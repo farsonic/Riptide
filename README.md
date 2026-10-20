@@ -24,14 +24,14 @@ the modern Linux TCP stack.
 * `docs/RE-NOTES.md`: reverse-engineering notes on MiamiDx (library tables,
   MNI driver ABI, protocol function map, sysctls).
 * `docs/DESIGN.md`: architecture and coding rules.
-* `docs/AMIGA.md`: installing and configuring Riptide on an Amiga.
+* `docs/AMIGA.md`: installing and configuring Riptide on an Amiga, plus the `ping` and `rtcheck` tools.
 
 ## Building
 
 ```
 make && ./tests/run_tests.sh build/host       # Linux host build + tests
 make CROSS=m68k-linux-gnu-                     # big-endian 68020 build (run tests under qemu-m68k)
-make -f Makefile.amiga                         # AmigaOS: build/amiga/Riptide (vbcc + NDK 3.2)
+make -f Makefile.amiga                         # AmigaOS: build/amiga/{Riptide,ping,rtcheck} (vbcc + NDK 3.2)
 make -f Makefile.amiga check                   # hunk checks + vamos self test
 tests/amiga/run_fsuae.sh build/amiga           # full-system test on FS-UAE + AROS ROM
 ```

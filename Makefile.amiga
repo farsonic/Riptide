@@ -39,8 +39,9 @@ GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC) src/amiga/libc.c) \
            $(BUILD)/gcc_thunks.o $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/startup.o $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
+PING_OBJ := $(BUILD)/startup.o $(BUILD)/amiga/cmd/ping.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
 
-all: $(BUILD)/Riptide $(BUILD)/rtcheck
+all: $(BUILD)/Riptide $(BUILD)/rtcheck $(BUILD)/ping
 
 $(BUILD)/gen/%_calls.h: src/amiga/os/os_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
@@ -71,6 +72,8 @@ $(BUILD)/Riptide.elf: $(RT_OBJ) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(RT_OBJ) $(LIBGCC)
 $(BUILD)/rtcheck.elf: $(RC_OBJ) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(RC_OBJ) $(LIBGCC)
+$(BUILD)/ping.elf: $(PING_OBJ) src/amiga/link.ld
+	$(LD) $(LDFLAGS) -o $@ $(PING_OBJ) $(LIBGCC)
 $(BUILD)/%: $(BUILD)/%.elf tools/elf2hunk.py
 	$(PYTHON) tools/elf2hunk.py -v $< $@
 
@@ -84,8 +87,9 @@ GEN_H   := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o
+PING_OBJ := $(BUILD)/amiga/cmd/ping.o $(BUILD)/core/printf.o
 
-all: $(BUILD)/Riptide $(BUILD)/rtcheck
+all: $(BUILD)/Riptide $(BUILD)/rtcheck $(BUILD)/ping
 
 $(BUILD)/gen/mni_calls.h: src/amiga/mni_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
@@ -110,6 +114,8 @@ $(BUILD)/Riptide: $(RT_OBJ)
 	$(VC) -o $@ $(RT_OBJ) -lamiga
 $(BUILD)/rtcheck: $(RC_OBJ)
 	$(VC) -o $@ $(RC_OBJ) -lamiga
+$(BUILD)/ping: $(PING_OBJ)
+	$(VC) -o $@ $(PING_OBJ) -lamiga
 endif
 
 # ------------------------------------------------------------- tests ----

@@ -30,9 +30,12 @@ under one exec semaphore (the stack lock).
    `NIL:`, for example `Run >CON:0/0/640/100/Riptide Riptide`.
 
 Riptide refuses to start if `bsdsocket.library`, `miami.library` or
-`usergroup.library` is already in the system library list. In that case it
-prints "A TCP/IP stack is already running." Quit MiamiDx, AmiTCP or
-Roadshow first.
+`usergroup.library` is already in the system library list. It then prints
+"A TCP/IP stack is already running:" followed by the id string of each
+library it found, so you can tell which stack owns them. Quit MiamiDx,
+AmiTCP or Roadshow first. Also turn off any emulator bsdsocket emulation,
+and remove another stack's `LIBS:bsdsocket.library`, which loads by itself
+when a program opens it.
 
 You do not need SetPatch tricks or `LIBS:` files: the libraries exist only
 while Riptide runs.
@@ -149,11 +152,31 @@ ifconfig eth0 192.168.1.20/24 up
 route add default 192.168.1.1
 ```
 
+### Example: FS-UAE / WinUAE with uaenet.device
+
+See `examples/riptide-uaenet.conf`. `uaenet.device` lives in the emulator's
+expansion ROM, not in `DEVS:`. In FS-UAE it only exists with
+`uae_sana2 = 1` in the emulator configuration, and needs `network_card =
+a2065` for the built-in slirp NAT. Under slirp the Amiga gets 10.0.2.15 by
+DHCP. The gateway (your host computer) is 10.0.2.2 and the DNS forwarder is
+10.0.2.3. Incoming connections from the LAN need slirp port forwarding.
+
 ### Hosts file
 
 `ENV:Riptide/hosts` uses the usual format, `A.B.C.D name [alias...]`, with
 `#` comments. Its entries go into the static host table, which is checked
 before DNS.
+
+## Tools
+
+* `ping HOST [COUNT=n] [SIZE=bytes] [INTERVAL=ms] [TIMEOUT=ms] [QUIET]`
+  sends ICMP echo requests through a raw socket and prints the round-trip
+  times and a summary. COUNT=0 pings until Ctrl-C. It uses only the
+  standard bsdsocket.library API, so it also works with other stacks.
+* `rtcheck [START=cmd] [STOP=cmd] [CONNECT=a.b.c.d:port]` is the library
+  test client. Without arguments it runs about 80 checks against the
+  running stack over loopback. `CONNECT=` runs a TCP echo test through a
+  real interface, against an echo server on the other end.
 
 ## Compatibility notes
 
