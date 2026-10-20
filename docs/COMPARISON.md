@@ -219,7 +219,7 @@ for the plain AmiTCP API or for MiamiDx's documented API do.
 | inetd | Yes (built in) | Yes, "inetd style Internet superserver" [RS-README] | No |
 | TCP: handler | Not analysed | Yes [RS-README] | No |
 | Packet capture | `MiamiTCPDump` (miamibpf/miamipcap) | `tcpdump`, BPF [RS-README] | No |
-| Tools | `Miami*` tools: ping, traceroute, netstat (kvm based), route, arp, ifconfig, sysctl, host, DiG, NSLookup, ftp, telnet, finger, IPFW, IPNatD... | Configuration and status commands (`ShowNetStatus`, `GetNetStatus`, `NetShutdown`, `Online`, `Offline`, `SampleNetSpeed`...) [RS-SRC], plus `ping`, `traceroute`, `wget`, `ftp`, `tcpdump` [RS-1.13], [RS-1.15] | Linux-style `ip` (iproute2), `ifconfig`, `route`, `arp`, `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname`, `nc`; no ftp, wget, telnet or dig |
+| Tools | `Miami*` tools: ping, traceroute, netstat (kvm based), route, arp, ifconfig, sysctl, host, DiG, NSLookup, ftp, telnet, finger, IPFW, IPNatD... | Configuration and status commands (`ShowNetStatus`, `GetNetStatus`, `NetShutdown`, `Online`, `Offline`, `SampleNetSpeed`...) [RS-SRC], plus `ping`, `traceroute`, `wget`, `ftp`, `tcpdump` [RS-1.13], [RS-1.15] | Linux-style `ip` (iproute2), `ifconfig`, `route`, `arp`, `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname`, `nc`, `ftp`; no wget, telnet or dig |
 
 ## 8. Security posture
 

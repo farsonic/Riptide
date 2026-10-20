@@ -212,7 +212,7 @@ before DNS.
 
 Riptide comes with the usual Linux network commands, written for AmigaOS:
 `ip`, `ifconfig`, `route`, `arp`, `netstat`, `traceroute`, `ping`, `host`,
-`sysctl`, `hostname` and `nc`. Copy them to `C:`. They take Linux style
+`sysctl`, `hostname`, `nc` and `ftp`. Copy them to `C:`. They take Linux style
 arguments (`-n`, `-c 3`, ...), print what their Linux counterparts print,
 stop on Ctrl-C and return 0 (ok), 5 (warning, e.g. no ping reply), 10
 (error) or 20 (failure, e.g. no stack). Each has `-h` / `--help`. They
@@ -220,8 +220,8 @@ need little stack (buffers come from AllocVec()).
 
 Where the data comes from:
 
-* `ping`, `traceroute`, `host` (A/PTR) and `nc` use only the standard
-  bsdsocket.library API, so they also work with other stacks.
+* `ping`, `traceroute`, `host` (A/PTR), `nc` and `ftp` use only the
+  standard bsdsocket.library API, so they also work with other stacks.
 * `ifconfig` (changes), `route add/del` and `arp -s/-d` use the BSD ioctls
   (SIOCAIFADDR, SIOCSIF*, SIOCADDRT/SIOCDELRT, SIOCSARP/SIOCDARP).
 * Listings read Riptide's tables with `RiptideSysCtl()` (below), and `ip`,
@@ -389,6 +389,111 @@ timeout in seconds.
   then the reply is copied to standard output (AmigaDOS input cannot be
   waited on together with a socket); `-d` sends nothing; `-u` sends stdin
   as one UDP datagram.
+
+### ftp
+
+An FTP client in the style of the BSD/Linux `ftp`:
+
+```
+ftp [-n] [-v] [-p|-A] [-i] [-d] [-t secs] [host [port]]
+ftp [-o localfile] ftp://[user[:pass]@]host[:port]/path
+ftp -u ftp://[user[:pass]@]host[:port]/[path] localfile...
+```
+
+`-n` no automatic login, `-v` verbose (the default when input is a
+console), `-p` passive (default) / `-A` active mode, `-i` no prompting in
+`mget`/`mput`, `-d` show the protocol, `-t` the network timeout (default
+60 s). Commands are read from standard input, so `ftp -n host 2121
+<S:ftpscript` runs a script (lines starting with `#` are comments; with
+`-v` each command is echoed). The URL forms fetch one file (to the file
+name of the URL, or `-o`; `-o -` writes to standard output; a path ending
+in `/` lists the directory) or upload files, log in as `anonymous` unless
+the URL names a user, print the transfer statistics and exit with 0 or 10.
+
+```
+1> ftp 10.0.2.2 2121
+Connected to 10.0.2.2 (10.0.2.2).
+220 pyftpdlib 1.5.10 ready.
+Name (10.0.2.2:anonymous):
+331 Username ok, send password.
+Password:
+230 Login successful.
+Remote system type is UNIX.
+Using binary mode to transfer files.
+ftp> get big.lha
+229 Entering extended passive mode (|||49731|).
+150 File status okay. About to open data connection.
+226 Transfer complete.
+1048576 bytes received in 3.21 secs (319.0 KB/s)
+```
+
+| Command | |
+|---|---|
+| `open host [port]`, `user name [pass]`, `close`/`disconnect`, `bye`/`quit`/`exit` | connection; the password is read without echo (console raw mode) |
+| `ls`/`dir [path [localfile]]`, `nlist [path [localfile]]` | LIST / NLST |
+| `cd dir`, `cdup`, `pwd`, `lcd [dir]`, `lpwd` | remote and local (AmigaDOS) directory |
+| `get`/`recv remote [local]`, `put`/`send local [remote]`, `append local [remote]` | the local name defaults to the last part of the remote one (and vice versa); `-` is standard output |
+| `mget pattern...`, `mput pattern...` | `mget` expands patterns on the server (NLST), `mput` with AmigaDOS patterns (`#?`, `*` and `?`); `prompt` toggles the questions (y/n/a/q) |
+| `restart offset`, `reget remote [local]` | REST: the next `get`/`put` starts at offset; `reget` resumes from the size of the local file |
+| `delete`, `mkdir`, `rmdir`, `rename from to`, `size`, `modtime` | |
+| `binary`/`image`, `ascii`, `type [ascii\|binary]` | binary is the default after login; ascii converts CRLF ⇄ LF |
+| `passive [on\|off]`, `epsv [on\|off]` | passive mode (default on): EPSV, then PASV |
+| `hash [on\|off\|bytes]` | a `#` per 1024 bytes (or the given size) |
+| `verbose`, `debug`, `prompt`, `timeout [secs]`, `status`, `help`/`?` | |
+| `quote`/`literal line`, `site args`, `system` | raw commands; the reply is always shown |
+
+Commands can be abbreviated. Notes:
+
+* **Passive mode and NAT.** The address in a `227` (PASV) reply is used
+  only when it is the control connection's peer; otherwise the data
+  connection goes to the peer address (as curl and modern clients do), so
+  servers behind NAT or advertising a private address work. EPSV (RFC
+  2428) carries no address at all; a server that refuses it gets PASV from
+  then on. Active mode (`passive off`, `-A`) sends `PORT` with the local
+  address and needs the server to reach it: it does not work through
+  slirp/NAT.
+* **Ctrl-C** during a transfer closes the data connection, sends `ABOR`
+  and reads the server's replies, so the session goes on (`receive
+  aborted. waiting for remote to finish abort.`); the partial file stays
+  for `reget`. At the prompt Ctrl-C prints a hint; press it twice to
+  quit. When input is a script, Ctrl-C between commands ends it.
+* Transfers use a 32 KB buffer (AllocVec) and AmigaDOS Read/Write; write
+  errors (disk full) abort the transfer. Timing comes from timer.device.
+* There is no `.netrc`, proxy, FXP, IPv6 (EPRT/LPSV), TLS or `!` shell
+  escape; offsets are limited to 2 GB.
+
+**Testing transfers against your computer.** Under FS-UAE with slirp NAT
+(Amiga 10.0.2.15, host 10.0.2.2) run an FTP server on the host, for
+example pyftpdlib:
+
+```
+python3 -m pip install pyftpdlib
+mkdir -p ~/ftptest
+python3 -m pyftpdlib -p 2121 -w -d ~/ftptest      # anonymous, writable
+```
+
+then on the Amiga `ftp 10.0.2.2 2121`, log in as `anonymous` (any
+password) and `put`/`get` files; passive mode works through slirp. The same
+as a script: `ftp -v -n 10.0.2.2 2121 <S:ftptest` with `user anonymous
+x`, `put RAM:test.bin`, `get test.bin RAM:back.bin`, `bye` in the file.
+Without a server on the host, `ftpd-test` (below) serves an AmigaDOS
+directory over loopback.
+
+### ftpd-test
+
+`ftpd-test [-p port] [-1] [-v] ROOT` (built in `build/amiga/ftpd-test` from
+`tests/amiga/ftpd_test.c`) is a minimal FTP server **for testing only**: one
+session at a time, any user and password are accepted, no access control.
+It serves the AmigaDOS directory ROOT (default port 2121) with USER, PASS,
+SYST, TYPE, PWD, CWD, CDUP, PASV, EPSV, PORT, LIST, NLST, RETR, STOR, APPE,
+SIZE, MDTM, DELE, MKD, RMD, RNFR/RNTO, REST, FEAT, HELP, ABOR and QUIT, plus
+`SITE NOEPSV` and `SITE PASVIP a.b.c.d` to test the client's EPSV fallback
+and NAT handling. `-1` exits after one session, `-v` logs the protocol.
+
+```
+1> run >NIL: ftpd-test RAM:
+1> ftp 127.0.0.1 2121
+```
 
 ### rtcheck
 
@@ -621,6 +726,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/test_hunk.py FILES` | Loads the executables with amitools and checks their relocations. It also has elf2hunk unit tests: absolute, PC-relative and absolute-symbol relocations, rejecting 16-bit relocations, bss in the hunk size, and a run under vamos. |
 | `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
 | `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. |
+| `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real

@@ -31,6 +31,7 @@
 #include <devices/timer.h>
 #include <dos/dos.h>
 #include <dos/dosextens.h>
+#include <dos/dosasl.h>
 #include <dos/var.h>
 #include <dos/rdargs.h>
 #include <dos/dostags.h>

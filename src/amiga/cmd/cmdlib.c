@@ -367,6 +367,60 @@ int cl_ioctl(int fd, u32 req, void *arg)
 	return 0;
 }
 
+struct cl_tv { ULONG secs, micro; };
+
+int cl_wait_fd(int fd, int wr, u32 ms)
+{
+	ULONG set[8], sigs = SIGBREAKF_CTRL_C;
+	struct cl_tv tmo;
+	LONG n;
+
+	if (fd < 0 || fd >= 256)
+		return -2;
+	memset(set, 0, sizeof(set));
+	set[fd / 32] |= 1UL << (fd % 32);
+	tmo.secs = ms / 1000;
+	tmo.micro = (ms % 1000) * 1000;
+	n = WaitSelect(fd + 1, wr ? NULL : set, wr ? set : NULL, NULL, ms ? &tmo : NULL, &sigs);
+	if (sigs & SIGBREAKF_CTRL_C)
+		return -1;
+	if (n < 0)
+		return Errno() == RT_EINTR ? -1 : -2;
+	return n > 0 ? 1 : 0;
+}
+
+int cl_connect(int fd, u32 addr, u16 port, u32 ms)
+{
+	struct rt_sockaddr_in sa;
+	LONG on = 1, off = 0, err = 0, len = sizeof(err);
+	int nb, r;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_len = sizeof(sa);
+	sa.sin_family = RT_AF_INET;
+	sa.sin_port = rt_htons(port);
+	sa.sin_addr = addr;
+	nb = IoctlSocket(fd, RT_FIONBIO, &on) == 0;
+	if (connect(fd, &sa, sizeof(sa)) == 0)
+		goto done;
+	err = Errno();
+	if (!nb || (err != RT_EINPROGRESS && err != RT_EALREADY && err != RT_EWOULDBLOCK))
+		goto done;
+	r = cl_wait_fd(fd, 1, ms);
+	if (r == 1) {
+		err = 0;
+		len = sizeof(err);
+		if (getsockopt(fd, RT_SOL_SOCKET, RT_SO_ERROR, &err, &len) < 0)
+			err = Errno();
+	} else {
+		err = r == 0 ? RT_ETIMEDOUT : r == -1 ? RT_EINTR : Errno();
+	}
+done:
+	if (nb)
+		IoctlSocket(fd, RT_FIONBIO, &off);
+	return (int)err;
+}
+
 /* ------------------------------------------------------------ addresses */
 
 int cl_parse_ip(const char *s, u32 *addr)

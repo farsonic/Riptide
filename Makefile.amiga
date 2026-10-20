@@ -20,7 +20,9 @@ AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/ami
 LIBS      := bsdsocket riptide usergroup
 HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h) tests/amiga/rtcheck_body.h
 # network tools (src/amiga/cmd), each linked with cmdlib.o
-TOOLS     := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc
+TOOLS     := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp
+# test programs linked like the tools (tests/amiga): a minimal FTP server for the ftp test
+TESTTOOLS := ftpd-test
 
 ifeq ($(TOOLCHAIN),gcc)
 # ---------------------------------------------------------------- GCC ----
@@ -44,7 +46,7 @@ RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIG
 RC_OBJ  := $(BUILD)/startup.o $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
 TOOL_LIB := $(BUILD)/startup.o $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
 
-all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS))
+all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS))
 
 $(BUILD)/gen/%_calls.h: src/amiga/os/os_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
@@ -77,6 +79,8 @@ $(BUILD)/rtcheck.elf: $(RC_OBJ) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(RC_OBJ) $(LIBGCC)
 $(addsuffix .elf,$(addprefix $(BUILD)/,$(TOOLS))): $(BUILD)/%.elf: $(BUILD)/amiga/cmd/%.o $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
+$(BUILD)/ftpd-test.elf: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB) src/amiga/link.ld
+	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
 $(BUILD)/%: $(BUILD)/%.elf tools/elf2hunk.py
 	$(PYTHON) tools/elf2hunk.py -v $< $@
 
@@ -92,7 +96,7 @@ RT_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o
 TOOL_LIB := $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o
 
-all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS))
+all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS))
 
 $(BUILD)/gen/mni_calls.h: src/amiga/mni_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
@@ -119,6 +123,8 @@ $(BUILD)/rtcheck: $(RC_OBJ)
 	$(VC) -o $@ $(RC_OBJ) -lamiga
 $(addprefix $(BUILD)/,$(TOOLS)): $(BUILD)/%: $(BUILD)/amiga/cmd/%.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
+$(BUILD)/ftpd-test: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB)
+	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
 
 # a client built only from the SDK in sdk/ and the NDK
 all: $(BUILD)/sdk_test
@@ -140,7 +146,7 @@ sdk-check:
 
 # ------------------------------------------------------------- tests ----
 check: all sdk-check
-	$(PYTHON) tests/amiga/test_hunk.py $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS)) $(SDK_BIN)
+	$(PYTHON) tests/amiga/test_hunk.py $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS)) $(SDK_BIN)
 	tests/amiga/run_vamos.sh $(BUILD)/Riptide
 
 clean:

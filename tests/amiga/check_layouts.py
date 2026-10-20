@@ -67,6 +67,9 @@ NDK_STRUCTS = (
     S('TagItem', 'ti_Tag', 'ti_Data') +
     S('Hook', 'h_Entry', 'h_SubEntry', 'h_Data') +
     S('DateStamp', 'ds_Days', 'ds_Minute', 'ds_Tick') +
+    S('FileInfoBlock', 'fib_DirEntryType', 'fib_FileName', 'fib_Protection', 'fib_Size',
+      'fib_Date', 'fib_Comment', 'fib_OwnerUID', 'fib_Reserved') +
+    S('AnchorPath', 'ap_BreakBits', 'ap_FoundBreak', 'ap_Flags', 'ap_Strlen', 'ap_Info', 'ap_Buf') +
     [('struct Process', f, 'struct Process', f) for f in
      ('pr_MsgPort', 'pr_SegList', 'pr_StackSize', 'pr_Result2', 'pr_CurrentDir', 'pr_CIS',
       'pr_COS', 'pr_CLI', 'pr_WindowPtr')] +
@@ -85,7 +88,8 @@ NDK_CONSTS = '''NT_LIBRARY NT_MSGPORT NT_MESSAGE NT_REPLYMSG NT_TASK NT_PROCESS 
 LIBF_SUMUSED LIBF_DELEXP PA_SIGNAL PA_IGNORE SIGBREAKF_CTRL_C SIGBREAKF_CTRL_D SIGBREAKF_CTRL_E
 SIGBREAKF_CTRL_F SIGF_SINGLE IOF_QUICK CMD_READ CMD_WRITE CMD_NONSTD IOERR_ABORTED MEMF_PUBLIC MEMF_CLEAR
 MEMF_ANY TAG_DONE TAG_IGNORE TAG_MORE TAG_SKIP TAG_USER UNIT_MICROHZ UNIT_VBLANK TR_ADDREQUEST
-TR_GETSYSTIME MODE_OLDFILE MODE_NEWFILE GVF_GLOBAL_ONLY TICKS_PER_SECOND SYS_Input SYS_Output
+TR_GETSYSTIME MODE_OLDFILE MODE_NEWFILE MODE_READWRITE OFFSET_BEGINNING OFFSET_END SHARED_LOCK
+ACCESS_READ ERROR_DISK_FULL ERROR_NO_MORE_ENTRIES ERROR_BREAK GVF_GLOBAL_ONLY TICKS_PER_SECOND SYS_Input SYS_Output
 SYS_Asynch'''.split()
 SANA_CONSTS = '''SANA2IOF_RAW SANA2IOF_BCAST SANA2IOF_MCAST S2_CopyToBuff S2_CopyFromBuff S2_PacketFilter
 S2_DEVICEQUERY S2_GETSTATIONADDRESS S2_CONFIGINTERFACE S2_BROADCAST S2_ONEVENT S2_ONLINE S2_OFFLINE
@@ -279,7 +283,7 @@ def main():
         ok &= check_against(tmp, 'ndk', NDK_STRUCTS, NDK_CONSTS, ['exec.h', 'dos.h', 'devices.h'],
                             ['exec/types.h', 'exec/execbase.h', 'exec/semaphores.h', 'exec/io.h', 'exec/devices.h',
                              'exec/memory.h', 'exec/errors.h', 'devices/timer.h', 'dos/dos.h',
-                             'dos/dosextens.h', 'dos/var.h', 'dos/dostags.h', 'utility/tagitem.h', 'utility/hooks.h'],
+                             'dos/dosextens.h', 'dos/dosasl.h', 'dos/var.h', 'dos/dostags.h', 'utility/tagitem.h', 'utility/hooks.h'],
                             [inc])
         sana = os.path.join(ndk, 'SANA+RoadshowTCP-IP', 'include')
         if os.path.isdir(sana):

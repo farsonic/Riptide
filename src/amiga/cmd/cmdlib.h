@@ -57,6 +57,14 @@ int  cl_need_timer(void);        /* timer.device for cl_now_us() */
 u32  cl_now_us(void);            /* microseconds, wraps */
 int  cl_socket(int type, int proto);   /* socket(AF_INET...) for ioctls */
 int  cl_ioctl(int fd, u32 req, void *arg); /* 0 or errno */
+/* Wait until fd is readable (wr = 0) or writable (wr = 1), at most ms
+ * milliseconds (0: no limit). Ctrl-C is in the WaitSelect() signal mask.
+ * Returns 1 ready, 0 timeout, -1 Ctrl-C (also EINTR), -2 error (Errno()). */
+int  cl_wait_fd(int fd, int wr, u32 ms);
+/* connect() a TCP socket with a timeout (non-blocking connect + WaitSelect;
+ * the socket is blocking again afterwards). 0 or the errno: RT_EINTR on
+ * Ctrl-C, RT_ETIMEDOUT on timeout. */
+int  cl_connect(int fd, u32 addr, u16 port, u32 ms);
 
 /* ---- argument helpers ---- */
 /* Is 'arg' a (non-empty) prefix of 'word'? (iproute2 style matching) */

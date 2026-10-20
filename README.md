@@ -19,7 +19,8 @@ the modern Linux TCP stack.
   sockets, IPv4 fragmentation, path-MTU discovery, a DHCP client and a DNS
   resolver.
 * **Tools:** Linux style `ip` (iproute2 syntax), `ifconfig`, `route`, `arp`,
-  `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname` and `nc`.
+  `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname`, `nc`, and
+  a BSD style `ftp` client (passive mode through NAT, ftp:// URLs).
   Interfaces, routes, ARP entries, DNS servers and DHCP can be inspected
   and changed while the stack runs. Third-party tools can use the BSD
   routing/ARP ioctls, the `net.riptide.*` tables via `MiamiSysCtl()` and
@@ -42,6 +43,7 @@ make -f Makefile.amiga                         # AmigaOS: build/amiga/{Riptide,r
 make -f Makefile.amiga check                   # hunk checks + vamos self test
 tests/amiga/run_fsuae.sh build/amiga           # full-system test on FS-UAE + AROS ROM
 tests/amiga/run_fsuae_tools.sh build/amiga     # every network tool on FS-UAE (loopback + uaenet.device)
+tests/amiga/run_fsuae_ftp.sh build/amiga       # ftp client against the ftpd-test server over loopback
 ```
 
 The Amiga build needs vbcc, vasm and vlink in `$VBCC` (default `/opt/vbcc`)
