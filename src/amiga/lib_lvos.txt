@@ -1,0 +1,162 @@
+# Riptide - the libraries Riptide publishes: bias, prototype, registers.
+# SPDX-License-Identifier: GPL-2.0-only
+# Format: see tools/gen_lvos.py. "= null" entries return 0. Verified
+# against the AmiTCP/Miami SDK FD files by tests/amiga/check_layouts.sh.
+
+@lib bsdsocket SocketBase prefix=bsd_
+6   ULONG LibOpen(ULONG version d0) = bsd_libopen
+12  ULONG LibClose() = bsd_libclose
+18  ULONG LibExpunge() = rtlib_expunge
+24  ULONG LibReserved() = null
+30  LONG socket(LONG domain d0, LONG type d1, LONG protocol d2)
+36  LONG bind(LONG s d0, const APTR name a0, LONG namelen d1)
+42  LONG listen(LONG s d0, LONG backlog d1)
+48  LONG accept(LONG s d0, APTR addr a0, LONG* addrlen a1)
+54  LONG connect(LONG s d0, const APTR name a0, LONG namelen d1)
+60  LONG sendto(LONG s d0, const APTR msg a0, LONG len d1, LONG flags d2, const APTR to a1, LONG tolen d3)
+66  LONG send(LONG s d0, const APTR msg a0, LONG len d1, LONG flags d2)
+72  LONG recvfrom(LONG s d0, APTR buf a0, LONG len d1, LONG flags d2, APTR from a1, LONG* fromlen a2)
+78  LONG recv(LONG s d0, APTR buf a0, LONG len d1, LONG flags d2)
+84  LONG shutdown(LONG s d0, LONG how d1)
+90  LONG setsockopt(LONG s d0, LONG level d1, LONG optname d2, const APTR optval a0, LONG optlen d3)
+96  LONG getsockopt(LONG s d0, LONG level d1, LONG optname d2, APTR optval a0, LONG* optlen a1)
+102 LONG getsockname(LONG s d0, APTR hostname a0, LONG* namelen a1)
+108 LONG getpeername(LONG s d0, APTR hostname a0, LONG* namelen a1)
+114 LONG IoctlSocket(LONG d d0, ULONG request d1, APTR argp a0)
+120 LONG CloseSocket(LONG d d0)
+126 LONG WaitSelect(LONG nfds d0, APTR readfds a0, APTR writefds a1, APTR exceptfds a2, APTR timeout a3, ULONG* sigmask d1)
+132 void SetSocketSignals(ULONG intrmask d0, ULONG iomask d1, ULONG urgmask d2)
+138 LONG getdtablesize()
+144 LONG ObtainSocket(LONG id d0, LONG domain d1, LONG type d2, LONG protocol d3)
+150 LONG ReleaseSocket(LONG fd d0, LONG id d1)
+156 LONG ReleaseCopyOfSocket(LONG fd d0, LONG id d1)
+162 LONG Errno()
+168 void SetErrnoPtr(APTR errno_p a0, LONG size d0)
+174 STRPTR Inet_NtoA(ULONG in d0)
+180 ULONG inet_addr(CONST_STRPTR cp a0)
+186 ULONG Inet_LnaOf(ULONG in d0)
+192 ULONG Inet_NetOf(ULONG in d0)
+198 ULONG Inet_MakeAddr(ULONG net d0, ULONG host d1)
+204 ULONG inet_network(CONST_STRPTR cp a0)
+210 APTR gethostbyname(CONST_STRPTR name a0)
+216 APTR gethostbyaddr(const APTR addr a0, LONG len d0, LONG type d1)
+222 APTR getnetbyname(CONST_STRPTR name a0)
+228 APTR getnetbyaddr(ULONG net d0, LONG type d1)
+234 APTR getservbyname(CONST_STRPTR name a0, CONST_STRPTR proto a1)
+240 APTR getservbyport(LONG port d0, CONST_STRPTR proto a0)
+246 APTR getprotobyname(CONST_STRPTR name a0)
+252 APTR getprotobynumber(LONG proto d0)
+258 void vsyslog(ULONG pri d0, CONST_STRPTR msg a0, APTR args a1)
+264 LONG Dup2Socket(LONG fd1 d0, LONG fd2 d1)
+270 LONG sendmsg(LONG s d0, APTR msg a0, LONG flags d1)
+276 LONG recvmsg(LONG s d0, APTR msg a0, LONG flags d1)
+282 LONG gethostname(STRPTR name a0, LONG namelen d0)
+288 ULONG gethostid()
+294 LONG SocketBaseTagList(APTR tags a0)
+300 LONG GetSocketEvents(ULONG* eventsp a0)
+
+@lib miami MiamiBase prefix=miami_
+6   ULONG LibOpen(ULONG version d0) = miami_libopen
+12  ULONG LibClose() = miami_libclose
+18  ULONG LibExpunge() = rtlib_expunge
+24  ULONG LibReserved() = null
+30  LONG MiamiSysCtl(LONG* name a0, ULONG namelen d0, APTR oldp a1, LONG* oldlenp a2, APTR newp a3, LONG newlen d1)
+36  LONG MiamiReserved1() = null
+42  LONG MiamiReserved2() = null
+48  LONG MiamiReserved3() = null
+54  LONG MiamiReserved4() = null
+60  LONG MiamiReserved5() = null
+66  void MiamiDisallowDNS(LONG value d0)
+72  LONG MiamiReserved6() = null
+78  APTR MiamiGetPid()
+84  LONG MiamiReserved7() = null
+90  LONG MiamiReserved8() = null
+96  APTR MiamiPFAddHook(APTR hook a0, CONST_STRPTR name a1, APTR tags a2)
+102 void MiamiPFRemoveHook(APTR handle a0)
+108 LONG MiamiGetHardwareLen(CONST_STRPTR name a0)
+114 LONG MiamiReserved9() = null
+120 LONG MiamiReserved10() = null
+126 LONG MiamiReserved11() = null
+132 LONG MiamiReserved12() = null
+138 LONG MiamiReserved13() = null
+144 LONG MiamiReserved14() = null
+150 APTR MiamiOpenSSL(APTR tags a0)
+156 void MiamiCloseSSL()
+162 LONG MiamiReserved15() = null
+168 LONG MiamiReserved16() = null
+174 LONG MiamiReserved17() = null
+180 LONG MiamiReserved18() = null
+186 LONG MiamiReserved19() = null
+192 LONG MiamiReserved20() = null
+198 LONG MiamiSetSocksConn(APTR sa a0, LONG len d0)
+204 LONG MiamiReserved21() = null
+210 LONG MiamiIsOnline(CONST_STRPTR name a0)
+216 void MiamiOnOffline(CONST_STRPTR name a0, LONG online d0)
+222 LONG MiamiReserved22() = null
+228 STRPTR inet_ntop(LONG family d0, const APTR addrptr a0, STRPTR strptr a1, LONG len d1)
+234 LONG inet_aton(CONST_STRPTR cp a0, APTR addr a1)
+240 LONG inet_pton(LONG family d0, CONST_STRPTR strptr a0, APTR addrptr a1)
+246 APTR gethostbyname2(CONST_STRPTR name a0, LONG fam d0)
+252 STRPTR gai_strerror(LONG err d0)
+258 void freeaddrinfo(APTR aihead a0)
+264 LONG getaddrinfo(CONST_STRPTR hostname a0, CONST_STRPTR servname a1, const APTR hintsp a2, APTR* result a3)
+270 LONG getnameinfo(const APTR sa a0, LONG salen d0, STRPTR host a1, LONG hostlen d1, STRPTR serv a2, LONG servlen d2, LONG flags d3)
+276 LONG if_nametoindex(CONST_STRPTR ifname a0)
+282 STRPTR if_indextoname(LONG ifindex d0, STRPTR ifname a0)
+288 APTR if_nameindex()
+294 void if_freenameindex(APTR ptr a0)
+300 LONG MiamiSupportsIPV6()
+306 LONG MiamiResGetOptions()
+312 void MiamiResSetOptions(LONG options d0)
+318 LONG sockatmark(LONG fd d0)
+324 void MiamiSupportedCPUs(ULONG* apis a0, ULONG* callbacks a1, ULONG* kernel a2)
+330 LONG MiamiGetFdCallback(APTR* cbptr a0)
+336 LONG MiamiSetFdCallback(APTR cbptr a0, LONG cputype d0)
+342 LONG MiamiReserved23() = null
+# MiamiDx 1.0c has private vectors up to -522; they return 0 here.
+522 LONG MiamiPrivate53() = null
+
+@lib usergroup UserGroupBase prefix=ug_
+6   ULONG LibOpen(ULONG version d0) = ug_libopen
+12  ULONG LibClose() = ug_libclose
+18  ULONG LibExpunge() = rtlib_expunge
+24  ULONG LibReserved() = null
+30  LONG ug_SetupContextTagList(CONST_STRPTR pname a0, APTR tags a1)
+36  LONG ug_GetErr()
+42  STRPTR ug_StrError(LONG code d1)
+48  LONG getuid()
+54  LONG geteuid()
+60  LONG setreuid(LONG ruid d0, LONG euid d1)
+66  LONG setuid(LONG uid d0)
+72  LONG getgid()
+78  LONG getegid()
+84  LONG setregid(LONG rgid d0, LONG egid d1)
+90  LONG setgid(LONG gid d0)
+96  LONG getgroups(LONG gidsetlen d0, LONG* gidset a1)
+102 LONG setgroups(LONG gidsetlen d0, const LONG* gidset a1)
+108 LONG initgroups(CONST_STRPTR name a1, LONG basegid d0)
+114 APTR getpwnam(CONST_STRPTR login a1)
+120 APTR getpwuid(LONG uid d0)
+126 void setpwent()
+132 APTR getpwent()
+138 void endpwent()
+144 APTR getgrnam(CONST_STRPTR name a1)
+150 APTR getgrgid(LONG gid d0)
+156 void setgrent()
+162 APTR getgrent()
+168 void endgrent()
+174 STRPTR crypt(CONST_STRPTR key a0, CONST_STRPTR salt a1)
+180 STRPTR ug_GetSalt(APTR user a0, STRPTR buf a1, ULONG size d0)
+186 STRPTR getpass(CONST_STRPTR prompt a1)
+192 ULONG umask(ULONG mask d0)
+198 ULONG getumask()
+204 LONG setsid()
+210 LONG getpgrp()
+216 STRPTR getlogin()
+222 LONG setlogin(CONST_STRPTR name a1)
+228 void setutent()
+234 APTR getutent()
+240 void endutent()
+246 APTR getlastlog(LONG uid d0)
+252 LONG setlastlog(LONG uid d0, STRPTR name a0, STRPTR host a1)
+258 APTR getcredentials(APTR task a0)

@@ -1,0 +1,492 @@
+/*
+ * Riptide - rt_os.h for AmigaOS (exec.library, timer.device).
+ *
+ * Stack lock: one exec SignalSemaphore. Sleepers: one per client task,
+ * embedded in the per-task context (libs.c); a sleeper owns a wakeup
+ * signal and a private timer request for timeouts. Clocks come from
+ * ReadEClock(). Log lines go to a ring buffer that only the Riptide
+ * process writes out with dos.library (client tasks must not do DOS I/O).
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+#include "amiga_priv.h"
+
+struct Device *TimerBase;
+
+static struct SignalSemaphore stack_sem;
+static struct timerequest *clock_req;    /* keeps timer.device open */
+static struct MsgPort *clock_port;
+static ULONG eclock_freq;
+
+struct Task *amiga_stack_task;
+ULONG amiga_kick_mask;
+int amiga_virtual_clock;
+u32 amiga_virtual_ms;
+int amiga_log_to_stdout = 1;
+
+/* ---- lock ---- */
+
+void rt_lock(void)
+{
+	ObtainSemaphore(&stack_sem);
+}
+
+void rt_unlock(void)
+{
+	ReleaseSemaphore(&stack_sem);
+}
+
+int rt_lock_held(void)
+{
+	return stack_sem.ss_Owner == FindTask(NULL) && stack_sem.ss_NestCount > 0;
+}
+
+/* ---- clocks ---- */
+
+static void eclock_read(u32 *q, u32 *r)
+{
+	struct EClockVal ev;
+	u64 e;
+
+	ReadEClock(&ev);
+	e = ((u64)ev.ev_hi << 32) | ev.ev_lo;
+	*q = (u32)(e / eclock_freq);
+	*r = (u32)(e % eclock_freq);
+}
+
+u32 rt_now_ms(void)
+{
+	u32 q, r;
+
+	if (amiga_virtual_clock || !TimerBase)
+		return amiga_virtual_ms;
+	eclock_read(&q, &r);
+	return q * 1000u + (u32)(((u64)r * 1000u) / eclock_freq);
+}
+
+u64 rt_now_us(void)
+{
+	u32 q, r;
+
+	if (amiga_virtual_clock || !TimerBase)
+		return (u64)amiga_virtual_ms * 1000u;
+	eclock_read(&q, &r);
+	return (u64)q * 1000000u + ((u64)r * 1000000u) / eclock_freq;
+}
+
+u32 rt_wallclock(void)
+{
+	struct timeval tv;
+
+	if (amiga_virtual_clock || !TimerBase)
+		return 0;
+	GetSysTime(&tv);
+	/* AmigaOS counts from 1.1.1978: add the 2922 days since 1970 */
+	return tv.tv_secs + 252460800u;
+}
+
+/* ---- memory ---- */
+
+void *rt_malloc(size_t n)
+{
+	if (n == 0)
+		n = 1;
+	return AllocVec((ULONG)n, MEMF_PUBLIC);
+}
+
+void *rt_zalloc(size_t n)
+{
+	if (n == 0)
+		n = 1;
+	return AllocVec((ULONG)n, MEMF_PUBLIC | MEMF_CLEAR);
+}
+
+void rt_free(void *p)
+{
+	if (p)
+		FreeVec(p);
+}
+
+/* ---- entropy ---- */
+
+static u32 rnd_state = 0x2545f491u;
+
+u32 rt_random32(void)
+{
+	u32 x = rnd_state;
+
+	if (TimerBase && !amiga_virtual_clock) {
+		struct EClockVal ev;
+		ReadEClock(&ev);
+		x ^= ev.ev_lo * 0x9e3779b9u;
+	}
+	/* xorshift32 */
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	if (x == 0)
+		x = 0x6d2b79f5u;
+	rnd_state = x;
+	return x * 0x2c1b3c6du;
+}
+
+void rt_random_bytes(void *buf, size_t n)
+{
+	u8 *p = buf;
+
+	while (n) {
+		u32 r = rt_random32();
+		size_t k = n < 4 ? n : 4;
+		memcpy(p, &r, k);
+		p += k;
+		n -= k;
+	}
+}
+
+/* ---- logging: ring buffer, flushed by the stack process ---- */
+
+int rt_log_level = RT_LOG_WARN;
+
+#define LOG_RING 8192
+static char log_ring[LOG_RING];
+static u32 log_head, log_tail;            /* head: write, tail: read */
+static u32 log_dropped;
+
+static void log_put(const char *s, u32 n)
+{
+	u32 i;
+
+	Forbid();
+	if (LOG_RING - 1 - (log_head - log_tail) < n) {
+		log_dropped++;
+	} else {
+		for (i = 0; i < n; i++)
+			log_ring[(log_head + i) % LOG_RING] = s[i];
+		log_head += n;
+	}
+	Permit();
+}
+
+void rt_log(int level, const char *fmt, ...)
+{
+	static const char *const lvl[] = { "error: ", "warning: ", "", "debug: " };
+	char line[200];
+	va_list ap;
+	int n;
+
+	if (level > rt_log_level)
+		return;
+	n = rt_snprintf(line, sizeof(line), "Riptide: %s", lvl[level & 3]);
+	va_start(ap, fmt);
+	rt_vsnprintf(line + n, sizeof(line) - (u32)n - 1, fmt, ap);
+	va_end(ap);
+	n = (int)strlen(line);
+	line[n++] = '\n';
+	log_put(line, (u32)n);
+	if (amiga_stack_task && FindTask(NULL) != amiga_stack_task)
+		Signal(amiga_stack_task, amiga_kick_mask);
+}
+
+void amiga_log_line(const char *line)
+{
+	u32 n = (u32)strlen(line);
+
+	log_put(line, n);
+	if (n == 0 || line[n - 1] != '\n')
+		log_put("\n", 1);
+	if (amiga_stack_task && FindTask(NULL) != amiga_stack_task)
+		Signal(amiga_stack_task, amiga_kick_mask);
+}
+
+void amiga_log_flush(void)
+{
+	char buf[256];
+	u32 n;
+	BPTR out;
+
+	if (!DOSBase)
+		return;
+	out = Output();
+	for (;;) {
+		Forbid();
+		n = 0;
+		while (log_tail != log_head && n < sizeof(buf)) {
+			buf[n++] = log_ring[log_tail % LOG_RING];
+			log_tail++;
+		}
+		Permit();
+		if (!n)
+			break;
+		if (out && amiga_log_to_stdout)
+			Write(out, buf, (LONG)n);
+	}
+	if (log_dropped && out) {
+		n = log_dropped;
+		log_dropped = 0;
+		amiga_out("Riptide: %lu log lines dropped\n", (unsigned long)n);
+	}
+}
+
+void amiga_out(const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	BPTR out;
+
+	va_start(ap, fmt);
+	rt_vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	if (DOSBase && (out = Output()) != 0)
+		Write(out, line, (LONG)strlen(line));
+}
+
+/* ---- kick ---- */
+
+void rt_kick(void)
+{
+	if (amiga_stack_task)
+		Signal(amiga_stack_task, amiga_kick_mask);
+}
+
+/* ---- sleepers ---- */
+
+static struct MinList orphan_sleepers;   /* tasks without a library context */
+
+int amiga_sleeper_init(struct rt_sleeper *s, const ULONG *breakmask)
+{
+	memset(s, 0, sizeof(*s));
+	s->task = FindTask(NULL);
+	s->breakmask = breakmask;
+	s->sigbit = AllocSignal(-1);
+	if (s->sigbit < 0)
+		return -RT_EAGAIN;
+	s->sigmask = 1UL << s->sigbit;
+	s->tsigbit = AllocSignal(-1);
+	if (s->tsigbit < 0) {
+		FreeSignal(s->sigbit);
+		return -RT_EAGAIN;
+	}
+	s->tport.mp_Node.ln_Type = NT_MSGPORT;
+	s->tport.mp_Flags = PA_SIGNAL;
+	s->tport.mp_SigBit = (UBYTE)s->tsigbit;
+	s->tport.mp_SigTask = s->task;
+	NewList(&s->tport.mp_MsgList);
+	s->treq.tr_node.io_Message.mn_Node.ln_Type = NT_REPLYMSG;
+	s->treq.tr_node.io_Message.mn_ReplyPort = &s->tport;
+	s->treq.tr_node.io_Message.mn_Length = sizeof(s->treq);
+	if (!amiga_virtual_clock &&
+	    OpenDevice((CONST_STRPTR)"timer.device", UNIT_MICROHZ, &s->treq.tr_node, 0) == 0)
+		s->timer_open = 1;
+	return 0;
+}
+
+void amiga_sleeper_fini(struct rt_sleeper *s)
+{
+	if (s->timer_open)
+		CloseDevice(&s->treq.tr_node);
+	s->timer_open = 0;
+	if (s->tsigbit >= 0)
+		FreeSignal(s->tsigbit);
+	if (s->sigbit >= 0)
+		FreeSignal(s->sigbit);
+	s->sigbit = s->tsigbit = -1;
+}
+
+struct rt_sleeper *rt_sleeper_self(void)
+{
+	struct Task *me = FindTask(NULL);
+	struct TaskCtx *c = amiga_ctx_find(me);
+	struct MinNode *n;
+	struct rt_sleeper *s;
+
+	if (c)
+		return &c->sl;
+	/* A task without a bsdsocket/miami context (the stack process, or a
+	 * program calling through a library opened by another task). */
+	Forbid();
+	for (n = orphan_sleepers.mlh_Head; n->mln_Succ; n = n->mln_Succ) {
+		s = (struct rt_sleeper *)n;
+		if (s->task == me) {
+			Permit();
+			return s;
+		}
+	}
+	Permit();
+	s = rt_zalloc(sizeof(*s));
+	if (s && amiga_sleeper_init(s, NULL) < 0) {
+		rt_free(s);
+		s = NULL;
+	}
+	if (!s) {
+		/* Cannot fail per contract: use a static fallback that only
+		 * polls (sigmask 0 + timer). */
+		static struct rt_sleeper fallback;
+		fallback.task = me;
+		return &fallback;
+	}
+	Forbid();
+	AddTail((struct List *)&orphan_sleepers, (struct Node *)&s->node);
+	Permit();
+	return s;
+}
+
+static void sleeper_wake(struct rt_sleeper *s)
+{
+	s->woken = 1;
+	if (s->task && s->sigmask)
+		Signal(s->task, s->sigmask);
+}
+
+int rt_sleeper_wait(struct rt_sleeper *s, s32 timeout_ms, u32 *extra_signals)
+{
+	ULONG want = extra_signals ? *extra_signals : 0;
+	ULONG brk = s->breakmask ? *s->breakmask : 0;
+	ULONG tmask = 0, got, pending;
+	int expired = 0;
+
+	if (extra_signals)
+		*extra_signals = 0;
+	/* Clear a stale wakeup signal; the 'woken' flag is authoritative and
+	 * every waker sets it (under the lock) before signalling. */
+	if (s->sigmask)
+		SetSignal(0, s->sigmask);
+	if (s->woken) {
+		s->woken = 0;
+		return 0;
+	}
+	pending = SetSignal(0, 0) & (brk | want);
+	if (pending) {
+		SetSignal(0, pending);
+		got = pending;
+	} else {
+		if (timeout_ms == 0)
+			return -RT_ETIMEDOUT;
+		if (timeout_ms > 0 && s->timer_open) {
+			tmask = 1UL << s->tsigbit;
+			SetSignal(0, tmask);
+			s->treq.tr_node.io_Command = TR_ADDREQUEST;
+			s->treq.tr_time.tv_secs = (ULONG)timeout_ms / 1000u;
+			s->treq.tr_time.tv_micro = ((ULONG)timeout_ms % 1000u) * 1000u;
+			SendIO(&s->treq.tr_node);
+		}
+		if (!(s->sigmask | brk | want | tmask)) {
+			/* fallback sleeper: nothing to wait for, poll politely */
+			rt_unlock();
+			if (DOSBase)
+				Delay(1);
+			rt_lock();
+			return timeout_ms >= 0 ? -RT_ETIMEDOUT : 0;
+		}
+		rt_unlock();
+		got = Wait(s->sigmask | brk | want | tmask);
+		if (tmask) {
+			if (!CheckIO(&s->treq.tr_node))
+				AbortIO(&s->treq.tr_node);
+			WaitIO(&s->treq.tr_node);
+			expired = s->treq.tr_node.io_Error == 0;
+			SetSignal(0, tmask);
+		}
+		rt_lock();
+	}
+	if (extra_signals)
+		*extra_signals = got & want;
+	if (s->woken || (got & s->sigmask)) {
+		s->woken = 0;
+		/* keep a break that arrived together with the wakeup */
+		if (got & brk)
+			SetSignal(got & brk, got & brk);
+		return 0;
+	}
+	if (got & brk)
+		return -RT_EINTR;
+	if (got & want)
+		return 0;
+	if (expired)
+		return -RT_ETIMEDOUT;
+	return 0;
+}
+
+void rt_waitq_add(struct rt_waitq *wq, struct rt_wait_entry *e, struct rt_sleeper *s)
+{
+	e->sleeper = s;
+	e->prev = NULL;
+	e->next = wq->head;
+	if (wq->head)
+		wq->head->prev = e;
+	wq->head = e;
+}
+
+void rt_waitq_remove(struct rt_waitq *wq, struct rt_wait_entry *e)
+{
+	if (e->prev)
+		e->prev->next = e->next;
+	else if (wq->head == e)
+		wq->head = e->next;
+	else
+		return;
+	if (e->next)
+		e->next->prev = e->prev;
+	e->next = e->prev = NULL;
+}
+
+void rt_waitq_wake(struct rt_waitq *wq)
+{
+	struct rt_wait_entry *e;
+
+	for (e = wq->head; e; e = e->next)
+		sleeper_wake(e->sleeper);
+}
+
+/* ---- init ---- */
+
+int amiga_os_init(void)
+{
+	BYTE kb;
+
+	InitSemaphore(&stack_sem);
+	rt_newminlist(&orphan_sleepers);
+	amiga_stack_task = FindTask(NULL);
+	kb = AllocSignal(-1);
+	if (kb < 0)
+		return -1;
+	amiga_kick_mask = 1UL << kb;
+	if (!amiga_virtual_clock) {
+		clock_port = CreateMsgPort();
+		if (!clock_port)
+			return -1;
+		clock_req = (struct timerequest *)CreateIORequest(clock_port, sizeof(*clock_req));
+		if (!clock_req)
+			return -1;
+		if (OpenDevice((CONST_STRPTR)"timer.device", UNIT_MICROHZ, &clock_req->tr_node, 0) != 0)
+			return -1;
+		TimerBase = clock_req->tr_node.io_Device;
+		{
+			struct EClockVal ev;
+			eclock_freq = ReadEClock(&ev);
+		}
+		if (eclock_freq == 0)
+			eclock_freq = 709379;
+	}
+	return 0;
+}
+
+void amiga_os_fini(void)
+{
+	amiga_log_flush();
+	if (amiga_kick_mask) {
+		BYTE b = 0;
+		while (!(amiga_kick_mask & (1UL << b)))
+			b++;
+		FreeSignal(b);
+		amiga_kick_mask = 0;
+	}
+	if (clock_req) {
+		if (TimerBase)
+			CloseDevice(&clock_req->tr_node);
+		DeleteIORequest((struct IORequest *)clock_req);
+		clock_req = NULL;
+	}
+	if (clock_port)
+		DeleteMsgPort(clock_port);
+	clock_port = NULL;
+	TimerBase = NULL;
+}

@@ -1,0 +1,216 @@
+/*
+ * Riptide - BSD socket ABI as seen by AmigaOS applications (AmiTCP 4 /
+ * Miami / 4.4BSD values). The core uses these RT_ prefixed names so it can
+ * be compiled on a host next to the host's own <sys/socket.h>.
+ *
+ * Structures here are exchanged with Amiga applications verbatim: all
+ * fields are naturally sized and there is no padding on any ABI we target.
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+#ifndef RT_BSD_H
+#define RT_BSD_H
+
+#include "rt_types.h"
+
+#define RT_AF_UNSPEC 0
+#define RT_AF_INET   2
+#define RT_PF_INET   RT_AF_INET
+
+#define RT_SOCK_STREAM 1
+#define RT_SOCK_DGRAM  2
+#define RT_SOCK_RAW    3
+
+#define RT_SOMAXCONN   128
+
+/* sockaddr (4.4BSD: with length byte) */
+struct rt_sockaddr {
+	u8   sa_len;
+	u8   sa_family;
+	char sa_data[14];
+};
+
+struct rt_sockaddr_in {
+	u8   sin_len;         /* sizeof(struct rt_sockaddr_in) == 16 */
+	u8   sin_family;      /* RT_AF_INET */
+	u16  sin_port;        /* network order */
+	u32  sin_addr;        /* network order */
+	u8   sin_zero[8];
+};
+
+struct rt_linger {
+	s32 l_onoff;
+	s32 l_linger;         /* seconds */
+};
+
+/* Amiga struct timeval (devices/timer.h): seconds + microseconds */
+struct rt_timeval {
+	u32 tv_secs;
+	u32 tv_micro;
+};
+
+/* ---- SOL_SOCKET options ---- */
+#define RT_SOL_SOCKET      0xffff
+#define RT_SO_DEBUG        0x0001
+#define RT_SO_ACCEPTCONN   0x0002
+#define RT_SO_REUSEADDR    0x0004
+#define RT_SO_KEEPALIVE    0x0008
+#define RT_SO_DONTROUTE    0x0010
+#define RT_SO_BROADCAST    0x0020
+#define RT_SO_USELOOPBACK  0x0040
+#define RT_SO_LINGER       0x0080
+#define RT_SO_OOBINLINE    0x0100
+#define RT_SO_REUSEPORT    0x0200
+#define RT_SO_SNDBUF       0x1001
+#define RT_SO_RCVBUF       0x1002
+#define RT_SO_SNDLOWAT     0x1003
+#define RT_SO_RCVLOWAT     0x1004
+#define RT_SO_SNDTIMEO     0x1005   /* struct rt_timeval */
+#define RT_SO_RCVTIMEO     0x1006   /* struct rt_timeval */
+#define RT_SO_ERROR        0x1007
+#define RT_SO_TYPE         0x1008
+#define RT_SO_EVENTMASK    0x2001   /* AmiTCP/Miami: RT_SEV_* mask */
+
+/* ---- IPPROTO_IP options ---- */
+#define RT_IP_OPTIONS          1
+#define RT_IP_HDRINCL          2
+#define RT_IP_TOS              3
+#define RT_IP_TTL              4
+#define RT_IP_RECVOPTS         5
+#define RT_IP_RECVRETOPTS      6
+#define RT_IP_RECVDSTADDR      7
+#define RT_IP_RETOPTS          8
+#define RT_IP_MULTICAST_IF     9
+#define RT_IP_MULTICAST_TTL    10
+#define RT_IP_MULTICAST_LOOP   11
+#define RT_IP_ADD_MEMBERSHIP   12
+#define RT_IP_DROP_MEMBERSHIP  13
+
+/* ---- IPPROTO_TCP options ----
+ * 1..8 are the 4.4BSD/Miami values. The rest use FreeBSD's numbers for the
+ * Linux-style knobs Riptide adds. */
+#define RT_TCP_NODELAY     0x01
+#define RT_TCP_MAXSEG      0x02
+#define RT_TCP_NOPUSH      0x04   /* cork: send only full segments */
+#define RT_TCP_NOOPT       0x08
+#define RT_TCP_INFO        0x20   /* struct rt_tcp_info (read only) */
+#define RT_TCP_CONGESTION  0x40   /* char[16] algorithm name */
+#define RT_TCP_KEEPINIT    0x80
+#define RT_TCP_KEEPIDLE    0x100  /* seconds */
+#define RT_TCP_KEEPINTVL   0x200  /* seconds */
+#define RT_TCP_KEEPCNT     0x400
+#define RT_TCP_QUICKACK    0x1000 /* Linux semantics */
+#define RT_TCP_USER_TIMEOUT 0x2000 /* ms, RFC 5482 / Linux semantics */
+
+/* ---- message flags ---- */
+#define RT_MSG_OOB       0x01
+#define RT_MSG_PEEK      0x02
+#define RT_MSG_DONTROUTE 0x04
+#define RT_MSG_EOR       0x08
+#define RT_MSG_TRUNC     0x10
+#define RT_MSG_CTRUNC    0x20
+#define RT_MSG_WAITALL   0x40
+#define RT_MSG_DONTWAIT  0x80
+#define RT_MSG_EOF       0x100
+
+/* ---- ioctls (4.4BSD encoding) ---- */
+#define RT_IOCPARM_MASK 0x1fff
+#define RT_IOC_VOID  0x20000000u
+#define RT_IOC_OUT   0x40000000u
+#define RT_IOC_IN    0x80000000u
+#define RT_IOC_INOUT (RT_IOC_IN | RT_IOC_OUT)
+#define RT_IOC(inout, g, n, len) \
+	((u32)(inout) | (((u32)(len) & RT_IOCPARM_MASK) << 16) | ((u32)(g) << 8) | (u32)(n))
+#define RT_IOR(g, n, len)  RT_IOC(RT_IOC_OUT, g, n, len)
+#define RT_IOW(g, n, len)  RT_IOC(RT_IOC_IN, g, n, len)
+#define RT_IOWR(g, n, len) RT_IOC(RT_IOC_INOUT, g, n, len)
+
+#define RT_FIONREAD   RT_IOR('f', 127, 4)
+#define RT_FIONBIO    RT_IOW('f', 126, 4)
+#define RT_FIOASYNC   RT_IOW('f', 125, 4)
+#define RT_FIOSETOWN  RT_IOW('f', 124, 4)
+#define RT_FIOGETOWN  RT_IOR('f', 123, 4)
+#define RT_SIOCATMARK RT_IOR('s', 7, 4)
+#define RT_SIOCSPGRP  RT_IOW('s', 8, 4)
+#define RT_SIOCGPGRP  RT_IOR('s', 9, 4)
+
+/* struct ifreq: 16 byte name + 16 byte union */
+struct rt_ifreq {
+	char ifr_name[16];
+	union {
+		struct rt_sockaddr ifru_addr;
+		s16  ifru_flags;
+		s32  ifru_metric;
+		s32  ifru_mtu;
+		u8   ifru_data[16];
+	} ifr_ifru;
+};
+struct rt_ifconf {
+	s32  ifc_len;
+	void *ifc_buf;        /* Amiga: 32-bit pointer (host tests: native) */
+};
+
+#define RT_SIOCSIFADDR     RT_IOW('i', 12, 32)
+#define RT_SIOCSIFDSTADDR  RT_IOW('i', 14, 32)
+#define RT_SIOCSIFFLAGS    RT_IOW('i', 16, 32)
+#define RT_SIOCGIFFLAGS    RT_IOWR('i', 17, 32)
+#define RT_SIOCSIFBRDADDR  RT_IOW('i', 19, 32)
+#define RT_SIOCSIFNETMASK  RT_IOW('i', 22, 32)
+#define RT_SIOCGIFMETRIC   RT_IOWR('i', 23, 32)
+#define RT_SIOCSIFMETRIC   RT_IOW('i', 24, 32)
+#define RT_SIOCDIFADDR     RT_IOW('i', 25, 32)
+#define RT_SIOCGIFADDR     RT_IOWR('i', 33, 32)
+#define RT_SIOCGIFDSTADDR  RT_IOWR('i', 34, 32)
+#define RT_SIOCGIFBRDADDR  RT_IOWR('i', 35, 32)
+#define RT_SIOCGIFCONF     RT_IOWR('i', 36, 8)
+#define RT_SIOCGIFNETMASK  RT_IOWR('i', 37, 32)
+#define RT_SIOCGIFMTU      RT_IOWR('i', 51, 32)
+#define RT_SIOCSIFMTU      RT_IOW('i', 52, 32)
+
+/* ---- TCP_INFO (subset of Linux struct tcp_info, fixed 32-bit fields) ---- */
+struct rt_tcp_info {
+	u8  tcpi_state;          /* RT_TCPS_* */
+	u8  tcpi_ca_state;       /* 0 open 1 disorder 2 cwr 3 recovery 4 loss */
+	u8  tcpi_retransmits;
+	u8  tcpi_options;        /* 1 TS, 2 SACK, 4 WSCALE, 8 ECN */
+	u8  tcpi_snd_wscale;
+	u8  tcpi_rcv_wscale;
+	u8  tcpi_backoff;
+	u8  tcpi_pad;
+	u32 tcpi_rto_us;
+	u32 tcpi_snd_mss;
+	u32 tcpi_rcv_mss;
+	u32 tcpi_unacked;        /* packets_out */
+	u32 tcpi_sacked;
+	u32 tcpi_lost;
+	u32 tcpi_retrans;        /* currently retransmitted, unacked */
+	u32 tcpi_rtt_us;         /* smoothed */
+	u32 tcpi_rttvar_us;
+	u32 tcpi_min_rtt_us;
+	u32 tcpi_snd_ssthresh;
+	u32 tcpi_snd_cwnd;       /* packets */
+	u32 tcpi_rcv_space;
+	u32 tcpi_snd_wnd;        /* peer's advertised window, bytes */
+	u32 tcpi_rcv_wnd;        /* our advertised window, bytes */
+	u32 tcpi_total_retrans;
+	u32 tcpi_bytes_acked;    /* low 32 bits */
+	u32 tcpi_bytes_received; /* low 32 bits */
+	u32 tcpi_segs_out;
+	u32 tcpi_segs_in;
+	u32 tcpi_reordering;
+	char tcpi_ca_name[16];
+};
+
+/* TCP states (numbering follows 4.4BSD TCPS_* so netstat tools work) */
+#define RT_TCPS_CLOSED       0
+#define RT_TCPS_LISTEN       1
+#define RT_TCPS_SYN_SENT     2
+#define RT_TCPS_SYN_RECEIVED 3
+#define RT_TCPS_ESTABLISHED  4
+#define RT_TCPS_CLOSE_WAIT   5
+#define RT_TCPS_FIN_WAIT_1   6
+#define RT_TCPS_CLOSING      7
+#define RT_TCPS_LAST_ACK     8
+#define RT_TCPS_FIN_WAIT_2   9
+#define RT_TCPS_TIME_WAIT    10
+
+#endif

@@ -1,0 +1,25 @@
+# Riptide - Miami Network Interface (.mni) driver calls, from the ABI
+# recovered in docs/RE-NOTES.md section 4.3. Every driver is a library;
+# Riptide passes the base explicitly (one base per loaded driver).
+# SPDX-License-Identifier: GPL-2.0-only
+
+@lib mni - callprefix=MNI_
+30  LONG GetInfo(ULONG* info a0)
+36  LONG DeviceQuery(ULONG version d0, ULONG* out a0)
+42  LONG FindBoards(ULONG version d0, ULONG flags d1, APTR* list a0)
+48  LONG FreeBoards(ULONG version d0, APTR list a0)
+54  LONG OpenHandle(ULONG version d0, APTR mniopen a0)
+60  LONG CloseHandle(APTR handle a0)
+66  LONG GetStationAddress(APTR handle a0, UBYTE* factory a1, UBYTE* current a2)
+72  LONG SetStationAddress(APTR handle a0, UBYTE* addr a1)
+78  LONG AddMulticast(APTR handle a0, UBYTE* addr a1)
+84  LONG RemMulticast(APTR handle a0, UBYTE* addr a1)
+90  LONG AddMulticastRange(APTR handle a0, UBYTE* lo a1, UBYTE* hi a2)
+96  LONG RemMulticastRange(APTR handle a0, UBYTE* lo a1, UBYTE* hi a2)
+102 LONG Send(APTR handle a0, APTR pkt a1)
+108 LONG GetStats(APTR handle a0, APTR buf a1)
+114 LONG Online(APTR handle a0)
+120 LONG Offline(APTR handle a0)
+126 LONG AddPacketType(APTR handle a0, ULONG type d0)
+132 LONG RemPacketType(APTR handle a0, ULONG type d0)
+138 LONG SetFlags(APTR handle a0, ULONG flags d0)
