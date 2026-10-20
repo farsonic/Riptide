@@ -746,7 +746,7 @@ int rt_resolve_addr(u32 addr, char *name, u32 namelen)
 
 /* ======================================================================
  * BIND style raw interface (res_mkquery/res_send/res_query/res_search,
- * dn_expand/dn_skipname) for miami.library. Called WITHOUT the lock.
+ * dn_expand/dn_skipname) for library clients. Called WITHOUT the lock.
  * ====================================================================== */
 
 int rt_res_mkquery(int op, const char *dname, int cls, int type, u8 *buf, int buflen)
@@ -891,7 +891,7 @@ int rt_dn_skipname(const u8 *src, const u8 *eom)
 }
 
 /* ======================================================================
- * sysctl (Miami CTL_DNS 9, dns.cache 0)
+ * sysctl (CTL_DNS 9, dns.cache 0)
  * ====================================================================== */
 
 static int cache_flush_handler(const struct rt_sysctl *e, void *old, u32 *oldlen,

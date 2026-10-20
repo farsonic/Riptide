@@ -141,6 +141,17 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 		}
 		return 0;
 	}
+	if (!rt_strcasecmp(argv[0], "compat")) {
+		/* compat aliases on|off: publish riptide.library also under the
+		 * name of the historical API it implements */
+		int on;
+		if (argc != 3 || rt_strcasecmp(argv[1], "aliases") ||
+		    ((on = !rt_strcasecmp(argv[2], "on")) == 0 && rt_strcasecmp(argv[2], "off"))) {
+			rt_snprintf(err, errlen, "usage: compat aliases on|off");
+			return -RT_EINVAL;
+		}
+		return amiga_libs_set_compat(on, err, errlen);
+	}
 	if (!rt_strcasecmp(argv[0], "loglevel") && argc >= 2) {
 		rt_log_level = (int)rt_strtoul(argv[1], NULL, 0);
 		return 0;
@@ -279,6 +290,11 @@ int amiga_status_text(char *buf, u32 len)
 	rt_lock();
 	ADD("Riptide %s, host %s, %d library users\n", RIPTIDE_VERSION_STRING,
 	    rt_hostname[0] ? rt_hostname : "(unset)", amiga_libs_users());
+	{
+		char libs[160];
+		amiga_libs_summary(libs, sizeof(libs));
+		ADD("Libraries: %s\n", libs);
+	}
 	for (n = rt_netif_list(); n; n = n->next) {
 		struct rt_dhcp_info di;
 		ADD("%-6s %s/%s mtu %u %s%s in %lu out %lu err %lu/%lu\n",
@@ -408,7 +424,10 @@ static void handle_port(void)
 			continue;
 		}
 		out = reply_buf(m, &olen);
-		out[0] = 0;
+		/* a command without a reply buffer is answered in text, which
+		 * holds the command line: RTCMD_COMMAND copies it first */
+		if (out != m->text || m->cmd != RTCMD_COMMAND)
+			out[0] = 0;
 		switch (m->cmd) {
 		case RTCMD_STATUS:
 			amiga_status_text(out, olen);
@@ -486,8 +505,11 @@ int amiga_stack_start(const char *config, int selftest)
 		amiga_out("Riptide: cannot create the libraries\n");
 		return -1;
 	}
-	amiga_out("Riptide %s running: bsdsocket.library 4, miami.library 21, usergroup.library 4\n",
-	          RIPTIDE_VERSION_STRING);
+	{
+		char libs[160];
+		amiga_libs_summary(libs, sizeof(libs));
+		amiga_out("Riptide %s running: %s\n", RIPTIDE_VERSION_STRING, libs);
+	}
 	return 0;
 }
 
@@ -538,7 +560,7 @@ void amiga_stack_loop(void)
 				break;
 			}
 			amiga_out("%s", msg);
-			/* ask the users to finish, like MiamiDx, and re-check */
+			/* ask the users to finish (as the historical stack did) and re-check */
 			amiga_libs_signal_users(SIGBREAKF_CTRL_C);
 			quit_requested = 1;
 		}

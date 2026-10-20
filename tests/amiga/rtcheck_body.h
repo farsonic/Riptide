@@ -9,7 +9,11 @@
  *   RTC_PUMP()         let the stack make progress (selftest: run
  *                      rt_stack_poll(); rtcheck: Delay(1))
  *   RTC_BLOCKING       1 if blocking calls may be used (real multitasking)
- * and opens SocketBase, MiamiBase and UserGroupBase before rtcheck_run().
+ *   RTC_COMMAND(line)  send one configuration line to the stack, returns
+ *                      0 or an errno
+ *   RTC_CLOSELIB(base) close a library opened by the includer
+ * and opens SocketBase, RiptideBase, CompatBase (the compat alias) and
+ * UserGroupBase before rtcheck_run().
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
@@ -256,7 +260,7 @@ static void rtc_bsd_misc(void)
 	CHECK(gethostid() != 0, "gethostid");
 }
 
-static void rtc_miami(void)
+static void rtc_riptide(void)
 {
 	ULONG a = 0;
 	char buf[32];
@@ -264,7 +268,9 @@ static void rtc_miami(void)
 	struct addrinfo *ai;
 	LONG idx;
 
-	CHECK(MiamiSupportsIPV6() == 0, "MiamiSupportsIPV6");
+	CHECK(RiptideBase->lib_Version >= RIPTIDE_LIB_VERSION &&
+	      rtc_streq(RiptideBase->lib_Node.ln_Name, RIPTIDE_LIB_NAME), "riptide.library name/version");
+	CHECK(RiptideSupportsIPV6() == 0, "RiptideSupportsIPV6");
 	CHECK(inet_pton(RTC_AF_INET, "192.168.1.2", &a) == 1 && a == 0xc0a80102UL, "inet_pton");
 	CHECK(inet_pton(RTC_AF_INET, "192.168.1", &a) == 0, "inet_pton strict");
 	CHECK(inet_aton("10.2", &a) == 1 && a == 0x0a000002UL, "inet_aton");
@@ -280,8 +286,61 @@ static void rtc_miami(void)
 	idx = if_nametoindex("lo0");
 	CHECK(idx >= 1, "if_nametoindex lo0");
 	CHECK(if_indextoname(idx, buf) && rtc_streq(buf, "lo0"), "if_indextoname");
-	CHECK(MiamiIsOnline("lo0") == 1, "MiamiIsOnline lo0");
-	CHECK(MiamiGetPid() != NULL, "MiamiGetPid");
+	CHECK(RiptideIsOnline("lo0") == 1, "RiptideIsOnline lo0");
+	CHECK(RiptideGetPid() != NULL, "RiptideGetPid");
+}
+
+/* The compat alias: its own per-task base on the same jump table and the
+ * same per-task context as riptide.library. */
+static void rtc_compat(void)
+{
+	struct Library *rb = RiptideBase;
+	APTR pid, apid;
+	LONG on;
+
+	CHECK(CompatBase != RiptideBase, "compat alias: own base");
+	CHECK(CompatBase->lib_Version >= RT_COMPAT_LIBVERSION &&
+	      rtc_streq(CompatBase->lib_Node.ln_Name, RT_COMPAT_LIBNAME), "compat alias: name/version");
+	pid = RiptideGetPid();
+	RiptideBase = CompatBase;           /* call through the alias' vectors */
+	apid = RiptideGetPid();
+	on = RiptideIsOnline("lo0");
+	RiptideBase = rb;
+	CHECK(pid && apid == pid, "compat alias: shares the per-task context");
+	CHECK(on == 1, "compat alias: RiptideIsOnline lo0");
+}
+
+static int rtc_lib_listed(const char *name)
+{
+	int r;
+
+	Forbid();
+	r = FindName(exec_liblist(SysBase), (CONST_STRPTR)name) != NULL;
+	Permit();
+	return r;
+}
+
+/* "compat aliases off" is refused while the alias is open and removes it
+ * once it is closed; "on" brings it back. Closes CompatBase. */
+static void rtc_compat_switch(void)
+{
+	rtc_errno = 0;
+	if (CompatBase) {
+		rtc_errno = RTC_COMMAND("compat aliases off");
+		RTC_LOG("compat aliases off with the alias open: errno %ld, alias %s, open count %ld",
+		        (long)rtc_errno, rtc_lib_listed(RT_COMPAT_LIBNAME) ? "listed" : "gone",
+		        (long)CompatBase->lib_OpenCnt);
+		CHECK(rtc_errno != 0 && rtc_lib_listed(RT_COMPAT_LIBNAME),
+		      "compat aliases off refused while the alias is open");
+		RTC_CLOSELIB(CompatBase);
+		CompatBase = NULL;
+	}
+	rtc_errno = RTC_COMMAND("compat aliases off");
+	CHECK(rtc_errno == 0 && !rtc_lib_listed(RT_COMPAT_LIBNAME) && rtc_lib_listed(RIPTIDE_LIB_NAME),
+	      "compat aliases off removes the alias");
+	rtc_errno = RTC_COMMAND("compat aliases on");
+	CHECK(rtc_errno == 0 && rtc_lib_listed(RT_COMPAT_LIBNAME), "compat aliases on adds it again");
+	RTC_LOG("compat alias switch: %d checks passed, %d failed so far", rtc_pass, rtc_fail);
 }
 
 static void rtc_usergroup(void)
@@ -351,8 +410,10 @@ static int rtcheck_run(void)
 #if RTC_BLOCKING
 	rtc_blocking();
 #endif
-	if (MiamiBase)
-		rtc_miami();
+	if (RiptideBase)
+		rtc_riptide();
+	if (RiptideBase && CompatBase)
+		rtc_compat();
 	if (UserGroupBase)
 		rtc_usergroup();
 	RTC_LOG("%d checks passed, %d failed", rtc_pass, rtc_fail);

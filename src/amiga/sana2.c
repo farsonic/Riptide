@@ -47,7 +47,7 @@ struct s2if {
 	struct s2req *all;           /* every request we allocated */
 	struct s2req *wfree;
 	int    nwrites, wbusy;
-	int    want_online;          /* request from MiamiOnOffline */
+	int    want_online;          /* request from RiptideOnOffline */
 	struct rt_timer retry;
 	u32    rx_errors;
 };

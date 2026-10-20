@@ -420,8 +420,8 @@ u32 rt_buf_to_iov(const struct rt_iov *iov, int iovcnt, u32 offset, const void *
 /* ---- sysctl ---- */
 
 static const struct rt_sysctl sock_sysctls[] = {
-	/* MIBs: 4.4BSD/Miami TCPCTL_SENDSPACE 8, TCPCTL_RECVSPACE 9; Miami
-	 * CTL_SOCKET(11).maxqlen(0). The UDP buffer defaults belong to udp.c
+	/* MIBs: 4.4BSD TCPCTL_SENDSPACE 8, TCPCTL_RECVSPACE 9;
+	 * CTL_SOCKET(11).maxqlen(0) (compat alias API). The UDP buffer defaults belong to udp.c
 	 * (net.inet.udp.recvspace / maxdgram), whose attach sets them. */
 	{ "net.inet.tcp.sendspace", RT_SYSCTL_INT, RT_SYSCTL_RW, 4, { RT_CTL_NET, RT_AF_INET, RT_IPPROTO_TCP, 8 },
 	  &sock_tcp_sendspace, 512, 16 * 1024 * 1024, NULL, "default TCP send buffer" },

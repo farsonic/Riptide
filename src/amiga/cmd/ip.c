@@ -5,7 +5,7 @@
  *   ip [-s] [-d] [-4] [-br] OBJECT [COMMAND [ARGS]]
  *   OBJECT := link | address | route | neigh | dhcp | dns   (abbreviations work)
  *
- * Data comes from the net.riptide.* tables (MiamiSysCtl), changes go to
+ * Data comes from the net.riptide.* tables (RiptideSysCtl), changes go to
  * the running stack as configuration commands through the RIPTIDE port.
  * "ip dhcp" and "ip dns" are Riptide extensions.
  * SPDX-License-Identifier: GPL-2.0-only

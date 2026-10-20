@@ -140,7 +140,7 @@ struct rt_dgram_cb {
 };
 
 /* Asynchronous socket events (values of GetSocketEvents / FD_* in the
- * AmiTCP/Miami ABI) */
+ * AmiTCP ABI) */
 #define RT_SEV_ACCEPT   0x01
 #define RT_SEV_CONNECT  0x02
 #define RT_SEV_OOB      0x04
@@ -204,7 +204,7 @@ struct rt_sockctx {
 	u32  sigio_mask, sigurg_mask, sigevent_mask;
 	void *owner;                  /* glue data (Amiga: struct SocketBase*) */
 	struct rt_sockctx *next;
-	/* fd callback (Miami MiamiSetFdCallback / SBTC_FDCALLBACK); may be NULL */
+	/* fd callback (RiptideSetFdCallback / SBTC_FDCALLBACK); may be NULL */
 	int (*fd_callback)(struct rt_sockctx *ctx, int fd, int action);
 	int  ev_next;                 /* GetSocketEvents round robin position */
 };

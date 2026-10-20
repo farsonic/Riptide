@@ -870,7 +870,7 @@ static int sbt_one(struct TaskCtx *c, struct TagItem *ti)
 		}
 		break;
 	case SBTC_FDCALLBACK:
-		if (set) amiga_set_fdcb(c, (APTR)val, MIAMICPU_M68KREG); else val = (ULONG)c->fdcb;
+		if (set) amiga_set_fdcb(c, (APTR)val, RIPTIDECPU_M68KREG); else val = (ULONG)c->fdcb;
 		break;
 	case SBTC_LOGSTAT:
 		if (set) c->logstat = (LONG)val; else val = (ULONG)c->logstat;

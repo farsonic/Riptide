@@ -300,7 +300,7 @@ struct rt_sleeper *rt_sleeper_self(void)
 
 	if (c)
 		return &c->sl;
-	/* A task without a bsdsocket/miami context (the stack process, or a
+	/* A task without a bsdsocket/riptide context (the stack process, or a
 	 * program calling through a library opened by another task). */
 	Forbid();
 	for (n = orphan_sleepers.mlh_Head; n->mln_Succ; n = n->mln_Succ) {

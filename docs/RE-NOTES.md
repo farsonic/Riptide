@@ -1,5 +1,7 @@
 # MiamiDx 1.0c: reverse-engineering notes
 
+> **Naming note.** This is the factual record of analysing the original MiamiDx binary, so it uses the original names throughout. Riptide's own code and documentation use Riptide names: the API that MiamiDx publishes as `miami.library` is implemented by `riptide.library` (functions `Riptide*` instead of `Miami*`, e.g. `RiptideSysCtl()`), which Riptide additionally publishes under the old name as a switchable compat alias (`compat aliases on|off`). See `docs/AMIGA.md`.
+
 This document covers interfaces and internals only, for interoperability and a clean-room reimplementation. It contains no Miami code. Official SDK prototypes are referred to by name only. Facts such as offsets, LVOs, register conventions and string identifiers are given where they are needed.
 
 The registration and key-file mechanism exists (strings `Miami:MiamiDx.key`, `Miami.key1` and `$MiamiKey$` at h0+0x526..0x544, plus the code around h0+0x1700..0x1800). It is **not analysed** here. Where an interface touches it, that is noted and the analysis stops.

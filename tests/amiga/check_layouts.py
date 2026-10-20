@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-# Riptide - verify the hand-written AmigaOS/AmiTCP/Miami definitions in
-# src/amiga against the official NDK 3.2 and the AmiTCP/Miami SDKs.
+# Riptide - verify the hand-written AmigaOS/AmiTCP definitions in src/amiga
+# against the official NDK 3.2, the AmiTCP SDK and the SDK of the historical
+# API that riptide.library and its compat alias provide (COMPAT_SDK).
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # 1. Structure offsets/sizes and constants: our headers are compiled for
 #    m68k and the values extracted; then a test file is compiled against
 #    the reference headers with _Static_assert()s that they are equal.
 # 2. Library vector tables (bias + argument registers) are compared with
-#    the reference FD files.
+#    the reference FD files. riptide.library's names are mapped to the
+#    reference names (COMPAT_FN_PREFIX), since its jump table is also
+#    published as the compat alias and must stay binary compatible.
 # Nothing from the reference headers is copied into the repository.
 import os
 import re
@@ -21,6 +24,17 @@ sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import gen_lvos  # noqa: E402
 
 CC = os.environ.get('CC_M68K', 'm68k-linux-gnu-gcc')
+
+# The reference SDK of the compat alias: its function prefix, FD file and
+# library header, and our constants that carry a different name there.
+COMPAT_FN_PREFIX = 'Miami'
+COMPAT_FD = 'miami_lib.fd'
+COMPAT_HDR = 'libraries/miami.h'
+COMPAT_CONSTS = {'RIPTIDECPU_M68KREG': 'MIAMICPU_M68KREG', 'RIPTIDECPU_PPCV4': 'MIAMICPU_PPCV4'}
+
+
+def compat_name(name):
+    return COMPAT_FN_PREFIX + name[len('Riptide'):] if name.startswith('Riptide') else name
 OBJCOPY = os.environ.get('OBJCOPY_M68K', 'm68k-linux-gnu-objcopy')
 
 # (our struct, field or None for sizeof, reference struct, reference field)
@@ -113,7 +127,7 @@ SBTC_ERRNOBYTEPTR SBTC_ERRNOWORDPTR SBTC_ERRNOLONGPTR SBTC_HERRNOLONGPTR SBTC_RE
 FDCB_ALLOC FDCB_CHECK HOST_NOT_FOUND TRY_AGAIN NO_RECOVERY NO_DATA AI_PASSIVE AI_CANONNAME NI_NOFQDN
 NI_NUMERICHOST NI_NAMEREQD NI_NUMERICSERV NI_DGRAM EAI_ADDRFAMILY EAI_AGAIN EAI_BADFLAGS EAI_FAIL
 EAI_FAMILY EAI_MEMORY EAI_NODATA EAI_NONAME EAI_SERVICE EAI_SOCKTYPE EAI_SYSTEM LOG_PRIMASK LOG_FACMASK
-LOG_USER LOG_PID MIAMICPU_M68KREG MIAMICPU_PPCV4 NGROUPS MAXLOGNAME UGT_ERRNOBPTR UGT_ERRNOWPTR
+LOG_USER LOG_PID RIPTIDECPU_M68KREG RIPTIDECPU_PPCV4 NGROUPS MAXLOGNAME UGT_ERRNOBPTR UGT_ERRNOWPTR
 UGT_ERRNOLPTR UGT_INTRMASK UGT_OWNER'''.split()
 # rt_bsd.h / rt_errno.h constants: RT_X must equal the SDK's X
 RT_CONSTS = '''AF_INET SOCK_STREAM SOCK_DGRAM SOCK_RAW SOL_SOCKET SO_DEBUG SO_ACCEPTCONN SO_REUSEADDR
@@ -192,7 +206,8 @@ def check_against(tmp, name, items, consts, our_inc, ref_inc, ref_dirs, defines=
                     % (e, vals[n], mine, field or 'sizeof', vals[n]))
             n += 1
         for c in consts + list(rt_consts):
-            f.write('_Static_assert((unsigned long)(%s) == %uUL, "%s: ours=%u");\n' % (c, vals[n], c, vals[n]))
+            rc = COMPAT_CONSTS.get(c, c)
+            f.write('_Static_assert((unsigned long)(%s) == %uUL, "%s: ours=%u");\n' % (rc, vals[n], c, vals[n]))
             n += 1
     gi = run([CC, '-print-file-name=include']).stdout.strip()
     cmd = [CC, '-m68020', '-std=gnu89', '-fsyntax-only', '-ffreestanding', '-nostdinc', '-isystem', gi,
@@ -236,7 +251,7 @@ def check_lvos(table, lib, fd, rename=None, allow_extra=()):
     for f in libs[lib].funcs:
         if f.bias <= 24 or f.name in allow_extra:
             continue
-        name = (rename or {}).get(f.name, f.name)
+        name = rename(f.name) if rename else f.name
         if name not in ref:
             print('  %s: %s not in %s' % (lib, f.name, os.path.basename(fd)))
             ok = False
@@ -253,10 +268,10 @@ def check_lvos(table, lib, fd, rename=None, allow_extra=()):
 
 def main():
     ndk = os.environ.get('NDK')
-    miami = os.environ.get('MIAMI_SDK')
+    compat = os.environ.get('COMPAT_SDK')
     amitcp = os.environ.get('AMITCP_SDK')
     if not ndk or not os.path.isdir(ndk):
-        print('SKIP: set NDK=<path to NDK3.2> (and MIAMI_SDK, AMITCP_SDK)')
+        print('SKIP: set NDK=<path to NDK3.2> (and COMPAT_SDK, AMITCP_SDK)')
         return 0
     ok = True
     with tempfile.TemporaryDirectory() as tmp:
@@ -270,22 +285,23 @@ def main():
         if os.path.isdir(sana):
             ok &= check_against(tmp, 'sana2', SANA_STRUCTS, SANA_CONSTS, ['exec.h', 'sana2.h'],
                                 ['devices/sana2.h'], [sana, inc])
-        if miami and os.path.isdir(miami):
-            ni = os.path.join(miami, 'netinclude')
+        if compat and os.path.isdir(compat):
+            ni = os.path.join(compat, 'netinclude')
             refs = ['sys/types.h', 'sys/uio.h', 'sys/socket.h', 'sys/ioctl.h', 'sys/errno.h', 'netinet/in.h',
                     'netinet/tcp.h', 'net/if.h', 'net/route.h', 'netdb.h', 'bsdsocket/socketbasetags.h',
-                    'sys/syslog.h', 'libraries/miami.h', 'libraries/usergroup.h']
-            ok &= check_against(tmp, 'miami-sdk', NET_STRUCTS, NET_CONSTS,
+                    'sys/syslog.h', COMPAT_HDR, 'libraries/usergroup.h']
+            ok &= check_against(tmp, 'compat-sdk', NET_STRUCTS, NET_CONSTS,
                                 ['exec.h', 'amiga_net.h', 'rt_bsd.h', 'rt_errno.h', 'rt_ip.h'], refs, [ni, inc, os.path.join(ROOT, 'src/amiga/include')],
                                 rt_consts=RT_CONSTS)
-            fdd = os.path.join(miami, 'fd')
+            fdd = os.path.join(compat, 'fd')
             t = os.path.join(ROOT, 'src/amiga/lib_lvos.txt')
             ok &= check_lvos(t, 'bsdsocket', os.path.join(fdd, 'socket_lib.fd'))
-            ok &= check_lvos(t, 'miami', os.path.join(fdd, 'miami_lib.fd'), allow_extra=('MiamiPrivate53',))
+            ok &= check_lvos(t, 'riptide', os.path.join(fdd, COMPAT_FD), rename=compat_name,
+                             allow_extra=('RiptideReserved53',))
             ok &= check_lvos(t, 'usergroup', os.path.join(fdd, 'usergroup_lib.fd'))
-            m = [f for f in gen_lvos.parse(t)['miami'].funcs]
+            m = [f for f in gen_lvos.parse(t)['riptide'].funcs]
             if max(f.bias for f in m) != 522:
-                print('FAIL miami: table must extend to -522')
+                print('FAIL riptide: table must extend to -522 (compat alias)')
                 ok = False
         if amitcp and os.path.isdir(amitcp):
             ni = os.path.join(amitcp, 'netinclude')
@@ -307,6 +323,9 @@ def main():
                 for lib, fdn in (('bsdsocket', 'bsdsocket_lib.fd'), ('usergroup', 'usergroup_lib.fd')):
                     if os.path.exists(os.path.join(fdd, fdn)):
                         ok &= check_lvos(t, lib, os.path.join(fdd, fdn))
+        # the developer SDK's FD file (generated from the same table)
+        ok &= check_lvos(os.path.join(ROOT, 'src/amiga/lib_lvos.txt'), 'riptide',
+                         os.path.join(ROOT, 'sdk/fd/riptide_lib.fd'))
         t = os.path.join(ROOT, 'src/amiga/os/os_lvos.txt')
         for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd')):
             ok &= check_lvos(t, lib, os.path.join(ndk, 'FD', fdn))

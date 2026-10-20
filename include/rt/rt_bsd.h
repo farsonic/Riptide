@@ -1,6 +1,6 @@
 /*
  * Riptide - BSD socket ABI as seen by AmigaOS applications (AmiTCP 4 /
- * Miami / 4.4BSD values). The core uses these RT_ prefixed names so it can
+ * 4.4BSD values). The core uses these RT_ prefixed names so it can
  * be compiled on a host next to the host's own <sys/socket.h>.
  *
  * Structures here are exchanged with Amiga applications verbatim: all
@@ -68,7 +68,7 @@ struct rt_timeval {
 #define RT_SO_RCVTIMEO     0x1006   /* struct rt_timeval */
 #define RT_SO_ERROR        0x1007
 #define RT_SO_TYPE         0x1008
-#define RT_SO_EVENTMASK    0x2001   /* AmiTCP/Miami: RT_SEV_* mask */
+#define RT_SO_EVENTMASK    0x2001   /* AmiTCP: RT_SEV_* mask */
 
 /* ---- IPPROTO_IP options ---- */
 #define RT_IP_OPTIONS          1
@@ -86,7 +86,7 @@ struct rt_timeval {
 #define RT_IP_DROP_MEMBERSHIP  13
 
 /* ---- IPPROTO_TCP options ----
- * 1..8 are the 4.4BSD/Miami values. The rest use FreeBSD's numbers for the
+ * 1..8 are the 4.4BSD values. The rest use FreeBSD's numbers for the
  * Linux-style knobs Riptide adds. */
 #define RT_TCP_NODELAY     0x01
 #define RT_TCP_MAXSEG      0x02

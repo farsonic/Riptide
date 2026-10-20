@@ -4,8 +4,8 @@
  *
  * Table dumps are read-only OPAQUE sysctls. Each one is reachable by name
  * ("net.riptide.ifaces") and by the numeric MIB {CTL_NET, RT_CTL_MIB_RIPTIDE,
- * RT_CTL_*}, so AmigaOS programs can fetch them with MiamiSysCtl()
- * (miami.library, LVO -30) using BSD sysctl(3) semantics:
+ * RT_CTL_*}, so AmigaOS programs can fetch them with RiptideSysCtl()
+ * (riptide.library, LVO -30) using BSD sysctl(3) semantics:
  *
  *   1. call with old == NULL: *oldlen is set to the current size;
  *   2. allocate a little more (tables can grow meanwhile) and call again;

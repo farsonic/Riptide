@@ -1,5 +1,5 @@
 /*
- * Riptide - rtcheck: a bsdsocket/miami/usergroup.library client for a
+ * Riptide - rtcheck: a bsdsocket/riptide/usergroup.library client for a
  * running Riptide on real AmigaOS (or an emulator). It opens the
  * libraries with exec OpenLibrary() and runs the checks in rtcheck_body.h
  * through the real library vectors, using blocking calls where possible.
@@ -10,11 +10,12 @@
 #include "amiga_os.h"
 #include "amiga_net.h"
 #include "rt/rt_types.h"
+#include "rt/riptide_port.h"
 
-struct Library *SocketBase, *MiamiBase, *UserGroupBase;
+struct Library *SocketBase, *RiptideBase, *CompatBase, *UserGroupBase;
 
 #include "gen/bsdsocket_calls.h"
-#include "gen/miami_calls.h"
+#include "gen/riptide_calls.h"
 #include "gen/usergroup_calls.h"
 
 static void rtc_logf(const char *fmt, ...)
@@ -29,7 +30,43 @@ static void rtc_logf(const char *fmt, ...)
 	PutStr((CONST_STRPTR)"\n");
 }
 
+/* Send one configuration line to the RIPTIDE port; 0 or an errno. */
+static LONG rtc_command(const char *line)
+{
+	struct MsgPort *reply = CreateMsgPort(), *port;
+	struct RiptideMsg *m;
+	LONG r = 5;          /* EIO: no reply port / no stack */
+	int i;
+
+	m = reply ? AllocVec(sizeof(*m), MEMF_PUBLIC | MEMF_CLEAR) : NULL;
+	if (m) {
+		m->msg.mn_ReplyPort = reply;
+		m->msg.mn_Length = sizeof(*m);
+		m->cmd = RTCMD_COMMAND;
+		for (i = 0; line[i] && i < RIPTIDE_TEXTLEN - 1; i++)
+			m->text[i] = line[i];
+		Forbid();
+		port = FindPort((CONST_STRPTR)RIPTIDE_PORTNAME);
+		if (port)
+			PutMsg(port, &m->msg);
+		Permit();
+		if (port) {
+			WaitPort(reply);
+			GetMsg(reply);
+			r = m->result;
+			if (r)
+				rtc_logf("rtcheck: '%s': %s", line, m->text);
+		}
+		FreeVec(m);
+	}
+	if (reply)
+		DeleteMsgPort(reply);
+	return r;
+}
+
 #define RTC_LOG(...) rtc_logf(__VA_ARGS__)
+#define RTC_COMMAND(line) rtc_command(line)
+#define RTC_CLOSELIB(b) CloseLibrary(b)
 #define RTC_PUMP() Delay(1)
 #define RTC_BLOCKING 1
 #include "rtcheck_body.h"
@@ -123,11 +160,17 @@ static int rtcheck_main(void)
 	if (args[3]) {
 		/* NOCHECK: only start the stack and wait until it is ready */
 		rtc_logf("rtcheck: stack ready: %s", (const char *)SocketBase->lib_IdString);
+		rtc_logf("rtcheck: %s %slisted, compat alias %s %slisted", RIPTIDE_LIB_NAME,
+		         rtc_lib_listed(RIPTIDE_LIB_NAME) ? "" : "not ", RT_COMPAT_LIBNAME,
+		         rtc_lib_listed(RT_COMPAT_LIBNAME) ? "" : "not ");
 		CloseLibrary(SocketBase);
 		FreeArgs(rda);
 		return 0;
 	}
-	MiamiBase = OpenLibrary((CONST_STRPTR)"miami.library", 21);
+	RiptideBase = OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, RIPTIDE_LIB_VERSION);
+	CompatBase = OpenLibrary((CONST_STRPTR)RT_COMPAT_LIBNAME, RT_COMPAT_LIBVERSION);
+	CHECK(RiptideBase != NULL, "open " RIPTIDE_LIB_NAME);
+	CHECK(CompatBase != NULL, "open the compat alias " RT_COMPAT_LIBNAME);
 	UserGroupBase = OpenLibrary((CONST_STRPTR)"usergroup.library", 4);
 	rtc_logf("rtcheck: %s", (const char *)SocketBase->lib_IdString);
 	fails = rtcheck_run();
@@ -135,6 +178,8 @@ static int rtcheck_main(void)
 		rtc_connect((const char *)args[2]);
 		fails = rtc_fail;
 	}
+	rtc_compat_switch();         /* closes CompatBase */
+	fails = rtc_fail;
 	if (args[1]) {
 		/* must be refused: we still have the libraries open */
 		rtc_logf("rtcheck: '%s' while the libraries are open:", (const char *)args[1]);
@@ -142,8 +187,8 @@ static int rtcheck_main(void)
 	}
 	if (UserGroupBase)
 		CloseLibrary(UserGroupBase);
-	if (MiamiBase)
-		CloseLibrary(MiamiBase);
+	if (RiptideBase)
+		CloseLibrary(RiptideBase);
 	CloseLibrary(SocketBase);
 	if (args[1]) {
 		rtc_logf("rtcheck: '%s' after closing them:", (const char *)args[1]);

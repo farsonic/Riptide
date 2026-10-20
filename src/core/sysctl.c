@@ -5,8 +5,9 @@
  *
  * Call with the stack lock held (handlers may look at stack state).
  *
- * Numeric MIBs follow 4.4BSD / Miami 2.x (MiamiSysCtl()) where the variable
- * existed there. Top level: CTL_KERN 1, CTL_NET 4, Miami CTL_DNS 9,
+ * Numeric MIBs follow 4.4BSD and the API of riptide.library's compat alias
+ * (RiptideSysCtl()) where the variable existed there. Top level: CTL_KERN 1,
+ * CTL_NET 4, CTL_DNS 9 (compat API),
  * CTL_INETD 10, CTL_SOCKET 11. Under net: PF_INET 2, then the protocol
  * number (ip 0, icmp 1, tcp 6, udp 17).
  *
@@ -26,10 +27,10 @@
  *   4.2.17.1         net.inet.udp.checksum       udp.c   (UDPCTL_CHECKSUM)
  *   4.2.17.3         net.inet.udp.maxdgram       udp.c   (UDPCTL_MAXDGRAM)
  *   4.2.17.4         net.inet.udp.recvspace      udp.c   (UDPCTL_RECVSPACE)
- *   9.0.0            dns.cache.size              resolv.c (Miami)
- *   9.0.1            dns.cache.flush             resolv.c (Miami)
- *   9.0.2            dns.cache.enabled           resolv.c (Miami)
- *   11.0             socket.maxqlen              socket.c (Miami)
+ *   9.0.0            dns.cache.size              resolv.c (compat API)
+ *   9.0.1            dns.cache.flush             resolv.c (compat API)
+ *   9.0.2            dns.cache.enabled           resolv.c (compat API)
+ *   11.0             socket.maxqlen              socket.c (compat API)
  *
  * The statistics (net.inet.{ip,icmp,tcp,udp}.stats) are exported by name
  * only: BSD's TCPCTL_STATS (4.2.6.4) and UDPCTL_STATS (4.2.17.2) return

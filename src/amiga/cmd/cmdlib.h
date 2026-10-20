@@ -2,7 +2,7 @@
  * Riptide - shared code of the network tools (ip, ifconfig, route, arp,
  * netstat, traceroute, ping, host, sysctl, hostname): Linux style argument
  * splitting, buffered output, library handling, the net.riptide.* table
- * dumps (MiamiSysCtl) and the RIPTIDE port command channel.
+ * dumps (RiptideSysCtl) and the RIPTIDE port command channel.
  *
  * Tools are small CLI programs: keep stack use low (the default CLI stack
  * is 4 KB) and allocate buffers with AllocVec().
@@ -22,7 +22,7 @@
 #include "rt/rt_stats.h"
 #include "rt/riptide_port.h"
 
-extern struct Library *SocketBase, *MiamiBase;
+extern struct Library *SocketBase, *RiptideBase;
 extern struct Device *TimerBase;
 
 /* exit codes (AmigaDOS conventions) */
@@ -52,7 +52,7 @@ int  cl_break(void);
 
 /* ---- libraries; print an error and return -1 when unavailable ---- */
 int  cl_need_socket(void);       /* bsdsocket.library 4 */
-int  cl_need_miami(void);        /* miami.library (MiamiSysCtl) */
+int  cl_need_riptide(void);      /* riptide.library (RiptideSysCtl) */
 int  cl_need_timer(void);        /* timer.device for cl_now_us() */
 u32  cl_now_us(void);            /* microseconds, wraps */
 int  cl_socket(int type, int proto);   /* socket(AF_INET...) for ioctls */

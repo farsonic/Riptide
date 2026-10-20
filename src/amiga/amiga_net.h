@@ -1,5 +1,5 @@
 /*
- * Riptide - structures and constants of the AmiTCP/Miami application ABI
+ * Riptide - structures and constants of the AmiTCP-style application ABI
  * (written from the documented API; tests/amiga/check_layouts.sh compares
  * them with the SDK headers).
  * SPDX-License-Identifier: GPL-2.0-only
@@ -148,9 +148,22 @@ struct if_nameindex {
 #define LOG_PID     0x01
 #define LOG_UPTO(pri) ((1 << ((pri) + 1)) - 1)
 
-/* miami.library */
-#define MIAMICPU_M68KREG 1
-#define MIAMICPU_PPCV4   2
+/* riptide.library */
+#define RIPTIDE_LIB_NAME     "riptide.library"
+#define RIPTIDE_LIB_VERSION  1
+#define RIPTIDE_LIB_REVISION 0
+#define RIPTIDE_LIB_VERSTR   "1.0"
+/* RiptideSupportedCPUs()/RiptideSetFdCallback() CPU types */
+#define RIPTIDECPU_M68KREG 1
+#define RIPTIDECPU_PPCV4   2
+/* The compat alias of riptide.library: the name and version under which
+ * programs written for the historical API it implements open it
+ * (docs/AMIGA.md, "Compat alias"). */
+#define RT_COMPAT_LIBNAME    "miami.library"
+#define RT_COMPAT_LIBVERSION 21
+/* where the historical stack installs its MNI drivers; searched after
+ * LIBS: and DEVS:Networks/ for an mni= name without a path */
+#define RT_COMPAT_MNI_DIR    "Miami:MNI/"
 
 /* ---- usergroup.library ---- */
 struct passwd {

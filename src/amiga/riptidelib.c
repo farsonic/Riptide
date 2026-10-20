@@ -1,17 +1,35 @@
 /*
- * Riptide - miami.library (version 21, the MiamiDx API). The documented
- * functions of the Miami SDK 2.11 are implemented; the reserved and the
- * MiamiDx-private vectors (up to -522) return 0. Socket related calls use
- * the per-task context shared with bsdsocket.library.
+ * Riptide - riptide.library (version 1), Riptide's own API library: sysctl
+ * access to the stack and its tables (RiptideSysCtl()), interface state,
+ * the protocol-independent resolver calls (getaddrinfo() & co.) and the
+ * if_* functions. Socket related calls use the per-task context shared
+ * with bsdsocket.library.
+ *
+ * Its jump table keeps the layout of a historical Amiga API library
+ * (53 documented vectors, reserved ones returning 0, extending to -522),
+ * so the same table is also published under that library's name as a
+ * compat alias (rtlib_compat, "compat aliases on|off" in riptide.conf).
+ * The alias is a second master base on the same vectors; its openers get
+ * per-task bases exactly like riptide.library's.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
-#include "gen/miami_impl.h"
+#include "gen/riptide_impl.h"
 
-struct RtLibDef rtlib_miami = {
-	"miami.library",
-	"miami.library 21.1 (" RIPTIDE_DATE ") Riptide " RIPTIDE_VERSION_STRING "\r\n",
-	21, 1, miami_vectors, sizeof(struct RtBase), 1, NULL, NULL, NULL, { NULL, NULL, NULL }
+struct RtLibDef rtlib_riptide = {
+	"riptide.library",
+	"riptide.library " RIPTIDE_LIB_VERSTR " (" RIPTIDE_DATE ") Riptide " RIPTIDE_VERSION_STRING "\r\n",
+	RIPTIDE_LIB_VERSION, RIPTIDE_LIB_REVISION, riptide_vectors, sizeof(struct RtBase), 1, NULL, NULL, NULL,
+	{ NULL, NULL, NULL }
+};
+
+/* The compat alias: name and version of the historical library whose API
+ * riptide.library provides (checked against its SDK by
+ * tests/amiga/check_layouts.sh). */
+struct RtLibDef rtlib_compat = {
+	RT_COMPAT_LIBNAME,
+	RT_COMPAT_LIBNAME " 21.1 (" RIPTIDE_DATE ") Riptide " RIPTIDE_VERSION_STRING " compat alias\r\n",
+	RT_COMPAT_LIBVERSION, 1, riptide_vectors, sizeof(struct RtBase), 1, NULL, NULL, NULL, { NULL, NULL, NULL }
 };
 
 int amiga_inet_aton(const char *cp, u32 *addr);
@@ -29,7 +47,7 @@ static LONG fail(struct TaskCtx *c, int err)
 	return -1;
 }
 
-LONG miami_MiamiSysCtl(RTREG(a6) struct Library *base, RTREG(a0) LONG *name, RTREG(d0) ULONG namelen,
+LONG riptide_RiptideSysCtl(RTREG(a6) struct Library *base, RTREG(a0) LONG *name, RTREG(d0) ULONG namelen,
                        RTREG(a1) APTR oldp, RTREG(a2) LONG *oldlenp, RTREG(a3) APTR newp,
                        RTREG(d1) LONG newlen)
 {
@@ -49,27 +67,27 @@ LONG miami_MiamiSysCtl(RTREG(a6) struct Library *base, RTREG(a0) LONG *name, RTR
 	return 0;
 }
 
-void miami_MiamiDisallowDNS(RTREG(a6) struct Library *base, RTREG(d0) LONG value)
+void riptide_RiptideDisallowDNS(RTREG(a6) struct Library *base, RTREG(d0) LONG value)
 {
 	rt_dns_disallowed = value != 0;
 }
 
-ULONG miami_MiamiGetPid(RTREG(a6) struct Library *base)
+ULONG riptide_RiptideGetPid(RTREG(a6) struct Library *base)
 {
 	return (ULONG)base_ctx(base);
 }
 
-ULONG miami_MiamiPFAddHook(RTREG(a6) struct Library *base, RTREG(a0) APTR hook,
+ULONG riptide_RiptidePFAddHook(RTREG(a6) struct Library *base, RTREG(a0) APTR hook,
                            RTREG(a1) CONST_STRPTR name, RTREG(a2) APTR tags)
 {
 	return 0;      /* packet monitoring is not supported */
 }
 
-void miami_MiamiPFRemoveHook(RTREG(a6) struct Library *base, RTREG(a0) APTR handle)
+void riptide_RiptidePFRemoveHook(RTREG(a6) struct Library *base, RTREG(a0) APTR handle)
 {
 }
 
-LONG miami_MiamiGetHardwareLen(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name)
+LONG riptide_RiptideGetHardwareLen(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name)
 {
 	struct rt_netif *n;
 	LONG len = 0;
@@ -84,16 +102,16 @@ LONG miami_MiamiGetHardwareLen(RTREG(a6) struct Library *base, RTREG(a0) CONST_S
 	return len;
 }
 
-ULONG miami_MiamiOpenSSL(RTREG(a6) struct Library *base, RTREG(a0) APTR tags)
+ULONG riptide_RiptideOpenSSL(RTREG(a6) struct Library *base, RTREG(a0) APTR tags)
 {
 	return 0;
 }
 
-void miami_MiamiCloseSSL(RTREG(a6) struct Library *base)
+void riptide_RiptideCloseSSL(RTREG(a6) struct Library *base)
 {
 }
 
-LONG miami_MiamiSetSocksConn(RTREG(a6) struct Library *base, RTREG(a0) APTR sa, RTREG(d0) LONG len)
+LONG riptide_RiptideSetSocksConn(RTREG(a6) struct Library *base, RTREG(a0) APTR sa, RTREG(d0) LONG len)
 {
 	return 0;      /* no SOCKS */
 }
@@ -104,14 +122,14 @@ static int netif_online(const struct rt_netif *n)
 	       (n->type == RT_IFT_LOOP && (n->flags & RT_IFF_UP));
 }
 
-LONG miami_MiamiIsOnline(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name)
+LONG riptide_RiptideIsOnline(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name)
 {
 	struct rt_netif *n;
 	LONG r = 0;
 
 	rt_lock();
 	if (!name || !strcmp((const char *)name, "mi0")) {
-		/* MiamiDx: "mi0" or NULL means any (non loopback) interface */
+		/* "mi0" (the historical API's name) or NULL: any non-loopback interface */
 		for (n = rt_netif_list(); n; n = n->next)
 			if (n->type != RT_IFT_LOOP && netif_online(n))
 				r = 1;
@@ -122,7 +140,7 @@ LONG miami_MiamiIsOnline(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR 
 	return r;
 }
 
-void miami_MiamiOnOffline(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name, RTREG(d0) LONG online)
+void riptide_RiptideOnOffline(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name, RTREG(d0) LONG online)
 {
 	struct amiga_if *ai;
 
@@ -137,7 +155,7 @@ void miami_MiamiOnOffline(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR
 	rt_kick();
 }
 
-ULONG miami_inet_ntop(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RTREG(a0) const APTR addrptr,
+ULONG riptide_inet_ntop(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RTREG(a0) const APTR addrptr,
                       RTREG(a1) STRPTR strptr, RTREG(d1) LONG len)
 {
 	CTX;
@@ -160,7 +178,7 @@ ULONG miami_inet_ntop(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RTR
 	return (ULONG)strptr;
 }
 
-LONG miami_inet_aton(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR cp, RTREG(a1) APTR addr)
+LONG riptide_inet_aton(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR cp, RTREG(a1) APTR addr)
 {
 	u32 a;
 
@@ -171,7 +189,7 @@ LONG miami_inet_aton(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR cp, 
 	return 1;
 }
 
-LONG miami_inet_pton(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RTREG(a0) CONST_STRPTR strptr,
+LONG riptide_inet_pton(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RTREG(a0) CONST_STRPTR strptr,
                      RTREG(a1) APTR addrptr)
 {
 	CTX;
@@ -186,7 +204,7 @@ LONG miami_inet_pton(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RTRE
 	return 1;
 }
 
-ULONG miami_gethostbyname2(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name, RTREG(d0) LONG fam)
+ULONG riptide_gethostbyname2(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name, RTREG(d0) LONG fam)
 {
 	CTX;
 	u32 addrs[8];
@@ -208,7 +226,7 @@ ULONG miami_gethostbyname2(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPT
 	return (ULONG)bsd_make_hostent(c, cname[0] ? cname : (const char *)name, addrs, r);
 }
 
-ULONG miami_gai_strerror(RTREG(a6) struct Library *base, RTREG(d0) LONG err)
+ULONG riptide_gai_strerror(RTREG(a6) struct Library *base, RTREG(d0) LONG err)
 {
 	static const char *const s[] = {
 		"Success", "Address family for hostname not supported", "Temporary failure in name resolution",
@@ -222,7 +240,7 @@ ULONG miami_gai_strerror(RTREG(a6) struct Library *base, RTREG(d0) LONG err)
 	return (ULONG)"Unknown error";
 }
 
-void miami_freeaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) APTR aihead)
+void riptide_freeaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) APTR aihead)
 {
 	struct addrinfo *ai = aihead, *next;
 
@@ -287,7 +305,7 @@ static struct addrinfo *ai_new(const struct addrinfo *hints, int socktype, u32 a
 	return ai;
 }
 
-LONG miami_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR hostname,
+LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR hostname,
                        RTREG(a1) CONST_STRPTR servname, RTREG(a2) const APTR hintsp, RTREG(a3) APTR *result)
 {
 	const struct addrinfo *hints = hintsp;
@@ -350,7 +368,7 @@ LONG miami_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR ho
 				port = 0;
 			} else if ((e = service_port(serv, types[j], &port)) != 0) {
 				if (ntypes == 1) {
-					miami_freeaddrinfo(base, head);
+					riptide_freeaddrinfo(base, head);
 					return e;
 				}
 				continue;
@@ -358,7 +376,7 @@ LONG miami_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR ho
 			ai = ai_new(hints, types[j], addrs[i], port,
 			            (head == NULL && (flags & AI_CANONNAME)) ? cname : NULL);
 			if (!ai) {
-				miami_freeaddrinfo(base, head);
+				riptide_freeaddrinfo(base, head);
 				return EAI_MEMORY;
 			}
 			*tail = ai;
@@ -371,7 +389,7 @@ LONG miami_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR ho
 	return 0;
 }
 
-LONG miami_getnameinfo(RTREG(a6) struct Library *base, RTREG(a0) const APTR sa, RTREG(d0) LONG salen,
+LONG riptide_getnameinfo(RTREG(a6) struct Library *base, RTREG(a0) const APTR sa, RTREG(d0) LONG salen,
                        RTREG(a1) STRPTR host, RTREG(d1) LONG hostlen, RTREG(a2) STRPTR serv,
                        RTREG(d2) LONG servlen, RTREG(d3) LONG flags)
 {
@@ -417,7 +435,7 @@ LONG miami_getnameinfo(RTREG(a6) struct Library *base, RTREG(a0) const APTR sa, 
 	return 0;
 }
 
-LONG miami_if_nametoindex(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR ifname)
+LONG riptide_if_nametoindex(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR ifname)
 {
 	struct rt_netif *n;
 	LONG r = 0;
@@ -432,7 +450,7 @@ LONG miami_if_nametoindex(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR
 	return r;
 }
 
-ULONG miami_if_indextoname(RTREG(a6) struct Library *base, RTREG(d0) LONG ifindex, RTREG(a0) STRPTR ifname)
+ULONG riptide_if_indextoname(RTREG(a6) struct Library *base, RTREG(d0) LONG ifindex, RTREG(a0) STRPTR ifname)
 {
 	CTX;
 	struct rt_netif *n;
@@ -450,7 +468,7 @@ ULONG miami_if_indextoname(RTREG(a6) struct Library *base, RTREG(d0) LONG ifinde
 	return r;
 }
 
-ULONG miami_if_nameindex(RTREG(a6) struct Library *base)
+ULONG riptide_if_nameindex(RTREG(a6) struct Library *base)
 {
 	struct rt_netif *n;
 	struct if_nameindex *ix;
@@ -473,28 +491,28 @@ ULONG miami_if_nameindex(RTREG(a6) struct Library *base)
 	return (ULONG)ix;
 }
 
-void miami_if_freenameindex(RTREG(a6) struct Library *base, RTREG(a0) APTR ptr)
+void riptide_if_freenameindex(RTREG(a6) struct Library *base, RTREG(a0) APTR ptr)
 {
 	if (ptr)
 		FreeVec(ptr);
 }
 
-LONG miami_MiamiSupportsIPV6(RTREG(a6) struct Library *base)
+LONG riptide_RiptideSupportsIPV6(RTREG(a6) struct Library *base)
 {
 	return 0;
 }
 
-LONG miami_MiamiResGetOptions(RTREG(a6) struct Library *base)
+LONG riptide_RiptideResGetOptions(RTREG(a6) struct Library *base)
 {
 	return res_options;
 }
 
-void miami_MiamiResSetOptions(RTREG(a6) struct Library *base, RTREG(d0) LONG options)
+void riptide_RiptideResSetOptions(RTREG(a6) struct Library *base, RTREG(d0) LONG options)
 {
 	res_options = options;
 }
 
-LONG miami_sockatmark(RTREG(a6) struct Library *base, RTREG(d0) LONG fd)
+LONG riptide_sockatmark(RTREG(a6) struct Library *base, RTREG(d0) LONG fd)
 {
 	CTX;
 	LONG v = 0;
@@ -505,18 +523,18 @@ LONG miami_sockatmark(RTREG(a6) struct Library *base, RTREG(d0) LONG fd)
 	return v ? 1 : 0;
 }
 
-void miami_MiamiSupportedCPUs(RTREG(a6) struct Library *base, RTREG(a0) ULONG *apis,
+void riptide_RiptideSupportedCPUs(RTREG(a6) struct Library *base, RTREG(a0) ULONG *apis,
                               RTREG(a1) ULONG *callbacks, RTREG(a2) ULONG *kernel)
 {
 	if (apis)
-		*apis = MIAMICPU_M68KREG;
+		*apis = RIPTIDECPU_M68KREG;
 	if (callbacks)
-		*callbacks = MIAMICPU_M68KREG;
+		*callbacks = RIPTIDECPU_M68KREG;
 	if (kernel)
-		*kernel = MIAMICPU_M68KREG;
+		*kernel = RIPTIDECPU_M68KREG;
 }
 
-LONG miami_MiamiGetFdCallback(RTREG(a6) struct Library *base, RTREG(a0) APTR *cbptr)
+LONG riptide_RiptideGetFdCallback(RTREG(a6) struct Library *base, RTREG(a0) APTR *cbptr)
 {
 	CTX;
 	if (cbptr)
@@ -524,21 +542,22 @@ LONG miami_MiamiGetFdCallback(RTREG(a6) struct Library *base, RTREG(a0) APTR *cb
 	return c->fdcb ? c->fdcb_cpu : 0;
 }
 
-LONG miami_MiamiSetFdCallback(RTREG(a6) struct Library *base, RTREG(a0) APTR cbptr, RTREG(d0) LONG cputype)
+LONG riptide_RiptideSetFdCallback(RTREG(a6) struct Library *base, RTREG(a0) APTR cbptr, RTREG(d0) LONG cputype)
 {
 	CTX;
-	if (cbptr && cputype != MIAMICPU_M68KREG)
+	if (cbptr && cputype != RIPTIDECPU_M68KREG)
 		return 0;
 	amiga_set_fdcb(c, cbptr, cputype);
 	return 1;
 }
 
-ULONG miami_libopen(RTREG(a6) struct Library *base, RTREG(d0) ULONG version)
+ULONG riptide_libopen(RTREG(a6) struct Library *base, RTREG(d0) ULONG version)
 {
-	return (ULONG)rtlib_open(&rtlib_miami, base);
+	/* exec calls Open on a master: riptide.library's or the alias' */
+	return (ULONG)rtlib_open(base == rtlib_compat.master ? &rtlib_compat : &rtlib_riptide, base);
 }
 
-ULONG miami_libclose(RTREG(a6) struct Library *base)
+ULONG riptide_libclose(RTREG(a6) struct Library *base)
 {
 	return rtlib_close((struct RtBase *)base);
 }

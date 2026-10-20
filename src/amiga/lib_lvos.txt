@@ -1,7 +1,9 @@
 # Riptide - the libraries Riptide publishes: bias, prototype, registers.
 # SPDX-License-Identifier: GPL-2.0-only
 # Format: see tools/gen_lvos.py. "= null" entries return 0. Verified
-# against the AmiTCP/Miami SDK FD files by tests/amiga/check_layouts.sh.
+# against the reference AmiTCP SDK FD files and, for riptide.library,
+# against the FD file of the API its compat alias provides, by
+# tests/amiga/check_layouts.sh.
 
 @lib bsdsocket SocketBase prefix=bsd_
 6   ULONG LibOpen(ULONG version d0) = bsd_libopen
@@ -55,44 +57,46 @@
 294 LONG SocketBaseTagList(APTR tags a0)
 300 LONG GetSocketEvents(ULONG* eventsp a0)
 
-@lib miami MiamiBase prefix=miami_
-6   ULONG LibOpen(ULONG version d0) = miami_libopen
-12  ULONG LibClose() = miami_libclose
+# riptide.library 1. The same jump table also serves the compat alias
+# library (see src/amiga/riptidelib.c), so its layout must not change.
+@lib riptide RiptideBase prefix=riptide_
+6   ULONG LibOpen(ULONG version d0) = riptide_libopen
+12  ULONG LibClose() = riptide_libclose
 18  ULONG LibExpunge() = rtlib_expunge
 24  ULONG LibReserved() = null
-30  LONG MiamiSysCtl(LONG* name a0, ULONG namelen d0, APTR oldp a1, LONG* oldlenp a2, APTR newp a3, LONG newlen d1)
-36  LONG MiamiReserved1() = null
-42  LONG MiamiReserved2() = null
-48  LONG MiamiReserved3() = null
-54  LONG MiamiReserved4() = null
-60  LONG MiamiReserved5() = null
-66  void MiamiDisallowDNS(LONG value d0)
-72  LONG MiamiReserved6() = null
-78  APTR MiamiGetPid()
-84  LONG MiamiReserved7() = null
-90  LONG MiamiReserved8() = null
-96  APTR MiamiPFAddHook(APTR hook a0, CONST_STRPTR name a1, APTR tags a2)
-102 void MiamiPFRemoveHook(APTR handle a0)
-108 LONG MiamiGetHardwareLen(CONST_STRPTR name a0)
-114 LONG MiamiReserved9() = null
-120 LONG MiamiReserved10() = null
-126 LONG MiamiReserved11() = null
-132 LONG MiamiReserved12() = null
-138 LONG MiamiReserved13() = null
-144 LONG MiamiReserved14() = null
-150 APTR MiamiOpenSSL(APTR tags a0)
-156 void MiamiCloseSSL()
-162 LONG MiamiReserved15() = null
-168 LONG MiamiReserved16() = null
-174 LONG MiamiReserved17() = null
-180 LONG MiamiReserved18() = null
-186 LONG MiamiReserved19() = null
-192 LONG MiamiReserved20() = null
-198 LONG MiamiSetSocksConn(APTR sa a0, LONG len d0)
-204 LONG MiamiReserved21() = null
-210 LONG MiamiIsOnline(CONST_STRPTR name a0)
-216 void MiamiOnOffline(CONST_STRPTR name a0, LONG online d0)
-222 LONG MiamiReserved22() = null
+30  LONG RiptideSysCtl(LONG* name a0, ULONG namelen d0, APTR oldp a1, LONG* oldlenp a2, APTR newp a3, LONG newlen d1)
+36  LONG RiptideReserved1() = null
+42  LONG RiptideReserved2() = null
+48  LONG RiptideReserved3() = null
+54  LONG RiptideReserved4() = null
+60  LONG RiptideReserved5() = null
+66  void RiptideDisallowDNS(LONG value d0)
+72  LONG RiptideReserved6() = null
+78  APTR RiptideGetPid()
+84  LONG RiptideReserved7() = null
+90  LONG RiptideReserved8() = null
+96  APTR RiptidePFAddHook(APTR hook a0, CONST_STRPTR name a1, APTR tags a2)
+102 void RiptidePFRemoveHook(APTR handle a0)
+108 LONG RiptideGetHardwareLen(CONST_STRPTR name a0)
+114 LONG RiptideReserved9() = null
+120 LONG RiptideReserved10() = null
+126 LONG RiptideReserved11() = null
+132 LONG RiptideReserved12() = null
+138 LONG RiptideReserved13() = null
+144 LONG RiptideReserved14() = null
+150 APTR RiptideOpenSSL(APTR tags a0)
+156 void RiptideCloseSSL()
+162 LONG RiptideReserved15() = null
+168 LONG RiptideReserved16() = null
+174 LONG RiptideReserved17() = null
+180 LONG RiptideReserved18() = null
+186 LONG RiptideReserved19() = null
+192 LONG RiptideReserved20() = null
+198 LONG RiptideSetSocksConn(APTR sa a0, LONG len d0)
+204 LONG RiptideReserved21() = null
+210 LONG RiptideIsOnline(CONST_STRPTR name a0)
+216 void RiptideOnOffline(CONST_STRPTR name a0, LONG online d0)
+222 LONG RiptideReserved22() = null
 228 STRPTR inet_ntop(LONG family d0, const APTR addrptr a0, STRPTR strptr a1, LONG len d1)
 234 LONG inet_aton(CONST_STRPTR cp a0, APTR addr a1)
 240 LONG inet_pton(LONG family d0, CONST_STRPTR strptr a0, APTR addrptr a1)
@@ -105,16 +109,16 @@
 282 STRPTR if_indextoname(LONG ifindex d0, STRPTR ifname a0)
 288 APTR if_nameindex()
 294 void if_freenameindex(APTR ptr a0)
-300 LONG MiamiSupportsIPV6()
-306 LONG MiamiResGetOptions()
-312 void MiamiResSetOptions(LONG options d0)
+300 LONG RiptideSupportsIPV6()
+306 LONG RiptideResGetOptions()
+312 void RiptideResSetOptions(LONG options d0)
 318 LONG sockatmark(LONG fd d0)
-324 void MiamiSupportedCPUs(ULONG* apis a0, ULONG* callbacks a1, ULONG* kernel a2)
-330 LONG MiamiGetFdCallback(APTR* cbptr a0)
-336 LONG MiamiSetFdCallback(APTR cbptr a0, LONG cputype d0)
-342 LONG MiamiReserved23() = null
-# MiamiDx 1.0c has private vectors up to -522; they return 0 here.
-522 LONG MiamiPrivate53() = null
+324 void RiptideSupportedCPUs(ULONG* apis a0, ULONG* callbacks a1, ULONG* kernel a2)
+330 LONG RiptideGetFdCallback(APTR* cbptr a0)
+336 LONG RiptideSetFdCallback(APTR cbptr a0, LONG cputype d0)
+342 LONG RiptideReserved23() = null
+# The table extends to -522 like the historical API; reserved vectors return 0.
+522 LONG RiptideReserved53() = null
 
 @lib usergroup UserGroupBase prefix=ug_
 6   ULONG LibOpen(ULONG version d0) = ug_libopen

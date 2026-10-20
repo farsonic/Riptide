@@ -49,15 +49,14 @@ void amiga_out(const char *fmt, ...);     /* stack process only: Write(Output())
 
 /* ---- libs.c: library construction ---------------------------------- */
 
-/* Per-task context shared by bsdsocket.library and miami.library (MiamiDx
- * does the same, see docs/RE-NOTES.md 2.2). */
+/* Per-task context shared by bsdsocket.library, riptide.library and its
+ * compat alias (the historical stack does the same, docs/RE-NOTES.md 2.2). */
 struct TaskCtx {
 	struct MinNode node;
 	struct Task   *task;
 	struct rt_sockctx sc;
 	struct rt_sleeper sl;
-	struct Library *bsdbase;     /* per-task bases (or NULL) */
-	struct Library *miamibase;
+	int    nbases;               /* per-task bases using this context */
 	LONG   errno_;
 	LONG   herrno;
 	APTR   errnoptr;
@@ -96,10 +95,10 @@ struct TaskCtx {
 	char   ifname[RT_IFNAMSIZ];
 };
 
-/* Base of a per-task library (bsdsocket, miami, usergroup) */
+/* Base of a per-task library (bsdsocket, riptide, its alias, usergroup) */
 struct RtBase {
 	struct Library lib;
-	struct TaskCtx *ctx;         /* at +0x22 like MiamiDx */
+	struct TaskCtx *ctx;         /* at +0x22 like the historical stack */
 	struct RtLibDef *def;
 	struct MinNode link;         /* on def->bases */
 	struct Task *task;
@@ -112,17 +111,25 @@ struct RtLibDef {
 	UWORD version, revision;
 	const ULONG *vectors;
 	ULONG possize;               /* >= sizeof(struct RtBase) */
-	int   needs_ctx;             /* bsdsocket/miami: attach a TaskCtx */
+	int   needs_ctx;             /* bsdsocket/riptide: attach a TaskCtx */
 	int   (*init)(struct RtBase *b);
 	void  (*fini)(struct RtBase *b);
 	struct Library *master;
 	struct MinList bases;
 };
 
-extern struct RtLibDef rtlib_bsdsocket, rtlib_miami, rtlib_usergroup;
+extern struct RtLibDef rtlib_bsdsocket, rtlib_riptide, rtlib_compat, rtlib_usergroup;
 extern volatile int amiga_libs_closing;   /* refuse new opens */
-/* Create and AddLibrary() the three masters. 0 or -1. */
+/* "compat aliases on|off": publish the compat alias library (default on) */
+extern int amiga_compat_aliases;
+/* Create and AddLibrary() the masters (the alias only when
+ * amiga_compat_aliases is set). 0 or -1. */
 int  amiga_libs_init(void);
+/* Add or remove the compat alias while the libraries exist (lock held).
+ * 0, or -RT_EBUSY if programs still have the alias open. */
+int  amiga_libs_set_compat(int on, char *err, u32 errlen);
+/* One line naming the published libraries and the alias state. */
+void amiga_libs_summary(char *buf, u32 len);
 /* Number of open per-task bases of all libraries. */
 int  amiga_libs_users(void);
 /* Remove the masters from the system list if nobody has them open.
@@ -172,7 +179,7 @@ struct amiga_if {
 	ULONG  sigmask;              /* stack process signals the driver uses */
 	/* lock held: process completed I/O */
 	void (*poll)(struct amiga_if *ai);
-	/* lock held: online/offline request (MiamiOnOffline) */
+	/* lock held: online/offline request (RiptideOnOffline) */
 	void (*set_online)(struct amiga_if *ai, int online);
 	/* lock NOT held: stop and free everything */
 	void (*close)(struct amiga_if *ai);

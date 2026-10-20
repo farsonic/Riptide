@@ -1,12 +1,12 @@
 /*
- * Riptide - library construction for bsdsocket.library, miami.library and
- * usergroup.library.
+ * Riptide - library construction for bsdsocket.library, riptide.library
+ * (plus its compat alias) and usergroup.library.
  *
- * Like MiamiDx (docs/RE-NOTES.md 2.2) every library has a master base in
+ * As in the historical stack (docs/RE-NOTES.md 2.2) every library has a master base in
  * the system list; its Open vector creates (or reuses) a private base per
  * opener task with MakeLibrary() and the same vector table, and returns
  * that. Later calls and CloseLibrary() land in the private base.
- * bsdsocket and miami share one per-task context (struct TaskCtx), which
+ * bsdsocket, riptide and the alias share one per-task context (struct TaskCtx), which
  * holds the socket descriptor table, errno state and the task's sleeper.
  * The Open and Close vectors are called by exec under Forbid().
  * SPDX-License-Identifier: GPL-2.0-only
@@ -17,7 +17,13 @@ static struct MinList ctx_list;
 static struct TaskCtx *ctx_cache;
 volatile int amiga_libs_closing;
 
-static struct RtLibDef *const all_defs[] = { &rtlib_bsdsocket, &rtlib_miami, &rtlib_usergroup };
+static struct RtLibDef *const all_defs[] = { &rtlib_bsdsocket, &rtlib_riptide, &rtlib_compat, &rtlib_usergroup };
+int amiga_compat_aliases = 1;
+
+/* Library names another TCP/IP stack would also publish */
+static const char *const stack_lib_names[] = {
+	"bsdsocket.library", RIPTIDE_LIB_NAME, RT_COMPAT_LIBNAME, "usergroup.library"
+};
 
 #define BASE_OF_LINK(n) ((struct RtBase *)((UBYTE *)(n) - offsetof(struct RtBase, link)))
 
@@ -146,20 +152,11 @@ struct Library *rtlib_open(struct RtLibDef *def, struct Library *master)
 			return NULL;
 		}
 		b->ctx = c;
-		if (def == &rtlib_bsdsocket)
-			c->bsdbase = lib;
-		else
-			c->miamibase = lib;
+		c->nbases++;
 	}
 	if (def->init && def->init(b) < 0) {
-		if (c) {
-			if (def == &rtlib_bsdsocket)
-				c->bsdbase = NULL;
-			else
-				c->miamibase = NULL;
-			if (!c->bsdbase && !c->miamibase)
-				ctx_destroy(c);
-		}
+		if (c && --c->nbases == 0)
+			ctx_destroy(c);
 		free_lib(lib);
 		return NULL;
 	}
@@ -183,17 +180,11 @@ ULONG rtlib_close(struct RtBase *b)
 		return 0;
 	if (def->fini)
 		def->fini(b);
-	if (c) {
-		if (c->bsdbase == &b->lib)
-			c->bsdbase = NULL;
-		if (c->miamibase == &b->lib)
-			c->miamibase = NULL;
-		if (!c->bsdbase && !c->miamibase)
-			ctx_destroy(c);
-	}
+	if (c && --c->nbases == 0)
+		ctx_destroy(c);
 	Forbid();
 	Remove((struct Node *)&b->link);
-	if (def->master->lib_OpenCnt)
+	if (def->master && def->master->lib_OpenCnt)
 		def->master->lib_OpenCnt--;
 	Permit();
 	free_lib(&b->lib);
@@ -211,12 +202,12 @@ ULONG rtlib_expunge(RTREG(a6) struct Library *base)
 
 int amiga_libs_present(void)
 {
-	static const char *const names[] = { "bsdsocket.library", "miami.library", "usergroup.library" };
+	const char *const *names = stack_lib_names;
 	struct List *ll = exec_liblist(SysBase);
 	int i, found = 0;
 
 	Forbid();
-	for (i = 0; i < 3; i++)
+	for (i = 0; i < (int)RT_ARRAY_SIZE(stack_lib_names); i++)
 		if (FindName(ll, (CONST_STRPTR)names[i]))
 			found = 1;
 	Permit();
@@ -227,7 +218,7 @@ int amiga_libs_present(void)
  * by its id string (or name and version) so the user can tell who owns them. */
 void amiga_libs_describe(char *buf, unsigned len)
 {
-	static const char *const names[] = { "bsdsocket.library", "miami.library", "usergroup.library" };
+	const char *const *names = stack_lib_names;
 	struct List *ll = exec_liblist(SysBase);
 	struct Library *lib;
 	unsigned n = 0;
@@ -235,7 +226,7 @@ void amiga_libs_describe(char *buf, unsigned len)
 
 	buf[0] = '\0';
 	Forbid();
-	for (i = 0; i < 3 && n < len; i++) {
+	for (i = 0; i < (int)RT_ARRAY_SIZE(stack_lib_names) && n < len; i++) {
 		lib = (struct Library *)FindName(ll, (CONST_STRPTR)names[i]);
 		if (lib) {
 			const char *id = (const char *)lib->lib_IdString;
@@ -268,13 +259,17 @@ int amiga_libs_init(void)
 	for (i = 0; i < RT_ARRAY_SIZE(all_defs); i++) {
 		struct RtLibDef *d = all_defs[i];
 		rt_newminlist(&d->bases);
+		d->master = NULL;
+		if (d == &rtlib_compat && !amiga_compat_aliases)
+			continue;
 		d->master = make_lib(d);
 		if (!d->master)
 			goto fail;
 	}
 	Forbid();
 	for (i = 0; i < RT_ARRAY_SIZE(all_defs); i++)
-		AddLibrary(all_defs[i]->master);
+		if (all_defs[i]->master)
+			AddLibrary(all_defs[i]->master);
 	Permit();
 	return 0;
 fail:
@@ -323,7 +318,63 @@ int amiga_libs_remove(void)
 	return 0;
 }
 
-/* Signal every opener (shutdown request, like MiamiDx's Ctrl-C). */
+/* "compat aliases on|off" at run time (lock held; the libraries exist). */
+int amiga_libs_set_compat(int on, char *err, u32 errlen)
+{
+	struct RtLibDef *d = &rtlib_compat;
+	struct Library *lib;
+
+	amiga_compat_aliases = on != 0;
+	if (!rtlib_riptide.master || amiga_libs_closing)
+		return 0;          /* before amiga_libs_init(): it uses the flag */
+	if (on) {
+		if (d->master)
+			return 0;
+		lib = make_lib(d);
+		if (!lib) {
+			rt_snprintf(err, errlen, "compat aliases: out of memory");
+			return -RT_ENOMEM;
+		}
+		Forbid();
+		d->master = lib;
+		AddLibrary(lib);
+		Permit();
+		return 0;
+	}
+	if (!d->master)
+		return 0;
+	Forbid();
+	if (d->master->lib_OpenCnt || d->bases.mlh_Head->mln_Succ) {
+		Permit();
+		amiga_compat_aliases = 1;
+		rt_snprintf(err, errlen, "compat aliases: %s is still open", d->name);
+		return -RT_EBUSY;
+	}
+	lib = d->master;
+	Remove(&lib->lib_Node);
+	d->master = NULL;
+	Permit();
+	free_lib(lib);
+	return 0;
+}
+
+void amiga_libs_summary(char *buf, u32 len)
+{
+	int n = rt_snprintf(buf, len, "%s %u, %s %u, %s %u", rtlib_bsdsocket.name,
+	                    (unsigned)rtlib_bsdsocket.version, rtlib_riptide.name,
+	                    (unsigned)rtlib_riptide.version, rtlib_usergroup.name,
+	                    (unsigned)rtlib_usergroup.version);
+
+	if (n < 0 || (u32)n >= len)
+		return;
+	if (rtlib_compat.master)
+		rt_snprintf(buf + n, len - (u32)n, "; compat alias: %s %u", rtlib_compat.name,
+		            (unsigned)rtlib_compat.version);
+	else
+		rt_snprintf(buf + n, len - (u32)n, "; compat alias: off");
+}
+
+/* Signal every opener (shutdown request, as the historical stack does on Ctrl-C). */
 void amiga_libs_signal_users(ULONG sigs)
 {
 	struct MinNode *n;

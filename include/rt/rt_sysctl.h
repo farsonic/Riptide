@@ -1,8 +1,8 @@
 /*
  * Riptide - tunables ("sysctl"). Every module registers a static table of
  * entries at init time. Entries are addressable by dotted name
- * ("net.inet.tcp.sack") and, when they have a BSD/Miami numeric MIB, by MIB
- * (MiamiSysCtl() in miami.library uses MIBs, e.g. {CTL_NET, PF_INET,
+ * ("net.inet.tcp.sack") and, when they have a BSD-style numeric MIB, by MIB
+ * (RiptideSysCtl() in riptide.library uses MIBs, e.g. {CTL_NET, PF_INET,
  * IPPROTO_TCP, TCPCTL_DO_RFC1323}).
  * SPDX-License-Identifier: GPL-2.0-only
  */

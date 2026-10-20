@@ -3,6 +3,7 @@
 #   make -f Makefile.amiga                  vbcc (default): build/amiga/Riptide, build/amiga/rtcheck
 #   make -f Makefile.amiga TOOLCHAIN=gcc    m68k-linux-gnu-gcc + tools/elf2hunk.py: build/amiga-gcc/...
 #   make -f Makefile.amiga check            vamos self test + hunk/relocation checks
+#   make -f Makefile.amiga sdk              regenerate the riptide.library SDK in sdk/
 #
 # vbcc needs VBCC (default /opt/vbcc) and the NDK 3.2 headers (NDK, default
 # /opt/ndk3.2). The GCC build needs neither: it uses src/amiga/os.
@@ -13,10 +14,10 @@ PYTHON ?= python3
 VAMOS ?= vamos
 
 CORE_SRC  := $(wildcard src/core/*.c)
-AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/amiga/miami.c \
+AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/amiga/riptidelib.c \
              src/amiga/usergroup.c src/amiga/sana2.c src/amiga/mni.c src/amiga/stackproc.c \
              src/amiga/main.c src/amiga/selftest.c
-LIBS      := bsdsocket miami usergroup
+LIBS      := bsdsocket riptide usergroup
 HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h) tests/amiga/rtcheck_body.h
 # network tools (src/amiga/cmd), each linked with cmdlib.o
 TOOLS     := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc
@@ -118,15 +119,32 @@ $(BUILD)/rtcheck: $(RC_OBJ)
 	$(VC) -o $@ $(RC_OBJ) -lamiga
 $(addprefix $(BUILD)/,$(TOOLS)): $(BUILD)/%: $(BUILD)/amiga/cmd/%.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
+
+# a client built only from the SDK in sdk/ and the NDK
+all: $(BUILD)/sdk_test
+$(BUILD)/sdk_test: tests/amiga/sdk_test.c $(wildcard sdk/include/*/*.h)
+	@mkdir -p $(dir $@)
+	$(VC) -c99 -O2 -cpu=68020 -I$(NDK)/Include_H -Isdk/include -o $@ $< -lamiga
+SDK_BIN := $(BUILD)/sdk_test
 endif
 
+# ---------------------------------------------------------------- SDK ----
+sdk:
+	$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide sdk
+
+sdk-check:
+	@rm -rf $(BUILD)/sdk && $(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide $(BUILD)/sdk
+	@for f in $$(cd $(BUILD)/sdk && find . -type f); do \
+		cmp -s $(BUILD)/sdk/$$f sdk/$$f || { echo "sdk/$$f is out of date: make -f Makefile.amiga sdk"; exit 1; }; \
+	done; echo "ok   sdk/ matches src/amiga/lib_lvos.txt"
+
 # ------------------------------------------------------------- tests ----
-check: all
-	$(PYTHON) tests/amiga/test_hunk.py $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS))
+check: all sdk-check
+	$(PYTHON) tests/amiga/test_hunk.py $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS)) $(SDK_BIN)
 	tests/amiga/run_vamos.sh $(BUILD)/Riptide
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all check clean
+.PHONY: all check clean sdk sdk-check
 .SECONDARY:

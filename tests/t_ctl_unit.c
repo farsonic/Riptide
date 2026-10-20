@@ -162,7 +162,7 @@ static void test_dumps(void)
 		CHECK(ifr->opackets >= 1);    /* gratuitous ARP */
 	}
 
-	/* by MIB, as MiamiSysCtl() does */
+	/* by MIB, as RiptideSysCtl() does */
 	rt_lock();
 	len = 0;
 	CHECK(rt_sysctl_bymib(mib, 3, NULL, &len, NULL, 0) == 0);

@@ -4,6 +4,9 @@
 # rtcheck, which starts Riptide, runs the library checks against the
 # running stack (real multitasking, timer.device, signals), and stops it
 # with "Riptide QUIT" (refused while libraries are open, accepted after).
+# rtcheck also opens riptide.library and its compat alias and switches the
+# alias off and on at run time; a second start with "compat aliases off"
+# in the configuration checks that the alias is then not published.
 #
 #   tests/amiga/run_fsuae.sh [BUILDDIR] [TIMEOUT_SECONDS]
 #
@@ -26,8 +29,15 @@ hostname aros-test
 loglevel 2
 host testhost 127.0.0.5
 CONF
+cat > "$dh0/S/noalias.conf" <<'CONF'
+hostname aros-test
+compat aliases off
+CONF
 cat > "$dh0/S/Startup-Sequence" <<'SEQ'
+FailAt 30
 DH0:C/rtcheck START="DH0:C/Riptide >DH0:riptide.log CONFIG=DH0:S/riptide.conf" STOP="DH0:C/Riptide QUIT" >DH0:result.txt
+DH0:C/rtcheck START="DH0:C/Riptide >DH0:riptide2.log CONFIG=DH0:S/noalias.conf" NOCHECK >DH0:result2.txt
+DH0:C/Riptide QUIT >>DH0:result2.txt
 SEQ
 cat > "$work/test.fs-uae" <<CFG
 [fs-uae]
@@ -52,7 +62,7 @@ SDL_AUDIODRIVER=dummy fs-uae "$work/test.fs-uae" >"$work/fs-uae.log" 2>&1 &
 upid=$!
 t=0
 while [ $t -lt "$TIMEOUT" ]; do
-	if grep -q "rtcheck: \(PASSED\|FAILED\)\|cannot open bsdsocket" "$dh0/result.txt" 2>/dev/null; then
+	if grep -q "shutting down\|not running\|cannot open bsdsocket" "$dh0/result2.txt" 2>/dev/null; then
 		sleep 2
 		break
 	fi
@@ -67,8 +77,17 @@ echo "---- result.txt"
 cat "$dh0/result.txt" 2>/dev/null | tr -d '\r'
 echo "---- riptide.log"
 cat "$dh0/riptide.log" 2>/dev/null | tr -d '\r'
+echo "---- result2.txt (compat aliases off)"
+cat "$dh0/result2.txt" 2>/dev/null | tr -d '\r'
+echo "---- riptide2.log"
+cat "$dh0/riptide2.log" 2>/dev/null | tr -d '\r'
 echo "---- (work dir $work)"
-if grep -q "rtcheck: PASSED" "$dh0/result.txt" 2>/dev/null; then
+ok2=1
+tr -d '\r' < "$dh0/result2.txt" 2>/dev/null | grep -q "riptide.library listed, compat alias miami.library not listed" || ok2=0
+tr -d '\r' < "$dh0/riptide2.log" 2>/dev/null | grep -q "compat alias: off" || ok2=0
+tr -d '\r' < "$dh0/result2.txt" 2>/dev/null | grep -q "shutting down" || ok2=0
+[ $ok2 -eq 1 ] || echo "run_fsuae: FAIL: 'compat aliases off' start (result2.txt / riptide2.log)"
+if [ $ok2 -eq 1 ] && grep -q "rtcheck: PASSED" "$dh0/result.txt" 2>/dev/null; then
 	echo "run_fsuae: PASSED"
 	exit 0
 fi

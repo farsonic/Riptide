@@ -3,7 +3,7 @@
  * datagram socket protocols (UDP and raw IP).
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * Semantics follow 4.4BSD (what Miami and AmiTCP programs expect): send
+ * Semantics follow 4.4BSD (what AmiTCP-style programs expect): send
  * buffer size bounds the datagram size (EMSGSIZE), unconnected sends
  * without a destination fail with ENOTCONN, broadcasts need SO_BROADCAST,
  * and ICMP errors are only reported on connected sockets (RFC 1122

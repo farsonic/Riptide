@@ -84,8 +84,8 @@ void rt_hosts_clear(void);
 int  rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 canonlen);
 /* Reverse lookup (PTR). Returns 0 and the name, or -h_errno. */
 int  rt_resolve_addr(u32 addr, char *name, u32 namelen);
-extern int rt_dns_disallowed;   /* MiamiDisallowDNS() */
-/* BIND style raw interface (miami.library res_* / dn_* calls), called
+extern int rt_dns_disallowed;   /* RiptideDisallowDNS() */
+/* BIND style raw interface (res_* / dn_* calls for library clients), called
  * WITHOUT the lock. res_mkquery: only op 0 (QUERY); returns length or -1.
  * res_send: answer length (copy truncated to anslen) or -h_errno.
  * res_query/querydomain/search: answer length, or -h_errno when the

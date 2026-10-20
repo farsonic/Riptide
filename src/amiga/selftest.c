@@ -11,10 +11,10 @@
  */
 #include "amiga_priv.h"
 
-struct Library *SocketBase, *MiamiBase, *UserGroupBase;
+struct Library *SocketBase, *RiptideBase, *CompatBase, *UserGroupBase;
 
 #include "gen/bsdsocket_calls.h"
-#include "gen/miami_calls.h"
+#include "gen/riptide_calls.h"
 #include "gen/usergroup_calls.h"
 
 static void pump(void)
@@ -26,9 +26,24 @@ static void pump(void)
 	amiga_log_flush();
 }
 
+static LONG selftest_command(const char *line)
+{
+	char err[128];
+	int r;
+
+	rt_lock();
+	r = rt_config_line(line, err, sizeof(err), amiga_config_unknown);
+	rt_unlock();
+	return r < 0 ? -r : 0;
+}
+
+static void close_lib(struct Library *b);
+
 #define RTC_LOG(...) do { amiga_out(__VA_ARGS__); amiga_out("\n"); } while (0)
 #define RTC_PUMP() pump()
 #define RTC_BLOCKING 0
+#define RTC_COMMAND(line) selftest_command(line)
+#define RTC_CLOSELIB(b) close_lib(b)
 #include "../../tests/amiga/rtcheck_body.h"
 
 /* Call a library's Open (-6) / Close (-12) vector like exec does. */
@@ -126,14 +141,16 @@ int amiga_selftest(void)
 		fails++;
 	}
 	SocketBase = open_lib("bsdsocket.library", 4);
-	MiamiBase = open_lib("miami.library", 21);
+	RiptideBase = open_lib(RIPTIDE_LIB_NAME, RIPTIDE_LIB_VERSION);
+	CompatBase = open_lib(RT_COMPAT_LIBNAME, RT_COMPAT_LIBVERSION);
 	UserGroupBase = open_lib("usergroup.library", 4);
-	amiga_out("opened through %s: bsdsocket %s, miami %s, usergroup %s\n",
+	amiga_out("opened through %s: bsdsocket %s, riptide %s, compat alias %s, usergroup %s\n",
 	          used_exec_open ? "exec OpenLibrary()" : "the LVO -6 Open vector",
-	          SocketBase ? "ok" : "FAILED", MiamiBase ? "ok" : "FAILED", UserGroupBase ? "ok" : "FAILED");
+	          SocketBase ? "ok" : "FAILED", RiptideBase ? "ok" : "FAILED", CompatBase ? "ok" : "FAILED",
+	          UserGroupBase ? "ok" : "FAILED");
 	if (!SocketBase)
 		return 20;
-	if (!MiamiBase || !UserGroupBase)
+	if (!RiptideBase || !CompatBase || !UserGroupBase)
 		fails++;
 	again = open_lib("bsdsocket.library", 4);
 	if (again != SocketBase || SocketBase->lib_OpenCnt != 2) {
@@ -141,17 +158,20 @@ int amiga_selftest(void)
 		fails++;
 	}
 	close_lib(again);
-	if (SocketBase->lib_Version != 4 || amiga_libs_users() != 3) {
+	if (SocketBase->lib_Version != 4 || amiga_libs_users() != 4) {
 		amiga_out("FAIL version/open count (%d users)\n", amiga_libs_users());
 		fails++;
 	}
 	fails += rtcheck_run();
+	rtc_compat_switch();         /* closes CompatBase */
+	fails += rtc_fail;
+	rtc_fail = 0;
 	if (amiga_libs_remove() == 0) {
 		amiga_out("FAIL libraries removed while open\n");
 		fails++;
 	}
 	close_lib(UserGroupBase);
-	close_lib(MiamiBase);
+	close_lib(RiptideBase);
 	close_lib(SocketBase);
 	if (amiga_libs_users() != 0) {
 		amiga_out("FAIL %d users after closing\n", amiga_libs_users());

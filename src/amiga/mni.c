@@ -1,9 +1,9 @@
 /*
- * Riptide - direct backend for Miami Network Interface (.mni) drivers.
+ * Riptide - direct backend for MNI (.mni) network drivers.
  *
  *   interface NAME mni=z2-am7990.mni unit=N [options="FT=2 MEDIA=AUTO"] [mtu=N]
  *
- * The ABI was recovered from MiamiDx 1.0c and its drivers (docs/RE-NOTES.md
+ * The ABI was recovered from the historical stack and its drivers (docs/RE-NOTES.md
  * section 4): the driver is a library; Riptide opens a handle with three
  * callbacks (supply an rx buffer, rx done, tx done) that may run in the
  * driver's interrupt code. Receive is zero copy: the driver writes frames
@@ -383,8 +383,12 @@ int mni_open_if(const char *name, const char *driver, ULONG unit, const char *op
 
 	mi->base = OpenLibrary((CONST_STRPTR)driver, 0);
 	if (!mi->base && !strchr(driver, ':') && !strchr(driver, '/')) {
-		rt_snprintf(path, sizeof(path), "Miami:MNI/%s", driver);
-		mi->base = OpenLibrary((CONST_STRPTR)path, 0);
+		static const char *const dirs[] = { "DEVS:Networks/", RT_COMPAT_MNI_DIR };
+		unsigned d;
+		for (d = 0; d < RT_ARRAY_SIZE(dirs) && !mi->base; d++) {
+			rt_snprintf(path, sizeof(path), "%s%s", dirs[d], driver);
+			mi->base = OpenLibrary((CONST_STRPTR)path, 0);
+		}
 	}
 	if (!mi->base) {
 		rt_snprintf(err, errlen, "cannot open MNI driver %s", driver);

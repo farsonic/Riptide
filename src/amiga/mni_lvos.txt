@@ -1,4 +1,4 @@
-# Riptide - Miami Network Interface (.mni) driver calls, from the ABI
+# Riptide - MNI (.mni) network driver calls, from the ABI
 # recovered in docs/RE-NOTES.md section 4.3. Every driver is a library;
 # Riptide passes the base explicitly (one base per loaded driver).
 # SPDX-License-Identifier: GPL-2.0-only

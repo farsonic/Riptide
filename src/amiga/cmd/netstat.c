@@ -10,7 +10,7 @@
  */
 #include "cmdlib.h"
 #include "gen/bsdsocket_calls.h"
-#include "gen/miami_calls.h"
+#include "gen/riptide_calls.h"
 
 static int opt_n, opt_all, opt_listen, opt_t, opt_u, opt_w, opt_e;
 
@@ -219,7 +219,7 @@ static int show_stats(void)
 		s = (struct rt_ip_stats *)((u8 *)d + sizeof(struct rt_ctl_hdr));
 		{
 			LONG v = 0;
-			if (MiamiSysCtl(mib, 4, &v, &len, NULL, 0) == 0)
+			if (RiptideSysCtl(mib, 4, &v, &len, NULL, 0) == 0)
 				fwd = (u32)v;
 		}
 		cl_puts("Ip:\n");
@@ -359,7 +359,7 @@ static int netstat_main(int argc, char **argv)
 		default: break;
 		}
 	}
-	if (cl_need_miami() < 0)
+	if (cl_need_riptide() < 0)
 		return CL_FAIL;
 	for (;;) {
 		rc = mode == 'r' ? show_routes() : mode == 'i' ? show_ifaces() : mode == 's' ? show_stats() :

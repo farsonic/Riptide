@@ -1,12 +1,16 @@
 # Riptide — design notes
 
-Riptide is a clean-room TCP/IP stack for AmigaOS (68020+). It replaces
-MiamiDx 1.0c, whose 4.4BSD-Lite-derived kernel we reverse engineered (see
-`RE-NOTES.md`). Riptide keeps Miami's *binary interfaces*, so existing Amiga
-programs and the Miami tools keep working. It publishes `bsdsocket.library`
-(AmiTCP 4 API, 46 LVOs), `miami.library` (Miami 2.x/Dx API) and
-`usergroup.library`. Underneath is a new protocol core whose TCP follows the
-modern Linux TCP stack.
+Riptide is a clean-room TCP/IP stack for AmigaOS (68020+). It replaces a
+historical commercial Amiga stack with a 4.4BSD-Lite-derived kernel, whose
+binary interfaces we reverse engineered (see `RE-NOTES.md`). Riptide keeps
+those *binary interfaces*, so existing Amiga programs keep working. It
+publishes `bsdsocket.library` (AmiTCP 4 API, 46 LVOs), its own
+`riptide.library` (version 1; the extended API of the historical stack, with
+the same vector layout, also published under that stack's library name as a
+switchable compat alias) and `usergroup.library`. Underneath is a new
+protocol core whose TCP follows the modern Linux TCP stack.
+`COMPARISON.md` compares Riptide with the historical stack and with
+Roadshow.
 
 Licence: GPL-2.0-only (the TCP follows Linux's algorithms and structure).
 
@@ -17,7 +21,8 @@ Licence: GPL-2.0-only (the TCP follows Linux's algorithms and structure).
 | `include/rt/*.h` | Contract headers shared by every module | integration |
 | `src/core/` | Portable protocol core (freestanding C99) | see below |
 | `src/host/` | Linux host OS layer: pthreads, TUN, simulated wire | infra |
-| `src/amiga/` | AmigaOS glue: libraries, SANA-II, startup, OS headers | amiga |
+| `src/amiga/` | AmigaOS glue: libraries, SANA-II, MNI, startup, OS headers | amiga |
+| `sdk/` | Developer SDK for riptide.library (generated FD and headers) | amiga |
 | `src/amiga/cmd/` | Network tools (ip, ifconfig, route, ...) and their shared `cmdlib` | amiga |
 | `tests/` | Host tests (`make check`), interop with Linux via TUN | everybody |
 | `tools/` | RE scripts (hunk parser etc.), `elf2hunk.py` | — |

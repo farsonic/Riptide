@@ -24,6 +24,9 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/riptide-tools.XXXXXX")
 dh0=$work/dh0
 mkdir -p "$dh0/C" "$dh0/S" "$dh0/out"
 for f in Riptide rtcheck $TOOLS; do cp "$BUILD/$f" "$dh0/C/"; done
+# the SDK client (vbcc build only: it needs the NDK headers)
+SDKTEST=
+[ -f "$BUILD/sdk_test" ] && { cp "$BUILD/sdk_test" "$dh0/C/"; SDKTEST=1; }
 cat > "$dh0/S/riptide.conf" <<'CONF'
 hostname aros-test
 domain test.lan
@@ -117,6 +120,7 @@ ip_link_up|ip link set eth0 up
 ip_help|ip help
 ifconfig_bad|ifconfig nosuch0 up
 CMDS
+[ -n "$SDKTEST" ] && echo "sdk_test|sdk_test" >> "$work/cmds"
 {
 	echo "FailAt 30"
 	echo 'DH0:C/rtcheck START="DH0:C/Riptide >DH0:riptide.log CONFIG=DH0:S/riptide.conf" NOCHECK >DH0:out/start'
@@ -266,7 +270,12 @@ reject ip_link_del2 '^eth1 '
 expect ip_r_down '^default via 10\.0\.2\.2 dev eth0 proto static linkdown'
 expect ip_help 'Usage: ip'
 expect ifconfig_bad 'No such device'
-expect status 'Routes:' 'default via 10\.0\.2\.2 dev eth0 proto static' 'DNS: 10\.0\.2\.3'
+expect status 'Routes:' 'default via 10\.0\.2\.2 dev eth0 proto static' 'DNS: 10\.0\.2\.3' \
+	'^Libraries: bsdsocket\.library 4, riptide\.library 1, usergroup\.library 4; compat alias: miami\.library 21$'
+[ -n "$SDKTEST" ] && expect sdk_test '^sdk_test: ok$'
+if ! tr -d '\r' < "$dh0/riptide.log" 2>/dev/null | grep -Eq 'running: bsdsocket\.library 4, riptide\.library 1, usergroup\.library 4; compat alias: miami\.library 21'; then
+	echo "FAIL riptide.log: no startup line naming the libraries"; fails=$((fails + 1))
+fi
 
 echo "---- work dir $work (outputs in $dh0/out)"
 if [ ! -s "$dh0/out/zz_done" ]; then

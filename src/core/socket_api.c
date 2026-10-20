@@ -1,6 +1,6 @@
 /*
  * Riptide - descriptor based socket API (bsdsocket.library semantics:
- * AmiTCP 4 / Miami / 4.4BSD).
+ * AmiTCP 4 / 4.4BSD).
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * Every rt_api_* function takes the stack lock itself. Blocking calls run

@@ -4,11 +4,11 @@
  */
 #include "cmdlib.h"
 
-struct Library *SocketBase, *MiamiBase;
+struct Library *SocketBase, *RiptideBase;
 struct Device *TimerBase;
 
 #include "gen/bsdsocket_calls.h"
-#include "gen/miami_calls.h"
+#include "gen/riptide_calls.h"
 
 #if !defined(__VBCC__)
 struct ExecBase *SysBase;
@@ -172,8 +172,8 @@ int cl_run(cl_main_fn fn, const char *name)
 out:
 	if (sock_fd >= 0 && SocketBase)
 		CloseSocket(sock_fd);
-	if (MiamiBase)
-		CloseLibrary(MiamiBase);
+	if (RiptideBase)
+		CloseLibrary(RiptideBase);
 	if (SocketBase)
 		CloseLibrary(SocketBase);
 	if (treq) {
@@ -307,15 +307,15 @@ int cl_need_socket(void)
 	return 0;
 }
 
-int cl_need_miami(void)
+int cl_need_riptide(void)
 {
 	if (cl_need_socket() < 0)
 		return -1;
-	if (MiamiBase)
+	if (RiptideBase)
 		return 0;
-	MiamiBase = OpenLibrary((CONST_STRPTR)"miami.library", 21);
-	if (!MiamiBase) {
-		cl_error("cannot open miami.library 21 (is Riptide running?)");
+	RiptideBase = OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, RIPTIDE_LIB_VERSION);
+	if (!RiptideBase) {
+		cl_error("cannot open " RIPTIDE_LIB_NAME " (is Riptide running?)");
 		return -1;
 	}
 	return 0;
@@ -561,14 +561,14 @@ void *cl_dump(int what, struct rt_ctl_hdr *hdr)
 	u8 *buf;
 	int tries;
 
-	if (cl_need_miami() < 0)
+	if (cl_need_riptide() < 0)
 		return NULL;
 	mib[0] = 4;             /* CTL_NET */
 	mib[1] = RT_CTL_MIB_RIPTIDE;
 	mib[2] = what;
 	for (tries = 0; tries < 4; tries++) {
 		len = 0;
-		if (MiamiSysCtl(mib, 3, NULL, &len, NULL, 0) != 0) {
+		if (RiptideSysCtl(mib, 3, NULL, &len, NULL, 0) != 0) {
 			cl_error("cannot read the Riptide tables (not Riptide 0.10 or later?)");
 			return NULL;
 		}
@@ -578,7 +578,7 @@ void *cl_dump(int what, struct rt_ctl_hdr *hdr)
 			cl_error("out of memory");
 			return NULL;
 		}
-		if (MiamiSysCtl(mib, 3, buf, &len, NULL, 0) == 0) {
+		if (RiptideSysCtl(mib, 3, buf, &len, NULL, 0) == 0) {
 			memcpy(hdr, buf, sizeof(*hdr));
 			if (hdr->version != RT_CTL_VERSION || hdr->recsize == 0) {
 				FreeVec(buf);

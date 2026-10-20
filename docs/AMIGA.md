@@ -1,14 +1,19 @@
 # Riptide on AmigaOS
 
-Riptide is a TCP/IP stack for AmigaOS 3.x on a 68020 or better. It replaces
-MiamiDx 1.0c and is a drop-in for applications. It publishes three
-libraries with the same vector layouts as MiamiDx:
+Riptide is a TCP/IP stack for AmigaOS 3.x on a 68020 or better. It is a
+drop-in replacement for a historical commercial Amiga stack (see
+`docs/RE-NOTES.md`) and keeps that stack's binary interfaces. It publishes
+these libraries:
 
 | Library | Version | API |
 |---|---|---|
 | `bsdsocket.library` | 4.1 | AmiTCP 4: all 46 functions, `socket()` through `GetSocketEvents()` |
-| `miami.library` | 21.1 | Miami SDK 2.11: the 53 documented vectors. The MiamiDx-private vectors up to LVO -522 exist and return 0. |
+| `riptide.library` | 1.0 | Riptide's own API: `RiptideSysCtl()`, interface state, `getaddrinfo()` & co., `if_*`; 53 documented vectors, reserved vectors up to LVO -522 return 0. See "riptide.library" below. |
+| compat alias of `riptide.library` | 21.1 | The same library under the name and version of the historical API it implements, `miami.library` 21, so existing programs keep working. `compat aliases off` removes it. |
 | `usergroup.library` | 4.1 | AmiTCP usergroup, 39 functions. Single user only. |
+
+`docs/COMPARISON.md` compares Riptide with that historical stack and with
+Roadshow, feature by feature.
 
 Riptide runs as one ordinary CLI process. That process owns the timers and
 the network drivers. Socket calls run in the calling program's own task,
@@ -29,11 +34,11 @@ under one exec semaphore (the stack lock).
    To see the log, redirect it to a file or a console window instead of
    `NIL:`, for example `Run >CON:0/0/640/100/Riptide Riptide`.
 
-Riptide refuses to start if `bsdsocket.library`, `miami.library` or
-`usergroup.library` is already in the system library list. It then prints
-"A TCP/IP stack is already running:" followed by the id string of each
-library it found, so you can tell which stack owns them. Quit MiamiDx,
-AmiTCP or Roadshow first. Also turn off any emulator bsdsocket emulation,
+Riptide refuses to start if `bsdsocket.library`, `riptide.library`, the
+compat alias library or `usergroup.library` is already in the system
+library list. It then prints "A TCP/IP stack is already running:" followed
+by the id string of each library it found, so you can tell which stack
+owns them. Quit the other stack (or the other Riptide) first. Also turn off any emulator bsdsocket emulation,
 and remove another stack's `LIBS:bsdsocket.library`, which loads by itself
 when a program opens it.
 
@@ -58,7 +63,7 @@ Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST]
 port `RIPTIDE`. You can also signal the Riptide process directly:
 
 * **Ctrl-C** works like `QUIT`. If programs still have the libraries open,
-  Riptide sends each of them Ctrl-C, as MiamiDx does. It then quits once
+  Riptide sends each of them Ctrl-C, as the historical stack does. It then quits once
   the last one has closed its library.
 * **Ctrl-F** prints the status to Riptide's output.
 
@@ -108,6 +113,7 @@ interface NAME device=DEVICE [unit=N] [mtu=N] [raw]
 interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N]
 interface NAME delete              # at run time: close the driver, drop the interface
 user NAME [uid=N] [gid=N] [home=DIR] [realname=TEXT]
+compat aliases on|off              # publish the compat alias library (default on)
 loglevel N
 ```
 
@@ -131,28 +137,42 @@ uses its name.
 * If a read fails because the device is offline, Riptide retries every
   second.
 
-**MNI drivers.** `mni=` loads a Miami Network Interface driver (`.mni`)
-directly, for example `mni=z2-am7990.mni`.
+**MNI drivers.** `mni=` loads an MNI network driver (`.mni`, the driver
+format of the historical stack) directly, for example `mni=z2-am7990.mni`.
 
-* If the name has no path, Riptide tries `LIBS:` and then `Miami:MNI/`.
+* If the name has no path, Riptide tries `LIBS:`, `DEVS:Networks/` and
+  then the historical stack's driver directory (`Miami:MNI/`).
 * `unit=` is the board index. `options=` is the driver's option string,
   for example `options="FT=2 MEDIA=AUTO"`.
 * Receive is zero copy: the driver writes frames straight into Riptide's
   buffers.
-* The ABI was recovered from MiamiDx; see `docs/RE-NOTES.md`, section 4.
+* The ABI was recovered from the historical stack; see `docs/RE-NOTES.md`,
+  section 4.
 
-**Using Miami's own drivers.**
+**Using existing MNI drivers.**
 
 * Prefer `mni=`: it is faster and has no further requirements.
-* Miami's `sanamni.device` wrapper is a SANA-II device too, but it is not a
-  good choice with Riptide:
-  * it works only with a registered MiamiDx installation;
+* The historical stack's `sanamni.device` wrapper is a SANA-II device too,
+  but it is not a good choice with Riptide:
+  * it works only with a registered installation of that stack;
   * it rejects packet types 0x0800 (IP), 0x0806 (ARP) and 0x8035 (RARP),
     which are exactly the types Riptide needs;
   * it adds a copy.
 
 **User.** `user` sets the single usergroup.library user. The default is
 `user`, uid 0, gid 0, home `SYS:`.
+
+**Compat alias.** `compat aliases on|off` decides whether `riptide.library`
+is also published as the compat alias library (default `on`). Turn it off
+if no program you use needs the historical API name. In the configuration
+file it takes effect when the libraries are created; sent to the running
+stack (RIPTIDE port) it adds or removes the alias at once, and `off` fails
+with `EBUSY` while a program still has the alias open. The startup line
+and `Riptide STATUS` show the state:
+
+```
+Libraries: bsdsocket.library 4, riptide.library 1, usergroup.library 4; compat alias: miami.library 21
+```
 
 ### Example: Ethernet with DHCP
 
@@ -204,7 +224,7 @@ Where the data comes from:
   bsdsocket.library API, so they also work with other stacks.
 * `ifconfig` (changes), `route add/del` and `arp -s/-d` use the BSD ioctls
   (SIOCAIFADDR, SIOCSIF*, SIOCADDRT/SIOCDELRT, SIOCSARP/SIOCDARP).
-* Listings read Riptide's tables with `MiamiSysCtl()` (below), and `ip`,
+* Listings read Riptide's tables with `RiptideSysCtl()` (below), and `ip`,
   `sysctl` and `hostname NAME` send configuration lines to the RIPTIDE
   port.
 
@@ -381,7 +401,7 @@ command in the background and waits until bsdsocket.library appears;
 
 ## Interfaces for tools
 
-### Tables: `MiamiSysCtl()` and `net.riptide.*`
+### Tables: `RiptideSysCtl()` and `net.riptide.*`
 
 Riptide publishes its tables as read-only sysctls under the MIB
 `{CTL_NET (4), 255, n}` (names `net.riptide.*`). Every table is a `struct
@@ -445,12 +465,13 @@ fields, as sent by Riptide 0.9) are still understood.
 
 ## Compatibility notes
 
-**Per-opener library bases.** Like MiamiDx, every task that opens
-`bsdsocket.library` or `miami.library` gets its own library base.
+**Per-opener library bases.** As in the historical stack, every task that
+opens `bsdsocket.library`, `riptide.library` or the compat alias gets its
+own library base.
 
 * A second `OpenLibrary()` from the same task returns the same base with a
   higher open count.
-* `bsdsocket` and `miami` share one per-task context: the descriptor
+* `bsdsocket`, `riptide` and the alias share one per-task context: the descriptor
   table, `errno` and the signal masks.
 * Each opener has its own socket descriptor table. The default size is 64;
   change it with `SBTC_DTABLESIZE`.
@@ -482,26 +503,61 @@ fields, as sent by Riptide 0.9) are still understood.
 * `getservbyname()`, `getservbyport()`, `getprotobyname()` and
   `getprotobynumber()` use built-in tables.
 
-**miami.library.**
+**riptide.library.**
 
-* Implemented: `MiamiSysCtl()` (by MIB), `MiamiDisallowDNS()`,
-  `MiamiGetPid()`, `MiamiIsOnline()` and `MiamiOnOffline()` (by interface
-  name; "mi0" or NULL means any interface), `inet_ntop()`, `inet_pton()`,
-  `inet_aton()`, `gethostbyname2()` (AF_INET only), `getaddrinfo()`,
-  `freeaddrinfo()`, `getnameinfo()`, `gai_strerror()`, the `if_*`
-  functions, `sockatmark()`, `MiamiGetFdCallback()` and
-  `MiamiSetFdCallback()`.
-* Fd callbacks must be 68k register callbacks (`MIAMICPU_M68KREG`); PPC
+* Implemented: `RiptideSysCtl()` (by MIB), `RiptideDisallowDNS()`,
+  `RiptideGetPid()`, `RiptideIsOnline()` and `RiptideOnOffline()` (by
+  interface name; "mi0" or NULL means any interface),
+  `RiptideGetHardwareLen()`, `RiptideResGetOptions()`/`RiptideResSetOptions()`,
+  `RiptideSupportedCPUs()`, `inet_ntop()`, `inet_pton()`, `inet_aton()`,
+  `gethostbyname2()` (AF_INET only), `getaddrinfo()`, `freeaddrinfo()`,
+  `getnameinfo()`, `gai_strerror()`, the `if_*` functions, `sockatmark()`,
+  `RiptideGetFdCallback()` and `RiptideSetFdCallback()`.
+* Fd callbacks must be 68k register callbacks (`RIPTIDECPU_M68KREG`); PPC
   callbacks are refused.
 * Return fixed values:
-  * `MiamiSupportsIPV6()` returns 0.
-  * `MiamiOpenSSL()` returns NULL (there is no SSL).
-  * `MiamiPFAddHook()` returns NULL (no packet monitoring).
-  * `MiamiSetSocksConn()` returns FALSE (no SOCKS).
-* The MiamiDx-private vectors (the resolver internals used by MiamiDx's
-  own DNS tools, kvm access for its NetStat, and its settings database)
-  return 0. Programs that depend on them, such as Miami's NetStat, DiG and
-  NSLookup, do not work.
+  * `RiptideSupportsIPV6()` returns 0.
+  * `RiptideOpenSSL()` returns NULL (there is no SSL).
+  * `RiptidePFAddHook()` returns NULL (no packet monitoring).
+  * `RiptideSetSocksConn()` returns FALSE (no SOCKS).
+* The reserved vectors (`RiptideReserved*`, up to LVO -522) return 0. In
+  the historical stack these were private calls (resolver internals used
+  by its own DNS tools, kvm access for its NetStat, its settings
+  database), so programs that depend on them, such as that stack's NetStat,
+  DiG and NSLookup, do not work.
+* **Compat alias.** The alias (see "Compat alias" above) is the same
+  library: same vectors, per-task bases and context. A program that opens
+  it calls the same functions under their historical names, which
+  `tests/amiga/check_layouts.sh` checks against that API's SDK.
+
+**riptide.library SDK.** `sdk/` holds what a program needs to call
+riptide.library, generated from `src/amiga/lib_lvos.txt` by
+`tools/gen_lvos.py` (`make -f Makefile.amiga sdk`; `check` fails when it
+is out of date):
+
+| File | |
+|---|---|
+| `sdk/fd/riptide_lib.fd` | FD file (base `_RiptideBase`; the reserved vectors are `##private`), for `fd2pragma`, `fd2sfd` and the like |
+| `sdk/include/libraries/riptide.h` | `RIPTIDE_LIB_NAME`, `RIPTIDE_LIB_VERSION`, `RIPTIDECPU_*`, the `net.riptide.*` MIB numbers |
+| `sdk/include/clib/riptide_protos.h` | prototypes |
+| `sdk/include/inline/riptide_protos.h` | vbcc inline calls |
+| `sdk/include/pragmas/riptide_pragmas.h` | SAS/C and DICE `#pragma libcall` |
+| `sdk/include/proto/riptide.h` | includes the above for the compiler in use |
+
+```c
+#include <proto/exec.h>
+#include <proto/riptide.h>      /* vc +aos68k -Isdk/include ... */
+
+struct Library *RiptideBase;
+...
+RiptideBase = OpenLibrary(RIPTIDE_LIB_NAME, RIPTIDE_LIB_VERSION);
+```
+
+Struct pointers are declared as `APTR`. For the record layouts of the
+`net.riptide.*` tables include `include/rt/rt_ctl.h` from the Riptide
+sources. `tests/amiga/sdk_test.c` is a small example that is built from
+the SDK alone and run in the FS-UAE tools test. GCC users can generate
+inlines from the FD file with their usual tools.
 
 **syslog.** `vsyslog()` messages go to Riptide's output, prefixed with the
 `SBTC_LOGTAGPTR` tag and filtered by `SBTC_LOGMASK`. Arguments are 32-bit
@@ -528,7 +584,8 @@ dependency and are not part of the repository.
 ```
 make -f Makefile.amiga            # VBCC=/opt/vbcc NDK=/opt/ndk3.2 by default
                                   # -> build/amiga/Riptide, build/amiga/rtcheck
-make -f Makefile.amiga check      # hunk checks + vamos self test
+make -f Makefile.amiga check      # SDK up to date, hunk checks + vamos self test
+make -f Makefile.amiga sdk        # regenerate sdk/ from src/amiga/lib_lvos.txt
 ```
 
 An alternative build uses Debian's `m68k-linux-gnu-gcc` in freestanding
@@ -558,11 +615,11 @@ Both builds generate their library glue from the LVO tables
 
 | Test | What it checks |
 |---|---|
-| `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the Miami SDK 2.11. Set `NDK=`, `MIAMI_SDK=` and `AMITCP_SDK=` to the unpacked archives. |
+| `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the SDK 2.11 of the historical API (`COMPAT_SDK`): the compat alias must keep its vector layout (riptide.library's names are mapped to the historical ones), and `sdk/fd/riptide_lib.fd` must match the table. Set `NDK=`, `COMPAT_SDK=` and `AMITCP_SDK=` to the unpacked archives. |
 | `tests/amiga/test_hunk.py FILES` | Loads the executables with amitools and checks their relocations. It also has elf2hunk unit tests: absolute, PC-relative and absolute-symbol relocations, rejecting 16-bit relocations, bss in the hunk size, and a run under vamos. |
 | `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
-| `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. |
-| `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. |
+| `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. |
+| `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real
 interface.
