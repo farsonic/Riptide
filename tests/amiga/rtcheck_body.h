@@ -38,12 +38,21 @@ struct rtc_tv {
 };
 
 static int rtc_fail, rtc_pass;
+static int rtc_verbose;          /* rtcheck -v: one line per check */
 static LONG rtc_errno;
 
 #define CHECK(cond, what) do { \
-	if (cond) { rtc_pass++; } \
-	else { rtc_fail++; RTC_LOG("FAIL %s (line %d, errno %ld)", what, __LINE__, (long)rtc_errno); } \
+	if (cond) { \
+		rtc_pass++; \
+		if (rtc_verbose) RTC_LOG("  ok   %3d %s", rtc_pass + rtc_fail, what); \
+	} else { \
+		rtc_fail++; \
+		if (rtc_verbose) RTC_LOG("  FAIL %3d %s (line %d, errno %ld)", rtc_pass + rtc_fail, what, __LINE__, (long)rtc_errno); \
+		else RTC_LOG("FAIL %s (line %d, errno %ld)", what, __LINE__, (long)rtc_errno); \
+	} \
 } while (0)
+/* Section heading, verbose mode only */
+#define RTC_SECTION(name) do { if (rtc_verbose) RTC_LOG("%s", name); } while (0)
 
 static int rtc_streq(const char *a, const char *b)
 {
@@ -403,19 +412,30 @@ static void rtc_blocking(void)
 
 static int rtcheck_run(void)
 {
-	rtc_fail = rtc_pass = 0;
+	/* counters are not reset: checks made before (opening the libraries)
+	 * belong to the same run and numbering */
+	RTC_SECTION("bsdsocket.library: misc (errno, tags, inet_*, netdb):");
 	rtc_bsd_misc();
+	RTC_SECTION("UDP over loopback:");
 	rtc_udp();
+	RTC_SECTION("TCP over loopback:");
 	rtc_tcp();
 #if RTC_BLOCKING
+	RTC_SECTION("blocking calls, timeouts and Ctrl-C:");
 	rtc_blocking();
 #endif
-	if (RiptideBase)
+	if (RiptideBase) {
+		RTC_SECTION("riptide.library:");
 		rtc_riptide();
-	if (RiptideBase && CompatBase)
+	}
+	if (RiptideBase && CompatBase) {
+		RTC_SECTION("compat alias library:");
 		rtc_compat();
-	if (UserGroupBase)
+	}
+	if (UserGroupBase) {
+		RTC_SECTION("usergroup.library:");
 		rtc_usergroup();
+	}
 	RTC_LOG("%d checks passed, %d failed", rtc_pass, rtc_fail);
 	return rtc_fail;
 }

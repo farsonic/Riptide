@@ -392,12 +392,14 @@ timeout in seconds.
 
 ### rtcheck
 
-`rtcheck [START=cmd] [STOP=cmd] [CONNECT=a.b.c.d:port] [NOCHECK]` is the
+`rtcheck [-v|VERBOSE] [START=cmd] [STOP=cmd] [CONNECT=a.b.c.d:port] [NOCHECK]` is the
 library test client. Without arguments it runs about 80 checks against the
 running stack over loopback. `CONNECT=` runs a TCP echo test through a
 real interface, against an echo server on the other end. `START=` starts a
 command in the background and waits until bsdsocket.library appears;
-`NOCHECK` then exits without running the checks.
+`NOCHECK` then exits without running the checks. `-v` (or `VERBOSE`) prints
+every check on its own numbered line (`ok` or `FAIL`), grouped by section;
+without it only failures and the summary are shown.
 
 ## Interfaces for tools
 

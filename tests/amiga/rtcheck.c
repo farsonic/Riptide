@@ -92,7 +92,7 @@ static LONG run(const char *cmd, int async)
 	return SystemTagList((CONST_STRPTR)cmd, t);
 }
 
-#define TEMPLATE "START/K,STOP/K,CONNECT/K,NOCHECK/S"
+#define TEMPLATE "START/K,STOP/K,CONNECT/K,NOCHECK/S,VERBOSE=-V/S"
 
 /* CONNECT=a.b.c.d:port - TCP echo test through a real interface: send a
  * line and expect it back (the host side runs an echo server). */
@@ -130,7 +130,7 @@ static void rtc_connect(const char *spec)
 
 static int rtcheck_main(void)
 {
-	LONG args[4] = { 0, 0, 0, 0 };
+	LONG args[5] = { 0, 0, 0, 0, 0 };
 	APTR rda;
 	int fails, i;
 
@@ -139,6 +139,7 @@ static int rtcheck_main(void)
 		PrintFault(IoErr(), (CONST_STRPTR)"rtcheck");
 		return 20;
 	}
+	rtc_verbose = args[4] != 0;
 	if (args[0]) {
 		/* start the stack ourselves (full-system tests boot straight into
 		 * rtcheck from S:Startup-Sequence) */
@@ -169,15 +170,18 @@ static int rtcheck_main(void)
 	}
 	RiptideBase = OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, RIPTIDE_LIB_VERSION);
 	CompatBase = OpenLibrary((CONST_STRPTR)RT_COMPAT_LIBNAME, RT_COMPAT_LIBVERSION);
+	RTC_SECTION("libraries:");
 	CHECK(RiptideBase != NULL, "open " RIPTIDE_LIB_NAME);
 	CHECK(CompatBase != NULL, "open the compat alias " RT_COMPAT_LIBNAME);
 	UserGroupBase = OpenLibrary((CONST_STRPTR)"usergroup.library", 4);
 	rtc_logf("rtcheck: %s", (const char *)SocketBase->lib_IdString);
 	fails = rtcheck_run();
 	if (args[2]) {
+		RTC_SECTION("TCP echo through a network interface:");
 		rtc_connect((const char *)args[2]);
 		fails = rtc_fail;
 	}
+	RTC_SECTION("compat alias on/off switch:");
 	rtc_compat_switch();         /* closes CompatBase */
 	fails = rtc_fail;
 	if (args[1]) {
