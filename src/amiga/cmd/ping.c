@@ -22,7 +22,10 @@
 
 struct tv { ULONG secs, micro; };
 
-static u32 bitmap[SEQ_BITS / 32];
+static u32 bitmap[SEQ_BITS / 32];     /* replies seen, per sequence number */
+static u32 sendtime[SEQ_BITS];        /* cl_now_us() at send, per sequence number */
+static u32 corrupt;                   /* replies whose data did not match a probe */
+static int shift_noted;
 static u32 recvd, dups, errors, sent, min_us = 0xffffffffUL, max_us;
 static u64 sum_us, sum2_us;
 static int quiet;
@@ -104,10 +107,40 @@ static void handle(LONG n, u32 from, u32 dst)
 		return;
 	if (ic[0] == RT_ICMP_ECHOREPLY) {
 		int dup;
+		u32 off, avail;
+		u8 *e = NULL;
+
 		if (rt_get_be16(ic + 4) != ident || from != dst)
 			return;
-		seq = rt_get_be16(ic + 6);
-		memcpy(&t0, ic + HDR, 4);
+		/* Find our echo header and trust a reply only if its sequence number
+		 * was sent and its data carries that probe's send time. RTT comes
+		 * from our own send-time table, never from the reply. Offset 20
+		 * copes with emulators (old slirp on macOS) that hand back the
+		 * host's IP header in front of the ICMP message. */
+		for (off = 0; off <= 20; off += 20) {
+			avail = (u32)n - hl;
+			if (avail < off + HDR + 4 || ic[off] != RT_ICMP_ECHOREPLY)
+				continue;
+			seq = rt_get_be16(ic + off + 6);
+			if (seq == 0 || seq > sent || sent - seq >= SEQ_BITS)
+				continue;
+			memcpy(&t0, ic + off + HDR, 4);
+			if (t0 != sendtime[seq % SEQ_BITS])
+				continue;
+			e = ic + off;
+			break;
+		}
+		if (!e) {
+			corrupt++;
+			if (!quiet && corrupt == 1)
+				cl_printf("Reply from %s with data that matches no probe (ignored)\n",
+				          cl_ip(from, a));
+			return;
+		}
+		if (off && !shift_noted && !quiet) {
+			shift_noted = 1;
+			cl_printf("(note: replies arrive with an extra IP header - emulator NAT quirk; compensated)\n");
+		}
 		rt = cl_now_us() - t0;
 		dup = (bitmap[(seq % SEQ_BITS) / 32] >> (seq % 32)) & 1;
 		bitmap[(seq % SEQ_BITS) / 32] |= 1UL << (seq % 32);
@@ -124,7 +157,7 @@ static void handle(LONG n, u32 from, u32 dst)
 		}
 		if (!quiet) {
 			fmt_ms(b, rt);
-			cl_printf("%ld bytes from %s: icmp_seq=%lu ttl=%u time=%s ms%s\n", (long)(n - hl),
+			cl_printf("%ld bytes from %s: icmp_seq=%lu ttl=%u time=%s ms%s\n", (long)(n - hl - off),
 			          cl_ip(from, a), (unsigned long)seq, (unsigned)rbuf[8], b, dup ? " (DUP!)" : "");
 		}
 		return;
@@ -174,7 +207,12 @@ static int receive_until(int s, u32 until, u32 dst, u32 stop_after)
 		n = WaitSelect(s + 1, rd, NULL, NULL, &tmo, &sigs);
 		if (sigs & SIGBREAKF_CTRL_C)
 			return 1;
-		if (n <= 0)
+		if (n < 0) {
+			if (Errno() == RT_EINTR || cl_break())
+				return 1;
+			return 0;            /* select failed: give up this wait */
+		}
+		if (n == 0)
 			continue;
 		n = recvfrom(s, rbuf, RBUF, 0, &from, &fl);
 		if (n >= 20)
@@ -313,6 +351,7 @@ static int ping_main(int argc, char **argv)
 		rt_put_be16(pkt + 6, (u16)seq);
 		t0 = cl_now_us();
 		memcpy(pkt + HDR, &t0, 4);
+		sendtime[seq % SEQ_BITS] = t0;
 		for (k = 4; k < size; k++)
 			pkt[HDR + k] = (u8)k;
 		rt_put_be16(pkt + 2, cksum(pkt, HDR + size));
@@ -338,11 +377,14 @@ static int ping_main(int argc, char **argv)
 		cl_printf(", +%lu duplicates", (unsigned long)dups);
 	if (errors)
 		cl_printf(", +%lu errors", (unsigned long)errors);
+	if (corrupt)
+		cl_printf(", +%lu unmatched", (unsigned long)corrupt);
 	cl_printf(", %lu%% packet loss, time %lums\n",
 	          (unsigned long)(sent ? (sent - (recvd > sent ? sent : recvd)) * 100 / sent : 0),
 	          (unsigned long)x);
 	if (recvd) {
-		u64 avg = sum_us / recvd, var = sum2_us / recvd - avg * avg;
+		u64 avg = sum_us / recvd, sq = sum2_us / recvd;
+		u64 var = sq > avg * avg ? sq - avg * avg : 0;
 		fmt_ms(b, min_us);
 		fmt_ms(c, (u32)avg);
 		fmt_ms(d, max_us);

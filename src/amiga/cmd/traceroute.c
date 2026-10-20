@@ -71,7 +71,9 @@ static int wait_reply(int rs, u32 dst, u16 key, u32 t0, u32 *from, u32 *rtt, int
 		n = WaitSelect(rs + 1, rd, NULL, NULL, &tmo, &sigs);
 		if (sigs & SIGBREAKF_CTRL_C)
 			return -2;
-		if (n <= 0)
+		if (n < 0)
+			return (Errno() == RT_EINTR || cl_break()) ? -2 : -1;
+		if (n == 0)
 			continue;
 		n = recvfrom(rs, rbuf, RBUF, 0, &f, &fl);
 		if (n < 28)

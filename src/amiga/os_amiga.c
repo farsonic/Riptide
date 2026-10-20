@@ -339,7 +339,10 @@ static void sleeper_wake(struct rt_sleeper *s)
 int rt_sleeper_wait(struct rt_sleeper *s, s32 timeout_ms, u32 *extra_signals)
 {
 	ULONG want = extra_signals ? *extra_signals : 0;
-	ULONG brk = s->breakmask ? *s->breakmask : 0;
+	/* A break signal the caller also asked for (WaitSelect's signal mask,
+	 * e.g. SIGBREAKF_CTRL_C) is delivered to it as a plain signal, not as
+	 * EINTR - AmiTCP semantics, and what Ctrl-C aware tools rely on. */
+	ULONG brk = (s->breakmask ? *s->breakmask : 0) & ~want;
 	ULONG tmask = 0, got, pending;
 	int expired = 0;
 
