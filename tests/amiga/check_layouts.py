@@ -101,7 +101,10 @@ NET_STRUCTS = (
      ('struct rt_sockaddr', None, 'struct sockaddr', None),
      ('struct rt_linger', None, 'struct linger', None),
      ('struct rt_ifreq', None, 'struct ifreq', None),
-     ('struct rt_ifconf', None, 'struct ifconf', None)]
+     ('struct rt_ifconf', None, 'struct ifconf', None)] +
+    S('rt_ortentry', 'rt_hash', 'rt_dst', 'rt_gateway', 'rt_flags', 'rt_refcnt', 'rt_use', 'rt_ifp',
+      ref='ortentry') +
+    S('rt_ifaliasreq', 'ifra_name', 'ifra_addr', 'ifra_broadaddr', 'ifra_mask', ref='ifaliasreq')
 )
 NET_CONSTS = '''SBTF_REF SBTF_SET SBTC_BREAKMASK SBTC_SIGIOMASK SBTC_SIGURGMASK SBTC_SIGEVENTMASK SBTC_ERRNO
 SBTC_HERRNO SBTC_DTABLESIZE SBTC_FDCALLBACK SBTC_LOGSTAT SBTC_LOGTAGPTR SBTC_LOGFACILITY SBTC_LOGMASK
@@ -125,7 +128,10 @@ SIOCGIFNETMASK SIOCGIFMTU SIOCSIFMTU EPERM ENOENT EINTR EBADF ENOMEM EACCES EFAU
 EWOULDBLOCK EINPROGRESS EALREADY ENOTSOCK EDESTADDRREQ EMSGSIZE EPROTOTYPE ENOPROTOOPT
 EPROTONOSUPPORT ESOCKTNOSUPPORT EOPNOTSUPP EPFNOSUPPORT EAFNOSUPPORT EADDRINUSE EADDRNOTAVAIL ENETDOWN
 ENETUNREACH ENETRESET ECONNABORTED ECONNRESET ENOBUFS EISCONN ENOTCONN ESHUTDOWN ETOOMANYREFS ETIMEDOUT
-ECONNREFUSED ELOOP ENAMETOOLONG EHOSTDOWN EHOSTUNREACH ENOTEMPTY'''.split()
+ECONNREFUSED ELOOP ENAMETOOLONG EHOSTDOWN EHOSTUNREACH ENOTEMPTY SIOCADDRT SIOCDELRT SIOCAIFADDR
+RTF_UP RTF_GATEWAY RTF_HOST RTF_REJECT RTF_DYNAMIC RTF_MASK RTF_STATIC'''.split()
+# AmiTCP SDK: the ARP ioctls (struct arpreq is AmiTCP specific: 18 byte arp_ha)
+AMITCP_ARP_CONSTS = '''SIOCSARP SIOCGARP SIOCDARP ATF_INUSE ATF_COM ATF_PERM ATF_PUBL'''.split()
 
 
 def run(cmd, **kw):
@@ -267,10 +273,10 @@ def main():
         if miami and os.path.isdir(miami):
             ni = os.path.join(miami, 'netinclude')
             refs = ['sys/types.h', 'sys/uio.h', 'sys/socket.h', 'sys/ioctl.h', 'sys/errno.h', 'netinet/in.h',
-                    'netinet/tcp.h', 'net/if.h', 'netdb.h', 'bsdsocket/socketbasetags.h',
+                    'netinet/tcp.h', 'net/if.h', 'net/route.h', 'netdb.h', 'bsdsocket/socketbasetags.h',
                     'sys/syslog.h', 'libraries/miami.h', 'libraries/usergroup.h']
             ok &= check_against(tmp, 'miami-sdk', NET_STRUCTS, NET_CONSTS,
-                                ['exec.h', 'amiga_net.h', 'rt_bsd.h', 'rt_errno.h'], refs, [ni, inc, os.path.join(ROOT, 'src/amiga/include')],
+                                ['exec.h', 'amiga_net.h', 'rt_bsd.h', 'rt_errno.h', 'rt_ip.h'], refs, [ni, inc, os.path.join(ROOT, 'src/amiga/include')],
                                 rt_consts=RT_CONSTS)
             fdd = os.path.join(miami, 'fd')
             t = os.path.join(ROOT, 'src/amiga/lib_lvos.txt')
@@ -291,6 +297,10 @@ def main():
             ok &= check_against(tmp, 'amitcp-sdk', items, ['UT_NAMESIZE', 'UT_HOSTSIZE'],
                                 ['exec.h', 'amiga_net.h'], ['sys/types.h', 'pwd.h', 'grp.h', 'utmp.h'],
                                 [ni, inc])
+            arp = S('rt_arpreq', 'arp_pa', 'arp_ha', 'arp_flags', ref='arpreq')
+            ok &= check_against(tmp, 'amitcp-arp', arp, [], ['exec.h', 'rt_bsd.h'],
+                                ['sys/types.h', 'sys/socket.h', 'sys/ioctl.h', 'net/if_arp.h'],
+                                [ni, inc], defines=('AMITCP', 'KERNEL'), rt_consts=AMITCP_ARP_CONSTS)
             fdd = os.path.join(amitcp, 'netinclude', 'fd')
             if os.path.isdir(fdd):
                 t = os.path.join(ROOT, 'src/amiga/lib_lvos.txt')

@@ -119,6 +119,147 @@ static int stack_ping(struct rt_sockctx *c, int rs, u32 dst, u16 seq, u32 size)
 	return 0;
 }
 
+/* ---- traceroute: UDP probes with IP_TTL, ICMP echo with IP_TTL ----
+ *   Riptide 10.77.0.2 --tun-- 10.77.0.1 Linux (forwarding) 10.77.5.1
+ *        --veth-- 10.77.5.2 netns "rttrN"
+ * Hop 1 must answer TIME_EXCEEDED, hop 2 PORT_UNREACH (UDP) or
+ * ECHOREPLY (ICMP), and the raw ICMP socket must see the errors with the
+ * probe quoted. */
+static char tr_ns[32];
+
+static int tr_setup(const char *tun_name)
+{
+	snprintf(tr_ns, sizeof(tr_ns), "rttr%d", (int)(getpid() % 100000));
+	if (sh("ip netns add %s 2>/dev/null", tr_ns))
+		return -1;
+	if (sh("ip link add %sa type veth peer name %sb 2>/dev/null", tr_ns) ||
+	    sh("ip link set %sb netns %s", tr_ns) ||
+	    sh("ip addr add 10.77.5.1/24 dev %sa && ip link set %sa up", tr_ns) ||
+	    sh("ip netns exec %s sh -c 'ip addr add 10.77.5.2/24 dev %sb && ip link set %sb up "
+	       "&& ip link set lo up && ip route add default via 10.77.5.1'", tr_ns) ||
+	    sh("sysctl -qw net.ipv4.ip_forward=1", tr_ns))
+		return -1;
+	sh("sysctl -qw net.ipv4.conf.all.rp_filter=0", tr_ns);
+	{
+		char cmd[200];
+		snprintf(cmd, sizeof(cmd), "sysctl -qw net.ipv4.conf.%s.rp_filter=0", tun_name);
+		if (system(cmd)) {}
+	}
+	return 0;
+}
+
+static void tr_teardown(void)
+{
+	sh("ip netns del %s 2>/dev/null", tr_ns);
+	sh("ip link del %sa 2>/dev/null", tr_ns);
+}
+
+/* Wait for the ICMP answer to the probe to dst (UDP dport, or ICMP echo
+ * seq). Returns the ICMP type (or -1) and the sender. */
+static int tr_wait(struct rt_sockctx *c, int rs, u32 dst, int udp, u16 key, u32 *from)
+{
+	u8 buf[600];
+	u32 t0 = rt_now_ms();
+
+	while ((s32)(rt_now_ms() - t0) < 3000) {
+		struct rt_sockaddr_in f;
+		u32 fl = sizeof(f), hl, ihl;
+		const u8 *ic, *in;
+		int n = rt_api_recvfrom(c, rs, buf, sizeof(buf), 0, &f, &fl);
+		if (n < 0)
+			return -1;
+		hl = (u32)(buf[0] & 15) * 4;
+		if ((u32)n < hl + 8)
+			continue;
+		ic = buf + hl;
+		if (ic[0] == RT_ICMP_ECHOREPLY && !udp) {
+			if (rt_get_be16(ic + 4) == 0x7472 && rt_get_be16(ic + 6) == key) {
+				*from = f.sin_addr;
+				return ic[0];
+			}
+			continue;
+		}
+		if (ic[0] != RT_ICMP_TIMXCEED && ic[0] != RT_ICMP_UNREACH)
+			continue;
+		if ((u32)n < hl + 8 + 20 + 8)
+			continue;
+		in = ic + 8;
+		ihl = (u32)(in[0] & 15) * 4;
+		if (memcmp(in + 16, &dst, 4) != 0 || (u32)n < hl + 8 + ihl + 8)
+			continue;
+		if (udp ? (in[9] != RT_IPPROTO_UDP || rt_get_be16(in + ihl + 2) != key)
+		        : (in[9] != RT_IPPROTO_ICMP || rt_get_be16(in + ihl + 6) != key))
+			continue;
+		*from = f.sin_addr;
+		return ic[0];
+	}
+	return -1;
+}
+
+static void test_traceroute(struct rt_sockctx *c, struct rt_netif *tun, const char *tun_name)
+{
+	u32 linux_ip = rt_htonl(0x0a4d0001), far = rt_htonl(0x0a4d0502), from;
+	struct rt_timeval tv = { 1, 0 };
+	struct rt_sockaddr_in a;
+	int rs, us, ttl, t;
+	u8 pkt[16];
+	char out[200];
+
+	if (tr_setup(tun_name)) {
+		printf("traceroute test skipped (netns/veth setup failed)\n");
+		tr_teardown();
+		return;
+	}
+	rt_lock();
+	CHECK(rt_ctl_command("route add 10.77.5.0/24 via 10.77.0.1", out, sizeof(out), NULL) == 0);
+	rt_unlock();
+	rs = rt_api_socket(c, RT_AF_INET, RT_SOCK_RAW, RT_IPPROTO_ICMP);
+	us = rt_api_socket(c, RT_AF_INET, RT_SOCK_DGRAM, 0);
+	rt_api_setsockopt(c, rs, RT_SOL_SOCKET, RT_SO_RCVTIMEO, &tv, sizeof(tv));
+	memset(&a, 0, sizeof(a));
+	a.sin_len = sizeof(a);
+	a.sin_family = RT_AF_INET;
+	a.sin_addr = far;
+	/* UDP probes */
+	for (ttl = 1; ttl <= 2; ttl++) {
+		s32 v = ttl, got = 0;
+		u32 gl = sizeof(got);
+		CHECK(rt_api_setsockopt(c, us, RT_IPPROTO_IP, RT_IP_TTL, &v, sizeof(v)) == 0);
+		CHECK(rt_api_getsockopt(c, us, RT_IPPROTO_IP, RT_IP_TTL, &got, &gl) == 0 && got == ttl);
+		a.sin_port = rt_htons((u16)(33434 + ttl));
+		CHECK(rt_api_sendto(c, us, "probe", 5, 0, &a, sizeof(a)) == 5);
+		t = tr_wait(c, rs, far, 1, (u16)(33434 + ttl), &from);
+		if (ttl == 1)
+			CHECK(t == RT_ICMP_TIMXCEED && from == linux_ip);
+		else
+			CHECK(t == RT_ICMP_UNREACH && from == far);
+	}
+	/* ICMP echo probes with IP_TTL on the raw socket */
+	for (ttl = 1; ttl <= 2; ttl++) {
+		s32 v = ttl;
+		u16 ck;
+		CHECK(rt_api_setsockopt(c, rs, RT_IPPROTO_IP, RT_IP_TTL, &v, sizeof(v)) == 0);
+		memset(pkt, 0, sizeof(pkt));
+		pkt[0] = RT_ICMP_ECHO;
+		rt_put_be16(pkt + 4, 0x7472);
+		rt_put_be16(pkt + 6, (u16)ttl);
+		ck = rt_inet_csum(pkt, sizeof(pkt));
+		memcpy(pkt + 2, &ck, 2);
+		a.sin_port = 0;
+		CHECK(rt_api_sendto(c, rs, pkt, sizeof(pkt), 0, &a, sizeof(a)) == (int)sizeof(pkt));
+		t = tr_wait(c, rs, far, 0, (u16)ttl, &from);
+		if (ttl == 1)
+			CHECK(t == RT_ICMP_TIMXCEED && from == linux_ip);
+		else
+			CHECK(t == RT_ICMP_ECHOREPLY && from == far);
+	}
+	printf("traceroute probes done (last answer type %d)\n", t);
+	rt_api_close(c, us);
+	rt_api_close(c, rs);
+	tr_teardown();
+	(void)tun;
+}
+
 int main(void)
 {
 	struct rt_netif *tun;
@@ -182,6 +323,7 @@ int main(void)
 		rt_api_close(&c, us);
 	}
 	rt_api_close(&c, rs);
+	test_traceroute(&c, tun, name);
 	rt_ctx_destroy(&c);
 	rt_host_stop();
 	printf("t_icmp_tun: %d checks, %d failures\n", checks, failures);

@@ -166,6 +166,63 @@ struct rt_ifconf {
 #define RT_SIOCGIFMTU      RT_IOWR('i', 51, 32)
 #define RT_SIOCSIFMTU      RT_IOW('i', 52, 32)
 
+/* SIOCAIFADDR: set address, broadcast (or peer) and mask in one call */
+struct rt_ifaliasreq {
+	char ifra_name[16];
+	struct rt_sockaddr ifra_addr;
+	struct rt_sockaddr ifra_broadaddr;
+	struct rt_sockaddr ifra_mask;
+};
+#define RT_SIOCAIFADDR     RT_IOW('i', 26, 64)
+
+/* ---- routing ioctls (4.3BSD struct ortentry, 48 bytes) ----
+ * rt_flags take RT_RTF_UP/GATEWAY/HOST/REJECT (rt_ip.h). Riptide
+ * extensions, both harmless for programs that leave the fields zero:
+ *  - with RT_RTF_MASK (BSD's "subnet mask present", 0x80) in rt_flags,
+ *    rt_hash holds the netmask in network order; otherwise a host route
+ *    is /32, "default" (0.0.0.0) is /0 and a network route gets its
+ *    classful mask, widened until it covers every set bit of rt_dst;
+ *  - rt_ifp, a kernel pointer in BSD, may hold an interface index (1..255)
+ *    to bind the route to that interface.
+ * Without RT_RTF_GATEWAY, rt_gateway is the address of the local
+ * interface (BSD convention) or 0 together with an rt_ifp index. */
+struct rt_ortentry {
+	u32  rt_hash;
+	struct rt_sockaddr rt_dst;
+	struct rt_sockaddr rt_gateway;
+	s16  rt_flags;
+	s16  rt_refcnt;
+	u32  rt_use;
+	u32  rt_ifp;          /* a 32-bit pointer on AmigaOS */
+};
+#define RT_SIOCADDRT       RT_IOW('r', 10, 48)
+#define RT_SIOCDELRT       RT_IOW('r', 11, 48)
+
+/* ---- ARP ioctls (AmiTCP 4 struct arpreq, 38 bytes) ----
+ * arp_ha is 2+16 bytes (MAXADDRARP) and the int arp_flags sits at offset
+ * 34 (m68k aligns int to 2), so it is declared as bytes here: access it
+ * with memcpy() of an s32. The same requests with the 4.4BSD/Roadshow
+ * layout (arp_ha a plain sockaddr, 36 bytes, group 'i') are accepted too. */
+struct rt_arpreq {
+	struct rt_sockaddr arp_pa;
+	struct {
+		u8 sa_len;
+		u8 sa_family;
+		u8 sa_data[16];
+	} arp_ha;
+	u8   arp_flags[4];
+};
+#define RT_SIOCSARP        RT_IOW('I', 30, 38)
+#define RT_SIOCGARP        RT_IOWR('I', 38, 38)
+#define RT_SIOCDARP        RT_IOW('I', 32, 38)
+#define RT_SIOCSARP_BSD    RT_IOW('i', 30, 36)
+#define RT_SIOCGARP_BSD    RT_IOWR('i', 38, 36)
+#define RT_SIOCDARP_BSD    RT_IOW('i', 32, 36)
+#define RT_ATF_INUSE       0x01
+#define RT_ATF_COM         0x02
+#define RT_ATF_PERM        0x04
+#define RT_ATF_PUBL        0x08
+
 /* ---- TCP_INFO (subset of Linux struct tcp_info, fixed 32-bit fields) ---- */
 struct rt_tcp_info {
 	u8  tcpi_state;          /* RT_TCPS_* */

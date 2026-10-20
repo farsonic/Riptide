@@ -78,6 +78,7 @@ void rt_netif_remove(struct rt_netif *nif)
 {
 	struct rt_netif **pp;
 
+	rt_dhcp_stop(nif);
 	rt_netif_down(nif);
 	rt_route_flush_if(nif);
 	rt_arp_flush(nif, 0);
@@ -197,6 +198,10 @@ void rt_netif_down(struct rt_netif *nif)
 		nif->ioctl_flags(nif, nf);
 	nif->flags = nf;
 	rt_arp_flush(nif, 1);
+	/* Configured routes stay (unused while down, shown as linkdown);
+	 * learned ones go, as their information may be stale when it is
+	 * back up. */
+	rt_route_flush_dynamic_if(nif);
 }
 
 void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,

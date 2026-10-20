@@ -31,6 +31,7 @@ int rt_init(void)
 	rt_raw_init();
 	rt_tcp_init();
 	rt_socket_init();
+	rt_ctl_init();
 	rt_lock();
 	r = rt_loopback_init();
 	rt_unlock();

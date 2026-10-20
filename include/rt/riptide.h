@@ -17,8 +17,9 @@
 #include "rt_socket.h"
 #include "rt_sysctl.h"
 #include "rt_stats.h"
+#include "rt_ctl.h"
 
-#define RIPTIDE_VERSION_STRING "0.9"
+#define RIPTIDE_VERSION_STRING "0.10"
 
 /* Initialise every module and create lo0. Call once, without the lock. */
 int  rt_init(void);
@@ -72,6 +73,7 @@ char *rt_format_ipv4(u32 addr, char *buf);
 #define RT_NO_RECOVERY    3
 #define RT_NO_DATA        4
 int  rt_dns_add_server(u32 addr);
+void rt_dns_remove_server(u32 addr);
 void rt_dns_clear_servers(void);
 int  rt_dns_get_servers(u32 *out, int max);
 void rt_dns_set_search(const char *domain);
@@ -114,5 +116,15 @@ int  rt_dhcp_start(struct rt_netif *nif, void (*cb)(struct rt_netif *nif, int ev
 void rt_dhcp_stop(struct rt_netif *nif);  /* releases the lease */
 /* Is DHCP configured and bound on nif? */
 int  rt_dhcp_bound(const struct rt_netif *nif);
+/* DHCP state of nif for tools (RT_DHCPS_* in rt_ctl.h). Returns
+ * RT_DHCPS_NONE if no client runs on nif. Lease fields are filled when
+ * bound (server/router network order, seconds). */
+struct rt_dhcp_info {
+	int state;
+	u32 server, router, addr, lease_s, left_s;
+};
+int  rt_dhcp_get_info(const struct rt_netif *nif, struct rt_dhcp_info *info);
+/* Restart the lease (DHCPREQUEST now when bound, else rediscover). */
+int  rt_dhcp_renew(struct rt_netif *nif);
 
 #endif

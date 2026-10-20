@@ -39,7 +39,9 @@ LONG miami_MiamiSysCtl(RTREG(a6) struct Library *base, RTREG(a0) LONG *name, RTR
 
 	if (!name || namelen == 0 || namelen > RT_SYSCTL_MAXMIB + 2)
 		return fail(c, RT_EINVAL);
+	rt_lock();
 	r = rt_sysctl_bymib((const s32 *)name, namelen, oldp, oldlenp ? &ol : NULL, newp, (u32)newlen);
+	rt_unlock();
 	if (oldlenp && (r == 0 || r == -RT_ENOMEM))
 		*oldlenp = (LONG)ol;
 	if (r < 0)

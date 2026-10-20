@@ -1,0 +1,338 @@
+/*
+ * Riptide - ifconfig: Linux net-tools style interface listing and
+ * configuration.
+ *
+ *   ifconfig [-a] [-s] [IF]
+ *   ifconfig IF [A.B.C.D[/BITS]] [netmask M] [broadcast B] [pointopoint P]
+ *               [mtu N] [metric N] [[-]promisc] [[-]arp] [[-]allmulti]
+ *               [del A.B.C.D] [up|down]
+ *
+ * Changes use the standard BSD interface ioctls (SIOCAIFADDR, SIOCSIF*),
+ * the listing the net.riptide.ifaces table.
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+#include "cmdlib.h"
+#include "gen/bsdsocket_calls.h"
+
+static void usage(void)
+{
+	cl_puts("Usage:\n"
+	        "  ifconfig [-a] [-v] [-s] <interface>\n"
+	        "  ifconfig <interface> [<address>[/<bits>]] [netmask <address>] [broadcast <address>]\n"
+	        "           [pointopoint <address>] [mtu <NN>] [metric <NN>] [[-]promisc] [[-]arp]\n"
+	        "           [[-]allmulti] [del <address>] [up|down]\n");
+}
+
+/* Linux numbering of the flag word shown by net-tools */
+static u32 linux_flags(u16 f)
+{
+	u32 l = f & 0x03ff;                    /* UP..ALLMULTI share values */
+
+	if (f & RT_IFF_MULTICAST)
+		l |= 0x1000;
+	return l;
+}
+
+static void flag_names(u16 f, char *b, u32 len)
+{
+	static const struct { u16 bit; const char *name; } fl[] = {
+		{ RT_IFF_UP, "UP" }, { RT_IFF_BROADCAST, "BROADCAST" }, { RT_IFF_DEBUG, "DEBUG" },
+		{ RT_IFF_LOOPBACK, "LOOPBACK" }, { RT_IFF_POINTOPOINT, "POINTOPOINT" },
+		{ RT_IFF_NOTRAILERS, "NOTRAILERS" }, { RT_IFF_RUNNING, "RUNNING" }, { RT_IFF_NOARP, "NOARP" },
+		{ RT_IFF_PROMISC, "PROMISC" }, { RT_IFF_ALLMULTI, "ALLMULTI" }, { RT_IFF_MULTICAST, "MULTICAST" },
+	};
+	u32 o = 0, i;
+
+	b[0] = 0;
+	for (i = 0; i < RT_ARRAY_SIZE(fl); i++)
+		if (f & fl[i].bit)
+			o += (u32)rt_snprintf(b + o, len - o, "%s%s", o ? "," : "", fl[i].name);
+}
+
+/* " (554.5 KiB)" like net-tools */
+static void human(u32 v, char *b)
+{
+	static const char *const unit[] = { "B", "KiB", "MiB", "GiB" };
+	u32 i = 0, frac = 0;
+
+	while (v >= 1024 && i < 3) {
+		frac = (v % 1024) * 10 / 1024;
+		v /= 1024;
+		i++;
+	}
+	if (i)
+		rt_snprintf(b, 24, "%lu.%lu %s", (unsigned long)v, (unsigned long)frac, unit[i]);
+	else
+		rt_snprintf(b, 24, "%lu.0 B", (unsigned long)v);
+}
+
+static void print_if(const struct rt_ctl_iface *f)
+{
+	char fl[128], a[16], b[16], c[16], h[24];
+
+	flag_names(f->flags, fl, sizeof(fl));
+	cl_printf("%s: flags=%lu<%s>  mtu %u\n", f->name, (unsigned long)linux_flags(f->flags), fl,
+	          (unsigned)f->mtu);
+	if (f->addr) {
+		cl_printf("        inet %s  netmask %s", cl_ip(f->addr, a), cl_ip(f->netmask, b));
+		if (f->type == RT_IFT_PTP && f->dstaddr)
+			cl_printf("  destination %s", cl_ip(f->dstaddr, c));
+		else if (f->broadaddr)
+			cl_printf("  broadcast %s", cl_ip(f->broadaddr, c));
+		cl_puts("\n");
+	}
+	if (f->type == RT_IFT_ETHER)
+		cl_printf("        ether %s  txqueuelen 1000  (Ethernet)\n", cl_mac(f->hwaddr, 6, fl));
+	else if (f->type == RT_IFT_LOOP)
+		cl_puts("        loop  txqueuelen 1000  (Local Loopback)\n");
+	else
+		cl_puts("        ppp  txqueuelen 3  (Point-to-Point Protocol)\n");
+	human(f->ibytes, h);
+	cl_printf("        RX packets %lu  bytes %lu (%s)\n", (unsigned long)f->ipackets,
+	          (unsigned long)f->ibytes, h);
+	cl_printf("        RX errors %lu  dropped %lu  overruns 0  frame 0\n", (unsigned long)f->ierrors,
+	          (unsigned long)f->iqdrops);
+	human(f->obytes, h);
+	cl_printf("        TX packets %lu  bytes %lu (%s)\n", (unsigned long)f->opackets,
+	          (unsigned long)f->obytes, h);
+	cl_printf("        TX errors %lu  dropped 0 overruns 0  carrier 0  collisions %lu\n",
+	          (unsigned long)f->oerrors, (unsigned long)f->collisions);
+	if (f->descr[0] && f->type != RT_IFT_LOOP)
+		cl_printf("        device %s\n", f->descr);
+	cl_puts("\n");
+}
+
+static void print_short(const struct rt_ctl_iface *f)
+{
+	char fl[8];
+	u32 o = 0;
+
+	if (f->flags & RT_IFF_BROADCAST) fl[o++] = 'B';
+	if (f->flags & RT_IFF_LOOPBACK) fl[o++] = 'L';
+	if (f->flags & RT_IFF_MULTICAST) fl[o++] = 'M';
+	if (f->flags & RT_IFF_NOARP) fl[o++] = 'O';
+	if (f->flags & RT_IFF_POINTOPOINT) fl[o++] = 'P';
+	if (f->flags & RT_IFF_RUNNING) fl[o++] = 'R';
+	if (f->flags & RT_IFF_UP) fl[o++] = 'U';
+	fl[o] = 0;
+	cl_printf("%-15s %5u %8lu %6lu %6lu %6lu %8lu %6lu %6lu %6lu %s\n", f->name, (unsigned)f->mtu,
+	          (unsigned long)f->ipackets, (unsigned long)f->ierrors, (unsigned long)f->iqdrops, 0UL,
+	          (unsigned long)f->opackets, (unsigned long)f->oerrors, 0UL, 0UL, fl);
+}
+
+static int list(int all, int shortfmt, const char *only)
+{
+	struct rt_ctl_hdr h;
+	void *d = cl_dump(RT_CTL_IFACES, &h);
+	u32 k;
+
+	if (!d)
+		return CL_FAIL;
+	if (only && !cl_find_iface(d, &h, only)) {
+		cl_printf("%s: error fetching interface information: Device not found\n", only);
+		FreeVec(d);
+		return CL_ERROR;
+	}
+	if (shortfmt)
+		cl_puts("Iface      MTU    RX-OK RX-ERR RX-DRP RX-OVR    TX-OK TX-ERR TX-DRP TX-OVR Flg\n");
+	for (k = 0; k < h.count; k++) {
+		struct rt_ctl_iface *f = cl_rec(d, &h, k);
+		if (only ? strcmp(f->name, only) != 0 : (!all && !(f->flags & RT_IFF_UP)))
+			continue;
+		if (shortfmt)
+			print_short(f);
+		else
+			print_if(f);
+	}
+	FreeVec(d);
+	return CL_OK;
+}
+
+static void ifr_name(struct rt_ifreq *r, const char *name)
+{
+	memset(r, 0, sizeof(*r));
+	rt_strlcpy(r->ifr_name, name, sizeof(r->ifr_name));
+}
+
+static void ifr_addr(struct rt_ifreq *r, u32 a)
+{
+	struct rt_sockaddr_in sin;
+
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_len = sizeof(sin);
+	sin.sin_family = RT_AF_INET;
+	sin.sin_addr = a;
+	memcpy(&r->ifr_ifru.ifru_addr, &sin, sizeof(sin));
+}
+
+static int fail(const char *what, int e)
+{
+	cl_printf("%s: %s\n", what, cl_strerror(e));
+	return CL_ERROR;
+}
+
+static int configure(int fd, const char *ifn, int argc, char **argv, int i)
+{
+	struct rt_ifreq r;
+	u32 addr = 0, mask = 0, brd = 0, peer = 0, del = 0, v;
+	int have_addr = 0, bits = -1, up = -1, promisc = -1, arp = -1, allmulti = -1, e;
+	long mtu = -1, metric = -1;
+	s16 fl;
+
+	for (; i < argc; i++) {
+		const char *k = argv[i], *n = i + 1 < argc ? argv[i + 1] : NULL;
+		if (!strcmp(k, "up")) up = 1;
+		else if (!strcmp(k, "down")) up = 0;
+		else if (!strcmp(k, "promisc") || !strcmp(k, "-promisc")) promisc = k[0] != '-';
+		else if (!strcmp(k, "arp") || !strcmp(k, "-arp")) arp = k[0] != '-';
+		else if (!strcmp(k, "allmulti") || !strcmp(k, "-allmulti")) allmulti = k[0] != '-';
+		else if (!strcmp(k, "inet")) continue;
+		else if ((!strcmp(k, "netmask")) && n) {
+			if (cl_parse_ip(n, &mask) < 0) goto bad;
+			i++;
+		} else if ((!strcmp(k, "broadcast") || !strcmp(k, "-broadcast")) && n) {
+			if (cl_parse_ip(n, &brd) < 0) goto bad;
+			i++;
+		} else if ((!strcmp(k, "pointopoint") || !strcmp(k, "dstaddr")) && n) {
+			if (cl_parse_ip(n, &peer) < 0) goto bad;
+			i++;
+		} else if (!strcmp(k, "mtu") && n) {
+			if (cl_parse_uint(n, 65535, &v) < 0) goto bad;
+			mtu = (long)v;
+			i++;
+		} else if (!strcmp(k, "metric") && n) {
+			if (cl_parse_uint(n, 0x7fffffff, &v) < 0) goto bad;
+			metric = (long)v;
+			i++;
+		} else if (!strcmp(k, "del") && n) {
+			if (cl_parse_prefix(n, &del, &bits) < 0) goto bad;
+			i++;
+		} else if (!have_addr && cl_parse_prefix(k, &addr, &bits) == 0) {
+			have_addr = 1;
+			if (bits >= 0)
+				mask = cl_mask(bits);
+		} else if (!have_addr && cl_need_socket() == 0 && cl_resolve(k, &addr) == 0) {
+			have_addr = 1;
+		} else {
+			cl_printf("%s: unknown argument '%s'\n", cl_prog, k);
+			usage();
+			return CL_ERROR;
+		}
+	}
+	if (del) {
+		ifr_name(&r, ifn);
+		ifr_addr(&r, del);
+		if ((e = cl_ioctl(fd, RT_SIOCDIFADDR, &r)) != 0)
+			return fail("SIOCDIFADDR", e);
+	}
+	if (have_addr) {
+		struct rt_ifaliasreq ra;
+		struct rt_sockaddr_in sin;
+
+		memset(&ra, 0, sizeof(ra));
+		rt_strlcpy(ra.ifra_name, ifn, sizeof(ra.ifra_name));
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_len = sizeof(sin);
+		sin.sin_family = RT_AF_INET;
+		sin.sin_addr = addr;
+		memcpy(&ra.ifra_addr, &sin, sizeof(sin));
+		/* a new address without a netmask gets the classful one (Linux) */
+		sin.sin_addr = mask ? mask : (addr ? cl_classful(addr) : 0);
+		memcpy(&ra.ifra_mask, &sin, sizeof(sin));
+		if (brd || peer) {
+			sin.sin_addr = peer ? peer : brd;
+			memcpy(&ra.ifra_broadaddr, &sin, sizeof(sin));
+		}
+		if ((e = cl_ioctl(fd, RT_SIOCAIFADDR, &ra)) != 0)
+			return fail("SIOCSIFADDR", e);
+	} else {
+		if (mask) {
+			ifr_name(&r, ifn);
+			ifr_addr(&r, mask);
+			if ((e = cl_ioctl(fd, RT_SIOCSIFNETMASK, &r)) != 0)
+				return fail("SIOCSIFNETMASK", e);
+		}
+		if (brd) {
+			ifr_name(&r, ifn);
+			ifr_addr(&r, brd);
+			if ((e = cl_ioctl(fd, RT_SIOCSIFBRDADDR, &r)) != 0)
+				return fail("SIOCSIFBRDADDR", e);
+		}
+		if (peer) {
+			ifr_name(&r, ifn);
+			ifr_addr(&r, peer);
+			if ((e = cl_ioctl(fd, RT_SIOCSIFDSTADDR, &r)) != 0)
+				return fail("SIOCSIFDSTADDR", e);
+		}
+	}
+	if (mtu >= 0) {
+		s32 m = (s32)mtu;
+		ifr_name(&r, ifn);
+		memcpy(&r.ifr_ifru.ifru_mtu, &m, 4);
+		if ((e = cl_ioctl(fd, RT_SIOCSIFMTU, &r)) != 0)
+			return fail("SIOCSIFMTU", e);
+	}
+	if (metric >= 0) {
+		s32 m = (s32)metric;
+		ifr_name(&r, ifn);
+		memcpy(&r.ifr_ifru.ifru_metric, &m, 4);
+		if ((e = cl_ioctl(fd, RT_SIOCSIFMETRIC, &r)) != 0)
+			return fail("SIOCSIFMETRIC", e);
+	}
+	if (up >= 0 || promisc >= 0 || arp >= 0 || allmulti >= 0) {
+		ifr_name(&r, ifn);
+		if ((e = cl_ioctl(fd, RT_SIOCGIFFLAGS, &r)) != 0)
+			return fail("SIOCGIFFLAGS", e);
+		memcpy(&fl, &r.ifr_ifru.ifru_flags, 2);
+#define SETF(c, bit) do { if ((c) == 1) fl |= (bit); else if ((c) == 0) fl &= ~(bit); } while (0)
+		SETF(up, RT_IFF_UP);
+		SETF(promisc, RT_IFF_PROMISC);
+		SETF(allmulti, RT_IFF_ALLMULTI);
+		SETF(arp < 0 ? -1 : !arp, RT_IFF_NOARP);
+#undef SETF
+		memcpy(&r.ifr_ifru.ifru_flags, &fl, 2);
+		if ((e = cl_ioctl(fd, RT_SIOCSIFFLAGS, &r)) != 0)
+			return fail("SIOCSIFFLAGS", e);
+	}
+	return CL_OK;
+bad:
+	cl_printf("%s: bad value for '%s'\n", cl_prog, argv[i]);
+	return CL_ERROR;
+}
+
+static int ifconfig_main(int argc, char **argv)
+{
+	int i = 1, all = 0, shortfmt = 0, fd;
+	struct rt_ifreq r;
+
+	for (; i < argc && argv[i][0] == '-'; i++) {
+		if (!strcmp(argv[i], "-a"))
+			all = 1;
+		else if (!strcmp(argv[i], "-s"))
+			shortfmt = 1;
+		else if (!strcmp(argv[i], "-v"))
+			;
+		else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") || !strcmp(argv[i], "-?")) {
+			usage();
+			return CL_OK;
+		} else {
+			usage();
+			return CL_ERROR;
+		}
+	}
+	if (i >= argc)
+		return list(all, shortfmt, NULL);
+	if (i + 1 >= argc)
+		return list(1, shortfmt, argv[i]);
+	fd = cl_socket(RT_SOCK_DGRAM, 0);
+	if (fd < 0)
+		return CL_FAIL;
+	ifr_name(&r, argv[i]);
+	if (cl_ioctl(fd, RT_SIOCGIFFLAGS, &r) != 0) {
+		cl_printf("%s: ERROR while getting interface flags: No such device\n", argv[i]);
+		return CL_ERROR;
+	}
+	return configure(fd, argv[i], argc, argv, i + 1);
+}
+
+CL_MAIN(ifconfig_main, "ifconfig")

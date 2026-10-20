@@ -55,7 +55,9 @@ static inline u16 rt_csum_fold(u32 sum)
 u32 rt_csum_pseudo(u32 saddr, u32 daddr, u8 proto, u16 len);
 /* Full Internet checksum of a buffer (returns value to store, net order
  * compatible: store with memcpy / as computed over network order data). */
+#ifndef RT_TOOL_BUILD  /* tools (src/amiga/cmd) link without the core */
 static inline u16 rt_inet_csum(const void *data, u32 len) { return rt_csum_fold(rt_csum_partial(data, len, 0)); }
+#endif
 
 /* ---- routing ---- */
 #define RT_RTF_UP       0x0001
@@ -63,9 +65,11 @@ static inline u16 rt_inet_csum(const void *data, u32 len) { return rt_csum_fold(
 #define RT_RTF_HOST     0x0004
 #define RT_RTF_REJECT   0x0008
 #define RT_RTF_DYNAMIC  0x0010   /* created by redirect */
+#define RT_RTF_MASK     0x0080   /* SIOCADDRT: netmask in rt_hash (see rt_bsd.h) */
 #define RT_RTF_STATIC   0x0800
 #define RT_RTF_CONNECTED 0x10000 /* interface route (not a BSD flag) */
 #define RT_RTF_PMTU     0x20000 /* PMTU cache entry: only mtu/expire_ms valid (not a BSD flag) */
+#define RT_RTF_DHCP     0x40000 /* installed by the DHCP client (not a BSD flag) */
 
 struct rt_route {
 	struct rt_route *next;
@@ -82,6 +86,14 @@ struct rt_route {
 
 int  rt_route_add(u32 dst, u32 mask, u32 gateway, struct rt_netif *nif, u32 flags, u32 metric);
 int  rt_route_delete(u32 dst, u32 mask, u32 gateway);
+/* Delete every route (not PMTU entries) for dst/mask whose gateway
+ * matches (0 = any), whose interface matches (NULL = any) and which has
+ * all of need_flags. Returns the number deleted or -RT_ESRCH. */
+int  rt_route_delete_match(u32 dst, u32 mask, u32 gateway, struct rt_netif *nif, u32 need_flags);
+/* Find a route by dst/mask/gateway (gateway 0 = first match), or NULL. */
+struct rt_route *rt_route_find(u32 dst, u32 mask, u32 gateway);
+/* Drop the dynamic entries (redirects, PMTU) that use nif. */
+void rt_route_flush_dynamic_if(struct rt_netif *nif);
 void rt_route_flush_if(struct rt_netif *nif);
 struct rt_route *rt_route_list(void);  /* head (for netstat -r / sysctl) */
 

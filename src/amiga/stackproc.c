@@ -28,6 +28,28 @@ struct amiga_if *amiga_if_find(const char *name)
 	return NULL;
 }
 
+/* "interface NAME delete": take a driver interface out of service at run
+ * time. Lock held (dropped while the driver closes). */
+int amiga_if_delete(const char *name, char *err, u32 errlen)
+{
+	struct amiga_if **pp, *ai;
+
+	for (pp = &amiga_ifs; (ai = *pp) != NULL; pp = &ai->next)
+		if (!strcmp(ai->nif.name, name))
+			break;
+	if (!ai) {
+		rt_snprintf(err, errlen, rt_netif_find(name) ? "interface %s cannot be removed" :
+		            "no interface '%s'", name);
+		return rt_netif_find(name) ? -RT_EPERM : -RT_ENXIO;
+	}
+	*pp = ai->next;
+	ai->next = NULL;
+	rt_unlock();
+	ai->close(ai);             /* removes the netif (routes, ARP, DHCP) */
+	rt_lock();
+	return 0;
+}
+
 /* ---- configuration ---- */
 
 static const char *kv(const char *arg, const char *key)
@@ -47,6 +69,10 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 		const char *dev = NULL, *mni = NULL, *opts = NULL, *v;
 		unsigned long unit = 0;
 		int mtu = 0, raw = 0, r;
+
+		if (argc == 3 && (!rt_strcasecmp(argv[2], "delete") || !rt_strcasecmp(argv[2], "del") ||
+		                  !rt_strcasecmp(argv[2], "remove")))
+			return amiga_if_delete(argv[1], err, errlen);
 
 		if (argc < 3) {
 			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [raw] [options=TEXT]");
@@ -228,38 +254,89 @@ int amiga_load_config(const char *path)
 
 /* ---- status ---- */
 
+static const char *route_proto_name(u32 flags)
+{
+	if (flags & RT_RTF_CONNECTED)
+		return "kernel";
+	if (flags & RT_RTF_DYNAMIC)
+		return "redirect";
+	if (flags & RT_RTF_DHCP)
+		return "dhcp";
+	return "static";
+}
+
 int amiga_status_text(char *buf, u32 len)
 {
 	struct rt_netif *n;
+	struct rt_route *r;
 	struct amiga_if *ai;
-	u32 o = 0;
+	u32 o = 0, ns[RT_CTL_MAXNS];
 	char a[16], m[16];
+	int i, nns;
 
+#define ADD(...) do { if (o + 1 < len) { o += (u32)rt_snprintf(buf + o, len - o, __VA_ARGS__); \
+		if (o >= len) o = len - 1; } } while (0)
 	rt_lock();
-	o += (u32)rt_snprintf(buf + o, len - o, "Riptide %s, host %s, %d library users\n",
-	                      RIPTIDE_VERSION_STRING, rt_hostname[0] ? rt_hostname : "(unset)",
-	                      amiga_libs_users());
-	for (n = rt_netif_list(); n && o < len; n = n->next) {
-		o += (u32)rt_snprintf(buf + o, len - o, "%-6s %s/%s mtu %u %s%s in %lu out %lu err %lu/%lu\n",
-		                      n->name, rt_format_ipv4(n->addr, a), rt_format_ipv4(n->netmask, m),
-		                      (unsigned)n->mtu, (n->flags & RT_IFF_UP) ? "UP" : "DOWN",
-		                      (n->flags & RT_IFF_RUNNING) ? ",RUNNING" : "",
-		                      (unsigned long)n->stats.ipackets, (unsigned long)n->stats.opackets,
-		                      (unsigned long)n->stats.ierrors, (unsigned long)n->stats.oerrors);
-		if (o >= len)
-			break;
+	ADD("Riptide %s, host %s, %d library users\n", RIPTIDE_VERSION_STRING,
+	    rt_hostname[0] ? rt_hostname : "(unset)", amiga_libs_users());
+	for (n = rt_netif_list(); n; n = n->next) {
+		struct rt_dhcp_info di;
+		ADD("%-6s %s/%s mtu %u %s%s in %lu out %lu err %lu/%lu\n",
+		    n->name, rt_format_ipv4(n->addr, a), rt_format_ipv4(n->netmask, m),
+		    (unsigned)n->mtu, (n->flags & RT_IFF_UP) ? "UP" : "DOWN",
+		    (n->flags & RT_IFF_RUNNING) ? ",RUNNING" : "",
+		    (unsigned long)n->stats.ipackets, (unsigned long)n->stats.opackets,
+		    (unsigned long)n->stats.ierrors, (unsigned long)n->stats.oerrors);
 		ai = amiga_if_find(n->name);
 		if (ai && ai->status && o + 8 < len) {
-			o += (u32)rt_snprintf(buf + o, len - o, "       ");
-			if (o < len)
+			ADD("       ");
+			if (o + 1 < len) {
 				o += (u32)ai->status(ai, buf + o, len - o);
-			if (o + 1 < len)
-				buf[o++] = '\n';
+				if (o >= len)
+					o = len - 1;
+			}
+			ADD("\n");
+		}
+		if (rt_dhcp_get_info(n, &di) != RT_DHCPS_NONE) {
+			ADD("       DHCP %s", rt_ctl_dhcp_state_name(di.state));
+			if (di.state >= RT_DHCPS_BOUND)
+				ADD(", server %s, lease %lu s left", rt_format_ipv4(di.server, a),
+				    (unsigned long)di.left_s);
+			ADD("\n");
 		}
 	}
+	ADD("Routes:\n");
+	for (r = rt_route_list(); r; r = r->next) {
+		if (r->flags & RT_RTF_PMTU)
+			continue;
+		if (!r->dst && !r->mask)
+			ADD("  default");
+		else
+			ADD("  %s/%d", rt_format_ipv4(r->dst, a), rt_ctl_prefixlen(r->mask));
+		if (r->flags & RT_RTF_GATEWAY)
+			ADD(" via %s", rt_format_ipv4(r->gateway, a));
+		if (r->flags & RT_RTF_REJECT)
+			ADD(" unreachable");
+		if (r->netif)
+			ADD(" dev %s", r->netif->name);
+		ADD(" proto %s", route_proto_name(r->flags));
+		if (r->metric)
+			ADD(" metric %lu", (unsigned long)r->metric);
+		if (r->netif && !(r->netif->flags & RT_IFF_UP))
+			ADD(" linkdown");
+		ADD("\n");
+	}
+	nns = rt_dns_get_servers(ns, RT_CTL_MAXNS);
+	ADD("DNS:");
+	for (i = 0; i < nns && i < RT_CTL_MAXNS; i++)
+		ADD(" %s", rt_format_ipv4(ns[i], a));
+	if (!nns)
+		ADD(" (no servers)");
+	if (rt_domainname[0])
+		ADD(", search %s", rt_domainname);
+	ADD("\n");
 	rt_unlock();
-	if (o >= len)
-		o = len - 1;
+#undef ADD
 	buf[o] = 0;
 	return (int)o;
 }
@@ -304,26 +381,73 @@ static int try_quit(char *msg, u32 len)
 	return -1;
 }
 
+/* Where the reply text of message m goes: the client's buffer (version 2
+ * messages, checked to be RAM) or the text field. */
+static char *reply_buf(struct RiptideMsg *m, u32 *len)
+{
+	if (m->msg.mn_Length >= sizeof(*m) && m->reply && m->replysize > 1 &&
+	    m->replysize <= 0x1000000UL && TypeOfMem((APTR)m->reply) &&
+	    TypeOfMem((APTR)(m->reply + m->replysize - 1))) {
+		*len = m->replysize;
+		return (char *)m->reply;
+	}
+	*len = sizeof(m->text);
+	return m->text;
+}
+
 static void handle_port(void)
 {
 	struct RiptideMsg *m;
+	char *out;
+	u32 olen, used;
+	int r;
 
 	while ((m = (struct RiptideMsg *)GetMsg(pub_port)) != NULL) {
-		if (m->msg.mn_Length < sizeof(*m)) {
+		if (m->msg.mn_Length < RIPTIDE_MSG_V1_SIZE) {
 			ReplyMsg(&m->msg);
 			continue;
 		}
+		out = reply_buf(m, &olen);
+		out[0] = 0;
 		switch (m->cmd) {
 		case RTCMD_STATUS:
-			amiga_status_text(m->text, sizeof(m->text));
+			amiga_status_text(out, olen);
 			m->result = 0;
 			break;
 		case RTCMD_QUIT:
-			m->result = try_quit(m->text, sizeof(m->text));
+			m->result = try_quit(out, olen) == 0 ? 0 : RT_EBUSY;
+			break;
+		case RTCMD_COMMAND:
+			/* the command line is in text; the reply may overwrite it */
+			m->text[sizeof(m->text) - 1] = 0;
+			if (out == m->text) {
+				char *line = rt_malloc(sizeof(m->text));
+				if (!line) {
+					m->result = RT_ENOMEM;
+					rt_strlcpy(out, "out of memory\n", olen);
+					break;
+				}
+				memcpy(line, m->text, sizeof(m->text));
+				rt_lock();
+				r = rt_ctl_command(line, out, olen, amiga_config_unknown);
+				rt_unlock();
+				rt_free(line);
+			} else {
+				rt_lock();
+				r = rt_ctl_command(m->text, out, olen, amiga_config_unknown);
+				rt_unlock();
+			}
+			m->result = r < 0 ? -r : 0;
+			amiga_log_flush();
 			break;
 		default:
-			m->result = -1;
-			rt_strlcpy(m->text, "unknown command\n", sizeof(m->text));
+			m->result = RT_EINVAL;
+			rt_strlcpy(out, "unknown command\n", olen);
+		}
+		if (m->msg.mn_Length >= sizeof(*m)) {
+			used = (u32)strlen(out);
+			m->replylen = used;
+			m->flags = used + 1 >= olen ? RTMSGF_TRUNCATED : 0;
 		}
 		ReplyMsg(&m->msg);
 	}
@@ -419,7 +543,7 @@ void amiga_stack_loop(void)
 			quit_requested = 1;
 		}
 		if (sigs & SIGBREAKF_CTRL_F) {
-			static char status[1024];
+			static char status[2048];
 			char *p = status, *nl;
 			amiga_status_text(status, sizeof(status));
 			/* amiga_out() formats at most 255 characters at a time */
@@ -443,10 +567,25 @@ void amiga_stack_stop(void)
 	struct amiga_if *ai, *next;
 
 	if (pub_port) {
-		struct Message *m;
+		struct RiptideMsg *m;
+		Forbid();
 		RemPort(pub_port);
-		while ((m = GetMsg(pub_port)) != NULL)
-			ReplyMsg(m);
+		Permit();
+		while ((m = (struct RiptideMsg *)GetMsg(pub_port)) != NULL) {
+			if (m->msg.mn_Length >= RIPTIDE_MSG_V1_SIZE) {
+				m->result = RT_ESHUTDOWN;
+				rt_strlcpy(m->text, "Riptide is shutting down.\n", sizeof(m->text));
+				if (m->msg.mn_Length >= sizeof(*m)) {
+					u32 l;
+					char *out = reply_buf(m, &l);
+					if (out != m->text)
+						rt_strlcpy(out, m->text, l);
+					m->replylen = (ULONG)strlen(out);
+					m->flags = 0;
+				}
+			}
+			ReplyMsg(&m->msg);
+		}
 		DeleteMsgPort(pub_port);
 		pub_port = NULL;
 	}

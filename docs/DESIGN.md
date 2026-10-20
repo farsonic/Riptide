@@ -18,6 +18,7 @@ Licence: GPL-2.0-only (the TCP follows Linux's algorithms and structure).
 | `src/core/` | Portable protocol core (freestanding C99) | see below |
 | `src/host/` | Linux host OS layer: pthreads, TUN, simulated wire | infra |
 | `src/amiga/` | AmigaOS glue: libraries, SANA-II, startup, OS headers | amiga |
+| `src/amiga/cmd/` | Network tools (ip, ifconfig, route, ...) and their shared `cmdlib` | amiga |
 | `tests/` | Host tests (`make check`), interop with Linux via TUN | everybody |
 | `tools/` | RE scripts (hunk parser etc.), `elf2hunk.py` | — |
 
@@ -26,7 +27,7 @@ The core files are owned per area:
 * **infra**: `buf.c timer.c printf.c netif.c arp.c ip.c ip_frag.c route.c
   icmp.c udp.c raw.c loopback.c checksum.c init.c stats.c`
 * **tcp**: `tcp*.c` plus internal `src/core/tcp.h`
-* **sockets**: `socket.c socket_api.c sysctl.c config.c resolv.c netdb.c dhcp.c errno.c`
+* **sockets**: `socket.c socket_api.c ioctl_net.c sysctl.c config.c ctl.c resolv.c netdb.c dhcp.c errno.c`
 
 ## Rules for core code
 

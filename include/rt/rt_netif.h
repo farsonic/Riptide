@@ -76,6 +76,8 @@ struct rt_netif {
 	struct rt_netif_stats stats;
 	/* bookkeeping for the link layer (ARP) */
 	void *arp_priv;
+	/* driver description for tools, e.g. "uaenet.device unit 0" */
+	char  descr[48];
 };
 
 /* Register an interface (assigns index, name must be set). The interface
@@ -124,6 +126,8 @@ int  rt_arp_resolve_output(struct rt_netif *nif, struct rt_buf *b, u32 nexthop);
 void rt_arp_flush_if(struct rt_netif *nif);
 int  rt_arp_add_static(struct rt_netif *nif, u32 ip, const u8 *hw);
 int  rt_arp_delete(u32 ip);
+/* Look up the entry for ip (on nif, or any interface if NULL). 0 or -RT_ENOENT. */
+int  rt_arp_get(const struct rt_netif *nif, u32 ip, struct rt_arp_entry_info *out);
 /* Fill up to max entries; returns total number of entries. */
 int  rt_arp_list(struct rt_arp_entry_info *out, int max);
 /* Gratuitous ARP / probe (used by DHCP for conflict detection). */

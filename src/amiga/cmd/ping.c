@@ -1,304 +1,366 @@
 /*
  * Riptide - ping: ICMP echo client for AmigaOS. Uses only the standard
  * bsdsocket.library API (a raw ICMP socket), so it works with any
- * AmiTCP-compatible stack.
+ * AmiTCP-compatible stack. Accepts both the Amiga keywords and Linux
+ * options:
  *
  *   ping HOST [COUNT=n] [SIZE=bytes] [INTERVAL=ms] [TIMEOUT=ms] [QUIET]
+ *   ping [-c count] [-s size] [-i seconds] [-W seconds] [-t ttl] [-q] [-n] HOST
  *
- * Ctrl-C stops early and prints the summary. Exit code 0 if any reply
- * arrived, 5 if none, 20 on errors.
+ * COUNT 0 (-c 0) pings until Ctrl-C; the default is 4. Ctrl-C stops early
+ * and prints the summary. Exit code 0 if any reply arrived, 5 if none,
+ * 20 on errors.
  * SPDX-License-Identifier: GPL-2.0-only
  */
-#include "amiga_os.h"
-#include "amiga_net.h"
-#include "rt/rt_types.h"
-
-struct Library *SocketBase;
-struct Device *TimerBase;
-
+#include "cmdlib.h"
 #include "gen/bsdsocket_calls.h"
 
-#define TEMPLATE "HOST/A,COUNT=C/K/N,SIZE=S/K/N,INTERVAL=I/K/N,TIMEOUT=W/K/N,QUIET=Q/S"
-enum { A_HOST, A_COUNT, A_SIZE, A_INTERVAL, A_TIMEOUT, A_QUIET, A_NUM };
-
-#define AF_INET      2
-#define SOCK_RAW     3
-#define IPPROTO_ICMP 1
-#define ICMP_ECHOREPLY 0
-#define ICMP_ECHO      8
 #define MAX_PAYLOAD  1472           /* fits a 1500 byte MTU unfragmented */
 #define HDR          8              /* ICMP echo header */
+#define RBUF         (60 + HDR + MAX_PAYLOAD + 64)
+#define SEQ_BITS     1024
 
-struct sin {
-	UBYTE sin_len, sin_family;
-	UWORD sin_port;
-	ULONG sin_addr;
-	UBYTE sin_zero[8];
-};
-struct tv {
-	ULONG secs, micro;
-};
+struct tv { ULONG secs, micro; };
 
-static void out(const char *fmt, ...)
+static u32 bitmap[SEQ_BITS / 32];
+static u32 recvd, dups, errors, sent, min_us = 0xffffffffUL, max_us;
+static u64 sum_us, sum2_us;
+static int quiet;
+static u16 ident;
+static u8 *rbuf;
+
+static void usage(void)
 {
-	char b[200];
-	va_list ap;
-
-	va_start(ap, fmt);
-	rt_vsnprintf(b, sizeof(b), fmt, ap);
-	va_end(ap);
-	PutStr((CONST_STRPTR)b);
+	cl_puts("Usage: ping [-c count] [-s size] [-i interval] [-W timeout] [-t ttl] [-qn] HOST\n"
+	        "       ping HOST [COUNT=n] [SIZE=bytes] [INTERVAL=ms] [TIMEOUT=ms] [QUIET]\n");
 }
 
-static ULONG now_us_lo(struct timeval *t)
+static u16 cksum(const u8 *p, u32 n)
 {
-	GetSysTime(t);
-	return (ULONG)t->tv_secs * 1000000UL + t->tv_micro;
-}
-
-static UWORD cksum(const UBYTE *p, LONG n)
-{
-	ULONG s = 0;
+	u32 s = 0;
 
 	for (; n > 1; p += 2, n -= 2)
-		s += ((ULONG)p[0] << 8) | p[1];
+		s += ((u32)p[0] << 8) | p[1];
 	if (n)
-		s += (ULONG)p[0] << 8;
+		s += (u32)p[0] << 8;
 	s = (s & 0xffff) + (s >> 16);
 	s = (s & 0xffff) + (s >> 16);
-	return (UWORD)~s;
+	return (u16)~s;
 }
 
-/* microseconds -> "12.345" ms */
-static void fmt_ms(char *b, ULONG us)
+static void fmt_ms(char *b, u32 us)
 {
-	rt_snprintf(b, 16, "%lu.%03lu", (unsigned long)(us / 1000), (unsigned long)(us % 1000));
+	rt_snprintf(b, 20, "%lu.%03lu", (unsigned long)(us / 1000), (unsigned long)(us % 1000));
 }
 
-static int ping_main(void)
+static u32 isqrt64(u64 v)
 {
-	LONG args[A_NUM] = { 0 };
-	struct RDArgs *rda;
-	struct timerequest *tr = NULL;
-	struct MsgPort *tport = NULL;
-	struct timeval t;
-	struct sin dst, from;
-	UBYTE *pkt = NULL, *rbuf = NULL;
-	LONG s = -1, count, size, interval, timeout;
-	ULONG target, id, sent = 0, recvd = 0, min = 0xffffffffUL, max = 0, sum = 0;
-	int quiet, rc = 20, stop = 0;
-	char a[16], b[16], c[16];
+	u64 r = 0, bit = (u64)1 << 62;
 
-	rda = ReadArgs((CONST_STRPTR)TEMPLATE, args, NULL);
-	if (!rda) {
-		PrintFault(IoErr(), (CONST_STRPTR)"ping");
-		return 20;
+	while (bit > v)
+		bit >>= 2;
+	while (bit) {
+		if (v >= r + bit) {
+			v -= r + bit;
+			r = (r >> 1) + bit;
+		} else {
+			r >>= 1;
+		}
+		bit >>= 2;
 	}
-	count = args[A_COUNT] ? *(LONG *)args[A_COUNT] : 4;
-	size = args[A_SIZE] ? *(LONG *)args[A_SIZE] : 56;
-	interval = args[A_INTERVAL] ? *(LONG *)args[A_INTERVAL] : 1000;
-	timeout = args[A_TIMEOUT] ? *(LONG *)args[A_TIMEOUT] : 2000;
-	quiet = args[A_QUIET] != 0;
+	return (u32)r;
+}
+
+static const char *unreach_text(int type, int code)
+{
+	if (type == RT_ICMP_TIMXCEED)
+		return code ? "Frag reassembly time exceeded" : "Time to live exceeded";
+	if (type == RT_ICMP_PARAMPROB)
+		return "Parameter problem";
+	if (type == RT_ICMP_SOURCEQUENCH)
+		return "Source Quench";
+	if (type == RT_ICMP_REDIRECT)
+		return "Redirect";
+	switch (code) {
+	case 0: return "Destination Net Unreachable";
+	case 1: return "Destination Host Unreachable";
+	case 2: return "Destination Protocol Unreachable";
+	case 3: return "Destination Port Unreachable";
+	case 4: return "Frag needed and DF set";
+	case 5: return "Source Route Failed";
+	case 13: return "Packet filtered";
+	}
+	return "Dest Unreachable, Bad Code";
+}
+
+/* Handle one received datagram. */
+static void handle(LONG n, u32 from, u32 dst)
+{
+	u32 hl = (u32)(rbuf[0] & 0x0f) * 4, seq, t0, rt;
+	u8 *ic = rbuf + hl;
+	char a[16], b[20];
+
+	if (n < (LONG)(hl + HDR))
+		return;
+	if (ic[0] == RT_ICMP_ECHOREPLY) {
+		int dup;
+		if (rt_get_be16(ic + 4) != ident || from != dst)
+			return;
+		seq = rt_get_be16(ic + 6);
+		memcpy(&t0, ic + HDR, 4);
+		rt = cl_now_us() - t0;
+		dup = (bitmap[(seq % SEQ_BITS) / 32] >> (seq % 32)) & 1;
+		bitmap[(seq % SEQ_BITS) / 32] |= 1UL << (seq % 32);
+		if (dup) {
+			dups++;
+		} else {
+			recvd++;
+			sum_us += rt;
+			sum2_us += (u64)rt * rt;
+			if (rt < min_us)
+				min_us = rt;
+			if (rt > max_us)
+				max_us = rt;
+		}
+		if (!quiet) {
+			fmt_ms(b, rt);
+			cl_printf("%ld bytes from %s: icmp_seq=%lu ttl=%u time=%s ms%s\n", (long)(n - hl),
+			          cl_ip(from, a), (unsigned long)seq, (unsigned)rbuf[8], b, dup ? " (DUP!)" : "");
+		}
+		return;
+	}
+	if (ic[0] == RT_ICMP_UNREACH || ic[0] == RT_ICMP_TIMXCEED || ic[0] == RT_ICMP_PARAMPROB ||
+	    ic[0] == RT_ICMP_SOURCEQUENCH || ic[0] == RT_ICMP_REDIRECT) {
+		/* error about one of our echo requests? */
+		u8 *in = ic + 8, *iq;
+		u32 ihl;
+		if (n < (LONG)(hl + 8 + 20 + 8))
+			return;
+		ihl = (u32)(in[0] & 15) * 4;
+		iq = in + ihl;
+		if (n < (LONG)(hl + 8 + ihl + 8) || in[9] != RT_IPPROTO_ICMP || iq[0] != RT_ICMP_ECHO ||
+		    rt_get_be16(iq + 4) != ident || memcmp(in + 16, &dst, 4))
+			return;
+		if (ic[0] != RT_ICMP_REDIRECT)
+			errors++;
+		if (!quiet) {
+			cl_printf("From %s icmp_seq=%lu %s", cl_ip(from, a), (unsigned long)rt_get_be16(iq + 6),
+			          unreach_text(ic[0], ic[1]));
+			if (ic[0] == RT_ICMP_UNREACH && ic[1] == 4)
+				cl_printf(" (mtu = %lu)", (unsigned long)rt_get_be16(ic + 6));
+			cl_puts("\n");
+		}
+	}
+}
+
+/* Receive until 'until' (cl_now_us). Returns 1 on Ctrl-C. */
+static int receive_until(int s, u32 until, u32 dst, u32 stop_after)
+{
+	for (;;) {
+		u32 now = cl_now_us(), left;
+		ULONG rd[2] = { 0, 0 }, sigs = SIGBREAKF_CTRL_C;
+		struct tv tmo;
+		struct rt_sockaddr_in from;
+		LONG fl = sizeof(from), n;
+
+		if (stop_after && recvd + errors >= stop_after)
+			return 0;
+		if ((s32)(until - now) <= 0)
+			return 0;
+		left = until - now;
+		tmo.secs = left / 1000000UL;
+		tmo.micro = left % 1000000UL;
+		rd[s / 32] |= 1UL << (s % 32);
+		n = WaitSelect(s + 1, rd, NULL, NULL, &tmo, &sigs);
+		if (sigs & SIGBREAKF_CTRL_C)
+			return 1;
+		if (n <= 0)
+			continue;
+		n = recvfrom(s, rbuf, RBUF, 0, &from, &fl);
+		if (n >= 20)
+			handle(n, from.sin_addr, dst);
+		cl_flush();
+	}
+}
+
+/* keyword=value (Amiga template style), also "KEY value" */
+static const char *kw(int argc, char **argv, int *i, const char *full, const char *alias)
+{
+	const char *a = argv[*i], *eq = strchr(a, '=');
+	u32 n = eq ? (u32)(eq - a) : (u32)strlen(a);
+
+	if (!((n == strlen(full) && !rt_strncasecmp(a, full, n)) ||
+	      (alias && n == strlen(alias) && !rt_strncasecmp(a, alias, n))))
+		return NULL;
+	if (eq)
+		return eq + 1;
+	if (*i + 1 < argc)
+		return argv[++(*i)];
+	return NULL;
+}
+
+static int ping_main(int argc, char **argv)
+{
+	const char *host = NULL, *v;
+	u32 count = 4, size = 56, interval_ms = 1000, timeout_ms = 2000, ttl = 0, dst, x;
+	struct rt_sockaddr_in to;
+	u8 *pkt = NULL;
+	int s = -1, i, rc = CL_FAIL, stop = 0;
+	u32 start;
+	char a[16], b[20], c[20], d[20], e[20];
+
+	for (i = 1; i < argc; i++) {
+		const char *arg = argv[i];
+		if (arg[0] == '-' && arg[1]) {
+			const char *o = arg + 1;
+			if (!strcmp(arg, "--help") || !strcmp(arg, "-h") || !strcmp(arg, "-?")) {
+				usage();
+				return CL_OK;
+			}
+			for (; *o; o++) {
+				const char *val = NULL;
+				if (strchr("csiWtwl", *o)) {
+					val = o[1] ? o + 1 : i + 1 < argc ? argv[++i] : NULL;
+					if (!val) {
+						cl_printf("ping: option requires an argument -- '%c'\n", *o);
+						return CL_ERROR;
+					}
+				}
+				switch (*o) {
+				case 'c': if (cl_parse_uint(val, 0x7fffffff, &count) < 0) goto bad; break;
+				case 's': if (cl_parse_uint(val, 65507, &size) < 0) goto bad; break;
+				case 'i': if (cl_parse_ms(val, &interval_ms) < 0) goto bad; break;
+				case 'W': if (cl_parse_ms(val, &timeout_ms) < 0) goto bad; break;
+				case 't': if (cl_parse_uint(val, 255, &ttl) < 0 || !ttl) goto bad; break;
+				case 'w': case 'l': break;
+				case 'q': quiet = 1; break;
+				case 'n': case '4': break;
+				default:
+					cl_printf("ping: invalid option -- '%c'\n", *o);
+					usage();
+					return CL_ERROR;
+				}
+				if (val)
+					break;
+			}
+			continue;
+		}
+		if ((v = kw(argc, argv, &i, "COUNT", "C")) != NULL) {
+			if (cl_parse_uint(v, 0x7fffffff, &count) < 0) goto bad;
+		} else if ((v = kw(argc, argv, &i, "SIZE", "S")) != NULL) {
+			if (cl_parse_uint(v, 65507, &size) < 0) goto bad;
+		} else if ((v = kw(argc, argv, &i, "INTERVAL", "I")) != NULL) {
+			if (cl_parse_uint(v, 3600000, &interval_ms) < 0) goto bad;
+		} else if ((v = kw(argc, argv, &i, "TIMEOUT", "W")) != NULL) {
+			if (cl_parse_uint(v, 3600000, &timeout_ms) < 0) goto bad;
+		} else if (!rt_strcasecmp(arg, "QUIET") || !rt_strcasecmp(arg, "Q")) {
+			quiet = 1;
+		} else if (!rt_strcasecmp(arg, "HOST") && i + 1 < argc) {
+			host = argv[++i];
+		} else if (!host) {
+			host = arg;
+		} else {
+			cl_printf("ping: unexpected argument '%s'\n", arg);
+			usage();
+			return CL_ERROR;
+		}
+	}
+	if (!host) {
+		usage();
+		return CL_ERROR;
+	}
 	if (size < 8)
 		size = 8;          /* room for the send timestamp */
 	if (size > MAX_PAYLOAD)
 		size = MAX_PAYLOAD;
-	if (interval < 10)
-		interval = 10;
-
-	tport = CreateMsgPort();
-	tr = tport ? (struct timerequest *)CreateIORequest(tport, sizeof(*tr)) : NULL;
-	if (!tr || OpenDevice((CONST_STRPTR)"timer.device", UNIT_MICROHZ, (struct IORequest *)tr, 0)) {
-		PutStr((CONST_STRPTR)"ping: cannot open timer.device\n");
-		if (tr)
-			DeleteIORequest((struct IORequest *)tr);
-		tr = NULL;
-		goto done;
-	}
-	TimerBase = tr->tr_node.io_Device;
-
-	SocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4);
-	if (!SocketBase) {
-		PutStr((CONST_STRPTR)"ping: no TCP/IP stack running (cannot open bsdsocket.library 4)\n");
-		goto done;
-	}
-
-	target = inet_addr((CONST_STRPTR)args[A_HOST]);
-	if (target == 0xffffffffUL) {
-		struct hostent *h = (struct hostent *)gethostbyname((CONST_STRPTR)args[A_HOST]);
-		if (!h || !h->h_addr_list || !h->h_addr_list[0]) {
-			out("ping: unknown host %s\n", (char *)args[A_HOST]);
-			goto done;
-		}
-		CopyMem(h->h_addr_list[0], &target, 4);
-	}
-
-	s = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+	if (interval_ms < 10)
+		interval_ms = 10;
+	if (cl_need_timer() < 0 || cl_need_socket() < 0)
+		return CL_FAIL;
+	if (cl_resolve(host, &dst) < 0)
+		return CL_FAIL;
+	s = socket(RT_AF_INET, RT_SOCK_RAW, RT_IPPROTO_ICMP);
 	if (s < 0) {
-		out("ping: cannot create raw ICMP socket (errno %ld)\n", (long)Errno());
-		goto done;
+		cl_error("cannot create raw ICMP socket (errno %ld)", (long)Errno());
+		return CL_FAIL;
+	}
+	if (ttl) {
+		LONG t = (LONG)ttl;
+		setsockopt(s, RT_IPPROTO_IP, RT_IP_TTL, &t, sizeof(t));
 	}
 	pkt = AllocVec(HDR + MAX_PAYLOAD, MEMF_ANY | MEMF_CLEAR);
-	rbuf = AllocVec(60 + HDR + MAX_PAYLOAD + 64, MEMF_ANY);
+	rbuf = AllocVec(RBUF, MEMF_ANY);
 	if (!pkt || !rbuf) {
-		PutStr((CONST_STRPTR)"ping: out of memory\n");
+		cl_error("out of memory");
 		goto done;
 	}
+	memset(&to, 0, sizeof(to));
+	to.sin_len = sizeof(to);
+	to.sin_family = RT_AF_INET;
+	to.sin_addr = dst;
+	ident = (u16)((u32)FindTask(NULL) >> 4);
+	cl_printf("PING %s (%s) %lu(%lu) bytes of data.\n", host, cl_ip(dst, a), (unsigned long)size,
+	          (unsigned long)(size + 28));
+	cl_flush();
+	start = cl_now_us();
+	while (!stop && (count == 0 || sent < count)) {
+		u32 t0, seq = (sent + 1) & 0xffff, k;
 
-	memset(&dst, 0, sizeof(dst));
-	dst.sin_len = sizeof(dst);
-	dst.sin_family = AF_INET;
-	dst.sin_addr = target;
-	id = ((ULONG)FindTask(NULL) >> 4) & 0xffff;
-	rt_strlcpy(a, (const char *)Inet_NtoA(target), sizeof(a));
-	out("PING %s (%s): %ld data bytes\n", (char *)args[A_HOST], a, (long)size);
-
-	while (!stop && (count <= 0 || (LONG)sent < count)) {
-		ULONG t0, deadline, seq = sent & 0xffff;
-		LONG i, got = 0;
-
-		/* echo request: type, code, checksum, id, seq, payload (timestamp first) */
-		pkt[0] = ICMP_ECHO;
+		pkt[0] = RT_ICMP_ECHO;
 		pkt[1] = 0;
 		pkt[2] = pkt[3] = 0;
-		pkt[4] = (UBYTE)(id >> 8);
-		pkt[5] = (UBYTE)id;
-		pkt[6] = (UBYTE)(seq >> 8);
-		pkt[7] = (UBYTE)seq;
-		t0 = now_us_lo(&t);
-		CopyMem(&t0, pkt + HDR, 4);
-		for (i = 4; i < size; i++)
-			pkt[HDR + i] = (UBYTE)i;
-		i = cksum(pkt, HDR + size);
-		pkt[2] = (UBYTE)(i >> 8);
-		pkt[3] = (UBYTE)i;
+		rt_put_be16(pkt + 4, ident);
+		rt_put_be16(pkt + 6, (u16)seq);
+		t0 = cl_now_us();
+		memcpy(pkt + HDR, &t0, 4);
+		for (k = 4; k < size; k++)
+			pkt[HDR + k] = (u8)k;
+		rt_put_be16(pkt + 2, cksum(pkt, HDR + size));
+		bitmap[(seq % SEQ_BITS) / 32] &= ~(1UL << (seq % 32));
 		sent++;
-		if (sendto(s, pkt, HDR + size, 0, &dst, sizeof(dst)) < 0) {
-			LONG e = Errno();
-			out("ping: icmp_seq %lu: %s\n", (unsigned long)seq,
-			    e == 51 ? "network is unreachable" : e == 65 ? "no route to host" :
-			    e == 64 ? "host is down" : e == 55 ? "no buffer space" : "send failed");
-			got = -1;
+		if (sendto(s, pkt, (LONG)(HDR + size), 0, &to, sizeof(to)) < 0) {
+			LONG err = Errno();
+			cl_printf("ping: sendmsg: %s\n", cl_strerror((int)err));
+			errors++;
 		}
-
-		/* wait for the reply until the timeout, then pad to the interval */
-		deadline = t0 + (ULONG)timeout * 1000UL;
-		while (got == 0) {
-			ULONG rd[2] = { 0, 0 }, sigs = SIGBREAKF_CTRL_C, nowt = now_us_lo(&t), left;
-			struct tv tmo;
-			LONG n, fl = sizeof(from);
-
-			if ((LONG)(deadline - nowt) <= 0)
-				break;
-			left = deadline - nowt;
-			tmo.secs = left / 1000000UL;
-			tmo.micro = left % 1000000UL;
-			rd[s / 32] |= 1UL << (s % 32);
-			n = WaitSelect(s + 1, rd, NULL, NULL, &tmo, &sigs);
-			if (sigs & SIGBREAKF_CTRL_C) {
-				stop = 1;
-				break;
-			}
-			if (n <= 0)
-				break;
-			n = recvfrom(s, rbuf, 60 + HDR + MAX_PAYLOAD + 64, 0, &from, &fl);
-			if (n >= 20) {
-				/* raw sockets deliver the IP header too */
-				LONG hl = (rbuf[0] & 0x0f) * 4;
-				UBYTE *ic = rbuf + hl;
-				ULONG rt, ttl = rbuf[8];
-
-				if (n < hl + HDR || ic[0] != ICMP_ECHOREPLY)
-					continue;
-				if ((((ULONG)ic[4] << 8) | ic[5]) != id)
-					continue;      /* someone else's ping */
-				if ((((ULONG)ic[6] << 8) | ic[7]) != seq)
-					continue;      /* late reply to an earlier probe */
-				rt = now_us_lo(&t) - t0;
-				recvd++;
-				sum += rt;
-				if (rt < min)
-					min = rt;
-				if (rt > max)
-					max = rt;
-				if (!quiet) {
-					fmt_ms(b, rt);
-					rt_strlcpy(c, (const char *)Inet_NtoA(from.sin_addr), sizeof(c));
-					out("%ld bytes from %s: icmp_seq=%lu ttl=%lu time=%s ms\n",
-					    (long)(n - hl), c, (unsigned long)seq, (unsigned long)ttl, b);
-				}
-				got = 1;
-				break;
-			}
-		}
-		if (got == 0 && !stop && !quiet)
-			out("Request timeout for icmp_seq %lu\n", (unsigned long)seq);
-		if (stop || (count > 0 && (LONG)sent >= count))
+		cl_flush();
+		if (count && sent >= count)
 			break;
-		/* sleep the rest of the interval, still honouring Ctrl-C */
-		{
-			ULONG el = now_us_lo(&t) - t0, wait = (ULONG)interval * 1000UL;
-			if (el < wait) {
-				struct tv tmo;
-				ULONG sigs = SIGBREAKF_CTRL_C;
-
-				tmo.secs = (wait - el) / 1000000UL;
-				tmo.micro = (wait - el) % 1000000UL;
-				WaitSelect(0, NULL, NULL, NULL, &tmo, &sigs);
-				if (sigs & SIGBREAKF_CTRL_C)
-					stop = 1;
-			}
-		}
+		stop = receive_until(s, t0 + interval_ms * 1000UL, dst, 0);
 	}
-
-	out("--- %s ping statistics ---\n", a);
-	out("%lu packets transmitted, %lu packets received, %lu%% packet loss\n",
-	    (unsigned long)sent, (unsigned long)recvd,
-	    (unsigned long)(sent ? (sent - recvd) * 100 / sent : 0));
+	/* wait for the outstanding replies (all answered: stop at once) */
+	if (!stop)
+		stop = receive_until(s, cl_now_us() + timeout_ms * 1000UL, dst, sent);
+	x = (cl_now_us() - start) / 1000;
+	cl_printf("\n--- %s ping statistics ---\n", host);
+	cl_printf("%lu packets transmitted, %lu received", (unsigned long)sent, (unsigned long)recvd);
+	if (dups)
+		cl_printf(", +%lu duplicates", (unsigned long)dups);
+	if (errors)
+		cl_printf(", +%lu errors", (unsigned long)errors);
+	cl_printf(", %lu%% packet loss, time %lums\n",
+	          (unsigned long)(sent ? (sent - (recvd > sent ? sent : recvd)) * 100 / sent : 0),
+	          (unsigned long)x);
 	if (recvd) {
-		fmt_ms(a, min);
-		fmt_ms(b, sum / recvd);
-		fmt_ms(c, max);
-		out("round-trip min/avg/max = %s/%s/%s ms\n", a, b, c);
+		u64 avg = sum_us / recvd, var = sum2_us / recvd - avg * avg;
+		fmt_ms(b, min_us);
+		fmt_ms(c, (u32)avg);
+		fmt_ms(d, max_us);
+		fmt_ms(e, isqrt64(var));
+		cl_printf("rtt min/avg/max/mdev = %s/%s/%s/%s ms\n", b, c, d, e);
 	}
-	rc = recvd ? 0 : 5;
+	rc = recvd ? CL_OK : CL_WARN;
 done:
 	if (s >= 0)
 		CloseSocket(s);
-	if (SocketBase)
-		CloseLibrary(SocketBase);
 	if (pkt)
 		FreeVec(pkt);
 	if (rbuf)
 		FreeVec(rbuf);
-	if (tr) {
-		CloseDevice((struct IORequest *)tr);
-		DeleteIORequest((struct IORequest *)tr);
-	}
-	if (tport)
-		DeleteMsgPort(tport);
-	FreeArgs(rda);
 	return rc;
+bad:
+	cl_printf("ping: invalid argument: '%s'\n", argv[i]);
+	return CL_ERROR;
 }
 
-#if defined(__VBCC__)
-int main(void)
-{
-	return ping_main();
-}
-#else
-struct ExecBase *SysBase;
-struct DosLibrary *DOSBase;
-
-long amiga_main(char *argstr, long arglen)
-{
-	int rc;
-
-	DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 37);
-	if (!DOSBase)
-		return 20;
-	rc = ping_main();
-	CloseLibrary((struct Library *)DOSBase);
-	return rc;
-}
-#endif
+CL_MAIN(ping_main, "ping")

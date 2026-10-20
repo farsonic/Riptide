@@ -9,7 +9,7 @@
 #include "amiga_net.h"
 #include "rt/riptide.h"
 
-#define RIPTIDE_PORTNAME "RIPTIDE"
+#include "rt/riptide_port.h"
 #define RIPTIDE_DATE     "20.10.2026"
 
 /* ---- os_amiga.c ---------------------------------------------------- */
@@ -189,20 +189,24 @@ int  sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, in
 int  mni_open_if(const char *name, const char *driver, ULONG unit, const char *options,
                  int mtu, char *err, u32 errlen);
 struct amiga_if *amiga_if_find(const char *name);
+/* file part of an AmigaDOS path ("DEVS:Networks/a2065.device" -> "a2065.device") */
+static inline const char *amiga_basename(const char *p)
+{
+	const char *b = p;
+
+	for (; *p; p++)
+		if (*p == '/' || *p == ':')
+			b = p + 1;
+	return b;
+}
+/* "interface NAME delete" (lock held) */
+int  amiga_if_delete(const char *name, char *err, u32 errlen);
 
 /* ---- stackproc.c --------------------------------------------------- */
 int  amiga_stack_start(const char *config, int selftest);
 void amiga_stack_loop(void);
 void amiga_stack_stop(void);
-/* Public port protocol between "Riptide QUIT|STATUS" and the running stack */
-#define RTCMD_STATUS 1
-#define RTCMD_QUIT   2
-struct RiptideMsg {
-	struct Message msg;
-	ULONG cmd;
-	LONG  result;
-	char  text[1024];
-};
+/* Public port protocol: include/rt/riptide_port.h */
 int  amiga_status_text(char *buf, u32 len);
 
 /* ---- selftest.c ---------------------------------------------------- */

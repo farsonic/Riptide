@@ -53,6 +53,9 @@ void rt_socket_init(void);
 void rt_sysctl_init(void);
 void rt_resolv_init(void);
 
+/* ioctl_net.c: routing/ARP/alias ioctls; 1 = not a request it knows */
+int  rt_ioctl_net(u32 req, void *arg);
+
 /* resolv.c */
 void rt_dns_remove_server(u32 addr);
 

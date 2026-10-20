@@ -438,6 +438,23 @@ int rt_arp_list(struct rt_arp_entry_info *out, int max)
 	return n;
 }
 
+int rt_arp_get(const struct rt_netif *nif, u32 ip, struct rt_arp_entry_info *out)
+{
+	struct arp_entry *e;
+
+	for (e = arp_tab[arp_hash(ip)]; e; e = e->next) {
+		if (e->ip != ip || (nif && e->nif != nif))
+			continue;
+		out->ip = e->ip;
+		memcpy(out->hw, e->hw, 6);
+		out->state = e->state == ST_PROBE ? ST_STALE : e->state;
+		out->age_s = (rt_now_ms() - e->updated_ms) / 1000;
+		out->ifindex = e->nif->index;
+		return 0;
+	}
+	return -RT_ENOENT;
+}
+
 /* ip == interface address: gratuitous ARP announcement (RFC 5227 3);
  * otherwise an address probe with sender 0.0.0.0 (RFC 5227 2.1.1). */
 void rt_arp_announce(struct rt_netif *nif, u32 ip)

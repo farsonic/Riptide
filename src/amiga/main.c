@@ -24,11 +24,13 @@ static int send_command(ULONG cmd)
 {
 	struct MsgPort *reply, *port;
 	struct RiptideMsg *m;
+	char *out = NULL;
 	int rc = 0;
 
 	reply = CreateMsgPort();
 	m = AllocVec(sizeof(*m), MEMF_PUBLIC | MEMF_CLEAR);
-	if (!reply || !m) {
+	out = AllocVec(8192, MEMF_PUBLIC | MEMF_CLEAR);
+	if (!reply || !m || !out) {
 		put("Riptide: out of memory\n");
 		rc = 20;
 		goto out;
@@ -37,6 +39,8 @@ static int send_command(ULONG cmd)
 	m->msg.mn_ReplyPort = reply;
 	m->msg.mn_Length = sizeof(*m);
 	m->cmd = cmd;
+	m->reply = (STRPTR)out;
+	m->replysize = 8192;
 	Forbid();
 	port = FindPort((CONST_STRPTR)RIPTIDE_PORTNAME);
 	if (port)
@@ -49,10 +53,19 @@ static int send_command(ULONG cmd)
 	}
 	WaitPort(reply);
 	GetMsg(reply);
-	m->text[sizeof(m->text) - 1] = 0;
-	put(m->text);
+	out[8191] = 0;
+	/* a Riptide 0.9 server answers in text */
+	if (!out[0]) {
+		m->text[sizeof(m->text) - 1] = 0;
+		put(m->text);
+	} else {
+		/* PutStr() output is fine for any length */
+		put(out);
+	}
 	rc = m->result ? 5 : 0;
 out:
+	if (out)
+		FreeVec(out);
 	if (m)
 		FreeVec(m);
 	if (reply)

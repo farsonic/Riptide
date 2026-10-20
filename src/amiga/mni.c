@@ -372,6 +372,8 @@ int mni_open_if(const char *name, const char *driver, ULONG unit, const char *op
 	rt_newminlist(&mi->tx_done);
 	nif = &mi->ai.nif;
 	rt_strlcpy(nif->name, name, sizeof(nif->name));
+	rt_snprintf(nif->descr, sizeof(nif->descr), "%s unit %lu", amiga_basename(driver),
+	            (unsigned long)unit);
 	mi->ai.poll = mni_poll;
 	mi->ai.set_online = mni_set_online;
 	mi->ai.close = mni_close;

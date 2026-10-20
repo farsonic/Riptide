@@ -56,6 +56,7 @@ int rt_loopback_init(void)
 	rt_bufq_init(&lo_queue);
 	memset(&lo_if, 0, sizeof(lo_if));
 	rt_strlcpy(lo_if.name, "lo0", sizeof(lo_if.name));
+	rt_strlcpy(lo_if.descr, "loopback", sizeof(lo_if.descr));
 	lo_if.type = RT_IFT_LOOP;
 	lo_if.flags = RT_IFF_LOOPBACK | RT_IFF_MULTICAST;
 	lo_if.mtu = LOOP_MTU;

@@ -307,10 +307,42 @@ int main(void)
 	CHECK(rt_dhcp_start(nif, dhcp_cb) == 0);
 	rt_unlock();
 	CHECK(wait_for(&ev_bound, 3, 5000));
-	rt_lock();
-	rt_dhcp_stop(nif);
-	CHECK(!rt_dhcp_bound(nif) && nif->addr == 0);
-	rt_unlock();
+
+	/* 7: tool view and control: the DHCP default route is tagged, a static
+	 * default route added later wins, "dhcp IF renew" renews at once and
+	 * keeps the static route first, "dhcp IF stop" removes only the DHCP
+	 * route (and releases). */
+	{
+		char out[512], line[64];
+		struct rt_route *r;
+		struct rt_nexthop nh;
+		struct rt_dhcp_info di;
+		int renewed;
+
+		rt_lock();
+		r = rt_route_find(0, 0, rt_htonl(SRV_IP));
+		CHECK(r && (r->flags & RT_RTF_DHCP));
+		CHECK(rt_dhcp_get_info(nif, &di) == RT_DHCPS_BOUND && di.server == rt_htonl(SRV_IP) &&
+		      di.router == rt_htonl(SRV_IP) && di.lease_s == LEASE && di.left_s <= LEASE);
+		CHECK(rt_ctl_command("route add default via 192.168.88.254", out, sizeof(out), NULL) == 0);
+		CHECK(rt_ip_route(rt_htonl(0x08080808u), &nh) == 0 && nh.nexthop == rt_htonl(0xc0a858feu));
+		renewed = ev_renewed;
+		snprintf(line, sizeof(line), "dhcp %s renew", nif->name);
+		CHECK(rt_ctl_command(line, out, sizeof(out), NULL) == 0);
+		rt_unlock();
+		CHECK(wait_for(&ev_renewed, renewed + 1, 1500));
+		rt_lock();
+		CHECK(rt_route_find(0, 0, rt_htonl(SRV_IP)) != NULL);
+		CHECK(rt_ip_route(rt_htonl(0x08080808u), &nh) == 0 && nh.nexthop == rt_htonl(0xc0a858feu));
+		snprintf(line, sizeof(line), "dhcp %s stop", nif->name);
+		CHECK(rt_ctl_command(line, out, sizeof(out), NULL) == 0);
+		CHECK(!rt_dhcp_bound(nif) && nif->addr == 0);
+		CHECK(rt_dhcp_get_info(nif, &di) == RT_DHCPS_NONE);
+		CHECK(rt_route_find(0, 0, rt_htonl(SRV_IP)) == NULL);
+		CHECK(rt_route_find(0, 0, rt_htonl(0xc0a858feu)) != NULL);
+		CHECK(rt_ctl_command("route del default", out, sizeof(out), NULL) == 0);
+		rt_unlock();
+	}
 	CHECK(wait_for(&n_release, 1, 2000));
 
 	stop_server = 1;

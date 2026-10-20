@@ -1290,7 +1290,9 @@ int rt_api_ioctl(struct rt_sockctx *c, int fd, u32 req, void *arg)
 		r = ifioctl(req, arg);
 		break;
 	default:
-		r = so->ops->ioctl ? so->ops->ioctl(so, req, arg) : -RT_EINVAL;
+		r = rt_ioctl_net(req, arg);
+		if (r == 1)
+			r = so->ops->ioctl ? so->ops->ioctl(so, req, arg) : -RT_EINVAL;
 		break;
 	}
 out:

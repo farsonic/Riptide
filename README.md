@@ -18,22 +18,30 @@ the modern Linux TCP stack.
   direct loader for Miami's MNI drivers. Also loopback, ARP, ICMP, UDP, raw
   sockets, IPv4 fragmentation, path-MTU discovery, a DHCP client and a DNS
   resolver.
+* **Tools:** Linux style `ip` (iproute2 syntax), `ifconfig`, `route`, `arp`,
+  `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname` and `nc`.
+  Interfaces, routes, ARP entries, DNS servers and DHCP can be inspected
+  and changed while the stack runs. Third-party tools can use the BSD
+  routing/ARP ioctls, the `net.riptide.*` tables via `MiamiSysCtl()` and
+  the `RIPTIDE` command port (see `docs/AMIGA.md`).
 
 ## Documentation
 
 * `docs/RE-NOTES.md`: reverse-engineering notes on MiamiDx (library tables,
   MNI driver ABI, protocol function map, sysctls).
 * `docs/DESIGN.md`: architecture and coding rules.
-* `docs/AMIGA.md`: installing and configuring Riptide on an Amiga, plus the `ping` and `rtcheck` tools.
+* `docs/AMIGA.md`: installing and configuring Riptide on an Amiga, the network tools, and the
+  interfaces for tools (tables, ioctls, the `RIPTIDE` port).
 
 ## Building
 
 ```
 make && ./tests/run_tests.sh build/host       # Linux host build + tests
 make CROSS=m68k-linux-gnu-                     # big-endian 68020 build (run tests under qemu-m68k)
-make -f Makefile.amiga                         # AmigaOS: build/amiga/{Riptide,ping,rtcheck} (vbcc + NDK 3.2)
+make -f Makefile.amiga                         # AmigaOS: build/amiga/{Riptide,rtcheck,ip,ping,...} (vbcc + NDK 3.2)
 make -f Makefile.amiga check                   # hunk checks + vamos self test
 tests/amiga/run_fsuae.sh build/amiga           # full-system test on FS-UAE + AROS ROM
+tests/amiga/run_fsuae_tools.sh build/amiga     # every network tool on FS-UAE (loopback + uaenet.device)
 ```
 
 The Amiga build needs vbcc, vasm and vlink in `$VBCC` (default `/opt/vbcc`)

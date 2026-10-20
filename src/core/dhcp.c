@@ -290,8 +290,8 @@ static void unconfigure(struct dhcp_client *c)
 
 	if (!c->addr)
 		return;
-	if (c->router)
-		rt_route_delete(0, 0, c->router);
+	if (c->router)   /* only our own route: a static one stays */
+		rt_route_delete_match(0, 0, c->router, c->nif, RT_RTF_DHCP);
 	for (i = 0; i < c->ndns; i++)
 		rt_dns_remove_server(c->dns[i]);
 	if (c->set_domain)
@@ -354,11 +354,12 @@ static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts
 	c->mask = mask;
 	if (o->mtu >= 68 && o->mtu <= nif->mtu)
 		nif->mtu = o->mtu;
-	if (o->router && c->router != o->router) {
+	if (o->router) {
+		/* (Re)install on every ACK: the route may have been removed by
+		 * hand. A static default route still wins (route.c orders DHCP
+		 * routes last), and one with the same gateway makes this fail. */
 		c->router = o->router;
-		/* an existing default route (static configuration) wins */
-		if (rt_route_add(0, 0, o->router, nif, RT_RTF_UP, 0) < 0)
-			c->router = 0;
+		rt_route_add(0, 0, o->router, nif, RT_RTF_UP | RT_RTF_DHCP, 0);
 	}
 	/* DNS servers: drop ours that disappeared, add new ones */
 	for (i = 0; i < c->ndns; i++) {
@@ -697,4 +698,48 @@ int rt_dhcp_bound(const struct rt_netif *nif)
 	const struct dhcp_client *c = client_of(nif);
 
 	return c && (c->state == ST_BOUND || c->state == ST_RENEWING || c->state == ST_REBINDING);
+}
+
+static const u8 state_map[] = {
+	RT_DHCPS_INIT, RT_DHCPS_SELECTING, RT_DHCPS_REQUESTING, RT_DHCPS_BOUND,
+	RT_DHCPS_RENEWING, RT_DHCPS_REBINDING
+};
+
+int rt_dhcp_get_info(const struct rt_netif *nif, struct rt_dhcp_info *info)
+{
+	struct dhcp_client *c = client_of(nif);
+
+	memset(info, 0, sizeof(*info));
+	if (!c)
+		return RT_DHCPS_NONE;
+	info->state = state_map[c->state];
+	if (c->state == ST_BOUND || c->state == ST_RENEWING || c->state == ST_REBINDING) {
+		u32 el = lease_elapsed(c);
+		info->server = c->server;
+		info->router = c->router;
+		info->addr = c->addr;
+		info->lease_s = c->lease_s;
+		info->left_s = c->lease_s == 0xffffffffu ? 0xffffffffu :
+		               el < c->lease_s ? c->lease_s - el : 0;
+	}
+	return info->state;
+}
+
+int rt_dhcp_renew(struct rt_netif *nif)
+{
+	struct dhcp_client *c = client_of(nif);
+
+	if (!c)
+		return -RT_ENOENT;
+	if (c->state == ST_BOUND || c->state == ST_RENEWING || c->state == ST_REBINDING) {
+		/* RENEWING now: unicast DHCPREQUEST to the server. The lease
+		 * timer keeps running; without an answer the normal T1/T2
+		 * schedule takes over. */
+		c->xid = rt_random32();
+		c->state = ST_RENEWING;
+		dhcp_send(c, DHCPREQUEST);
+	} else {
+		start_init(c, 0);
+	}
+	return 0;
 }

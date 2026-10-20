@@ -61,9 +61,14 @@ static void route_insert(struct rt_route *r)
 	struct rt_route **pp;
 	int plen = prefix_len(r->mask);
 
+	/* Longest prefix first, then lowest metric; at equal metric a DHCP
+	 * route goes after the others, so a static route always wins. */
 	for (pp = &route_head; *pp; pp = &(*pp)->next) {
 		int ol = prefix_len((*pp)->mask);
 		if (ol < plen || (ol == plen && (*pp)->metric > r->metric))
+			break;
+		if (ol == plen && (*pp)->metric == r->metric && ((*pp)->flags & RT_RTF_DHCP) &&
+		    !(r->flags & RT_RTF_DHCP))
 			break;
 	}
 	r->next = *pp;
@@ -181,6 +186,52 @@ int rt_route_delete(u32 dst, u32 mask, u32 gateway)
 		}
 	}
 	return -RT_ESRCH;
+}
+
+int rt_route_delete_match(u32 dst, u32 mask, u32 gateway, struct rt_netif *nif, u32 need_flags)
+{
+	struct rt_route **pp, *r;
+	int n = 0;
+
+	dst &= mask;
+	for (pp = &route_head; (r = *pp) != NULL;) {
+		if (r->dst == dst && r->mask == mask && !(r->flags & RT_RTF_PMTU) &&
+		    (!gateway || r->gateway == gateway) && (!nif || r->netif == nif) &&
+		    (r->flags & need_flags) == need_flags) {
+			*pp = r->next;
+			route_free(r);
+			n++;
+		} else {
+			pp = &r->next;
+		}
+	}
+	return n ? n : -RT_ESRCH;
+}
+
+struct rt_route *rt_route_find(u32 dst, u32 mask, u32 gateway)
+{
+	struct rt_route *r;
+
+	dst &= mask;
+	for (r = route_head; r; r = r->next)
+		if (r->dst == dst && r->mask == mask && !(r->flags & RT_RTF_PMTU) &&
+		    (!gateway || r->gateway == gateway))
+			return r;
+	return NULL;
+}
+
+void rt_route_flush_dynamic_if(struct rt_netif *nif)
+{
+	struct rt_route **pp, *r;
+
+	for (pp = &route_head; (r = *pp) != NULL;) {
+		if (r->netif == nif && (r->flags & (RT_RTF_PMTU | RT_RTF_DYNAMIC))) {
+			*pp = r->next;
+			route_free(r);
+		} else {
+			pp = &r->next;
+		}
+	}
 }
 
 static void route_flush_match(struct rt_netif *nif, u32 need_flags)

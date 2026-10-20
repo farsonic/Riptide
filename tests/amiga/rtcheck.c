@@ -55,7 +55,7 @@ static LONG run(const char *cmd, int async)
 	return SystemTagList((CONST_STRPTR)cmd, t);
 }
 
-#define TEMPLATE "START/K,STOP/K,CONNECT/K"
+#define TEMPLATE "START/K,STOP/K,CONNECT/K,NOCHECK/S"
 
 /* CONNECT=a.b.c.d:port - TCP echo test through a real interface: send a
  * line and expect it back (the host side runs an echo server). */
@@ -93,7 +93,7 @@ static void rtc_connect(const char *spec)
 
 static int rtcheck_main(void)
 {
-	LONG args[3] = { 0, 0, 0 };
+	LONG args[4] = { 0, 0, 0, 0 };
 	APTR rda;
 	int fails, i;
 
@@ -119,6 +119,13 @@ static int rtcheck_main(void)
 		FreeArgs(rda);
 		PutStr((CONST_STRPTR)"rtcheck: cannot open bsdsocket.library 4\n");
 		return 20;
+	}
+	if (args[3]) {
+		/* NOCHECK: only start the stack and wait until it is ready */
+		rtc_logf("rtcheck: stack ready: %s", (const char *)SocketBase->lib_IdString);
+		CloseLibrary(SocketBase);
+		FreeArgs(rda);
+		return 0;
 	}
 	MiamiBase = OpenLibrary((CONST_STRPTR)"miami.library", 21);
 	UserGroupBase = OpenLibrary((CONST_STRPTR)"usergroup.library", 4);
