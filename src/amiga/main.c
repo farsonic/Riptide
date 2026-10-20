@@ -83,7 +83,14 @@ static int riptide_main(void)
 	if (args[ARG_CONFIG])
 		config = (const char *)args[ARG_CONFIG];
 	if (amiga_libs_present()) {
-		put("A TCP/IP stack is already running.\n");
+		char who[256];
+
+		put("A TCP/IP stack is already running:\n");
+		amiga_libs_describe(who, sizeof(who));
+		put(who);
+		put("Quit it first (for Riptide: Riptide QUIT). Disable any emulator\n"
+		    "bsdsocket emulation, and remove other stacks' LIBS:bsdsocket.library,\n"
+		    "which loads automatically when a program opens it.\n");
 		FreeArgs(rda);
 		return 20;
 	}

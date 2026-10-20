@@ -157,6 +157,7 @@ STRPTR amiga_ntoa(u32 in_net, char *buf);
 void amiga_set_fdcb(struct TaskCtx *c, APTR fn, LONG cpu);
 /* libs.c */
 int  amiga_libs_present(void);          /* any TCP/IP stack library in the system? */
+void amiga_libs_describe(char *buf, unsigned len); /* which ones, with versions */
 void amiga_libs_signal_users(ULONG sigs);
 /* os_amiga.c: append a line to the log regardless of rt_log_level */
 void amiga_log_line(const char *line);

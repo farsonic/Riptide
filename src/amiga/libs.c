@@ -223,6 +223,42 @@ int amiga_libs_present(void)
 	return found;
 }
 
+/* Describe the TCP/IP stack libraries already in the system, one per line,
+ * by its id string (or name and version) so the user can tell who owns them. */
+void amiga_libs_describe(char *buf, unsigned len)
+{
+	static const char *const names[] = { "bsdsocket.library", "miami.library", "usergroup.library" };
+	struct List *ll = exec_liblist(SysBase);
+	struct Library *lib;
+	unsigned n = 0;
+	int i;
+
+	buf[0] = '\0';
+	Forbid();
+	for (i = 0; i < 3 && n < len; i++) {
+		lib = (struct Library *)FindName(ll, (CONST_STRPTR)names[i]);
+		if (lib) {
+			const char *id = (const char *)lib->lib_IdString;
+			int k = (id && id[0])
+				? rt_snprintf(buf + n, len - n, "  %s", id)
+				: rt_snprintf(buf + n, len - n, "  %s %u.%u", names[i],
+				              (unsigned)lib->lib_Version, (unsigned)lib->lib_Revision);
+			if (k < 0)
+				break;
+			n += (unsigned)k;
+			if (n >= len)
+				n = len - 1;   /* truncated */
+			while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+				buf[--n] = '\0';
+			if (n + 1 < len) {
+				buf[n++] = '\n';
+				buf[n] = '\0';
+			}
+		}
+	}
+	Permit();
+}
+
 int amiga_libs_init(void)
 {
 	unsigned i;
