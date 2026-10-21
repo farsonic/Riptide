@@ -142,7 +142,7 @@ static struct rt_buf *fq_assemble(struct frag_q *q)
 	memcpy(rt_buf_put(b, hlen), f->data, hlen);
 	for (; f; f = f->next) {
 		struct frag_cb *c = FCB(f);
-		memcpy(b->data + hlen + c->off, f->data + c->hlen, c->end - c->off);
+		rt_copy_buf(b->data + hlen + c->off, f->data + c->hlen, c->end - c->off);
 	}
 	b->len = hlen + q->total;
 	b->netif = q->frags.head->netif;
@@ -295,7 +295,7 @@ int rt_ipfrag_output(struct rt_buf *b, struct rt_netif *nif, u32 nexthop, u32 mt
 			break;
 		}
 		memcpy(rt_buf_put(f, hl), h, hl);
-		memcpy(rt_buf_put(f, len), b->data + hlen + off, len);
+		rt_copy_buf(rt_buf_put(f, len), b->data + hlen + off, len);
 		fip = (struct rt_iphdr *)f->data;
 		nfo = (u16)((base + off) >> 3);
 		if (off + len < payload || (fo & RT_IP_MF))

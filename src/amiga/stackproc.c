@@ -294,6 +294,8 @@ int amiga_status_text(char *buf, u32 len)
 		char libs[160];
 		amiga_libs_summary(libs, sizeof(libs));
 		ADD("Libraries: %s\n", libs);
+		rt_arch_describe(libs, sizeof(libs));
+		ADD("%s\n", libs);
 	}
 	for (n = rt_netif_list(); n; n = n->next) {
 		struct rt_dhcp_info di;

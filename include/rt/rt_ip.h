@@ -9,6 +9,7 @@
 #include "rt_types.h"
 #include "rt_buf.h"
 #include "rt_netif.h"
+#include "rt_arch.h"
 
 #define RT_IPPROTO_IP    0
 #define RT_IPPROTO_ICMP  1
@@ -42,8 +43,14 @@ static inline u32 rt_ip_hlen(const struct rt_iphdr *ip) { return (u32)(ip->ver_i
 
 /* ---- checksums ---- */
 /* 32-bit one's complement partial sum of 'len' bytes added to 'sum'.
- * Works on any alignment. */
-u32 rt_csum_partial(const void *data, u32 len, u32 sum);
+ * Works on any alignment. Dispatches to the CPU specific routine (see
+ * rt_arch.h for the exact contract; compare sums only after folding). */
+#ifndef RT_TOOL_BUILD
+static inline u32 rt_csum_partial(const void *data, u32 len, u32 sum)
+{
+	return rt_arch.csum(data, len, sum);
+}
+#endif
 static inline u16 rt_csum_fold(u32 sum)
 {
 	sum = (sum & 0xffff) + (sum >> 16);

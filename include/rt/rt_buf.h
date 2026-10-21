@@ -53,6 +53,10 @@ void rt_buf_free_chain(struct rt_buf *b);        /* follows ->next */
 struct rt_buf *rt_buf_copy(const struct rt_buf *b);
 /* Copy with at least 'headroom' bytes of headroom. */
 struct rt_buf *rt_buf_copy_expand(const struct rt_buf *b, u32 headroom);
+/* Like rt_buf_copy() but the headroom bytes are not copied, and *sum gets
+ * the partial checksum of the data, computed while copying (TCP
+ * transmit). */
+struct rt_buf *rt_buf_copy_csum(const struct rt_buf *b, u32 *sum);
 
 static inline u32 rt_buf_headroom(const struct rt_buf *b) { return (u32)(b->data - b->head); }
 static inline u32 rt_buf_tailroom(const struct rt_buf *b)

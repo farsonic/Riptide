@@ -11,12 +11,13 @@ TOOLCHAIN ?= vbcc
 VBCC ?= /opt/vbcc
 NDK  ?= /opt/ndk3.2
 PYTHON ?= python3
+VASM ?= $(VBCC)/bin/vasmm68k_mot
 VAMOS ?= vamos
 
 CORE_SRC  := $(wildcard src/core/*.c)
 AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/amiga/riptidelib.c \
              src/amiga/usergroup.c src/amiga/sana2.c src/amiga/mni.c src/amiga/stackproc.c \
-             src/amiga/main.c src/amiga/selftest.c
+             src/amiga/main.c src/amiga/selftest.c src/amiga/bench.c
 LIBS      := bsdsocket riptide usergroup
 HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h) tests/amiga/rtcheck_body.h
 # network tools (src/amiga/cmd), each linked with cmdlib.o
@@ -32,7 +33,8 @@ CC      := $(CROSS)gcc
 LD      := $(CROSS)ld
 GCCINC  := $(shell $(CC) -print-file-name=include)
 LIBGCC  := $(shell $(CC) -m68020 -print-libgcc-file-name)
-CFLAGS  := -m68020 -O2 -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie \
+# -mtune=68020-60: no 64-bit mulu.l/divu.l (68060 traps them to 68060.library)
+CFLAGS  := -m68020 -mtune=68020-60 -DRT_ARCH_M68K_ASM -O2 -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie \
            -fomit-frame-pointer -msoft-float -nostdinc -isystem $(GCCINC) \
            -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector \
            -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter \
@@ -42,7 +44,7 @@ GEN_H   := $(foreach l,exec dos timer,$(BUILD)/gen/$(l)_calls.h) \
            $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC) src/amiga/libc.c) \
-           $(BUILD)/gcc_thunks.o $(GEN_OBJ)
+           $(BUILD)/gcc_thunks.o $(BUILD)/arch/rt_m68k.o $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/startup.o $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
 TOOL_LIB := $(BUILD)/startup.o $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
 
@@ -72,6 +74,10 @@ $(BUILD)/%.o: src/amiga/%.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 $(BUILD)/gen/%.o: $(BUILD)/gen/%.S
 	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/arch/%.o: src/arch/m68k/%.s
+	@mkdir -p $(dir $@)
+	$(VASM) -quiet -m68020 -Felf -o $@ $<
+	$(CROSS)objcopy --add-section .note.GNU-stack=/dev/null --set-section-flags .note.GNU-stack=contents,readonly $@
 
 $(BUILD)/Riptide.elf: $(RT_OBJ) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(RT_OBJ) $(LIBGCC)
@@ -89,10 +95,10 @@ else
 BUILD   := build/amiga
 export VBCC
 VC      := PATH=$(VBCC)/bin:$$PATH VBCC=$(VBCC) $(VBCC)/bin/vc +aos68k
-CFLAGS  := -c99 -O2 -cpu=68020 -I$(NDK)/Include_H -Isrc/amiga -I$(BUILD) -Iinclude -Iinclude/rt
+CFLAGS  := -c99 -O2 -cpu=68020 -DRT_ARCH_M68K_ASM -I$(NDK)/Include_H -Isrc/amiga -I$(BUILD) -Iinclude -Iinclude/rt
 GEN_H   := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
-RT_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(GEN_OBJ)
+RT_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(BUILD)/arch/rt_m68k.o $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o
 TOOL_LIB := $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o
 
@@ -116,6 +122,9 @@ $(BUILD)/tests/%.o: tests/amiga/%.c $(HDRS) $(GEN_H)
 	$(VC) $(CFLAGS) -Itests/amiga -c -o $@ $<
 $(BUILD)/gen/%.o: $(BUILD)/gen/%.c $(GEN_H)
 	$(VC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/arch/%.o: src/arch/m68k/%.s
+	@mkdir -p $(dir $@)
+	$(VASM) -quiet -m68020 -Fhunk -o $@ $<
 
 $(BUILD)/Riptide: $(RT_OBJ)
 	$(VC) -o $@ $(RT_OBJ) -lamiga

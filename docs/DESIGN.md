@@ -21,6 +21,7 @@ Licence: GPL-2.0-only (the TCP follows Linux's algorithms and structure).
 | `include/rt/*.h` | Contract headers shared by every module | integration |
 | `src/core/` | Portable protocol core (freestanding C99) | see below |
 | `src/host/` | Linux host OS layer: pthreads, TUN, simulated wire | infra |
+| `src/arch/m68k/` | 680x0 assembly checksum and copy routines (vasm, Motorola syntax) | infra |
 | `src/amiga/` | AmigaOS glue: libraries, SANA-II, MNI, startup, OS headers | amiga |
 | `sdk/` | Developer SDK for riptide.library (generated FD and headers) | amiga |
 | `src/amiga/cmd/` | Network tools (ip, ifconfig, route, ...) and their shared `cmdlib` | amiga |
@@ -30,7 +31,7 @@ Licence: GPL-2.0-only (the TCP follows Linux's algorithms and structure).
 The core files are owned per area:
 
 * **infra**: `buf.c timer.c printf.c netif.c arp.c ip.c ip_frag.c route.c
-  icmp.c udp.c raw.c loopback.c checksum.c init.c stats.c`
+  icmp.c udp.c raw.c loopback.c checksum.c arch.c init.c stats.c`
 * **tcp**: `tcp*.c` plus internal `src/core/tcp.h`
 * **sockets**: `socket.c socket_api.c ioctl_net.c sysctl.c config.c ctl.c resolv.c netdb.c dhcp.c errno.c`
 
@@ -56,13 +57,57 @@ The core files are owned per area:
 * Keep comments purposeful. Name Linux functions or RFC sections where an
   algorithm follows them (`/* RFC 8985 6.2: RACK detect loss */`).
 
+## Arch ops: checksum and copy routines
+
+The hot loops go through function pointers in `rt_arch`
+(`include/rt/rt_arch.h`), so one binary can pick CPU specific code at run
+time:
+
+| Op | Used for | C version | 680x0 version |
+|---|---|---|---|
+| `csum` | `rt_csum_partial()`: every checksum | `rt_csum_partial_c` | `rt_csum_020` |
+| `csum_copy` | `rt_csum_copy()`: copy and checksum in one pass (Linux `csum_partial_copy`) | `rt_csum_copy_c` | `rt_csum_copy_020` |
+| `copy` | `rt_copy()`: payload between user or driver memory and packet buffers | `rt_copy_c` | `rt_copy_020` |
+| `copy_buf` | `rt_copy_buf()`: packet buffer to packet buffer | `rt_copy_c` | `rt_copy_020`, or `rt_copy_040` (MOVE16) |
+
+* `rt_copy()` and `rt_copy_buf()` call plain `memcpy()` below
+  `RT_COPY_MIN` (128) bytes; the dispatch only pays off above it.
+* Where they are used: TCP transmit copies the write-queue segment and sums
+  its payload in one pass (`rt_buf_copy_csum()`), then adds the header sum;
+  UDP send copies from the user's iov and sums in one pass
+  (`rt_iov_to_buf_csum()`); `send()`/`recv()` copies (`rt_iov_to_buf()`,
+  `rt_buf_to_iov()`) and the SANA-II `CopyToBuff`/`CopyFromBuff` callbacks
+  use `rt_copy()`; receive-queue coalescing and collapsing, `tcp_fragment`,
+  IP reassembly/fragmentation and raw/broadcast clones use
+  `rt_copy_buf()`. Received data is copied to the user with `rt_copy()`
+  only: its checksum was verified at input.
+* Checksum contract: a 32-bit partial sum whose `rt_csum_fold()` equals the
+  C version's (implementations may return different but congruent 32-bit
+  values, so compare only folded sums). Pieces at odd offsets are chained
+  with `rt_csum_block_add()`.
+* Every routine must be reentrant (the SANA-II callbacks run in driver
+  interrupts) and use no 64-bit `mulu.l`/`divu.l` (the 68060 traps them).
+* Packet buffer data starts on a 16-byte boundary (`buf.c`), so copies
+  between buffers with equal headroom can use whole cache lines.
+* The OS layer sets `rt_arch_cpu` before `rt_init()`, which selects
+  `auto`; `cpu routines generic|020|040|060` (configuration) overrides it.
+  Builds with `RT_ARCH_M68K_ASM` (the Amiga builds, and
+  `make CROSS=m68k-linux-gnu-`) link `src/arch/m68k/rt_m68k.s`; the
+  native host build uses C only. `tests/t_arch_m68k.c` tests every
+  routine against the C versions (see `docs/AMIGA.md`, CPU support).
+* Per-packet code avoids 64-bit multiply/divide where a 32-bit form is
+  enough (clocks, RTO arithmetic): the compilers' 64-bit helpers use the
+  64-bit `mulu.l`/`divu.l` forms, which the 68060 emulates in software.
+
 ## Builds
 
 * `make`: native build plus tests in `build/host/`.
 * `make SAN=1`: the same, with ASan and UBSan.
 * `make CROSS=m68k-linux-gnu-`: big-endian 68020 static Linux binaries. Run
   them under `qemu-m68k` to test the core on the real target CPU and
-  endianness.
+  endianness. This build links the 680x0 assembly routines (vasm from
+  `$VBCC`; `ASM=0` leaves them out). `RT_CPU=68040` (with
+  `QEMU_CPU=m68040`) makes it select the 68040 routines.
 * `make -f Makefile.amiga`: AmigaOS hunk executable `Riptide`, built with
   vbcc (`vc +aos68k -c99`, plus vasm and vlink built from source) against
   the free NDK 3.2 headers from Aminet. Expected locations are

@@ -42,15 +42,42 @@ int rt_lock_held(void)
 
 /* ---- clocks ---- */
 
+/*
+ * The clocks run for every packet, so they use 32-bit multiplies and
+ * divides only: the compilers' 64-bit helpers use the 64-bit mulu.l and
+ * divu.l forms, which the 68060 traps to 68060.library. ev_hi * 2^32
+ * divided by the EClock frequency changes only when ev_hi does (every 100
+ * minutes or so); it is cached, and the sequence check keeps concurrent
+ * callers (any task may read the clock) from mixing two cache entries.
+ */
+static volatile u32 ec_hi = 0xffffffffu, ec_hq, ec_hr;
+
 static void eclock_read(u32 *q, u32 *r)
 {
 	struct EClockVal ev;
-	u64 e;
+	u32 h, hq, hr, lq, lr;
 
 	ReadEClock(&ev);
-	e = ((u64)ev.ev_hi << 32) | ev.ev_lo;
-	*q = (u32)(e / eclock_freq);
-	*r = (u32)(e % eclock_freq);
+	h = ec_hi;
+	hq = ec_hq;
+	hr = ec_hr;
+	if (h != ev.ev_hi || ec_hi != h) {
+		u64 e = (u64)ev.ev_hi << 32;
+		hq = (u32)(e / eclock_freq);
+		hr = (u32)(e % eclock_freq);
+		ec_hi = 0xffffffffu;
+		ec_hq = hq;
+		ec_hr = hr;
+		ec_hi = ev.ev_hi;
+	}
+	lq = ev.ev_lo / eclock_freq;
+	lr = ev.ev_lo % eclock_freq + hr;    /* < 2 * eclock_freq */
+	if (lr >= eclock_freq) {
+		lr -= eclock_freq;
+		lq++;
+	}
+	*q = hq + lq;
+	*r = lr;
 }
 
 u32 rt_now_ms(void)
@@ -60,17 +87,23 @@ u32 rt_now_ms(void)
 	if (amiga_virtual_clock || !TimerBase)
 		return amiga_virtual_ms;
 	eclock_read(&q, &r);
+	if (eclock_freq < 4294967u)          /* r * 1000 fits 32 bits */
+		return q * 1000u + r * 1000u / eclock_freq;
 	return q * 1000u + (u32)(((u64)r * 1000u) / eclock_freq);
 }
 
 u64 rt_now_us(void)
 {
-	u32 q, r;
+	u32 q, r, m;
 
 	if (amiga_virtual_clock || !TimerBase)
-		return (u64)amiga_virtual_ms * 1000u;
+		return rt_mul32x32(amiga_virtual_ms, 1000u);
 	eclock_read(&q, &r);
-	return (u64)q * 1000000u + ((u64)r * 1000000u) / eclock_freq;
+	if (eclock_freq >= 4294967u)
+		return (u64)q * 1000000u + ((u64)r * 1000000u) / eclock_freq;
+	/* r * 10^6 / f = 1000 * (r * 1000 / f) + (r * 1000 % f) * 1000 / f */
+	m = r * 1000u;
+	return rt_mul32x32(q, 1000000u) + (m / eclock_freq) * 1000u + (m % eclock_freq) * 1000u / eclock_freq;
 }
 
 u32 rt_wallclock(void)
@@ -86,11 +119,29 @@ u32 rt_wallclock(void)
 
 /* ---- memory ---- */
 
+/* Packet buffers come from rt_malloc(): keep them in Fast RAM, where
+ * MOVE16 is safe and the CPU is not slowed down by the chipset. If memory
+ * runs short we take any public memory, and then MOVE16 is off for good. */
+static int amiga_have_fast;
+static int amiga_check_move16;      /* 68040+: watch for non-Fast buffers */
+
 void *rt_malloc(size_t n)
 {
+	void *p;
+
 	if (n == 0)
 		n = 1;
-	return AllocVec((ULONG)n, MEMF_PUBLIC);
+	if (amiga_have_fast) {
+		p = AllocVec((ULONG)n, MEMF_PUBLIC | MEMF_FAST);
+		if (p)
+			return p;
+	}
+	p = AllocVec((ULONG)n, MEMF_PUBLIC);
+	if (p && amiga_check_move16 && !(TypeOfMem(p) & MEMF_FAST)) {
+		amiga_check_move16 = 0;
+		rt_arch_move16_veto("packet memory is not Fast RAM");
+	}
+	return p;
 }
 
 void *rt_zalloc(size_t n)
@@ -441,12 +492,34 @@ void rt_waitq_wake(struct rt_waitq *wq)
 
 /* ---- init ---- */
 
+/* CPU model from SysBase->AttnFlags (the 68060.library sets AFF_68060;
+ * AFF_68040 and AFF_68030 are also set on the bigger CPUs). */
+static u32 amiga_cpu_model(void)
+{
+	UWORD af = RT_AMIGA_ATTNFLAGS(SysBase);
+
+	if (af & (1u << 7))
+		return 68060;
+	if (af & (1u << 3))
+		return 68040;
+	if (af & (1u << 2))
+		return 68030;
+	if (af & (1u << 1))
+		return 68020;
+	if (af & (1u << 0))
+		return 68010;
+	return 68000;
+}
+
 int amiga_os_init(void)
 {
 	BYTE kb;
 
 	InitSemaphore(&stack_sem);
 	rt_newminlist(&orphan_sleepers);
+	rt_arch_cpu = amiga_cpu_model();
+	amiga_have_fast = AvailMem(MEMF_FAST) != 0;
+	amiga_check_move16 = rt_arch_cpu >= 68040;
 	amiga_stack_task = FindTask(NULL);
 	kb = AllocSignal(-1);
 	if (kb < 0)

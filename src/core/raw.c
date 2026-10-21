@@ -48,7 +48,7 @@ int rt_raw_input(const struct rt_buf *b, const struct rt_iphdr *ip)
 		if (!c)
 			continue;
 		memcpy(rt_buf_put(c, hlen), ip, hlen);
-		memcpy(rt_buf_put(c, b->len), b->data, b->len);
+		rt_copy_buf(rt_buf_put(c, b->len), b->data, b->len);
 		c->netif = b->netif;
 		c->flags = b->flags;
 		if (rt_dgram_deliver(p->so, c, ip->saddr, 0, ip->daddr, b->netif) == 0)

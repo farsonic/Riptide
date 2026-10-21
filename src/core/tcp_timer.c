@@ -66,6 +66,24 @@ u32 tcp_probe0_when(const struct tcp_sock *tp, u32 max_when)
 	return RT_MIN(when, max_when);
 }
 
+/* These run for every ACK. The RTO (<= TCP_RTO_MAX ms) in µs fits 32 bits,
+ * so they avoid the compilers' 64-bit multiply/divide helpers, which use
+ * the 64-bit mulu.l/divu.l forms that the 68060 traps to 68060.library. */
+static s64 tcp_rto_us(const struct tcp_sock *tp)
+{
+	if (tp->icsk_rto <= 4294967u)
+		return (s64)(tp->icsk_rto * 1000u);
+	return (s64)tp->icsk_rto * 1000;
+}
+
+/* (us + add) / 1000 for 0 < us, add < 1000 */
+static u32 tcp_us_div1000(s64 us, u32 add)
+{
+	if (us <= 0x7fff0000)
+		return ((u32)us + add) / 1000u;
+	return (u32)((us + add) / 1000);
+}
+
 /* time until the RTO of the head segment fires (µs, may be negative) */
 s64 tcp_rto_delta_us(const struct tcp_sock *tp)
 {
@@ -73,8 +91,8 @@ s64 tcp_rto_delta_us(const struct tcp_sock *tp)
 	u64 rto_time;
 
 	if (!b)
-		return (s64)tp->icsk_rto * 1000;
-	rto_time = TCP_SKB_CB(b)->tx_us + (u64)tp->icsk_rto * 1000u;
+		return (s64)tcp_rto_us(tp);
+	rto_time = TCP_SKB_CB(b)->tx_us + (u64)tcp_rto_us(tp);
 	return (s64)(rto_time - tcp_clock_us);
 }
 
@@ -88,7 +106,7 @@ void tcp_rearm_rto(struct tcp_sock *tp)
 		if (tp->icsk_pending == ICSK_TIME_REO_TIMEOUT ||
 		    tp->icsk_pending == ICSK_TIME_LOSS_PROBE) {
 			s64 delta_us = tcp_rto_delta_us(tp);
-			rto = (u32)((RT_MAX(delta_us, (s64)1) + 999) / 1000);
+			rto = tcp_us_div1000(RT_MAX(delta_us, (s64)1), 999);
 		}
 		tcp_reset_xmit_timer(tp, ICSK_TIME_RETRANS, rto);
 	}
@@ -115,9 +133,10 @@ int tcp_schedule_loss_probe(struct tcp_sock *tp, int advancing_rto)
 	}
 	if (timeout < 1)
 		timeout = 1;
-	rto_delta_us = advancing_rto ? (s64)tp->icsk_rto * 1000 : tcp_rto_delta_us(tp);
-	if (rto_delta_us > 0 && (u64)timeout * 1000u > (u64)rto_delta_us)
-		timeout = (u32)((rto_delta_us + 999) / 1000);
+	rto_delta_us = advancing_rto ? tcp_rto_us(tp) : tcp_rto_delta_us(tp);
+	/* timeout * 1000 > rto_delta_us  <=>  timeout > floor(rto_delta_us / 1000) */
+	if (rto_delta_us > 0 && timeout > tcp_us_div1000(rto_delta_us, 0))
+		timeout = tcp_us_div1000(rto_delta_us, 999);
 	tcp_reset_xmit_timer(tp, ICSK_TIME_LOSS_PROBE, timeout);
 	return 1;
 }

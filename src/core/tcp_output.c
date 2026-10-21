@@ -346,12 +346,25 @@ static void tcp_fill_csum(struct rt_buf *b, u32 saddr, u32 daddr)
 	memcpy(b->data + 16, &c, 2);
 }
 
+/* As tcp_fill_csum(), with the payload behind the hdr_len (even) header
+ * bytes already summed into dsum. */
+static void tcp_fill_csum_hdr(struct rt_buf *b, u32 saddr, u32 daddr, u32 hdr_len, u32 dsum)
+{
+	u32 sum = rt_csum_pseudo(saddr, daddr, RT_IPPROTO_TCP, (u16)b->len);
+	u16 c;
+
+	b->data[16] = b->data[17] = 0;
+	sum = rt_csum_add(rt_csum_partial(b->data, hdr_len, sum), dsum);
+	c = rt_csum_fold(sum);
+	memcpy(b->data + 16, &c, 2);
+}
+
 int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 {
 	struct tcp_skb_cb *tcb = TCP_SKB_CB(skb);
 	struct tcp_out_options opts;
 	struct rt_buf *b;
-	u32 opt_size, hdr_len, data_len;
+	u32 opt_size, hdr_len, data_len, dsum;
 	u8 *th, flags, tos = tp->tos;
 	u16 win;
 
@@ -361,11 +374,13 @@ int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 		tcb->tx_ms = tcp_jiffies();
 		if (!tcb->first_tx_ms)
 			tcb->first_tx_ms = tcb->tx_ms;
-		b = rt_buf_copy(skb);
+		/* copy the payload and checksum it in the same pass */
+		b = rt_buf_copy_csum(skb, &dsum);
 		if (!b)
 			return -RT_ENOBUFS;
 	} else {
 		b = skb;
+		dsum = rt_csum_partial(b->data, b->len, 0);
 	}
 	data_len = b->len;
 	memset(&opts, 0, sizeof(opts));
@@ -413,7 +428,7 @@ int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 			flags |= TCPHDR_ECE;
 	}
 	th[13] = flags;
-	tcp_fill_csum(b, tp->saddr, tp->daddr);
+	tcp_fill_csum_hdr(b, tp->saddr, tp->daddr, hdr_len, dsum);
 
 	if (flags & TCPHDR_ACK)
 		tcp_event_ack_sent(tp);
@@ -739,7 +754,7 @@ int tcp_fragment(struct tcp_sock *tp, struct rt_buf *b, u32 len)
 	nb = tcp_stream_alloc_skb(tp, nlen);
 	if (!nb)
 		return -RT_ENOMEM;
-	memcpy(rt_buf_put(nb, nlen), b->data + len, nlen);
+	rt_copy_buf(rt_buf_put(nb, nlen), b->data + len, nlen);
 	b->len = len;
 	ncb = TCP_SKB_CB(nb);
 	*ncb = *cb;

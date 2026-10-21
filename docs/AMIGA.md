@@ -48,7 +48,7 @@ while Riptide runs.
 ## Command line
 
 ```
-Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST]
+Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
 ```
 
 | Argument | Meaning |
@@ -58,6 +58,7 @@ Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST]
 | `STATUS` | Ask the running Riptide for a summary: interfaces, addresses, packet counters, driver and DHCP state, the routing table, DNS servers and library users. |
 | `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
+| `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and exit. Needs timer.device, so not under vamos. |
 
 `QUIT` and `STATUS` talk to the running stack through the public message
 port `RIPTIDE`. You can also signal the Riptide process directly:
@@ -91,6 +92,7 @@ ifconfig IFNAME [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D]
       [mtu N] [metric N] [[-]promisc] [[-]arp] [delete] [up|down]
 dhcp IFNAME [start|stop|renew]     # run (stop, renew) the DHCP client on IFNAME
 arp add A.B.C.D MAC [dev IF] | arp del A.B.C.D [dev IF] | arp flush [dev IF]
+cpu routines auto|generic|020|040|060   # checksum/copy routines (troubleshooting)
 ```
 
 The short forms of older versions (`route add default 10.0.2.2`,
@@ -683,6 +685,76 @@ inlines from the FD file with their usual tools.
 **Not supported:** IPv6, `socketpair()`, ancillary data in `recvmsg()`
 (`msg_controllen` is always 0), and ARexx.
 
+## CPU support
+
+One Riptide binary runs on the 68020, 68030, 68040 and 68060. At startup
+it reads the CPU type from `SysBase->AttnFlags` and picks its checksum and
+copy routines (hand-written 680x0 assembly in `src/arch/m68k/rt_m68k.s`;
+no FPU, Blitter or Copper code):
+
+| CPU | Checksum | Copy (user/driver memory) | Copy between packet buffers |
+|---|---|---|---|
+| 68020, 68030 | `csum_020` | `copy_020` | `copy_020` |
+| 68040, 68060 | `csum_020` | `copy_020` | `copy_040` (MOVE16) |
+
+* `csum_020` is an unrolled `addx.l` loop (16 longs per iteration, entered
+  by a computed jump for the remainder). `copy_020` aligns the destination
+  and runs 16 `move.l` per iteration. `csum_copy_020` copies and sums in
+  one pass; TCP uses it to build each segment it sends and UDP to take
+  the payload from the program.
+* There is no separate 68060 checksum: the emulators give no 68060 timing
+  that could justify one, so `csum_020` serves every CPU. On the 68060
+  plain `move.l` copies are used for any memory, as on the 68020.
+* The choice is logged at info level (`DEBUG=2`) and shown by `Riptide
+  STATUS`:
+
+  ```
+  cpu: 68060, checksum: csum_020, copy: copy_020, buffer copy: copy_040 (move16) (routines auto)
+  ```
+
+  and by the read-only sysctls `riptide.cpu.model` and
+  `riptide.cpu.routines`.
+* `cpu routines generic|020|040|060` in the configuration file (or sent to
+  the running stack) overrides the choice, for troubleshooting: `generic`
+  is the portable C code. `040`/`060` are refused on a CPU without MOVE16.
+
+**MOVE16.** On the 68040 and 68060, copies between Riptide's own packet
+buffers use MOVE16 for 16-byte lines when both sides have the same
+alignment and the copy is at least 80 bytes long. MOVE16 bursts whole
+cache lines and is known to fail on some boards and with some memory
+(Chip RAM, some Zorro memory). Riptide therefore:
+
+* never uses it on memory it does not own (programs' buffers, SANA-II
+  driver buffers);
+* allocates its buffers in Fast RAM, and turns MOVE16 off for good (with a
+  warning) as soon as one of its allocations lands outside Fast RAM;
+* has a kill switch: `sysctl riptide.cpu.move16=0` (configuration file or
+  the `sysctl` tool at run time). Use it if the stack misbehaves on a
+  68040/68060 accelerator; `cpu routines 020` has the same effect.
+
+**68060 and 64-bit arithmetic.** The 68060 lacks the 64-bit forms of
+`mulu.l`/`divu.l`; `68060.library` emulates them, slowly. The assembly
+uses none, and the per-packet clock and RTO code uses 32-bit arithmetic.
+The vbcc build still calls vbcc's 64-bit helpers (which use those forms)
+in CUBIC's window update (per ACK in congestion avoidance) and, less
+often, in receive-buffer tuning, PRR, DHCP and number formatting. The GCC
+build is compiled with `-mtune=68020-60`, so GCC does not inline the
+64-bit forms either; its libgcc helpers remain in the same places.
+
+**Benchmark.** `Riptide BENCH` prints KB/s for the C and the assembly
+routines on 64 to 8192 byte buffers (`tests/amiga/run_fsuae_bench.sh`
+runs it in FS-UAE; `FSUAE_MODEL`/`FSUAE_EXTRA` select other CPUs). On the
+emulated A1200 (68020, cycle exact, Fast RAM), 1460-byte buffers:
+
+| Routine | C | Assembly |
+|---|---|---|
+| checksum | 2168 KB/s | 5857 KB/s |
+| copy | 3559 KB/s (vbcc `memcpy`) | 4961 KB/s |
+| copy + checksum | 1348 KB/s (two passes) | 4018 KB/s (one pass) |
+
+Emulator timing is not real hardware timing; the 68030/40/60 models of
+FS-UAE are not cycle exact at all. Measure on the real machine.
+
 ## Building
 
 The primary toolchain is vbcc with the NDK 3.2 headers. They are a build
@@ -727,6 +799,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
 | `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. |
 | `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
+| `tests/t_arch_m68k.c` (host, `make CROSS=m68k-linux-gnu-`) | Every assembly routine against the C versions: all lengths 0..160 with every source/destination alignment 0..15, 3000 random lengths up to 4096, 64-128 KB and 4 MB buffers, initial sums 0, 0xffffffff and others, random/all-ones/zero data, guard bytes around every copy; odd-offset chaining, the TCP `rt_buf` copy + checksum, routine selection and the sysctls. Run it on each CPU: `RT_CPU=68040 qemu-m68k -cpu m68040 build/m68k-linux-gnu/tests/t_arch_m68k` (also `m68020`, `m68030`, `m68060`). qemu's 68060 model lacks MOVE16, so there the test turns MOVE16 off through the kill switch. It skips in other builds. |
+| `tests/amiga/run_fsuae_bench.sh build/amiga` | `Riptide BENCH` on FS-UAE (A1200; `FSUAE_MODEL=A4000/040 FSUAE_EXTRA="cpu = 68060"` and so on for other CPUs). |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real

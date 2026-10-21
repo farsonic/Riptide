@@ -66,7 +66,7 @@ S2CB ULONG s2_copy_to_buff(RTREG(a0) APTR to, RTREG(a1) APTR from, RTREG(d0) ULO
 
 	if (!b || n > rt_buf_tailroom(b) + b->len)
 		return FALSE;
-	memcpy(b->data, from, n);
+	rt_copy(b->data, from, n);   /* reentrant; never MOVE16 (driver memory) */
 	b->len = n;
 	return TRUE;
 }
@@ -77,7 +77,7 @@ S2CB ULONG s2_copy_from_buff(RTREG(a0) APTR to, RTREG(a1) APTR from, RTREG(d0) U
 
 	if (!b || n > b->len)
 		return FALSE;
-	memcpy(to, b->data, n);
+	rt_copy(to, b->data, n);
 	return TRUE;
 }
 

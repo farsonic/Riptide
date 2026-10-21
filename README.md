@@ -44,7 +44,12 @@ make -f Makefile.amiga check                   # hunk checks + vamos self test
 tests/amiga/run_fsuae.sh build/amiga           # full-system test on FS-UAE + AROS ROM
 tests/amiga/run_fsuae_tools.sh build/amiga     # every network tool on FS-UAE (loopback + uaenet.device)
 tests/amiga/run_fsuae_ftp.sh build/amiga       # ftp client against the ftpd-test server over loopback
+tests/amiga/run_fsuae_bench.sh build/amiga     # Riptide BENCH: C vs 680x0 assembly checksum/copy
 ```
+
+One binary serves the 68020 to 68060: Riptide picks hand-written
+checksum and copy routines (MOVE16 on the 68040/68060) from the CPU type at
+startup; see "CPU support" in `docs/AMIGA.md`.
 
 The Amiga build needs vbcc, vasm and vlink in `$VBCC` (default `/opt/vbcc`)
 and the NDK 3.2 headers from Aminet in `/opt/ndk3.2`. See `docs/AMIGA.md`.

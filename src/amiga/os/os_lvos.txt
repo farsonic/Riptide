@@ -11,6 +11,7 @@
 138 void Permit()
 198 APTR AllocMem(ULONG byteSize d0, ULONG requirements d1)
 210 void FreeMem(APTR memoryBlock a1, ULONG byteSize d0)
+216 ULONG AvailMem(ULONG requirements d1)
 240 void AddHead(struct List* list a0, struct Node* node a1)
 246 void AddTail(struct List* list a0, struct Node* node a1)
 252 void Remove(struct Node* node a1)

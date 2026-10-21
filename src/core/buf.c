@@ -14,6 +14,7 @@
  */
 #include "rt/rt_buf.h"
 #include "rt/rt_os.h"
+#include "rt/rt_arch.h"
 
 #define RT_BUF_HDR_SIZE   ((sizeof(struct rt_buf) + 7u) & ~7u)
 #define RT_BUF_CACHE_MAX  64u      /* buffers kept per class */
@@ -27,10 +28,15 @@ static u32 buf_ncached[2];
 static struct rt_buf_stats buf_stats;
 static u32 buf_limit;
 
+/* Data areas start on a 16 byte boundary, so packet buffer copies with
+ * equal headroom can use whole cache lines (MOVE16 on the 68040/68060). */
+#define RT_BUF_ALIGN      16u
+
 static void buf_reset(struct rt_buf *b, u32 headroom)
 {
 	b->next = b->prev = NULL;
-	b->head = (u8 *)b + RT_BUF_HDR_SIZE;
+	b->head = (u8 *)(((uintptr_t)b + RT_BUF_HDR_SIZE + RT_BUF_ALIGN - 1) &
+	                 ~(uintptr_t)(RT_BUF_ALIGN - 1));
 	b->data = b->head + headroom;
 	b->len = 0;
 	b->netif = NULL;
@@ -75,7 +81,7 @@ struct rt_buf *rt_buf_alloc(u32 headroom, u32 size)
 		buf_ncached[cl]--;
 		buf_stats.cached--;
 	} else {
-		b = rt_malloc(RT_BUF_HDR_SIZE + alloc);
+		b = rt_malloc(RT_BUF_HDR_SIZE + RT_BUF_ALIGN - 1 + alloc);
 		if (!b) {
 			buf_stats.failures++;
 			return NULL;
@@ -128,7 +134,7 @@ struct rt_buf *rt_buf_copy_expand(const struct rt_buf *b, u32 headroom)
 	c = rt_buf_alloc(headroom, b->len + rt_buf_tailroom(b));
 	if (!c)
 		return NULL;
-	memcpy(c->data, b->data, b->len);
+	rt_copy_buf(c->data, b->data, b->len);
 	c->len = b->len;
 	c->netif = b->netif;
 	c->flags = b->flags;
@@ -138,7 +144,23 @@ struct rt_buf *rt_buf_copy_expand(const struct rt_buf *b, u32 headroom)
 	/* Callers sometimes need to look back at the IP header that sits in the
 	 * headroom (e.g. transport input); keep those bytes too. */
 	if (hr)
-		memcpy(c->data - hr, b->data - hr, hr);
+		rt_copy_buf(c->data - hr, b->data - hr, hr);
+	return c;
+}
+
+struct rt_buf *rt_buf_copy_csum(const struct rt_buf *b, u32 *sum)
+{
+	struct rt_buf *c = rt_buf_alloc(rt_buf_headroom(b), b->len + rt_buf_tailroom(b));
+
+	if (!c)
+		return NULL;
+	*sum = rt_csum_copy(c->data, b->data, b->len, 0);
+	c->len = b->len;
+	c->netif = b->netif;
+	c->flags = b->flags;
+	c->l3_proto = b->l3_proto;
+	c->tstamp_ms = b->tstamp_ms;
+	memcpy(&c->cb, &b->cb, sizeof(c->cb));
 	return c;
 }
 

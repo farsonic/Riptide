@@ -14,6 +14,7 @@
 
 #include "rt/rt_os.h"
 #include "rt/rt_errno.h"
+#include "rt/rt_arch.h"
 #include "rt/rt_host.h"
 #include "host_priv.h"
 
@@ -47,13 +48,18 @@ u64 rt_now_us(void)
 {
 	struct timespec ts;
 
+	/* 32-bit arithmetic plus rt_mul32x32(), so the m68k test build runs
+	 * under qemu-m68k -cpu m68060 (no 64-bit mulu.l/divu.l there) */
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (u64)ts.tv_sec * 1000000u + (u64)ts.tv_nsec / 1000u;
+	return rt_mul32x32((u32)ts.tv_sec, 1000000u) + (u32)ts.tv_nsec / 1000u;
 }
 
 u32 rt_now_ms(void)
 {
-	return (u32)(rt_now_us() / 1000u);
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (u32)ts.tv_sec * 1000u + (u32)ts.tv_nsec / 1000000u;
 }
 
 u32 rt_wallclock(void)
@@ -210,6 +216,11 @@ __attribute__((constructor)) static void log_level_from_env(void)
 	const char *e = getenv("RT_LOG_LEVEL");
 	if (e)
 		rt_log_level = atoi(e);
+	/* CPU model for the routine choice (m68k builds under qemu-m68k:
+	 * RT_CPU=68060 together with QEMU_CPU=m68060) */
+	e = getenv("RT_CPU");
+	if (e)
+		rt_arch_cpu = (u32)atoi(e);
 }
 
 /* ---- kick: a self-pipe the stack thread watches (see host.c) ---- */

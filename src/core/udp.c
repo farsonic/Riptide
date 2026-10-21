@@ -440,7 +440,7 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 	struct udp_pcb *pcb = pcb_of(so);
 	struct rt_ip_out o;
 	struct rt_buf *b;
-	u32 len, daddr, saddr;
+	u32 len, daddr, saddr, dsum;
 	u16 dport;
 	u8 *uh;
 	int r;
@@ -481,7 +481,10 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 	if (!b)
 		return -RT_ENOBUFS;
 	uh = rt_buf_put(b, 8 + len);
-	if (len && rt_iov_to_buf(iov, iovcnt, 0, uh + 8, len) != len) {
+	/* copy the payload and checksum it in the same pass */
+	dsum = 0;
+	if (len && (rt_udp_checksum ? rt_iov_to_buf_csum(iov, iovcnt, 0, uh + 8, len, &dsum) :
+	                              rt_iov_to_buf(iov, iovcnt, 0, uh + 8, len)) != len) {
 		rt_buf_free(b);
 		return -RT_EFAULT;
 	}
@@ -490,8 +493,8 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 	rt_put_be16(uh + 4, (u16)(8 + len));
 	uh[6] = uh[7] = 0;
 	if (rt_udp_checksum) {
-		u16 ck = rt_csum_fold(rt_csum_partial(uh, 8 + len,
-		                      rt_csum_pseudo(saddr, daddr, RT_IPPROTO_UDP, (u16)(8 + len))));
+		u16 ck = rt_csum_fold(rt_csum_add(rt_csum_partial(uh, 8,
+		                      rt_csum_pseudo(saddr, daddr, RT_IPPROTO_UDP, (u16)(8 + len))), dsum));
 		if (ck == 0)
 			ck = 0xffff;         /* RFC 768: 0 means "no checksum" */
 		memcpy(uh + 6, &ck, 2);

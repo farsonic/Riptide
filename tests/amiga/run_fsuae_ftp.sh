@@ -10,6 +10,8 @@
 # compared here, byte for byte.
 #
 #   tests/amiga/run_fsuae_ftp.sh [BUILDDIR] [TIMEOUT_SECONDS]
+# Environment: FSUAE_MODEL (default A1200), FSUAE_EXTRA (more fs-uae
+# config lines, e.g. "cpu = 68040"), for throughput runs on other CPUs.
 # SPDX-License-Identifier: GPL-2.0-only
 set -u
 BUILD=${1:-build/amiga}
@@ -146,7 +148,8 @@ SCRIPT
 
 cat > "$work/test.fs-uae" <<CFG
 [fs-uae]
-amiga_model = A1200
+amiga_model = ${FSUAE_MODEL:-A1200}
+${FSUAE_EXTRA:-}
 hard_drive_0 = $dh0
 hard_drive_0_label = DH0
 sound_card = none
@@ -274,7 +277,7 @@ if [ "$bs" -lt 200000 ] || [ "$bs" -ge 1048576 ]; then
 	echo "FAIL abort: broken.bin has $bs bytes"; fails=$((fails + 1))
 fi
 
-echo "---- throughput (loopback, client and server on the same emulated 68020)"
+echo "---- throughput (loopback, client and server on the same emulated ${FSUAE_MODEL:-A1200} ${FSUAE_EXTRA:-})"
 grep -E 'bytes (received|sent) in' "$dh0/out/ftp1" | grep -E '^(1048576|648576|748576) ' | head -8 | sed 's/^/  /'
 echo "---- work dir $work (outputs in $dh0/out)"
 if [ ! -s "$dh0/out/zz_done" ]; then

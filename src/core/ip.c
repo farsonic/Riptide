@@ -61,7 +61,7 @@ static struct rt_buf *ip_realign(struct rt_buf *b)
 	struct rt_buf *c = rt_buf_alloc(RT_BUF_HEADROOM, b->len);
 
 	if (c) {
-		memcpy(rt_buf_put(c, b->len), b->data, b->len);
+		rt_copy_buf(rt_buf_put(c, b->len), b->data, b->len);
 		c->netif = b->netif;
 		c->flags = b->flags;
 		c->l3_proto = b->l3_proto;

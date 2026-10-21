@@ -102,6 +102,19 @@ static void test_checksum(void)
 	/* chaining with an even first part */
 	CHECK(rt_csum_fold(rt_csum_partial(buf + 100, 501, rt_csum_partial(buf, 100, 0))) ==
 	      ref_csum(buf, 601));
+	/* copy + checksum in one pass; odd-offset pieces of an iov (UDP send) */
+	{
+		u8 d[700];
+		struct rt_iov iov[3];
+		u32 sum;
+		CHECK(rt_csum_fold(rt_csum_copy(d + 1, buf + 3, 601, 0x1234)) ==
+		      rt_csum_fold(rt_csum_partial(buf + 3, 601, 0x1234)) && memcmp(d + 1, buf + 3, 601) == 0);
+		iov[0].base = buf + 1;   iov[0].len = 7;
+		iov[1].base = buf + 50;  iov[1].len = 300;
+		iov[2].base = buf + 400; iov[2].len = 101;
+		CHECK(rt_iov_to_buf_csum(iov, 3, 0, d, 408, &sum) == 408);
+		CHECK(rt_csum_fold(sum) == ref_csum(d, 408));
+	}
 	/* pseudo header: UDP datagram from RFC-ish fixed vector computed by reference */
 	{
 		u8 ph[12 + 8];

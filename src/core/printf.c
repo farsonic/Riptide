@@ -202,12 +202,20 @@ int rt_vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 			const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
 			int len = 0, i;
 
-			do {
-				/* u64 division by a small constant: fine on 68020
-				 * (libgcc), and only used for formatting. */
+			/* u64 division only while the value needs it: the 64-bit
+			 * divide helpers use divu.l 64/32, which the 68060 traps
+			 * to 68060.library. */
+			while (v > 0xffffffffu) {
 				tmp[sizeof(tmp) - 1 - len++] = digits[v % base];
 				v /= base;
-			} while (v);
+			}
+			{
+				u32 w = (u32)v;
+				do {
+					tmp[sizeof(tmp) - 1 - len++] = digits[w % (u32)base];
+					w /= (u32)base;
+				} while (w);
+			}
 			n = len + neg;
 			if (left || !zero) {
 				if (!left)

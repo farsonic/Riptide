@@ -919,7 +919,7 @@ static void tcp_queue_rcv(struct tcp_sock *tp, struct rt_buf *b)
 	tp->rcvq_bytes += len;
 	if (tail && len <= rt_buf_tailroom(tail) &&
 	    TCP_SKB_CB(tail)->end_seq == TCP_SKB_CB(b)->seq) {
-		memcpy(rt_buf_put(tail, len), b->data, len);
+		rt_copy_buf(rt_buf_put(tail, len), b->data, len);
 		TCP_SKB_CB(tail)->end_seq += len;
 		tp->rcvq.bytes += len;
 		rt_buf_free(b);
@@ -962,7 +962,7 @@ static void tcp_collapse_rcvq(struct tcp_sock *tp)
 				rt_bufq_tail(&nq, nb);
 			}
 			n = RT_MIN(b->len - off, rt_buf_tailroom(nb));
-			memcpy(rt_buf_put(nb, n), b->data + off, n);
+			rt_copy_buf(rt_buf_put(nb, n), b->data + off, n);
 			TCP_SKB_CB(nb)->end_seq += n;
 			nq.bytes += n;
 			off += n;
@@ -1164,7 +1164,7 @@ static void tcp_data_queue_ofo(struct tcp_sock *tp, struct rt_buf *b)
 		} else if (pcb->end_seq == seq && !(pcb->tcp_flags & TCPHDR_FIN) &&
 		           b->len <= rt_buf_tailroom(p)) {
 			/* coalesce into the left neighbour */
-			memcpy(rt_buf_put(p, b->len), b->data, b->len);
+			rt_copy_buf(rt_buf_put(p, b->len), b->data, b->len);
 			tp->ofo_bytes += b->len;
 			tp->ofoq.bytes += b->len;
 			pcb->end_seq = end_seq;

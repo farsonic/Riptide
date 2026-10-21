@@ -1,17 +1,18 @@
 /*
  * Riptide - CLI entry point.
  *
- *   Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST]
+ *   Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
  *
  * Without QUIT/STATUS it starts the stack and stays in this process (start
  * it with "Run >NIL: Riptide"). QUIT and STATUS talk to a running instance
- * through the public message port "RIPTIDE".
+ * through the public message port "RIPTIDE". BENCH times the checksum and
+ * copy routines (bench.c) and exits.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
 
-#define TEMPLATE "CONFIG/K,DEBUG/N,QUIT/S,STATUS/S,SELFTEST/S"
-enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_COUNT };
+#define TEMPLATE "CONFIG/K,DEBUG/N,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S"
+enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_COUNT };
 
 const char riptide_version_tag[] = "$VER: Riptide " RIPTIDE_VERSION_STRING " (" RIPTIDE_DATE ")";
 
@@ -95,6 +96,17 @@ static int riptide_main(void)
 		rt_log_level = (int)*(LONG *)args[ARG_DEBUG];
 	if (args[ARG_CONFIG])
 		config = (const char *)args[ARG_CONFIG];
+	if (args[ARG_BENCH]) {
+		if (amiga_os_init() < 0) {
+			put("Riptide: cannot initialise (timer.device or signals)\n");
+			rc = 20;
+		} else {
+			rc = amiga_bench();
+			amiga_os_fini();
+		}
+		FreeArgs(rda);
+		return rc;
+	}
 	if (amiga_libs_present()) {
 		char who[256];
 

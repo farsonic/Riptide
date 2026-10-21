@@ -54,12 +54,14 @@ static inline void rt_newlist(struct List *l)
 #define NewList rt_newlist
 #endif
 #define RT_AMIGA_ECLOCKFREQ(eb) ((eb)->ex_EClockFrequency)
+#define RT_AMIGA_ATTNFLAGS(eb) ((eb)->AttnFlags)
 
 #else /* GCC */
 
 #include "os/amiga.h"
 #define RTREG(r)
 #define RT_AMIGA_ECLOCKFREQ(eb) (*(ULONG *)((UBYTE *)(eb) + EXECBASE_ECLOCK_OFS))
+#define RT_AMIGA_ATTNFLAGS(eb) (*(UWORD *)((UBYTE *)(eb) + EXECBASE_ATTNFLAGS_OFS))
 
 #endif
 

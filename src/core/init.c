@@ -22,6 +22,7 @@ int rt_init(void)
 	 * sysctls need rt_sysctl_init() first; the resolver comes last
 	 * because it may open a socket. */
 	rt_sysctl_init();
+	rt_arch_init();
 	rt_netif_init();
 	rt_route_init();
 	rt_arp_init();

@@ -175,6 +175,10 @@ int  rt_sock_queue_dgram(struct rt_socket *so, struct rt_buf *b);
 u32  rt_iov_total(const struct rt_iov *iov, int iovcnt);
 /* copy 'len' bytes starting at byte 'offset' of the iov into dst */
 u32  rt_iov_to_buf(const struct rt_iov *iov, int iovcnt, u32 offset, void *dst, u32 len);
+/* rt_iov_to_buf() that also returns the partial checksum of the copied
+ * bytes in *sum (computed in the same pass). */
+u32  rt_iov_to_buf_csum(const struct rt_iov *iov, int iovcnt, u32 offset, void *dst, u32 len,
+                        u32 *sum);
 /* copy 'len' bytes of src into the iov starting at byte 'offset' */
 u32  rt_buf_to_iov(const struct rt_iov *iov, int iovcnt, u32 offset, const void *src, u32 len);
 

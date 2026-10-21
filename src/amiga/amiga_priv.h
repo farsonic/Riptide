@@ -218,5 +218,6 @@ int  amiga_status_text(char *buf, u32 len);
 
 /* ---- selftest.c ---------------------------------------------------- */
 int  amiga_selftest(void);
+int  amiga_bench(void);                 /* "Riptide BENCH" (bench.c) */
 
 #endif

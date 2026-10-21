@@ -639,6 +639,17 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 			return cfg_err(err, errlen, r, "sysctl: bad value for '%s'", argv[1]);
 		return 0;
 	}
+	if (!strcmp(k, "cpu")) {
+		/* cpu routines auto|generic|020|040|060 (troubleshooting) */
+		if (argc != 3 || strcmp(argv[1], "routines"))
+			return cfg_err(err, errlen, -RT_EINVAL, "usage: cpu routines auto|generic|020|040|060%s", NULL);
+		r = rt_arch_select(argv[2]);
+		if (r == -RT_EOPNOTSUPP)
+			return cfg_err(err, errlen, r, "cpu: routines '%s' need a CPU or build this one lacks", argv[2]);
+		if (r < 0)
+			return cfg_err(err, errlen, r, "usage: cpu routines auto|generic|020|040|060%s", NULL);
+		return 0;
+	}
 	if (!strcmp(k, "ifconfig"))
 		return cfg_ifconfig(argc, argv, err, errlen);
 	if (!strcmp(k, "dhcp")) {

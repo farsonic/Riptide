@@ -390,10 +390,32 @@ u32 rt_iov_to_buf(const struct rt_iov *iov, int iovcnt, u32 offset, void *dst, u
 			continue;
 		}
 		n = RT_MIN(iov[i].len - offset, len - done);
-		memcpy(d + done, (const u8 *)iov[i].base + offset, n);
+		rt_copy(d + done, (const u8 *)iov[i].base + offset, n);
 		done += n;
 		offset = 0;
 	}
+	return done;
+}
+
+u32 rt_iov_to_buf_csum(const struct rt_iov *iov, int iovcnt, u32 offset, void *dst, u32 len,
+                       u32 *sum)
+{
+	u8 *d = dst;
+	u32 done = 0, s = 0;
+	int i;
+
+	for (i = 0; i < iovcnt && done < len; i++) {
+		u32 n;
+		if (offset >= iov[i].len) {
+			offset -= iov[i].len;
+			continue;
+		}
+		n = RT_MIN(iov[i].len - offset, len - done);
+		s = rt_csum_block_add(s, rt_csum_copy(d + done, (const u8 *)iov[i].base + offset, n, 0), done);
+		done += n;
+		offset = 0;
+	}
+	*sum = s;
 	return done;
 }
 
@@ -410,7 +432,7 @@ u32 rt_buf_to_iov(const struct rt_iov *iov, int iovcnt, u32 offset, const void *
 			continue;
 		}
 		n = RT_MIN(iov[i].len - offset, len - done);
-		memcpy((u8 *)iov[i].base + offset, s + done, n);
+		rt_copy((u8 *)iov[i].base + offset, s + done, n);
 		done += n;
 		offset = 0;
 	}

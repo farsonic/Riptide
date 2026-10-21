@@ -12,6 +12,7 @@
  * piece (all users do: headers are even sized).
  */
 #include "rt/rt_ip.h"
+#include "rt/rt_arch.h"
 
 #if defined(__GNUC__)
 typedef u16 __attribute__((may_alias)) u16_alias;
@@ -35,7 +36,8 @@ static inline u32 add_carry(u32 a, u32 b)
 	return a + (a < b);
 }
 
-u32 rt_csum_partial(const void *data, u32 len, u32 sum)
+/* Portable reference; rt_csum_partial() dispatches through rt_arch.csum. */
+u32 rt_csum_partial_c(const void *data, u32 len, u32 sum)
 {
 	const u8 *p = (const u8 *)data;
 	u32 acc = 0;
@@ -77,6 +79,17 @@ u32 rt_csum_partial(const void *data, u32 len, u32 sum)
 	if (len)
 		acc += native16(p[0], 0);
 	return add_carry(sum, acc);
+}
+
+u32 rt_csum_copy_c(void *dst, const void *src, u32 len, u32 sum)
+{
+	memcpy(dst, src, len);
+	return rt_csum_partial_c(dst, len, sum);
+}
+
+void rt_copy_c(void *dst, const void *src, u32 len)
+{
+	memcpy(dst, src, len);
 }
 
 u32 rt_csum_pseudo(u32 saddr, u32 daddr, u8 proto, u16 len)
