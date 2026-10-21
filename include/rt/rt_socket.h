@@ -49,6 +49,13 @@ struct rt_iov {
 #define RT_SS_ISLISTENING    0x0400
 #define RT_SS_ISBOUND        0x0800
 
+/* Addresses between the socket layer and the protocols are always a
+ * struct rt_sockaddr_in6 in normalised form: IPv4 addresses (AF_INET
+ * sockets, or IPv4-mapped destinations of AF_INET6 sockets) are
+ * IPv4-mapped (::ffff:a.b.c.d), and sin6_family carries the family the
+ * caller used (RT_AF_INET, RT_AF_INET6 or RT_AF_UNSPEC for a datagram
+ * "disconnect"). The socket layer converts to and from the caller's
+ * sockaddr_in / sockaddr_in6 according to so->domain. */
 struct rt_proto_ops {
 	const char *name;
 	/* Create protocol state (so->pcb). */
@@ -58,24 +65,24 @@ struct rt_proto_ops {
 	 * the socket layer frees 'so' right after. If so->linger_on and
 	 * so->linger_s == 0 the protocol must abort (TCP: send RST). */
 	void (*close)(struct rt_socket *so);
-	int  (*bind)(struct rt_socket *so, const struct rt_sockaddr_in *sin);
+	int  (*bind)(struct rt_socket *so, const struct rt_sockaddr_in6 *sin);
 	int  (*listen)(struct rt_socket *so, int backlog);
 	/* Start connecting. Returns 0 if connected at once (UDP/raw),
 	 * -RT_EINPROGRESS for TCP (socket layer waits for RT_SS_ISCONNECTED
 	 * or so_error), or -errno. */
-	int  (*connect)(struct rt_socket *so, const struct rt_sockaddr_in *sin);
+	int  (*connect)(struct rt_socket *so, const struct rt_sockaddr_in6 *sin);
 	/* Send: copy up to the total iov length from user memory. Returns the
 	 * number of bytes accepted (>0), or -RT_EWOULDBLOCK if nothing could
 	 * be queued, or -errno (-RT_EPIPE, -RT_ENOTCONN, -RT_EMSGSIZE ...).
 	 * Datagram protocols send atomically or not at all. 'to' may be NULL. */
 	int  (*send)(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
-	             int flags, const struct rt_sockaddr_in *to);
+	             int flags, const struct rt_sockaddr_in6 *to);
 	/* Receive into iov. Returns bytes (>=0, 0 = EOF for streams) or
 	 * -RT_EWOULDBLOCK or -errno. 'from' (may be NULL) gets the peer address.
 	 * *msgflags gets RT_MSG_TRUNC etc. Must honour RT_MSG_PEEK and
 	 * RT_MSG_OOB. */
 	int  (*recv)(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
-	             int flags, struct rt_sockaddr_in *from, int *msgflags);
+	             int flags, struct rt_sockaddr_in6 *from, int *msgflags);
 	int  (*shutdown)(struct rt_socket *so, int how);   /* 0 rd, 1 wr, 2 both */
 	/* For level RT_SOL_SOCKET the socket layer has already validated and
 	 * stored the option (so->options, linger, sndbuf/rcvbuf, timeouts,
@@ -87,7 +94,7 @@ struct rt_proto_ops {
 	int  (*getsockopt)(struct rt_socket *so, int level, int name, void *val, u32 *len);
 	u32  (*poll)(struct rt_socket *so);
 	/* Local (peer=0) or remote (peer=1) address. -RT_ENOTCONN if none. */
-	int  (*getname)(struct rt_socket *so, struct rt_sockaddr_in *sin, int peer);
+	int  (*getname)(struct rt_socket *so, struct rt_sockaddr_in6 *sin, int peer);
 	/* FIONREAD, SIOCATMARK; others -RT_EINVAL (socket layer handles the
 	 * generic and interface ioctls). */
 	int  (*ioctl)(struct rt_socket *so, u32 req, void *arg);
@@ -130,13 +137,15 @@ struct rt_socket {
 	s32  release_id;              /* -1: not released */
 	u32  refcnt;                  /* descriptor references (Dup2Socket) */
 	u32  pgid;                    /* FIOSETOWN/SIOCSPGRP value (Amiga: task), 0 = none */
+	u16  domain;                  /* RT_AF_INET or RT_AF_INET6 */
 };
 
 /* Ancillary info stored in rt_buf.cb of buffers on so->rcvq */
 struct rt_dgram_cb {
-	struct rt_sockaddr_in from;
-	u32 dst_addr;                 /* IP destination (IP_RECVDSTADDR) */
+	struct rt_sockaddr_in6 from;  /* normalised (see rt_proto_ops) */
+	rt_in6_addr dst;              /* IP destination (IP_RECVDSTADDR) */
 	u32 ifindex;
+	u8  hlim, tclass;
 };
 
 /* Asynchronous socket events (values of GetSocketEvents / FD_* in the
@@ -199,7 +208,11 @@ extern struct rt_socket *rt_all_sockets;
  * (AmigaOS: per bsdsocket.library opener; host: per test program).
  * All functions take the stack lock themselves (call WITHOUT it held) and
  * return >=0 on success or -errno; the glue converts to -1 + errno.
- * Addresses are struct rt_sockaddr_in (BSD layout, matches the Amiga ABI).
+ * Addresses are struct rt_sockaddr_in (AF_INET sockets) or struct
+ * rt_sockaddr_in6 (AF_INET6 sockets) with their length, in the BSD layout
+ * of the Amiga ABI. Returned addresses follow BSD: at most *alen bytes are
+ * copied and *alen gets the full length (28, or 24 for callers whose
+ * buffer is too small for 28: see rt_bsd.h).
  * ======================================================================== */
 struct rt_sockctx {
 	struct rt_socket **fds;
@@ -223,25 +236,25 @@ void rt_ctx_destroy(struct rt_sockctx *ctx);        /* closes all fds */
 int  rt_ctx_set_dtablesize(struct rt_sockctx *ctx, int nfds);
 
 int  rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol);
-int  rt_api_bind(struct rt_sockctx *c, int fd, const struct rt_sockaddr_in *a, u32 alen);
+int  rt_api_bind(struct rt_sockctx *c, int fd, const void *a, u32 alen);
 int  rt_api_listen(struct rt_sockctx *c, int fd, int backlog);
-int  rt_api_accept(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *alen);
-int  rt_api_connect(struct rt_sockctx *c, int fd, const struct rt_sockaddr_in *a, u32 alen);
+int  rt_api_accept(struct rt_sockctx *c, int fd, void *a, u32 *alen);
+int  rt_api_connect(struct rt_sockctx *c, int fd, const void *a, u32 alen);
 int  rt_api_sendmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int iovcnt,
-                    int flags, const struct rt_sockaddr_in *to, u32 tolen);
+                    int flags, const void *to, u32 tolen);
 int  rt_api_recvmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int iovcnt,
-                    int flags, struct rt_sockaddr_in *from, u32 *fromlen, int *msgflags);
+                    int flags, void *from, u32 *fromlen, int *msgflags);
 int  rt_api_send(struct rt_sockctx *c, int fd, const void *buf, u32 len, int flags);
 int  rt_api_recv(struct rt_sockctx *c, int fd, void *buf, u32 len, int flags);
 int  rt_api_sendto(struct rt_sockctx *c, int fd, const void *buf, u32 len, int flags,
-                   const struct rt_sockaddr_in *to, u32 tolen);
+                   const void *to, u32 tolen);
 int  rt_api_recvfrom(struct rt_sockctx *c, int fd, void *buf, u32 len, int flags,
-                     struct rt_sockaddr_in *from, u32 *fromlen);
+                     void *from, u32 *fromlen);
 int  rt_api_shutdown(struct rt_sockctx *c, int fd, int how);
 int  rt_api_setsockopt(struct rt_sockctx *c, int fd, int level, int name, const void *val, u32 len);
 int  rt_api_getsockopt(struct rt_sockctx *c, int fd, int level, int name, void *val, u32 *len);
-int  rt_api_getsockname(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *alen);
-int  rt_api_getpeername(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *alen);
+int  rt_api_getsockname(struct rt_sockctx *c, int fd, void *a, u32 *alen);
+int  rt_api_getpeername(struct rt_sockctx *c, int fd, void *a, u32 *alen);
 int  rt_api_ioctl(struct rt_sockctx *c, int fd, u32 req, void *arg);
 int  rt_api_close(struct rt_sockctx *c, int fd);
 int  rt_api_dup2(struct rt_sockctx *c, int oldfd, int newfd);

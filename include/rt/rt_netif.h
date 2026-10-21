@@ -39,6 +39,7 @@
 /* ethertypes */
 #define RT_ETH_P_IP   0x0800
 #define RT_ETH_P_ARP  0x0806
+#define RT_ETH_P_IPV6 0x86dd
 
 struct rt_netif;
 
@@ -78,6 +79,14 @@ struct rt_netif {
 	void *arp_priv;
 	/* driver description for tools, e.g. "uaenet.device unit 0" */
 	char  descr[48];
+	/* optional: add (join = 1) or remove a link layer multicast address
+	 * in the receive filter (IPv6: 33:33:xx:xx:xx:xx). NULL if the driver
+	 * receives every multicast frame. Called with the lock held; return
+	 * 0 or -errno (failures only cost the reception of that group). */
+	int (*mcast)(struct rt_netif *nif, const u8 *hwaddr, int join);
+	/* IPv6 state (src/core/ip6_if.c), NULL while IPv6 is off */
+	void *ip6;
+	u8    ip6_disabled;      /* "ipv6 off": not enabled automatically */
 };
 
 /* Register an interface (assigns index, name must be set). The interface

@@ -15,6 +15,9 @@
 #define RT_AF_UNSPEC 0
 #define RT_AF_INET   2
 #define RT_PF_INET   RT_AF_INET
+/* 4.4BSD-Lite2/KAME value, also in the Miami SDK's <sys/socket.h> */
+#define RT_AF_INET6  28
+#define RT_PF_INET6  RT_AF_INET6
 
 #define RT_SOCK_STREAM 1
 #define RT_SOCK_DGRAM  2
@@ -36,6 +39,21 @@ struct rt_sockaddr_in {
 	u32  sin_addr;        /* network order */
 	u8   sin_zero[8];
 };
+
+/* IPv6 socket address, RFC 3493 layout (KAME/BSD, 28 bytes). Programs
+ * built with RFC 2133 headers (the Miami SDK) use the first 24 bytes
+ * only (no sin6_scope_id): Riptide accepts 24 byte addresses and returns
+ * 24 bytes when the caller's buffer is smaller than 28. */
+struct rt_sockaddr_in6 {
+	u8   sin6_len;
+	u8   sin6_family;     /* RT_AF_INET6 */
+	u16  sin6_port;       /* network order */
+	u32  sin6_flowinfo;   /* network order */
+	rt_in6_addr sin6_addr;
+	u32  sin6_scope_id;   /* interface index for link-local addresses */
+};
+#define RT_SIN6_LEN         28
+#define RT_SIN6_LEN_RFC2133 24
 
 struct rt_linger {
 	s32 l_onoff;
@@ -84,6 +102,27 @@ struct rt_timeval {
 #define RT_IP_MULTICAST_LOOP   11
 #define RT_IP_ADD_MEMBERSHIP   12
 #define RT_IP_DROP_MEMBERSHIP  13
+
+/* ---- IPPROTO_IPV6 (41) options: KAME/RFC 3542 numbers. The Miami SDK
+ * defines the first six with the same values (as aliases of the IPv4
+ * options). ---- */
+#define RT_IPV6_UNICAST_HOPS   4
+#define RT_IPV6_MULTICAST_IF   9    /* u32 interface index */
+#define RT_IPV6_MULTICAST_HOPS 10
+#define RT_IPV6_MULTICAST_LOOP 11
+#define RT_IPV6_JOIN_GROUP     12   /* struct rt_ipv6_mreq (IPV6_ADD_MEMBERSHIP) */
+#define RT_IPV6_LEAVE_GROUP    13   /* struct rt_ipv6_mreq (IPV6_DROP_MEMBERSHIP) */
+#define RT_IPV6_CHECKSUM       26   /* raw sockets: checksum offset, -1 off */
+#define RT_IPV6_V6ONLY         27
+#define RT_IPV6_TCLASS         61
+#define RT_IPV6_DONTFRAG       62
+struct rt_ipv6_mreq {
+	rt_in6_addr ipv6mr_multiaddr;
+	u32 ipv6mr_interface;
+};
+/* IPPROTO_ICMPV6 (58) level: KAME ICMP6_FILTER, struct of 8 u32; a set
+ * bit lets the type pass (KAME semantics, unlike Linux). */
+#define RT_ICMP6_FILTER        18
 
 /* ---- IPPROTO_TCP options ----
  * 1..8 are the 4.4BSD values. The rest use FreeBSD's numbers for the

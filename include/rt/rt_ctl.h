@@ -109,6 +109,10 @@ struct rt_ctl_route {
 #define RT_NUD_REACHABLE  1
 #define RT_NUD_STALE      2
 #define RT_NUD_PERMANENT  3
+/* IPv6 neighbour cache only (rt_ctl_neigh6) */
+#define RT_NUD_DELAY      4
+#define RT_NUD_PROBE      5
+#define RT_NUD_FAILED     6
 
 struct rt_ctl_neigh {
 	u32  addr;                /* network order */
@@ -183,8 +187,9 @@ static inline const char *rt_ctl_tcp_state_name(int st)
 }
 static inline const char *rt_ctl_nud_name(int st)
 {
-	static const char *const n[] = { "INCOMPLETE", "REACHABLE", "STALE", "PERMANENT" };
-	return st >= 0 && st <= 3 ? n[st] : "NONE";
+	static const char *const n[] = { "INCOMPLETE", "REACHABLE", "STALE", "PERMANENT",
+	                                 "DELAY", "PROBE", "FAILED" };
+	return st >= 0 && st <= 6 ? n[st] : "NONE";
 }
 static inline const char *rt_ctl_dhcp_state_name(int st)
 {

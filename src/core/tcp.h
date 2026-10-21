@@ -13,6 +13,7 @@
 #define RT_TCP_INTERNAL_H
 
 #include "rt/riptide.h"
+#include "infra.h"
 
 /* ---- protocol constants (Linux include/net/tcp.h equivalents, ms) ---- */
 #define TCP_MSS_DEFAULT      536
@@ -231,8 +232,12 @@ struct tcp_sock {
 	struct tcp_sock *reap_next;
 	struct rt_socket *so;          /* NULL once orphaned */
 
-	u32 saddr, daddr;              /* network order */
+	rt_in6_addr saddr, daddr;      /* IPv4 as IPv4-mapped (see inet.c) */
 	u16 sport, dport;              /* network order */
+	u32 scope;                     /* interface of a link-local endpoint */
+	u8  family;                    /* socket domain: RT_AF_INET / RT_AF_INET6 */
+	u8  v6only;                    /* IPV6_V6ONLY */
+	u8  net_hlen;                  /* network header: 20 (IPv4) or 40 (IPv6) */
 	u8  state;                     /* RT_TCPS_* */
 	u8  ca_state;
 	u8  shutdown;                  /* RCV_SHUTDOWN | SEND_SHUTDOWN */
@@ -372,8 +377,9 @@ struct tcp_request_sock {
 	struct tcp_request_sock *next;
 	struct tcp_sock *listener;
 	struct rt_timer timer;
-	u32 loc_addr, rmt_addr;
+	rt_in6_addr loc_addr, rmt_addr;
 	u16 loc_port, rmt_port;
+	u32 scope;
 	u32 snt_isn, rcv_isn;
 	u32 ts_recent, ts_off;
 	u32 rcv_wnd, window_clamp;
@@ -394,8 +400,9 @@ struct tcp_tw {
 	struct tcp_tw *bhash_next;
 	struct tcp_tw *all_next, *all_prev;
 	struct rt_timer timer;
-	u32 saddr, daddr;
+	rt_in6_addr saddr, daddr;
 	u16 sport, dport;
+	u32 scope;
 	u8  substate;                  /* RT_TCPS_TIME_WAIT or FIN_WAIT_2 */
 	u8  tstamp_ok, rcv_wscale, reuse;
 	u32 snd_nxt, rcv_nxt, rcv_wnd;
@@ -515,12 +522,15 @@ void tcp_ehash_insert(struct tcp_sock *tp);
 void tcp_ehash_remove(struct tcp_sock *tp);
 void tcp_bhash_insert(struct tcp_sock *tp);
 void tcp_unhash(struct tcp_sock *tp);
-struct tcp_sock *tcp_lookup_established(u32 saddr, u16 sport, u32 daddr, u16 dport);
-struct tcp_sock *tcp_lookup_listener(u32 daddr, u16 dport);
-struct tcp_tw *tcp_tw_lookup(u32 saddr, u16 sport, u32 daddr, u16 dport);
-u32 tcp_secure_seq(u32 saddr, u32 daddr, u16 sport, u16 dport);
-u32 tcp_secure_ts_off(u32 saddr, u32 daddr);
-u32 tcp_cookie_hash(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 count, u32 c);
+struct tcp_sock *tcp_lookup_established(const rt_in6_addr *saddr, u16 sport, const rt_in6_addr *daddr,
+                                        u16 dport);
+struct tcp_sock *tcp_lookup_listener(const rt_in6_addr *daddr, u16 dport);
+struct tcp_tw *tcp_tw_lookup(const rt_in6_addr *saddr, u16 sport, const rt_in6_addr *daddr, u16 dport);
+u32 tcp_secure_seq(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport);
+u32 tcp_secure_ts_off(const rt_in6_addr *saddr, const rt_in6_addr *daddr);
+u32 tcp_cookie_hash(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport,
+                    u32 count, u32 c);
+u32 tcp_addr_fold(const rt_in6_addr *a);
 void tcp_sync_rcvbuf(struct tcp_sock *tp);
 void tcp_check_space(struct tcp_sock *tp);
 void tcp_sndbuf_expand(struct tcp_sock *tp);
@@ -554,7 +564,8 @@ void tcp_rcv_rtt_update(struct tcp_sock *tp, u32 sample, int win_dep);
 void tcp_finish_connect(struct tcp_sock *tp);
 u32  tcp_space(const struct tcp_sock *tp);
 void tcp_ecn_check_ce(struct tcp_sock *tp, const struct rt_buf *b);
-int  tcp_listen_input(struct tcp_sock *lp, struct rt_buf *b, const struct rt_iphdr *ip, u32 tw_isn);
+int  tcp_listen_input(struct tcp_sock *lp, struct rt_buf *b, const rt_in6_addr *saddr,
+                      const rt_in6_addr *daddr, u32 tw_isn);
 void tcp_api_enter(void);
 void tcp_api_exit(void);
 
@@ -583,9 +594,10 @@ int  tcp_write_wakeup(struct tcp_sock *tp);
 void tcp_send_probe0(struct tcp_sock *tp);
 void tcp_check_probe_timer(struct tcp_sock *tp);
 void tcp_send_loss_probe(struct tcp_sock *tp);
-void tcp_send_reset_raw(const struct rt_buf *in, u32 saddr, u32 daddr);
-int  tcp_send_ctl(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 seq, u32 ack,
-                  u8 flags, u16 win, int ts, u32 tsval, u32 tsecr, u8 tos, u8 ttl);
+void tcp_send_reset_raw(const struct rt_buf *in, const rt_in6_addr *saddr, const rt_in6_addr *daddr,
+                        u32 scope);
+int  tcp_send_ctl(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport, u32 seq,
+                  u32 ack, u8 flags, u16 win, int ts, u32 tsval, u32 tsecr, u8 tos, u8 ttl, u32 scope);
 int  tcp_send_synack_req(struct tcp_request_sock *req, u32 tsval);
 void tcp_cwnd_restart(struct tcp_sock *tp, s32 delta);
 void tcp_mark_push(struct tcp_sock *tp, struct rt_buf *b);
@@ -656,7 +668,7 @@ int  tcp_limit_reno_sacked(struct tcp_sock *tp);
 
 /* ---- tcp_minisocks.c ---- */
 void tcp_synq_purge(struct tcp_sock *lp);
-void tcp_req_err(struct tcp_sock *lp, u32 raddr, u16 rport, u32 seq, int abort);
+void tcp_req_err(struct tcp_sock *lp, const rt_in6_addr *raddr, u16 rport, u32 seq, int abort);
 void tcp_time_wait(struct tcp_sock *tp, int state, u32 timeo);
 #define TCP_TW_SUCCESS 0
 #define TCP_TW_RST     1
@@ -667,9 +679,14 @@ void tcp_tw_ack(struct tcp_tw *tw);
 void tcp_tw_kill(struct tcp_tw *tw);
 int  tcp_twsk_unique(struct tcp_sock *tp, struct tcp_tw *tw);
 struct tcp_tw *tcp_tw_first(void);
-u32  tcp_cookie_init_seq(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 seq, u16 *mssp);
-int  tcp_cookie_check(u32 cookie, u32 saddr, u32 daddr, u16 sport, u16 dport, u32 seq);
+u32  tcp_cookie_init_seq(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport,
+                         u32 seq, u16 *mssp);
+int  tcp_cookie_check(u32 cookie, const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport,
+                      u16 dport, u32 seq);
 extern const u16 tcp_msstab[4];
-int  tcp_tw_port_used(u16 port, u32 addr, int reuse);
+int  tcp_tw_port_used(u16 port, const rt_in6_addr *addr, int v6only, int reuse);
+u32  tcp_tw_hashfn(const rt_in6_addr *laddr, u16 lport, const rt_in6_addr *faddr, u16 fport);
+/* route MTU towards daddr (576 / 1280 when unknown) */
+u32  tcp_route_mtu(const rt_in6_addr *daddr, u32 scope);
 
 #endif

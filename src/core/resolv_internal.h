@@ -11,6 +11,7 @@
 #define DNS_TYPE_A      1
 #define DNS_TYPE_CNAME  5
 #define DNS_TYPE_PTR    12
+#define DNS_TYPE_AAAA   28
 #define DNS_CLASS_IN    1
 #define DNS_NAMEBUF     256
 #define DNS_MAX_CNAME   8
@@ -18,6 +19,7 @@
 
 struct dns_result {
 	u32 *addrs;               /* A results (network order) */
+	rt_in6_addr *addrs6;      /* AAAA results */
 	int  max;
 	int  naddr;
 	u32  ttl;                 /* smallest TTL seen in the answer chain */

@@ -98,24 +98,48 @@ static u64 siphash_4u32(u32 a, u32 b, u32 c, u32 d, const struct sip_key *k)
 	return v[0] ^ v[1] ^ v[2] ^ v[3];
 }
 
+/* SipHash-2-4 over both addresses and two more words: IPv6 (and mixed)
+ * address pairs hash all 128 bits (RFC 6528 asks for the full 4-tuple). */
+static u64 siphash_addrs(const rt_in6_addr *a, const rt_in6_addr *b, u32 c, u32 d,
+                         const struct sip_key *k)
+{
+	u8 key[16], msg[40];
+
+	if (rt_in6_is_v4mapped(a) && rt_in6_is_v4mapped(b))
+		return siphash_4u32(rt_in6_v4(a), rt_in6_v4(b), c, d, k);
+	memcpy(key, &k->k0, 8);
+	memcpy(key + 8, &k->k1, 8);
+	memcpy(msg, a->b, 16);
+	memcpy(msg + 16, b->b, 16);
+	memcpy(msg + 32, &c, 4);
+	memcpy(msg + 36, &d, 4);
+	return rt_siphash(msg, sizeof(msg), key);
+}
+
+u32 tcp_addr_fold(const rt_in6_addr *a)
+{
+	return a->w[0] ^ a->w[1] ^ a->w[2] ^ a->w[3];
+}
+
 /* RFC 6528: ISN = M + F(localip, localport, remoteip, remoteport, secret),
  * M a 64 ns-ish clock like Linux secure_tcp_seq(). */
-u32 tcp_secure_seq(u32 saddr, u32 daddr, u16 sport, u16 dport)
+u32 tcp_secure_seq(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport)
 {
-	u32 h = (u32)siphash_4u32(saddr, daddr, ((u32)sport << 16) | dport, 0, &isn_key);
+	u32 h = (u32)siphash_addrs(saddr, daddr, ((u32)sport << 16) | dport, 0, &isn_key);
 	return h + (u32)(rt_now_us() << 4);
 }
 
 /* Per address pair timestamp offset (Linux secure_tcp_ts_off). */
-u32 tcp_secure_ts_off(u32 saddr, u32 daddr)
+u32 tcp_secure_ts_off(const rt_in6_addr *saddr, const rt_in6_addr *daddr)
 {
-	return (u32)siphash_4u32(saddr, daddr, 0, 0, &tsoff_key);
+	return (u32)siphash_addrs(saddr, daddr, 0, 0, &tsoff_key);
 }
 
-u32 tcp_cookie_hash(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 count, u32 c)
+u32 tcp_cookie_hash(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport,
+                    u32 count, u32 c)
 {
-	return (u32)siphash_4u32(saddr, daddr, ((u32)sport << 16) | dport,
-	                         count ^ (c << 31), &cookie_key);
+	return (u32)siphash_addrs(saddr, daddr, ((u32)sport << 16) | dport,
+	                          count ^ (c << 31), &cookie_key);
 }
 
 /* ---- windowed min filter (Linux lib/win_minmax.c) ---- */
@@ -169,11 +193,11 @@ static struct tcp_sock *tcp_all;
 static struct tcp_sock *tcp_reap_list;
 static int tcp_nest;
 
-static u32 tcp_ehashfn(u32 laddr, u16 lport, u32 faddr, u16 fport)
+static u32 tcp_ehashfn(const rt_in6_addr *la, u16 lport, const rt_in6_addr *fa, u16 fport)
 {
-	u32 h = laddr * 0x9e3779b1u;
+	u32 h = tcp_addr_fold(la) * 0x9e3779b1u;
 
-	h ^= faddr + ehash_seed;
+	h ^= tcp_addr_fold(fa) + ehash_seed;
 	h ^= ((u32)lport << 16) | fport;
 	h ^= h >> 15;
 	h *= 0x2c1b3c6du;
@@ -183,8 +207,7 @@ static u32 tcp_ehashfn(u32 laddr, u16 lport, u32 faddr, u16 fport)
 	return h & (TCP_EHASH_SIZE - 1);
 }
 
-u32 tcp_tw_hashfn(u32 laddr, u16 lport, u32 faddr, u16 fport);
-u32 tcp_tw_hashfn(u32 laddr, u16 lport, u32 faddr, u16 fport)
+u32 tcp_tw_hashfn(const rt_in6_addr *laddr, u16 lport, const rt_in6_addr *faddr, u16 fport)
 {
 	return tcp_ehashfn(laddr, lport, faddr, fport);
 }
@@ -197,7 +220,7 @@ void tcp_ehash_insert(struct tcp_sock *tp)
 
 	if (tp->in_ehash)
 		return;
-	h = tcp_ehashfn(tp->saddr, tp->sport, tp->daddr, tp->dport);
+	h = tcp_ehashfn(&tp->saddr, tp->sport, &tp->daddr, tp->dport);
 	tp->ehash_next = tcp_ehash[h];
 	tcp_ehash[h] = tp;
 	tp->in_ehash = 1;
@@ -209,7 +232,7 @@ void tcp_ehash_remove(struct tcp_sock *tp)
 
 	if (!tp->in_ehash)
 		return;
-	pp = &tcp_ehash[tcp_ehashfn(tp->saddr, tp->sport, tp->daddr, tp->dport)];
+	pp = &tcp_ehash[tcp_ehashfn(&tp->saddr, tp->sport, &tp->daddr, tp->dport)];
 	while (*pp && *pp != tp)
 		pp = &(*pp)->ehash_next;
 	if (*pp)
@@ -274,32 +297,42 @@ void tcp_unhash(struct tcp_sock *tp)
 	tcp_bhash_remove(tp);
 }
 
-struct tcp_sock *tcp_lookup_established(u32 laddr, u16 lport, u32 faddr, u16 fport)
+struct tcp_sock *tcp_lookup_established(const rt_in6_addr *laddr, u16 lport, const rt_in6_addr *faddr,
+                                        u16 fport)
 {
 	struct tcp_sock *tp = tcp_ehash[tcp_ehashfn(laddr, lport, faddr, fport)];
 
 	for (; tp; tp = tp->ehash_next)
 		if (tp->sport == lport && tp->dport == fport &&
-		    tp->daddr == faddr && tp->saddr == laddr)
+		    rt_in6_eq(&tp->daddr, faddr) && rt_in6_eq(&tp->saddr, laddr))
 			return tp;
 	return NULL;
 }
 
-/* Best listener: exact local address beats wildcard. */
-struct tcp_sock *tcp_lookup_listener(u32 laddr, u16 lport)
+/* Best listener: exact local address beats wildcard, and for IPv4 an
+ * AF_INET wildcard beats a dual-stack :: one (Linux compute_score). */
+struct tcp_sock *tcp_lookup_listener(const rt_in6_addr *laddr, u16 lport)
 {
 	struct tcp_sock *tp = tcp_lhash[tcp_porthash(lport) & (TCP_LHASH_SIZE - 1)];
-	struct tcp_sock *wild = NULL;
+	struct tcp_sock *best = NULL;
+	int bestscore = 0;
 
 	for (; tp; tp = tp->lhash_next) {
+		int m, score;
 		if (tp->sport != lport || tp->state != RT_TCPS_LISTEN)
 			continue;
-		if (tp->saddr == laddr)
+		m = rt_inet_laddr_match(&tp->saddr, tp->v6only, laddr);
+		if (m == 2)
 			return tp;
-		if (tp->saddr == RT_INADDR_ANY && !wild)
-			wild = tp;
+		if (!m)
+			continue;
+		score = rt_in6_is_v4mapped(&tp->saddr) ? 2 : 1;
+		if (score > bestscore) {
+			best = tp;
+			bestscore = score;
+		}
 	}
-	return wild;
+	return best;
 }
 
 /* ---- port allocation ---- */
@@ -324,14 +357,14 @@ static void tcp_port_range(u32 *low, u32 *high)
  * in local address unless both set SO_REUSEADDR (and the other is not
  * listening) or both set SO_REUSEPORT. TIME_WAIT owners only block a bind
  * without SO_REUSEADDR. */
-static int tcp_bind_conflict(const struct tcp_sock *tp, u16 port, u32 addr, int listening)
+static int tcp_bind_conflict(const struct tcp_sock *tp, u16 port, const rt_in6_addr *addr, int listening)
 {
 	struct tcp_sock *sk2 = tcp_bhash[tcp_porthash(port) & (TCP_BHASH_SIZE - 1)];
 
 	for (; sk2; sk2 = sk2->bhash_next) {
 		if (sk2 == tp || sk2->sport != port)
 			continue;
-		if (addr && sk2->saddr && addr != sk2->saddr)
+		if (!rt_inet_bind_overlap(addr, tp->v6only, &sk2->saddr, sk2->v6only))
 			continue;
 		if (tp->reuseport && sk2->reuseport)
 			continue;
@@ -344,7 +377,7 @@ static int tcp_bind_conflict(const struct tcp_sock *tp, u16 port, u32 addr, int 
 			continue;
 		return 1;
 	}
-	if (!listening && tcp_tw_port_used(port, addr, tp->reuse))
+	if (!listening && tcp_tw_port_used(port, addr, tp->v6only, tp->reuse))
 		return 1;
 	return 0;
 }
@@ -356,7 +389,7 @@ static int tcp_port_in_use(u16 port)
 	for (; sk2; sk2 = sk2->bhash_next)
 		if (sk2->sport == port)
 			return 1;
-	return tcp_tw_port_used(port, 0, 0);
+	return tcp_tw_port_used(port, NULL, 0, 0);
 }
 
 /* bind(port 0): random start, first port nobody owns. */
@@ -389,9 +422,9 @@ static int tcp_check_established(struct tcp_sock *tp, u16 lport)
 {
 	struct tcp_tw *tw;
 
-	if (tcp_lookup_established(tp->saddr, lport, tp->daddr, tp->dport))
+	if (tcp_lookup_established(&tp->saddr, lport, &tp->daddr, tp->dport))
 		return -RT_EADDRNOTAVAIL;
-	tw = tcp_tw_lookup(tp->saddr, lport, tp->daddr, tp->dport);
+	tw = tcp_tw_lookup(&tp->saddr, lport, &tp->daddr, tp->dport);
 	if (tw) {
 		if (!tcp_twsk_unique(tp, tw))
 			return -RT_EADDRNOTAVAIL;
@@ -415,7 +448,7 @@ static int tcp_hash_connect(struct tcp_sock *tp)
 	}
 	tcp_port_range(&low, &high);
 	remaining = high - low + 1;
-	h = siphash_4u32(tp->saddr, tp->daddr, tp->dport, 0, &port_key);
+	h = siphash_addrs(&tp->saddr, &tp->daddr, tp->dport, 0, &port_key);
 	idx = (u32)(h >> 32) & (TCP_PERTURB_SIZE - 1);
 	offset = (u32)h + tcp_perturb[idx];
 	for (i = 0; i < remaining; i++) {
@@ -482,6 +515,10 @@ void tcp_init_sock(struct tcp_sock *tp)
 	if (!tp->ca_ops)
 		tp->ca_ops = &tcp_cubic;
 	tp->ack.ato = 0;
+	tp->family = RT_AF_INET;
+	tp->net_hlen = 20;
+	rt_inaddr_v4any(&tp->saddr);
+	rt_inaddr_v4any(&tp->daddr);
 }
 
 void tcp_write_queue_purge(struct tcp_sock *tp)
@@ -782,6 +819,12 @@ static int tcp_v4_attach(struct rt_socket *so)
 	tp->so_rcvbuf_seen = so->rcvbuf;
 	tp->so_sndbuf_seen = so->sndbuf;
 	tp->sndlowat = so->sndlowat;
+	if (so->domain == RT_AF_INET6) {
+		tp->family = RT_AF_INET6;
+		tp->v6only = rt_ip6_v6only != 0;
+		memset(&tp->saddr, 0, sizeof(tp->saddr));
+		memset(&tp->daddr, 0, sizeof(tp->daddr));
+	}
 	return 0;
 }
 
@@ -884,37 +927,47 @@ out:
 	tcp_exit();
 }
 
-static int tcp_v4_bind(struct rt_socket *so, const struct rt_sockaddr_in *sin)
+static int tcp_v4_bind(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 {
 	struct tcp_sock *tp = so->pcb;
-	u32 addr;
+	rt_in6_addr addr, old;
 	u16 port;
 	int err = 0;
 
 	if (!tp)
 		return -RT_EINVAL;
-	if (sin->sin_family != RT_AF_INET && sin->sin_family != RT_AF_UNSPEC)
-		return -RT_EAFNOSUPPORT;
+	err = rt_sin_check(so, sin, tp->v6only);
+	if (err)
+		return err;
 	tcp_enter();
 	if (tp->sport || tp->state != RT_TCPS_CLOSED) {
 		err = -RT_EINVAL;
 		goto out;
 	}
-	addr = sin->sin_addr;
-	if (addr != RT_INADDR_ANY && !rt_ip_is_local(addr)) {
+	addr = sin->sin6_addr;
+	if (!rt_inaddr_is_any(&addr) && !rt_inet_is_local(&addr)) {
 		err = -RT_EADDRNOTAVAIL;
 		goto out;
 	}
+	if (rt_in6_is_linklocal(&addr)) {
+		if (!sin->sin6_scope_id) {
+			struct rt_netif *own = rt_in6_addr_owner(&addr, 1);
+			tp->scope = own ? own->index : 0;
+		} else {
+			tp->scope = sin->sin6_scope_id;
+		}
+	}
 	tp->reuse = (so->options & RT_SO_REUSEADDR) != 0;
 	tp->reuseport = (so->options & RT_SO_REUSEPORT) != 0;
-	port = sin->sin_port;
+	port = sin->sin6_port;
+	old = tp->saddr;
 	tp->saddr = addr;
 	if (port == 0) {
 		err = tcp_autobind(tp);
 		if (err)
-			tp->saddr = 0;
-	} else if (tcp_bind_conflict(tp, port, addr, 0)) {
-		tp->saddr = 0;
+			tp->saddr = old;
+	} else if (tcp_bind_conflict(tp, port, &addr, 0)) {
+		tp->saddr = old;
 		err = -RT_EADDRINUSE;
 	} else {
 		tp->sport = port;
@@ -954,7 +1007,7 @@ static int tcp_v4_listen(struct rt_socket *so, int backlog)
 		err = tcp_autobind(tp);
 		if (err)
 			goto out;
-	} else if (tcp_bind_conflict(tp, tp->sport, tp->saddr, 1)) {
+	} else if (tcp_bind_conflict(tp, tp->sport, &tp->saddr, 1)) {
 		err = -RT_EADDRINUSE;
 		goto out;
 	}
@@ -968,17 +1021,20 @@ out:
 }
 
 /* Linux tcp_v4_connect() */
-static int tcp_v4_connect(struct rt_socket *so, const struct rt_sockaddr_in *sin)
+static int tcp_v4_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 {
 	struct tcp_sock *tp = so->pcb;
-	struct rt_nexthop nh;
-	u32 daddr;
-	int err;
+	struct rt_inet_route nh;
+	rt_in6_addr daddr;
+	u32 scope;
+	int err, v4;
 
 	if (!tp)
 		return -RT_EINVAL;
-	if (sin->sin_family != RT_AF_INET)
+	if (sin->sin6_family != (so->domain == RT_AF_INET6 ? RT_AF_INET6 : RT_AF_INET))
 		return -RT_EAFNOSUPPORT;
+	if (tp->v6only && rt_in6_is_v4mapped(&sin->sin6_addr))
+		return -RT_ENETUNREACH;     /* as Linux */
 	switch (tp->state) {
 	case RT_TCPS_CLOSED:
 		break;
@@ -990,48 +1046,69 @@ static int tcp_v4_connect(struct rt_socket *so, const struct rt_sockaddr_in *sin
 	default:
 		return -RT_EISCONN;
 	}
-	if (sin->sin_port == 0)
+	if (sin->sin6_port == 0)
 		return -RT_EADDRNOTAVAIL;
-	daddr = sin->sin_addr;
-	if (daddr == RT_INADDR_ANY)
-		daddr = RT_INADDR_LOOPBACK;
-	if (daddr == RT_INADDR_BROADCAST || (rt_ntohl(daddr) & 0xf0000000u) == 0xe0000000u)
-		return -RT_ENETUNREACH;
+	daddr = sin->sin6_addr;
+	v4 = rt_in6_is_v4mapped(&daddr);
+	if (v4) {
+		u32 d = rt_in6_v4(&daddr);
+		if (d == RT_INADDR_ANY)
+			daddr.w[3] = d = RT_INADDR_LOOPBACK;
+		if (d == RT_INADDR_BROADCAST || (rt_ntohl(d) & 0xf0000000u) == 0xe0000000u)
+			return -RT_ENETUNREACH;
+	} else {
+		if (rt_in6_is_unspec(&daddr))
+			daddr = rt_in6addr_loopback;
+		if (rt_in6_is_mcast(&daddr))
+			return -RT_ENETUNREACH;
+	}
+	/* the bound address and the peer must be of one family */
+	if (!rt_in6_is_unspec(&tp->saddr) && rt_in6_is_v4mapped(&tp->saddr) != v4)
+		return -RT_EAFNOSUPPORT;
+	scope = sin->sin6_scope_id ? sin->sin6_scope_id : tp->scope;
+	if (!rt_in6_is_linklocal(&daddr))
+		scope = rt_in6_is_linklocal(&tp->saddr) ? tp->scope : 0;
 	tcp_enter();
 	tcp_sync_rcvbuf(tp);
-	err = rt_ip_route(daddr, &nh);
+	err = rt_inet_route(&daddr, scope, &nh);
 	if (err)
 		goto out;
-	if (rt_ip_is_broadcast(daddr, nh.netif)) {
+	if (v4 && nh.bcast) {
 		err = -RT_ENETUNREACH;
 		goto out;
 	}
-	if (!tp->saddr) {
-		tp->saddr = nh.src ? nh.src : rt_ip_select_source(daddr);
-		if (!tp->saddr) {
+	if (rt_inaddr_is_any(&tp->saddr)) {
+		tp->saddr = nh.src;
+		if (rt_inaddr_is_any(&tp->saddr)) {
 			err = -RT_EADDRNOTAVAIL;
 			goto out;
 		}
 	}
-	if (tp->ts_recent_stamp && tp->daddr != daddr) {
+	if (tp->ts_recent_stamp && !rt_in6_eq(&tp->daddr, &daddr)) {
 		tp->ts_recent = 0;
 		tp->ts_recent_stamp = 0;
 		tp->write_seq = 0;
 	}
 	tp->daddr = daddr;
-	tp->dport = sin->sin_port;
+	tp->dport = sin->sin6_port;
+	tp->net_hlen = v4 ? 20 : 40;
+	if (rt_in6_is_linklocal(&daddr) && nh.netif)
+		tp->scope = nh.netif->index;
 	tcp_set_state(tp, RT_TCPS_SYN_SENT);
 	err = tcp_hash_connect(tp);
 	if (err) {
 		tcp_set_state(tp, RT_TCPS_CLOSED);
 		tp->dport = 0;
-		tp->daddr = 0;
+		if (tp->family == RT_AF_INET6)
+			memset(&tp->daddr, 0, sizeof(tp->daddr));
+		else
+			rt_inaddr_v4any(&tp->daddr);
 		goto out;
 	}
 	if (!tp->write_seq)
-		tp->write_seq = tcp_secure_seq(tp->saddr, tp->daddr, tp->sport, tp->dport);
-	tp->ts_offset = tcp_secure_ts_off(tp->saddr, tp->daddr);
-	tp->pmtu_cookie = (u16)(nh.mtu ? nh.mtu : 576);
+		tp->write_seq = tcp_secure_seq(&tp->saddr, &tp->daddr, tp->sport, tp->dport);
+	tp->ts_offset = tcp_secure_ts_off(&tp->saddr, &tp->daddr);
+	tp->pmtu_cookie = (u16)(nh.mtu ? nh.mtu : v4 ? 576 : RT_IP6_MIN_MTU);
 	so->state |= RT_SS_ISCONNECTING | RT_SS_ISBOUND;
 	so->state &= ~(RT_SS_CANTRCVMORE | RT_SS_CANTSENDMORE);
 	tp->shutdown = 0;
@@ -1050,7 +1127,7 @@ out:
 
 /* Linux tcp_sendmsg_locked(), non-blocking */
 static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
-                       int flags, const struct rt_sockaddr_in *to)
+                       int flags, const struct rt_sockaddr_in6 *to)
 {
 	struct tcp_sock *tp = so->pcb;
 	u32 total, copied = 0, mss_now;
@@ -1186,7 +1263,7 @@ static void tcp_rcvq_free_head(struct tcp_sock *tp)
 
 /* Linux tcp_recvmsg_locked(), non-blocking */
 static int tcp_v4_recv(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
-                       int flags, struct rt_sockaddr_in *from, int *msgflags)
+                       int flags, struct rt_sockaddr_in6 *from, int *msgflags)
 {
 	struct tcp_sock *tp = so->pcb;
 	struct rt_buf *b;
@@ -1292,13 +1369,8 @@ skip_copy:
 	}
 	err = -RT_EWOULDBLOCK;
 out:
-	if (from && err >= 0 && tp) {
-		memset(from, 0, sizeof(*from));
-		from->sin_len = sizeof(*from);
-		from->sin_family = RT_AF_INET;
-		from->sin_port = tp->dport;
-		from->sin_addr = tp->daddr;
-	}
+	if (from && err >= 0 && tp)
+		rt_sin_fill(so, from, &tp->daddr, tp->dport, tp->scope);
 	tcp_exit();
 	return err;
 }
@@ -1411,6 +1483,35 @@ static int tcp_v4_setsockopt(struct rt_socket *so, int level, int name, const vo
 	if (level == RT_SOL_SOCKET) {
 		/* The socket layer stored the value; react to it. */
 		tcp_sync_rcvbuf(tp);
+		goto out;
+	}
+	if (level == RT_IPPROTO_IPV6 && tp->family == RT_AF_INET6) {
+		err = get_int(val, len, &v);
+		if (err)
+			goto out;
+		switch (name) {
+		case RT_IPV6_V6ONLY:
+			if (tp->sport || tp->state != RT_TCPS_CLOSED)
+				err = -RT_EINVAL;
+			else
+				tp->v6only = v != 0;
+			break;
+		case RT_IPV6_UNICAST_HOPS:
+			if (v < -1 || v > 255)
+				err = -RT_EINVAL;
+			else
+				tp->ttl = (u8)(v < 0 ? 0 : v);
+			break;
+		case RT_IPV6_TCLASS:
+			if (v < -1 || v > 255)
+				err = -RT_EINVAL;
+			else
+				tp->tos = (u8)((v < 0 ? 0 : v) & ~INET_ECN_MASK);
+			break;
+		default:
+			err = -RT_ENOPROTOOPT;
+			break;
+		}
 		goto out;
 	}
 	if (level == RT_IPPROTO_IP) {
@@ -1554,6 +1655,15 @@ static int tcp_v4_getsockopt(struct rt_socket *so, int level, int name, void *va
 			err = put_int(val, len, tp->ttl ? tp->ttl : 64);
 		goto out;
 	}
+	if (level == RT_IPPROTO_IPV6 && tp->family == RT_AF_INET6) {
+		if (name == RT_IPV6_V6ONLY)
+			err = put_int(val, len, tp->v6only);
+		else if (name == RT_IPV6_UNICAST_HOPS)
+			err = put_int(val, len, tp->ttl ? tp->ttl : rt_ip6_hlim);
+		else if (name == RT_IPV6_TCLASS)
+			err = put_int(val, len, tp->tos);
+		goto out;
+	}
 	if (level != RT_IPPROTO_TCP)
 		goto out;
 	switch (name) {
@@ -1647,24 +1757,19 @@ static u32 tcp_v4_poll(struct rt_socket *so)
 	return mask;
 }
 
-static int tcp_v4_getname(struct rt_socket *so, struct rt_sockaddr_in *sin, int peer)
+static int tcp_v4_getname(struct rt_socket *so, struct rt_sockaddr_in6 *sin, int peer)
 {
 	struct tcp_sock *tp = so->pcb;
 
 	if (!tp)
 		return -RT_EINVAL;
-	memset(sin, 0, sizeof(*sin));
-	sin->sin_len = sizeof(*sin);
-	sin->sin_family = RT_AF_INET;
 	if (peer) {
 		if (!tp->dport || tp->state == RT_TCPS_CLOSED || tp->state == RT_TCPS_LISTEN ||
 		    tp->state == RT_TCPS_SYN_SENT)
 			return -RT_ENOTCONN;
-		sin->sin_port = tp->dport;
-		sin->sin_addr = tp->daddr;
+		rt_sin_fill(so, sin, &tp->daddr, tp->dport, tp->scope);
 	} else {
-		sin->sin_port = tp->sport;
-		sin->sin_addr = tp->saddr;
+		rt_sin_fill(so, sin, &tp->saddr, tp->sport, tp->scope);
 	}
 	return 0;
 }
@@ -1728,8 +1833,12 @@ int rt_tcp_list(struct rt_pcb_info *out, int max)
 			p->state = tp->state;
 			p->lport = rt_ntohs(tp->sport);
 			p->fport = rt_ntohs(tp->dport);
-			p->laddr = tp->saddr;
-			p->faddr = tp->daddr;
+			p->laddr = rt_in6_is_v4mapped(&tp->saddr) ? rt_in6_v4(&tp->saddr) : 0;
+			p->faddr = rt_in6_is_v4mapped(&tp->daddr) ? rt_in6_v4(&tp->daddr) : 0;
+			p->v6 = tp->family == RT_AF_INET6;
+			p->v6only = tp->v6only;
+			p->laddr6 = tp->saddr;
+			p->faddr6 = tp->daddr;
 			p->sendq = tp->write_seq - tp->snd_una;
 			p->recvq = tp->state == RT_TCPS_LISTEN ? tp->synq_len : tp->rcvq_bytes;
 			p->rtt_us = tp->srtt_us >> 3;
@@ -1746,8 +1855,11 @@ int rt_tcp_list(struct rt_pcb_info *out, int max)
 			p->state = tw->substate;
 			p->lport = rt_ntohs(tw->sport);
 			p->fport = rt_ntohs(tw->dport);
-			p->laddr = tw->saddr;
-			p->faddr = tw->daddr;
+			p->laddr = rt_in6_is_v4mapped(&tw->saddr) ? rt_in6_v4(&tw->saddr) : 0;
+			p->faddr = rt_in6_is_v4mapped(&tw->daddr) ? rt_in6_v4(&tw->daddr) : 0;
+			p->v6 = !rt_in6_is_v4mapped(&tw->daddr);
+			p->laddr6 = tw->saddr;
+			p->faddr6 = tw->daddr;
 		}
 		n++;
 	}

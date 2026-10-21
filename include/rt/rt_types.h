@@ -90,6 +90,14 @@ static inline void rt_put_be32(void *p, u32 v)
 	b[0] = (u8)(v >> 24); b[1] = (u8)(v >> 16); b[2] = (u8)(v >> 8); b[3] = (u8)v;
 }
 
+/* An IPv6 address (network order bytes). Transports also keep IPv4
+ * endpoints in it, as IPv4-mapped addresses (see rt_ip6.h). */
+typedef union rt_in6_addr {
+	u8  b[16];
+	u16 h[8];                /* network order halves */
+	u32 w[4];                /* network order words */
+} rt_in6_addr;
+
 /* Sequence-space comparisons (RFC 9293 / Linux before()/after()). */
 static inline int rt_seq_before(u32 a, u32 b) { return (s32)(a - b) < 0; }
 static inline int rt_seq_after(u32 a, u32 b) { return (s32)(b - a) < 0; }

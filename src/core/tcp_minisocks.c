@@ -6,8 +6,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "tcp.h"
-
-u32 tcp_tw_hashfn(u32 laddr, u16 lport, u32 faddr, u16 fport);
+#include "infra.h"
 
 /* ======================================================================
  * SYN cookies (Linux syncookies.c)
@@ -28,7 +27,8 @@ const u16 tcp_msstab[4] = { 536, 1300, 1440, 1460 };
 
 static u32 tcp_cookie_time(void) { return tcp_seconds() / 64u; }
 
-u32 tcp_cookie_init_seq(u32 laddr, u32 raddr, u16 lport, u16 rport, u32 seq, u16 *mssp)
+u32 tcp_cookie_init_seq(const rt_in6_addr *laddr, const rt_in6_addr *raddr, u16 lport, u16 rport,
+                        u32 seq, u16 *mssp)
 {
 	u32 mssind, count = tcp_cookie_time();
 
@@ -41,7 +41,8 @@ u32 tcp_cookie_init_seq(u32 laddr, u32 raddr, u16 lport, u16 rport, u32 seq, u16
 }
 
 /* returns the MSS index, or -1 */
-int tcp_cookie_check(u32 cookie, u32 laddr, u32 raddr, u16 lport, u16 rport, u32 seq)
+int tcp_cookie_check(u32 cookie, const rt_in6_addr *laddr, const rt_in6_addr *raddr, u16 lport,
+                     u16 rport, u32 seq)
 {
 	u32 diff, count = tcp_cookie_time(), mssind;
 
@@ -102,13 +103,14 @@ void tcp_synq_purge(struct tcp_sock *lp)
 	lp->synq_len = 0;
 }
 
-static struct tcp_request_sock *tcp_reqsk_find(struct tcp_sock *lp, u32 raddr, u16 rport, u32 laddr)
+static struct tcp_request_sock *tcp_reqsk_find(struct tcp_sock *lp, const rt_in6_addr *raddr, u16 rport,
+                                               const rt_in6_addr *laddr)
 {
 	struct tcp_request_sock *req;
 
 	for (req = lp->synq; req; req = req->next)
-		if (req->rmt_port == rport && req->rmt_addr == raddr &&
-		    (!laddr || req->loc_addr == laddr))
+		if (req->rmt_port == rport && rt_in6_eq(&req->rmt_addr, raddr) &&
+		    (!laddr || rt_in6_eq(&req->loc_addr, laddr)))
 			return req;
 	return NULL;
 }
@@ -138,9 +140,9 @@ out:
 }
 
 /* ICMP error for a SYN-ACK we sent (Linux tcp_req_err) */
-void tcp_req_err(struct tcp_sock *lp, u32 raddr, u16 rport, u32 seq, int abort)
+void tcp_req_err(struct tcp_sock *lp, const rt_in6_addr *raddr, u16 rport, u32 seq, int abort)
 {
-	struct tcp_request_sock *req = tcp_reqsk_find(lp, raddr, rport, 0);
+	struct tcp_request_sock *req = tcp_reqsk_find(lp, raddr, rport, NULL);
 
 	if (!req || seq != req->snt_isn)
 		return;
@@ -150,13 +152,14 @@ void tcp_req_err(struct tcp_sock *lp, u32 raddr, u16 rport, u32 seq, int abort)
 	}
 }
 
-static u32 tcp_route_mtu(u32 daddr)
+u32 tcp_route_mtu(const rt_in6_addr *daddr, u32 scope)
 {
-	struct rt_nexthop nh;
+	struct rt_inet_route rt;
+	int v4 = rt_in6_is_v4mapped(daddr);
 
-	if (rt_ip_route(daddr, &nh) == 0 && nh.mtu >= 68)
-		return nh.mtu;
-	return 576;
+	if (rt_inet_route(daddr, scope, &rt) == 0 && rt.mtu >= (v4 ? 68u : RT_IP6_MIN_MTU))
+		return rt.mtu;
+	return v4 ? 576 : RT_IP6_MIN_MTU;
 }
 
 static void tcp_req_window(struct tcp_sock *lp, struct tcp_request_sock *req)
@@ -177,21 +180,19 @@ static void tcp_req_window(struct tcp_sock *lp, struct tcp_request_sock *req)
 }
 
 /* Linux tcp_conn_request(): a SYN for a listener */
-static void tcp_conn_request(struct tcp_sock *lp, struct rt_buf *b, const struct rt_iphdr *ip,
-                             u32 tw_isn)
+static void tcp_conn_request(struct tcp_sock *lp, struct rt_buf *b, const rt_in6_addr *raddr,
+                             const rt_in6_addr *laddr, u32 tw_isn)
 {
 	struct tcp_skb_cb *cb = TCP_SKB_CB(b);
 	struct tcp_request_sock *req, local;
 	struct tcp_rx_opt opt;
-	u32 laddr, raddr, isn, tsval;
+	u32 isn, tsval;
 	u16 lport, rport, peer_mss;
 	int want_cookie = 0;
 	struct rt_socket *so = lp->so;
 
 	if (!so)
 		goto drop;
-	memcpy(&raddr, &ip->saddr, 4);
-	memcpy(&laddr, &ip->daddr, 4);
 	memcpy(&rport, b->data, 2);
 	memcpy(&lport, b->data + 2, 2);
 
@@ -227,10 +228,11 @@ static void tcp_conn_request(struct tcp_sock *lp, struct rt_buf *b, const struct
 			goto drop;
 	}
 	req->listener = lp;
-	req->loc_addr = laddr;
-	req->rmt_addr = raddr;
+	req->loc_addr = *laddr;
+	req->rmt_addr = *raddr;
 	req->loc_port = lport;
 	req->rmt_port = rport;
+	req->scope = rt_in6_is_linklocal(raddr) && b->netif ? b->netif->index : 0;
 	req->rcv_isn = cb->seq;
 	req->tstamp_ok = opt.saw_tstamp;
 	req->ts_recent = opt.saw_tstamp ? opt.rcv_tsval : 0;
@@ -239,7 +241,7 @@ static void tcp_conn_request(struct tcp_sock *lp, struct rt_buf *b, const struct
 	req->snd_wscale = opt.wscale_ok ? opt.snd_wscale : 0;
 	req->ecn_ok = (cb->tcp_flags & TCPHDR_ECE) && (cb->tcp_flags & TCPHDR_CWR) && sysctl_tcp_ecn;
 	req->tos = lp->tos;
-	req->mss = (u16)(tcp_route_mtu(raddr) - 40);
+	req->mss = (u16)(tcp_route_mtu(raddr, req->scope) - (rt_in6_is_v4mapped(raddr) ? 40 : 60));
 	if (lp->rx_opt.user_mss && req->mss > lp->rx_opt.user_mss)
 		req->mss = lp->rx_opt.user_mss;
 	req->ts_off = tcp_secure_ts_off(laddr, raddr);
@@ -299,6 +301,10 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->daddr = req->rmt_addr;
 	tp->sport = req->loc_port;
 	tp->dport = req->rmt_port;
+	tp->scope = req->scope;
+	tp->family = lp->family;
+	tp->v6only = lp->v6only;
+	tp->net_hlen = rt_in6_is_v4mapped(&tp->daddr) ? 20 : 40;
 	tp->reuse = lp->reuse;
 	tp->reuseport = lp->reuseport;
 	tp->nodelay = lp->nodelay;
@@ -351,7 +357,7 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->rcv_ssthresh = req->rcv_wnd;
 	tp->ecn_flags = req->ecn_ok ? TCP_ECN_OK : 0;
 	tp->rx_opt.mss_clamp = req->peer_mss;
-	mtu = tcp_route_mtu(tp->daddr);
+	mtu = tcp_route_mtu(&tp->daddr, tp->scope);
 	tcp_sync_mss(tp, mtu);
 	tp->advmss = req->mss;
 	if (tp->rx_opt.tstamp_ok)
@@ -379,10 +385,10 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 
 static void tcp_req_ack(struct tcp_request_sock *req)
 {
-	tcp_send_ctl(req->loc_addr, req->rmt_addr, req->loc_port, req->rmt_port,
+	tcp_send_ctl(&req->loc_addr, &req->rmt_addr, req->loc_port, req->rmt_port,
 	             req->snt_isn + 1, req->rcv_isn + 1, TCPHDR_ACK,
 	             (u16)(RT_MIN(req->rcv_wnd, TCP_MAX_WINDOW << req->rcv_wscale) >> req->rcv_wscale),
-	             req->tstamp_ok, tcp_jiffies() + req->ts_off, req->ts_recent, req->tos, 0);
+	             req->tstamp_ok, tcp_jiffies() + req->ts_off, req->ts_recent, req->tos, 0, req->scope);
 }
 
 /* Linux tcp_in_window() */
@@ -467,20 +473,18 @@ static int tcp_check_req(struct tcp_sock *lp, struct tcp_request_sock *req, stru
 }
 
 /* Linux cookie_v4_check(). Returns 1: send RST (b kept), 0: consumed. */
-static int tcp_cookie_v4_check(struct tcp_sock *lp, struct rt_buf *b, const struct rt_iphdr *ip)
+static int tcp_cookie_check_ack(struct tcp_sock *lp, struct rt_buf *b, const rt_in6_addr *raddr,
+                                const rt_in6_addr *laddr)
 {
 	struct tcp_skb_cb *cb = TCP_SKB_CB(b);
 	struct tcp_request_sock req;
 	struct tcp_rx_opt opt;
 	struct tcp_sock *child;
-	u32 laddr, raddr;
 	int mssind;
 
 	if ((u32)(tcp_seconds() - lp->synq_overflow_ts) > TCP_SYNCOOKIE_VALID || !lp->synq_overflow_ts)
 		return 1;
 	memset(&req, 0, sizeof(req));
-	memcpy(&raddr, &ip->saddr, 4);
-	memcpy(&laddr, &ip->daddr, 4);
 	memcpy(&req.rmt_port, b->data, 2);
 	memcpy(&req.loc_port, b->data + 2, 2);
 	mssind = tcp_cookie_check(cb->ack_seq - 1, laddr, raddr, req.loc_port, req.rmt_port, cb->seq - 1);
@@ -507,13 +511,14 @@ static int tcp_cookie_v4_check(struct tcp_sock *lp, struct rt_buf *b, const stru
 		}
 	}
 	req.listener = lp;
-	req.loc_addr = laddr;
-	req.rmt_addr = raddr;
+	req.loc_addr = *laddr;
+	req.rmt_addr = *raddr;
+	req.scope = rt_in6_is_linklocal(raddr) && b->netif ? b->netif->index : 0;
 	req.snt_isn = cb->ack_seq - 1;
 	req.rcv_isn = cb->seq - 1;
 	req.peer_mss = tcp_msstab[mssind];
 	req.tos = lp->tos;
-	req.mss = (u16)(tcp_route_mtu(raddr) - 40);
+	req.mss = (u16)(tcp_route_mtu(raddr, req.scope) - (rt_in6_is_v4mapped(raddr) ? 40 : 60));
 	if (lp->rx_opt.user_mss && req.mss > lp->rx_opt.user_mss)
 		req.mss = lp->rx_opt.user_mss;
 	tcp_req_window(lp, &req);
@@ -529,16 +534,14 @@ static int tcp_cookie_v4_check(struct tcp_sock *lp, struct rt_buf *b, const stru
 
 /* Segment for a listening socket. Returns 1 if the caller must answer
  * with RST (b not consumed); 0 if b was consumed. */
-int tcp_listen_input(struct tcp_sock *lp, struct rt_buf *b, const struct rt_iphdr *ip, u32 tw_isn)
+int tcp_listen_input(struct tcp_sock *lp, struct rt_buf *b, const rt_in6_addr *raddr,
+                     const rt_in6_addr *laddr, u32 tw_isn)
 {
 	struct tcp_skb_cb *cb = TCP_SKB_CB(b);
 	struct tcp_request_sock *req;
-	u32 raddr, laddr;
 	u16 rport;
 	u8 fl = cb->tcp_flags;
 
-	memcpy(&raddr, &ip->saddr, 4);
-	memcpy(&laddr, &ip->daddr, 4);
 	memcpy(&rport, b->data, 2);
 	req = tcp_reqsk_find(lp, raddr, rport, laddr);
 	if (req)
@@ -549,11 +552,11 @@ int tcp_listen_input(struct tcp_sock *lp, struct rt_buf *b, const struct rt_iphd
 	}
 	if (fl & TCPHDR_ACK) {
 		if (!(fl & TCPHDR_SYN) && sysctl_tcp_syncookies)
-			return tcp_cookie_v4_check(lp, b, ip);
+			return tcp_cookie_check_ack(lp, b, raddr, laddr);
 		return 1;
 	}
 	if ((fl & TCPHDR_SYN) && !(fl & TCPHDR_FIN))
-		tcp_conn_request(lp, b, ip, tw_isn);
+		tcp_conn_request(lp, b, raddr, laddr, tw_isn);
 	rt_buf_free(b);
 	return 0;
 }
@@ -571,24 +574,25 @@ static u32 tw_porthash(u16 port) { return ((u32)rt_ntohs(port) * 0x9e37u >> 3) &
 
 struct tcp_tw *tcp_tw_first(void) { return tw_all; }
 
-struct tcp_tw *tcp_tw_lookup(u32 laddr, u16 lport, u32 faddr, u16 fport)
+struct tcp_tw *tcp_tw_lookup(const rt_in6_addr *laddr, u16 lport, const rt_in6_addr *faddr, u16 fport)
 {
 	struct tcp_tw *tw = tw_ehash[tcp_tw_hashfn(laddr, lport, faddr, fport) & (TW_HASH_SIZE - 1)];
 
 	for (; tw; tw = tw->ehash_next)
-		if (tw->sport == lport && tw->dport == fport && tw->saddr == laddr && tw->daddr == faddr)
+		if (tw->sport == lport && tw->dport == fport && rt_in6_eq(&tw->saddr, laddr) &&
+		    rt_in6_eq(&tw->daddr, faddr))
 			return tw;
 	return NULL;
 }
 
-int tcp_tw_port_used(u16 port, u32 addr, int reuse)
+int tcp_tw_port_used(u16 port, const rt_in6_addr *addr, int v6only, int reuse)
 {
 	struct tcp_tw *tw = tw_bhash[tw_porthash(port)];
 
 	if (reuse)
 		return 0;
 	for (; tw; tw = tw->bhash_next)
-		if (tw->sport == port && (!addr || !tw->saddr || tw->saddr == addr))
+		if (tw->sport == port && (!addr || rt_inet_bind_overlap(addr, v6only, &tw->saddr, 1)))
 			return 1;
 	return 0;
 }
@@ -598,7 +602,7 @@ void tcp_tw_kill(struct tcp_tw *tw)
 	struct tcp_tw **pp;
 
 	rt_timer_del(&tw->timer);
-	pp = &tw_ehash[tcp_tw_hashfn(tw->saddr, tw->sport, tw->daddr, tw->dport) & (TW_HASH_SIZE - 1)];
+	pp = &tw_ehash[tcp_tw_hashfn(&tw->saddr, tw->sport, &tw->daddr, tw->dport) & (TW_HASH_SIZE - 1)];
 	while (*pp && *pp != tw)
 		pp = &(*pp)->ehash_next;
 	if (*pp)
@@ -639,6 +643,7 @@ void tcp_time_wait(struct tcp_sock *tp, int state, u32 timeo)
 		tw->daddr = tp->daddr;
 		tw->sport = tp->sport;
 		tw->dport = tp->dport;
+		tw->scope = tp->scope;
 		tw->substate = (u8)state;
 		tw->tstamp_ok = tp->rx_opt.tstamp_ok;
 		tw->rcv_wscale = tp->rx_opt.rcv_wscale;
@@ -654,7 +659,7 @@ void tcp_time_wait(struct tcp_sock *tp, int state, u32 timeo)
 		if (state == RT_TCPS_TIME_WAIT || timeo == 0)
 			timeo = TCP_TIMEWAIT_LEN;
 		rt_timer_init(&tw->timer, tcp_tw_timer, tw);
-		h = tcp_tw_hashfn(tw->saddr, tw->sport, tw->daddr, tw->dport) & (TW_HASH_SIZE - 1);
+		h = tcp_tw_hashfn(&tw->saddr, tw->sport, &tw->daddr, tw->dport) & (TW_HASH_SIZE - 1);
 		tw->ehash_next = tw_ehash[h];
 		tw_ehash[h] = tw;
 		h = tw_porthash(tw->sport);
@@ -675,9 +680,9 @@ void tcp_tw_ack(struct tcp_tw *tw)
 {
 	u32 win = tw->rcv_wnd >> tw->rcv_wscale;
 
-	tcp_send_ctl(tw->saddr, tw->daddr, tw->sport, tw->dport, tw->snd_nxt, tw->rcv_nxt,
+	tcp_send_ctl(&tw->saddr, &tw->daddr, tw->sport, tw->dport, tw->snd_nxt, tw->rcv_nxt,
 	             TCPHDR_ACK, (u16)RT_MIN(win, 65535u), tw->tstamp_ok,
-	             tcp_jiffies() + tw->ts_offset, tw->ts_recent, tw->tos, tw->ttl);
+	             tcp_jiffies() + tw->ts_offset, tw->ts_recent, tw->tos, tw->ttl, tw->scope);
 }
 
 static int tcp_tw_oow_rate_limited(struct tcp_tw *tw, const struct rt_buf *b)
@@ -790,8 +795,9 @@ int tcp_twsk_unique(struct tcp_sock *tp, struct tcp_tw *tw)
 	if (tw->substate != RT_TCPS_TIME_WAIT)
 		return 0;
 	if (reuse == 2) {
-		reuse = (rt_ntohl(tw->daddr) >> 24) == 127 || (rt_ntohl(tw->saddr) >> 24) == 127 ||
-		        tw->daddr == tw->saddr;
+		reuse = (rt_in6_is_v4mapped(&tw->daddr) && tw->daddr.b[12] == 127) ||
+		        (rt_in6_is_v4mapped(&tw->saddr) && tw->saddr.b[12] == 127) ||
+		        rt_in6_is_loopback(&tw->daddr) || rt_in6_eq(&tw->daddr, &tw->saddr);
 	}
 	if (tw->ts_recent_stamp && reuse && (s32)(tcp_seconds() - tw->ts_recent_stamp) > 0) {
 		tp->write_seq = tw->snd_nxt + 65535 + 2;

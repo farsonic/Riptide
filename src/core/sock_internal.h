@@ -44,6 +44,11 @@ void sock_waiter_done(struct rt_socket *so);
 /* Create/close a kernel socket (no fd). Lock held. */
 int  sock_kernel_create(int type, int protocol, struct sock_upcall *up,
                         struct rt_socket **out);
+int  sock_kernel_create_af(int domain, int type, int protocol, struct sock_upcall *up,
+                           struct rt_socket **out);
+/* Normalise a caller's sockaddr for so (see rt_proto_ops) and back. */
+int  sock_addr_in(int domain, const void *a, u32 alen, struct rt_sockaddr_in6 *out);
+void sock_addr_out(int domain, const struct rt_sockaddr_in6 *n, void *a, u32 *alen);
 void sock_kernel_close(struct rt_socket *so);
 /* readiness for select: RT_POLL* bits including socket-layer state */
 u32  sock_poll(struct rt_socket *so);

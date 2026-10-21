@@ -253,27 +253,68 @@ static struct rt_iov *iov_dup(const struct rt_iov *iov, int iovcnt, struct rt_io
 	return v;
 }
 
-static int check_addr(const struct rt_sockaddr_in *a, u32 alen, struct rt_sockaddr_in *out)
+/* Caller's sockaddr -> normalised rt_sockaddr_in6 (see rt_proto_ops):
+ * AF_INET sockets take a sockaddr_in (at least 8 bytes, as before IPv6),
+ * AF_INET6 sockets a sockaddr_in6 of 24 (RFC 2133) or 28 bytes, or a bare
+ * AF_UNSPEC address. Families are checked by the callers/protocols. */
+int sock_addr_in(int domain, const void *a, u32 alen, struct rt_sockaddr_in6 *out)
 {
+	memset(out, 0, sizeof(*out));
 	if (!a)
 		return -RT_EFAULT;
-	if (alen < 8)
-		return -RT_EINVAL;
-	memset(out, 0, sizeof(*out));
-	memcpy(out, a, alen < sizeof(*out) ? alen : sizeof(*out));
-	out->sin_len = sizeof(*out);
-	return 0;
+	out->sin6_len = RT_SIN6_LEN;
+	if (domain == RT_AF_INET6) {
+		const u8 *p = a;
+		if (alen >= 2 && p[1] == RT_AF_UNSPEC && alen < RT_SIN6_LEN_RFC2133) {
+			out->sin6_family = RT_AF_UNSPEC;
+			return 0;
+		}
+		if (alen < RT_SIN6_LEN_RFC2133)
+			return -RT_EINVAL;
+		memcpy(out, a, alen < RT_SIN6_LEN ? alen : RT_SIN6_LEN);
+		out->sin6_len = RT_SIN6_LEN;
+		return 0;
+	} else {
+		struct rt_sockaddr_in sin;
+		if (alen < 8)
+			return -RT_EINVAL;
+		memset(&sin, 0, sizeof(sin));
+		memcpy(&sin, a, alen < sizeof(sin) ? alen : sizeof(sin));
+		out->sin6_family = sin.sin_family;
+		out->sin6_port = sin.sin_port;
+		rt_in6_set_v4mapped(&out->sin6_addr, sin.sin_addr);
+		return 0;
+	}
 }
 
-static void copy_addr_out(const struct rt_sockaddr_in *sin, struct rt_sockaddr_in *a, u32 *alen)
+/* Normalised address -> the caller's buffer: BSD semantics (copy at most
+ * *alen bytes, *alen = full length). AF_INET6 gives 28 bytes, or the 24
+ * byte RFC 2133 form when the buffer is smaller than 28. */
+void sock_addr_out(int domain, const struct rt_sockaddr_in6 *n, void *a, u32 *alen)
 {
-	u32 n;
+	u32 full, cnt;
 
 	if (!a || !alen)
 		return;
-	n = *alen < sizeof(*sin) ? *alen : sizeof(*sin);
-	memcpy(a, sin, n);
-	*alen = sizeof(*sin);
+	if (domain == RT_AF_INET6) {
+		struct rt_sockaddr_in6 s = *n;
+		full = *alen >= RT_SIN6_LEN ? RT_SIN6_LEN : RT_SIN6_LEN_RFC2133;
+		s.sin6_len = (u8)full;
+		s.sin6_family = RT_AF_INET6;
+		cnt = *alen < full ? *alen : full;
+		memcpy(a, &s, cnt);
+	} else {
+		struct rt_sockaddr_in sin;
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_len = sizeof(sin);
+		sin.sin_family = RT_AF_INET;
+		sin.sin_port = n->sin6_port;
+		sin.sin_addr = rt_in6_is_v4mapped(&n->sin6_addr) ? rt_in6_v4(&n->sin6_addr) : 0;
+		full = sizeof(sin);
+		cnt = *alen < full ? *alen : full;
+		memcpy(a, &sin, cnt);
+	}
+	*alen = full;
 }
 
 /* ======================================================================
@@ -286,7 +327,7 @@ int rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol)
 	struct rt_socket *so;
 	int fd, r;
 
-	if (domain != RT_AF_INET)
+	if (domain != RT_AF_INET && domain != RT_AF_INET6)
 		return -RT_EAFNOSUPPORT;
 	if (type != RT_SOCK_STREAM && type != RT_SOCK_DGRAM && type != RT_SOCK_RAW)
 		return -RT_ESOCKTNOSUPPORT;
@@ -305,6 +346,7 @@ int rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol)
 		return -RT_ENOBUFS;
 	}
 	so->owner = c->owner;
+	so->domain = (u16)domain;
 	r = ops->attach ? ops->attach(so) : 0;
 	if (r < 0) {
 		sock_free(so);
@@ -316,20 +358,29 @@ int rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol)
 	return fd;
 }
 
-int rt_api_bind(struct rt_sockctx *c, int fd, const struct rt_sockaddr_in *a, u32 alen)
+int rt_api_bind(struct rt_sockctx *c, int fd, const void *a, u32 alen)
 {
-	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin;
 	struct rt_socket *so;
-	int r = check_addr(a, alen, &sin);
+	int r;
 
-	if (r < 0)
-		return r;
-	/* Old Amiga programs often leave sin_family 0 (AF_UNSPEC). */
-	if (sin.sin_family != RT_AF_INET && sin.sin_family != RT_AF_UNSPEC)
-		return -RT_EAFNOSUPPORT;
-	sin.sin_family = RT_AF_INET;
+	if (!a)
+		return -RT_EFAULT;
 	rt_lock();
 	r = fd_get(c, fd, &so);
+	if (r == 0)
+		r = sock_addr_in(so->domain, a, alen, &sin);
+	if (r == 0) {
+		if (so->domain == RT_AF_INET6) {
+			if (sin.sin6_family != RT_AF_INET6)
+				r = -RT_EAFNOSUPPORT;
+		} else if (sin.sin6_family != RT_AF_INET && sin.sin6_family != RT_AF_UNSPEC) {
+			/* Old Amiga programs often leave sin_family 0 (AF_UNSPEC). */
+			r = -RT_EAFNOSUPPORT;
+		} else {
+			sin.sin6_family = RT_AF_INET;
+		}
+	}
 	if (r == 0) {
 		r = so->ops->bind ? so->ops->bind(so, &sin) : -RT_EOPNOTSUPP;
 		if (r == 0)
@@ -375,11 +426,11 @@ out:
 	return r;
 }
 
-int rt_api_accept(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *alen)
+int rt_api_accept(struct rt_sockctx *c, int fd, void *a, u32 *alen)
 {
 	struct rt_wait_entry we;
 	struct rt_socket *so, *ch = NULL;
-	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin;
 	int r, nfd = -1, waiting = 0;
 	u32 start = rt_now_ms();
 
@@ -438,9 +489,7 @@ int rt_api_accept(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *a
 			memset(&sin, 0, sizeof(sin));
 			if (ch->ops->getname)
 				ch->ops->getname(ch, &sin, 1);
-			sin.sin_len = sizeof(sin);
-			sin.sin_family = RT_AF_INET;
-			copy_addr_out(&sin, a, alen);
+			sock_addr_out(ch->domain, &sin, a, alen);
 		}
 		r = nfd;
 	}
@@ -451,22 +500,25 @@ out_unlock:
 	return r;
 }
 
-int rt_api_connect(struct rt_sockctx *c, int fd, const struct rt_sockaddr_in *a, u32 alen)
+int rt_api_connect(struct rt_sockctx *c, int fd, const void *a, u32 alen)
 {
 	struct rt_wait_entry we;
-	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin;
 	struct rt_socket *so;
-	int r = check_addr(a, alen, &sin), waiting = 0;
+	int r, waiting = 0;
 	u32 start = rt_now_ms();
 
-	if (r < 0)
-		return r;
+	if (!a)
+		return -RT_EFAULT;
 	rt_lock();
 	r = fd_get(c, fd, &so);
 	if (r < 0)
 		goto out;
-	if (sin.sin_family != RT_AF_INET &&
-	    !(sin.sin_family == RT_AF_UNSPEC && so->type != RT_SOCK_STREAM)) {
+	r = sock_addr_in(so->domain, a, alen, &sin);
+	if (r < 0)
+		goto out;
+	if (sin.sin6_family != (so->domain == RT_AF_INET6 ? RT_AF_INET6 : RT_AF_INET) &&
+	    !(sin.sin6_family == RT_AF_UNSPEC && so->type != RT_SOCK_STREAM)) {
 		r = -RT_EAFNOSUPPORT;
 		goto out;
 	}
@@ -495,7 +547,7 @@ int rt_api_connect(struct rt_sockctx *c, int fd, const struct rt_sockaddr_in *a,
 	}
 	r = so->ops->connect(so, &sin);
 	if (r == 0) {
-		if (sin.sin_family == RT_AF_UNSPEC)
+		if (sin.sin6_family == RT_AF_UNSPEC)
 			so->state &= ~RT_SS_ISCONNECTED;     /* datagram disconnect */
 		else
 			so->state |= RT_SS_ISCONNECTED;
@@ -554,7 +606,7 @@ out:
  * ====================================================================== */
 
 static int sock_sendit(struct rt_socket *so, const struct rt_iov *iov0, int iovcnt,
-                       int flags, const struct rt_sockaddr_in *to)
+                       int flags, const struct rt_sockaddr_in6 *to)
 {
 	struct rt_iov local[SOCK_IOV_LOCAL];
 	struct rt_wait_entry we;
@@ -615,7 +667,7 @@ static int sock_sendit(struct rt_socket *so, const struct rt_iov *iov0, int iovc
 }
 
 static int sock_recvit(struct rt_socket *so, const struct rt_iov *iov0, int iovcnt,
-                       int flags, struct rt_sockaddr_in *from, int *msgflags)
+                       int flags, struct rt_sockaddr_in6 *from, int *msgflags)
 {
 	struct rt_iov local[SOCK_IOV_LOCAL];
 	struct rt_wait_entry we;
@@ -679,35 +731,39 @@ static int sock_recvit(struct rt_socket *so, const struct rt_iov *iov0, int iovc
 }
 
 int rt_api_sendmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int iovcnt,
-                   int flags, const struct rt_sockaddr_in *to, u32 tolen)
+                   int flags, const void *to, u32 tolen)
 {
-	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin;
 	struct rt_socket *so;
 	int r;
 
 	if (iovcnt < 0 || iovcnt > SOCK_IOV_MAX || (iovcnt && !iov))
 		return -RT_EINVAL;
-	if (to) {
-		r = check_addr(to, tolen, &sin);
-		if (r < 0)
-			return r;
-		if (sin.sin_family != RT_AF_INET && sin.sin_family != RT_AF_UNSPEC)
-			return -RT_EAFNOSUPPORT;
-		sin.sin_family = RT_AF_INET;
-		to = &sin;
-	}
 	rt_lock();
 	r = fd_get(c, fd, &so);
+	if (r == 0 && to) {
+		r = sock_addr_in(so->domain, to, tolen, &sin);
+		if (r == 0) {
+			if (so->domain == RT_AF_INET6) {
+				if (sin.sin6_family != RT_AF_INET6)
+					r = -RT_EAFNOSUPPORT;
+			} else if (sin.sin6_family != RT_AF_INET && sin.sin6_family != RT_AF_UNSPEC) {
+				r = -RT_EAFNOSUPPORT;
+			} else {
+				sin.sin6_family = RT_AF_INET;
+			}
+		}
+	}
 	if (r == 0)
-		r = sock_sendit(so, iov, iovcnt, flags, to);
+		r = sock_sendit(so, iov, iovcnt, flags, to ? &sin : NULL);
 	rt_unlock();
 	return r;
 }
 
 int rt_api_recvmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int iovcnt,
-                   int flags, struct rt_sockaddr_in *from, u32 *fromlen, int *msgflags)
+                   int flags, void *from, u32 *fromlen, int *msgflags)
 {
-	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin;
 	struct rt_socket *so;
 	int r;
 
@@ -721,16 +777,14 @@ int rt_api_recvmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int i
 	rt_lock();
 	r = fd_get(c, fd, &so);
 	if (r == 0) {
-		int stream = so->type == RT_SOCK_STREAM;
+		int stream = so->type == RT_SOCK_STREAM, dom = so->domain;
 		/* 'so' may be freed by sock_recvit if it was closed meanwhile */
 		r = sock_recvit(so, iov, iovcnt, flags, from ? &sin : NULL, msgflags);
 		if (from && r >= 0) {
 			if (stream) {
 				*fromlen = 0;    /* no address for streams (BSD) */
 			} else {
-				sin.sin_len = sizeof(sin);
-				sin.sin_family = RT_AF_INET;
-				copy_addr_out(&sin, from, fromlen);
+				sock_addr_out(dom, &sin, from, fromlen);
 			}
 		}
 	}
@@ -757,7 +811,7 @@ int rt_api_recv(struct rt_sockctx *c, int fd, void *buf, u32 len, int flags)
 }
 
 int rt_api_sendto(struct rt_sockctx *c, int fd, const void *buf, u32 len, int flags,
-                  const struct rt_sockaddr_in *to, u32 tolen)
+                  const void *to, u32 tolen)
 {
 	struct rt_iov v;
 
@@ -767,7 +821,7 @@ int rt_api_sendto(struct rt_sockctx *c, int fd, const void *buf, u32 len, int fl
 }
 
 int rt_api_recvfrom(struct rt_sockctx *c, int fd, void *buf, u32 len, int flags,
-                    struct rt_sockaddr_in *from, u32 *fromlen)
+                    void *from, u32 *fromlen)
 {
 	struct rt_iov v;
 
@@ -1002,9 +1056,9 @@ out:
 	return r;
 }
 
-static int sock_name(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *alen, int peer)
+static int sock_name(struct rt_sockctx *c, int fd, void *a, u32 *alen, int peer)
 {
-	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin;
 	struct rt_socket *so;
 	int r;
 
@@ -1018,22 +1072,19 @@ static int sock_name(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32
 			r = -RT_ENOTCONN;
 		else
 			r = so->ops->getname ? so->ops->getname(so, &sin, peer) : -RT_EOPNOTSUPP;
-		if (r == 0) {
-			sin.sin_len = sizeof(sin);
-			sin.sin_family = RT_AF_INET;
-			copy_addr_out(&sin, a, alen);
-		}
+		if (r == 0)
+			sock_addr_out(so->domain, &sin, a, alen);
 	}
 	rt_unlock();
 	return r;
 }
 
-int rt_api_getsockname(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *alen)
+int rt_api_getsockname(struct rt_sockctx *c, int fd, void *a, u32 *alen)
 {
 	return sock_name(c, fd, a, alen, 0);
 }
 
-int rt_api_getpeername(struct rt_sockctx *c, int fd, struct rt_sockaddr_in *a, u32 *alen)
+int rt_api_getpeername(struct rt_sockctx *c, int fd, void *a, u32 *alen)
 {
 	return sock_name(c, fd, a, alen, 1);
 }
@@ -1589,11 +1640,11 @@ int rt_api_obtain(struct rt_sockctx *c, s32 id, int domain, int type, int protoc
 	struct rt_socket *so;
 	int fd;
 
-	if (domain != RT_AF_INET)
+	if (domain != RT_AF_INET && domain != RT_AF_INET6)
 		return -RT_EAFNOSUPPORT;
 	rt_lock();
 	so = released_find(id);
-	if (!so || id == -1 || so->type != type ||
+	if (!so || id == -1 || so->type != type || so->domain != domain ||
 	    (protocol != 0 && so->protocol != protocol)) {
 		fd = -RT_EINVAL;
 		goto out;

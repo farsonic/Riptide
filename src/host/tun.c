@@ -32,7 +32,7 @@ static int tun_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u
 	ssize_t r;
 
 	(void)dsthw;
-	if (ethertype != RT_ETH_P_IP) {
+	if (ethertype != RT_ETH_P_IP && ethertype != RT_ETH_P_IPV6) {
 		rt_buf_free(b);
 		return -RT_EAFNOSUPPORT;
 	}
@@ -62,9 +62,7 @@ static void tun_rx(void *arg)
 			return;
 		}
 		b->len = (u32)n;
-		/* Linux also sends IPv6 (router solicitations etc.): drop it
-		 * as an unknown protocol. */
-		rt_netif_input(&t->nif, b, (b->data[0] >> 4) == 4 ? RT_ETH_P_IP : 0x86dd, NULL, 0);
+		rt_netif_input(&t->nif, b, (b->data[0] >> 4) == 4 ? RT_ETH_P_IP : RT_ETH_P_IPV6, NULL, 0);
 	}
 }
 

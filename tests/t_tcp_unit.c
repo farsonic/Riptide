@@ -128,9 +128,19 @@ static void test_options(void)
 	}
 }
 
+static rt_in6_addr m4(u32 a)
+{
+	rt_in6_addr x;
+	rt_in6_set_v4mapped(&x, a);
+	return x;
+}
+
 static void test_cookies(void)
 {
-	u32 l = rt_htonl(0x0a000001), r = rt_htonl(0x0a000002), isn;
+	rt_in6_addr L = m4(rt_htonl(0x0a000001)), R = m4(rt_htonl(0x0a000002));
+	rt_in6_addr L6, R6;
+	const rt_in6_addr *l = &L, *r = &R;
+	u32 isn;
 	u16 lp = rt_htons(80), rp = rt_htons(40000), mss;
 	int i;
 
@@ -144,6 +154,13 @@ static void test_cookies(void)
 		CHECK(tcp_cookie_check(isn, l, r, lp, rp, 1000 + 0x123456) < 0);
 		CHECK(tcp_cookie_check(isn, l, r, lp, rt_htons(40001), 1000) < 0);
 	}
+	/* IPv6 address pairs hash all 128 bits */
+	CHECK(rt_inet6_pton("2001:db8::1", &L6) == 0 && rt_inet6_pton("2001:db8::2", &R6) == 0);
+	mss = 1440;
+	isn = tcp_cookie_init_seq(&L6, &R6, lp, rp, 7, &mss);
+	CHECK(mss == 1440 && tcp_cookie_check(isn, &L6, &R6, lp, rp, 7) == 2);
+	R6.b[3] ^= 1;          /* differs only in the high bits */
+	CHECK(tcp_cookie_check(isn, &L6, &R6, lp, rp, 7) < 0);
 	rt_unlock();
 }
 
@@ -153,6 +170,12 @@ struct target {
 	u16 sport, dport;
 	struct tcp_sock *tp; /* receiving connection (for in-window values) */
 };
+
+static struct tcp_sock *lookup(const struct target *t)
+{
+	rt_in6_addr d = m4(t->daddr), sa = m4(t->saddr);
+	return tcp_lookup_established(&d, t->dport, &sa, t->sport);
+}
 
 static void inject(const struct target *t, int mode)
 {
@@ -250,10 +273,10 @@ static void test_fuzz(void)
 	tg[0].daddr = rt_htonl(LO); tg[0].dport = rt_htons(6000); tg[0].tp = NULL;
 	tg[1].saddr = rt_htonl(LO); tg[1].sport = me.sin_port;
 	tg[1].daddr = rt_htonl(LO); tg[1].dport = rt_htons(6000);
-	tg[1].tp = tcp_lookup_established(tg[1].daddr, tg[1].dport, tg[1].saddr, tg[1].sport);
+	tg[1].tp = lookup(&tg[1]);
 	tg[2].saddr = rt_htonl(LO); tg[2].sport = rt_htons(6000);
 	tg[2].daddr = rt_htonl(LO); tg[2].dport = me.sin_port;
-	tg[2].tp = tcp_lookup_established(tg[2].daddr, tg[2].dport, tg[2].saddr, tg[2].sport);
+	tg[2].tp = lookup(&tg[2]);
 	tg[3].saddr = rt_htonl(0x7f000003); tg[3].sport = rt_htons(999);
 	tg[3].daddr = rt_htonl(LO); tg[3].dport = rt_htons(6001); tg[3].tp = NULL;
 	CHECK(tg[1].tp != NULL && tg[2].tp != NULL);
@@ -264,7 +287,7 @@ static void test_fuzz(void)
 		rt_lock();
 		/* the connection may be reset by the fuzz: re-look it up */
 		if (t == &tg[1] || t == &tg[2])
-			t->tp = tcp_lookup_established(t->daddr, t->dport, t->saddr, t->sport);
+			t->tp = lookup(t);
 		if (rnd() % 10 == 0)
 			fuzz_icmp(t);
 		else

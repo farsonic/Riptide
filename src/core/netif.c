@@ -80,6 +80,7 @@ void rt_netif_remove(struct rt_netif *nif)
 
 	rt_dhcp_stop(nif);
 	rt_netif_down(nif);
+	rt_ip6_ifenable(nif, 0);
 	rt_route_flush_if(nif);
 	rt_arp_flush(nif, 0);
 	for (pp = &netif_list; *pp; pp = &(*pp)->next) {
@@ -187,6 +188,7 @@ void rt_netif_up(struct rt_netif *nif)
 	nif->flags = nf;
 	if (nif->type == RT_IFT_ETHER && nif->addr)
 		rt_arp_announce(nif, nif->addr);
+	rt_ip6_if_up(nif);
 	rt_kick();
 }
 
@@ -202,6 +204,7 @@ void rt_netif_down(struct rt_netif *nif)
 	 * learned ones go, as their information may be stale when it is
 	 * back up. */
 	rt_route_flush_dynamic_if(nif);
+	rt_ip6_if_down(nif);
 }
 
 void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
@@ -227,6 +230,12 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
 	case RT_ETH_P_ARP:
 		if (nif->type == RT_IFT_ETHER) {
 			rt_arp_input(nif, b);
+			return;
+		}
+		break;
+	case RT_ETH_P_IPV6:
+		if (nif->ip6) {
+			rt_ip6_input(nif, b);
 			return;
 		}
 		break;

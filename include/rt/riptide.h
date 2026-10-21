@@ -13,6 +13,7 @@
 #include "rt_timer.h"
 #include "rt_netif.h"
 #include "rt_ip.h"
+#include "rt_ip6.h"
 #include "rt_bsd.h"
 #include "rt_socket.h"
 #include "rt_sysctl.h"
@@ -36,10 +37,13 @@ struct rt_pcb_info {
 	u8  proto;           /* RT_IPPROTO_TCP / UDP / raw protocol */
 	u8  state;           /* RT_TCPS_* for TCP, 0 otherwise */
 	u16 lport, fport;    /* host order */
-	u32 laddr, faddr;    /* network order */
+	u32 laddr, faddr;    /* network order (IPv4 sockets) */
 	u32 sendq, recvq;    /* bytes queued */
 	u32 rtt_us, cwnd;    /* TCP only */
 	u32 retrans;
+	u8  v6;              /* an AF_INET6 socket: see laddr6/faddr6 */
+	u8  v6only;
+	rt_in6_addr laddr6, faddr6;  /* both families (IPv4 as IPv4-mapped) */
 };
 int rt_tcp_list(struct rt_pcb_info *out, int max);   /* returns total count */
 int rt_udp_list(struct rt_pcb_info *out, int max);
@@ -91,6 +95,15 @@ extern int rt_dns_disallowed;   /* RiptideDisallowDNS() */
  * res_query/querydomain/search: answer length, or -h_errno when the
  * rcode is not NOERROR or there are no answers (BIND semantics).
  * dn_expand: compressed length consumed or -1; dn_skipname likewise. */
+/* IPv6: AAAA lookups (numeric, hosts table and "localhost" -> ::1 without
+ * traffic), PTR in ip6.arpa (in-addr.arpa for IPv4-mapped addresses), and
+ * servers of either family (IPv4 servers are kept IPv4-mapped; servers
+ * learned from RAs or DHCPv6 expire). */
+int  rt_resolve_name6(const char *name, rt_in6_addr *addrs, int max, char *canon, u32 canonlen);
+int  rt_resolve_addr6(const rt_in6_addr *addr, char *name, u32 namelen);
+int  rt_hosts_add6(const char *name, const rt_in6_addr *addr);
+/* All servers (IPv4-mapped for IPv4), in order; returns the total. */
+int  rt_dns_get_servers6(rt_in6_addr *out, u32 *ifindex, u8 *source, int max);
 int  rt_res_mkquery(int op, const char *dname, int cls, int type, u8 *buf, int buflen);
 int  rt_res_send(const u8 *msg, int msglen, u8 *answer, int anslen);
 int  rt_res_query(const char *dname, int cls, int type, u8 *answer, int anslen);

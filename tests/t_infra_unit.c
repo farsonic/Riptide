@@ -790,6 +790,10 @@ int main(void)
 	CHECK(rt_init() == 0);
 	CHECK(rt_loopback_if && (rt_loopback_if->flags & RT_IFF_UP));
 	CHECK(rt_ip_is_local(RT_INADDR_LOOPBACK));
+	/* these tests count IPv4 frames: no IPv6 (DAD, MLD, RS) on eth0/1 */
+	rt_lock();
+	CHECK(rt_sysctl_set_text("net.inet6.ip6.enable", "0") == 0);
+	rt_unlock();
 	setup_ifs();
 	CHECK(rt_ip_is_local(ip4(192, 168, 1, 10)) && rt_ip_is_local(ip4(192, 168, 1, 255)) &&
 	      !rt_ip_is_local(ip4(192, 168, 1, 11)));
