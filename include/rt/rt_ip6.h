@@ -159,6 +159,16 @@ int  rt_ip6_mc_leave(struct rt_netif *nif, const rt_in6_addr *g);
 /* Source address selection (RFC 6724 5, without home addresses and with a
  * fixed policy table). oif may be NULL. 0 or -RT_EADDRNOTAVAIL. */
 int  rt_ip6_select_source(const rt_in6_addr *dst, const struct rt_netif *oif, rt_in6_addr *src);
+/* RFC 6724 policy table: precedence and label of an address. */
+int  rt_in6_precedence(const rt_in6_addr *a);
+int  rt_in6_label(const rt_in6_addr *a);
+/* Destination address ordering for getaddrinfo() (RFC 6724 6: rules 1, 2,
+ * 5, 6, 8, 9 and 10; IPv4 addresses as IPv4-mapped). Stable. Lock held. */
+void rt_inet_sort_dest(rt_in6_addr *a, int n);
+/* AI_ADDRCONFIG (RFC 3493 6.1): does an interface other than loopback
+ * have an address of family (RT_AF_INET, or RT_AF_INET6 where a
+ * link-local address does not count)? Lock held. */
+int  rt_inet_have_addr(int family);
 /* IPv6 MTU of the link (RA MTU option or the interface MTU). */
 u32  rt_ip6_link_mtu(const struct rt_netif *nif);
 

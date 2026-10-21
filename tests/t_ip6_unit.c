@@ -1233,6 +1233,32 @@ static void test_select_route(void)
 	rt_unlock();
 }
 
+/* getaddrinfo() ordering (RFC 6724 6) */
+static void test_dest_sort(void)
+{
+	rt_in6_addr l[3];
+
+	rt_lock();
+	CHECK(rt_inet_have_addr(RT_AF_INET6));
+	/* rule 1: no IPv4 route, the IPv6 destination first */
+	l[0] = A("::ffff:198.51.100.1");
+	l[1] = A("2001:db8:7::5");
+	rt_inet_sort_dest(l, 2);
+	CHECK(rt_in6_eq(&l[0], P("2001:db8:7::5")) && rt_in6_eq(&l[1], P("::ffff:198.51.100.1")));
+	/* rule 5: a ULA destination with a global source loses to a global one */
+	l[0] = A("fd00:9::1");
+	l[1] = A("2001:db8:7::5");
+	rt_inet_sort_dest(l, 2);
+	CHECK(rt_in6_eq(&l[0], P("2001:db8:7::5")));
+	/* rule 6: ::1 has the highest precedence; rule 10 keeps equal ones */
+	l[0] = A("2001:db8:7::5");
+	l[1] = A("2001:db8:7::6");
+	l[2] = A("::1");
+	rt_inet_sort_dest(l, 3);
+	CHECK(rt_in6_is_loopback(&l[0]) && rt_in6_eq(&l[1], P("2001:db8:7::5")) && rt_in6_eq(&l[2], P("2001:db8:7::6")));
+	rt_unlock();
+}
+
 static void test_ptp(void)
 {
 	struct in6_ifaddr *ia;
@@ -1267,6 +1293,7 @@ int main(void)
 	test_reassembly();
 	test_fragmentation_pmtu();
 	test_select_route();
+	test_dest_sort();
 	test_ptp();
 	test_ratelimit();
 	test_fuzz();

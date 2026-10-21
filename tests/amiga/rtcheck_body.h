@@ -26,12 +26,22 @@
 #define RTC_FIONBIO     0x8004667eUL
 #define RTC_SOL_SOCKET  0xffff
 #define RTC_SO_ERROR    0x1007
+#define RTC_AF_INET6    28
+#define RTC_IPPROTO_IPV6 41
+#define RTC_IPV6_V6ONLY 27
 
 struct rtc_sin {
 	UBYTE sin_len, sin_family;
 	UWORD sin_port;
 	ULONG sin_addr;
 	UBYTE sin_zero[8];
+};
+struct rtc_sin6 {
+	UBYTE sin6_len, sin6_family;
+	UWORD sin6_port;
+	ULONG sin6_flowinfo;
+	UBYTE sin6_addr[16];
+	ULONG sin6_scope_id;
 };
 struct rtc_tv {
 	ULONG s, us;
@@ -279,7 +289,7 @@ static void rtc_riptide(void)
 
 	CHECK(RiptideBase->lib_Version >= RIPTIDE_LIB_VERSION &&
 	      rtc_streq(RiptideBase->lib_Node.ln_Name, RIPTIDE_LIB_NAME), "riptide.library name/version");
-	CHECK(RiptideSupportsIPV6() == 0, "RiptideSupportsIPV6");
+	CHECK(RiptideSupportsIPV6() == 1, "RiptideSupportsIPV6");
 	CHECK(inet_pton(RTC_AF_INET, "192.168.1.2", &a) == 1 && a == 0xc0a80102UL, "inet_pton");
 	CHECK(inet_pton(RTC_AF_INET, "192.168.1", &a) == 0, "inet_pton strict");
 	CHECK(inet_aton("10.2", &a) == 1 && a == 0x0a000002UL, "inet_aton");
@@ -297,6 +307,171 @@ static void rtc_riptide(void)
 	CHECK(if_indextoname(idx, buf) && rtc_streq(buf, "lo0"), "if_indextoname");
 	CHECK(RiptideIsOnline("lo0") == 1, "RiptideIsOnline lo0");
 	CHECK(RiptideGetPid() != NULL, "RiptideGetPid");
+}
+
+/* ---- IPv6 over the loopback (::1) ---- */
+
+static const UBYTE rtc_lo6[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+
+static int rtc_memeq(const void *a, const void *b, int n)
+{
+	const UBYTE *x = a, *y = b;
+
+	while (n-- > 0)
+		if (*x++ != *y++)
+			return 0;
+	return 1;
+}
+
+static void rtc_sin6(struct rtc_sin6 *s, const UBYTE *addr, UWORD port)
+{
+	int i;
+
+	s->sin6_len = sizeof(*s);
+	s->sin6_family = RTC_AF_INET6;
+	s->sin6_port = port;
+	s->sin6_flowinfo = 0;
+	for (i = 0; i < 16; i++)
+		s->sin6_addr[i] = addr ? addr[i] : 0;
+	s->sin6_scope_id = 0;
+}
+
+/* TCP between two sockets; the client is AF_INET (dual-stack check) when
+ * v4client is set. Returns the accepted peer address in *peer. */
+static void rtc_tcp6_pair(int v4client, int rfc2133, struct rtc_sin6 *peer)
+{
+	struct rtc_sin6 sa, ca;
+	struct rtc_sin s4;
+	LONG ls, cs, as, r, len;
+	char in[8];
+
+	ls = socket(RTC_AF_INET6, RTC_SOCK_STREAM, 0);
+	CHECK(ls >= 0, "tcp6 socket");
+	rtc_sin6(&sa, v4client ? NULL : rtc_lo6, 0);
+	CHECK(bind(ls, &sa, sizeof(sa)) == 0, v4client ? "tcp6 bind [::]:0" : "tcp6 bind [::1]:0");
+	len = sizeof(sa);
+	CHECK(getsockname(ls, &sa, &len) == 0 && len == sizeof(sa) && sa.sin6_family == RTC_AF_INET6 &&
+	      sa.sin6_port != 0, "tcp6 getsockname");
+	CHECK(listen(ls, 4) == 0, "tcp6 listen");
+	cs = socket(v4client ? RTC_AF_INET : RTC_AF_INET6, RTC_SOCK_STREAM, 0);
+	rtc_nbio(cs);
+	if (v4client) {
+		rtc_sin(&s4, 0x7f000001UL, sa.sin6_port);
+		r = connect(cs, &s4, sizeof(s4));
+	} else {
+		rtc_sin6(&ca, rtc_lo6, sa.sin6_port);
+		/* RFC 2133 callers (Miami SDK) pass 24 bytes, no scope id */
+		r = connect(cs, &ca, rfc2133 ? 24 : sizeof(ca));
+	}
+	CHECK(r == 0 || Errno() == RTC_EINPROGRESS, "tcp6 connect");
+	CHECK(rtc_wait(ls, 0), "tcp6 listener readable");
+	len = rfc2133 ? 24 : sizeof(*peer);
+	as = accept(ls, peer, &len);
+	CHECK(as >= 0 && len == (rfc2133 ? 24 : (LONG)sizeof(*peer)) && peer->sin6_family == RTC_AF_INET6,
+	      rfc2133 ? "tcp6 accept, 24 byte address" : "tcp6 accept");
+	CHECK(rtc_wait(cs, 1), "tcp6 client writable");
+	CHECK(send(cs, "six", 3, 0) == 3, "tcp6 send");
+	CHECK(rtc_wait(as, 0), "tcp6 data readable");
+	CHECK(recv(as, in, sizeof(in), 0) == 3 && in[0] == 's' && in[2] == 'x', "tcp6 recv");
+	CloseSocket(as);
+	CloseSocket(cs);
+	CloseSocket(ls);
+}
+
+static void rtc_ipv6(void)
+{
+	static const UBYTE doc[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+	static const UBYTE mapped_lo[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1 };
+	struct rtc_sin6 peer, a1, a2, from;
+	struct addrinfo hints, *ai;
+	struct hostent *he;
+	APTR res = NULL;
+	UBYTE a[16];
+	char buf[64], serv[8];
+	LONG s1, s2, v, len, r;
+	int i, n4, n6;
+
+	CHECK(inet_pton(RTC_AF_INET6, "2001:db8::1", a) == 1 && rtc_memeq(a, doc, 16), "inet_pton AF_INET6");
+	CHECK(inet_pton(RTC_AF_INET6, "2001:db8:::1", a) == 0, "inet_pton AF_INET6 strict");
+	CHECK(inet_ntop(RTC_AF_INET6, (APTR)doc, buf, sizeof(buf)) && rtc_streq(buf, "2001:db8::1"), "inet_ntop AF_INET6");
+	CHECK(inet_ntop(RTC_AF_INET6, (APTR)mapped_lo, buf, sizeof(buf)) && rtc_streq(buf, "::ffff:127.0.0.1"),
+	      "inet_ntop IPv4-mapped");
+
+	/* TCP over ::1, with 28 and 24 byte addresses; dual-stack listener */
+	rtc_tcp6_pair(0, 0, &peer);
+	CHECK(rtc_memeq(peer.sin6_addr, rtc_lo6, 16), "tcp6 peer is ::1");
+	rtc_tcp6_pair(0, 1, &peer);
+	rtc_tcp6_pair(1, 0, &peer);
+	CHECK(rtc_memeq(peer.sin6_addr, mapped_lo, 16), "dual-stack: IPv4 client seen as ::ffff:127.0.0.1");
+
+	/* UDP over ::1 */
+	s1 = socket(RTC_AF_INET6, RTC_SOCK_DGRAM, 0);
+	s2 = socket(RTC_AF_INET6, RTC_SOCK_DGRAM, 0);
+	CHECK(s1 >= 0 && s2 >= 0, "udp6 sockets");
+	rtc_sin6(&a1, rtc_lo6, 0);
+	rtc_sin6(&a2, rtc_lo6, 0);
+	CHECK(bind(s1, &a1, sizeof(a1)) == 0 && bind(s2, &a2, sizeof(a2)) == 0, "udp6 bind");
+	len = sizeof(a1);
+	getsockname(s1, &a1, &len);
+	len = sizeof(a2);
+	getsockname(s2, &a2, &len);
+	rtc_nbio(s2);
+	CHECK(sendto(s1, "dgram6", 6, 0, &a2, sizeof(a2)) == 6, "udp6 sendto");
+	CHECK(rtc_wait(s2, 0), "udp6 readable");
+	len = sizeof(from);
+	r = recvfrom(s2, buf, sizeof(buf), 0, &from, &len);
+	CHECK(r == 6 && buf[0] == 'd' && buf[5] == '6', "udp6 recvfrom data");
+	CHECK(len == sizeof(from) && from.sin6_port == a1.sin6_port && rtc_memeq(from.sin6_addr, rtc_lo6, 16),
+	      "udp6 recvfrom address");
+	v = 1;
+	CHECK(setsockopt(s1, RTC_IPPROTO_IPV6, RTC_IPV6_V6ONLY, &v, sizeof(v)) == -1, "IPV6_V6ONLY after bind refused");
+	v = -1;
+	len = sizeof(v);
+	CHECK(getsockopt(s1, RTC_IPPROTO_IPV6, RTC_IPV6_V6ONLY, &v, &len) == 0 && v == 0, "IPV6_V6ONLY default 0");
+	CloseSocket(s1);
+	CloseSocket(s2);
+
+	/* resolver calls */
+	for (i = 0; i < (int)sizeof(hints); i++)
+		((UBYTE *)&hints)[i] = 0;
+	hints.ai_family = RTC_AF_INET6;
+	hints.ai_socktype = RTC_SOCK_STREAM;
+	CHECK(getaddrinfo("::1", "80", &hints, &res) == 0 && res, "getaddrinfo ::1");
+	ai = res;
+	if (ai) {
+		struct rtc_sin6 *s = ai->ai_addr;
+		CHECK(ai->ai_family == RTC_AF_INET6 && ai->ai_addrlen == sizeof(*s) && s->sin6_port == 80 &&
+		      rtc_memeq(s->sin6_addr, rtc_lo6, 16) && !ai->ai_next, "getaddrinfo ::1 result");
+		freeaddrinfo(res);
+	}
+	res = NULL;
+	CHECK(getaddrinfo("127.0.0.1", "80", &hints, &res) != 0, "getaddrinfo IPv4 literal for AF_INET6");
+	hints.ai_flags = 0x800;           /* AI_V4MAPPED */
+	res = NULL;
+	CHECK(getaddrinfo("127.0.0.1", "80", &hints, &res) == 0 && res &&
+	      ((struct addrinfo *)res)->ai_family == RTC_AF_INET6 &&
+	      rtc_memeq(((struct rtc_sin6 *)((struct addrinfo *)res)->ai_addr)->sin6_addr, mapped_lo, 16),
+	      "getaddrinfo AI_V4MAPPED");
+	if (res)
+		freeaddrinfo(res);
+	hints.ai_family = 0;
+	hints.ai_flags = 1;               /* AI_PASSIVE, AF_UNSPEC: :: and 0.0.0.0 */
+	res = NULL;
+	n4 = n6 = 0;
+	CHECK(getaddrinfo(NULL, "21", &hints, &res) == 0 && res, "getaddrinfo passive AF_UNSPEC");
+	for (ai = res; ai; ai = ai->ai_next) {
+		n4 += ai->ai_family == RTC_AF_INET;
+		n6 += ai->ai_family == RTC_AF_INET6;
+	}
+	CHECK(n4 == 1 && n6 == 1, "getaddrinfo passive: one of each family");
+	if (res)
+		freeaddrinfo(res);
+	rtc_sin6(&a1, rtc_lo6, 21);
+	CHECK(getnameinfo(&a1, sizeof(a1), buf, sizeof(buf), serv, sizeof(serv), 2 | 8) == 0 &&
+	      rtc_streq(buf, "::1") && rtc_streq(serv, "21"), "getnameinfo AF_INET6 numeric");
+	he = gethostbyname2("::1", RTC_AF_INET6);
+	CHECK(he && he->h_addrtype == RTC_AF_INET6 && he->h_length == 16 && he->h_addr_list[0] &&
+	      rtc_memeq(he->h_addr_list[0], rtc_lo6, 16), "gethostbyname2 AF_INET6");
 }
 
 /* The compat alias: its own per-task base on the same jump table and the
@@ -427,6 +602,8 @@ static int rtcheck_run(void)
 	if (RiptideBase) {
 		RTC_SECTION("riptide.library:");
 		rtc_riptide();
+		RTC_SECTION("IPv6 over ::1:");
+		rtc_ipv6();
 	}
 	if (RiptideBase && CompatBase) {
 		RTC_SECTION("compat alias library:");

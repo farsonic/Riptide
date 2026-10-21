@@ -1134,13 +1134,11 @@ static const struct policy *policy_of(const rt_in6_addr *a)
 	return best;
 }
 
-int rt_in6_precedence(const rt_in6_addr *a);
 int rt_in6_precedence(const rt_in6_addr *a)
 {
 	return policy_of(a)->prec;
 }
 
-int rt_in6_label(const rt_in6_addr *a);
 int rt_in6_label(const rt_in6_addr *a)
 {
 	return policy_of(a)->label;

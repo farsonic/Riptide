@@ -52,6 +52,12 @@ struct addrinfo {
 #define AI_PASSIVE     1
 #define AI_CANONNAME   2
 #define AI_NUMERICHOST 4
+/* KAME / BSD values (the Miami SDK's netdb.h comes from KAME too) */
+#define AI_NUMERICSERV  0x0008
+#define AI_ALL          0x0100
+#define AI_V4MAPPED_CFG 0x0200
+#define AI_ADDRCONFIG   0x0400
+#define AI_V4MAPPED     0x0800
 #define NI_NOFQDN      1
 #define NI_NUMERICHOST 2
 #define NI_NAMEREQD    4

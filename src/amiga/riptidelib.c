@@ -159,17 +159,23 @@ ULONG riptide_inet_ntop(RTREG(a6) struct Library *base, RTREG(d0) LONG family, R
                       RTREG(a1) STRPTR strptr, RTREG(d1) LONG len)
 {
 	CTX;
-	char buf[16];
+	char buf[RT_INET6_ADDRSTRLEN];
 	u32 a;
 
-	if (family != RT_AF_INET) {
+	if (family != RT_AF_INET && family != RT_AF_INET6) {
 		fail(c, RT_EAFNOSUPPORT);
 		return 0;
 	}
 	if (!addrptr || !strptr)
 		return 0;
-	memcpy(&a, addrptr, 4);
-	rt_format_ipv4(a, buf);
+	if (family == RT_AF_INET6) {
+		rt_in6_addr a6;
+		memcpy(a6.b, addrptr, 16);
+		rt_inet6_ntop(&a6, buf, sizeof(buf));
+	} else {
+		memcpy(&a, addrptr, 4);
+		rt_format_ipv4(a, buf);
+	}
 	if ((LONG)strlen(buf) >= len) {
 		fail(c, RT_ENOSPC);
 		return 0;
@@ -195,6 +201,14 @@ LONG riptide_inet_pton(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RT
 	CTX;
 	u32 a;
 
+	if (family == RT_AF_INET6) {
+		rt_in6_addr a6;
+		if (!strptr || rt_inet6_pton((const char *)strptr, &a6) < 0)
+			return 0;
+		if (addrptr)
+			memcpy(addrptr, a6.b, 16);
+		return 1;
+	}
 	if (family != RT_AF_INET)
 		return fail(c, RT_EAFNOSUPPORT);
 	if (!strptr || rt_parse_ipv4((const char *)strptr, &a) < 0)
@@ -204,25 +218,39 @@ LONG riptide_inet_pton(RTREG(a6) struct Library *base, RTREG(d0) LONG family, RT
 	return 1;
 }
 
+static LONG herr_of(int r)
+{
+	return r == -RT_TRY_AGAIN ? TRY_AGAIN : r == -RT_NO_DATA || r == 0 ? NO_DATA :
+	       r == -RT_NO_RECOVERY ? NO_RECOVERY : HOST_NOT_FOUND;
+}
+
 ULONG riptide_gethostbyname2(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name, RTREG(d0) LONG fam)
 {
 	CTX;
 	u32 addrs[8];
+	rt_in6_addr a6[8];
 	char cname[256];
 	int r;
 
-	if (fam != RT_AF_INET || !name) {
+	if ((fam != RT_AF_INET && fam != RT_AF_INET6) || !name) {
 		c->herrno = HOST_NOT_FOUND;
-		return 0;
-	}
-	cname[0] = 0;
-	r = rt_resolve_name((const char *)name, addrs, 8, cname, sizeof(cname));
-	if (r <= 0) {
-		c->herrno = r == -RT_TRY_AGAIN ? TRY_AGAIN : r == -RT_NO_DATA || r == 0 ? NO_DATA : HOST_NOT_FOUND;
 		if (c->herrnoptr)
 			*c->herrnoptr = c->herrno;
 		return 0;
 	}
+	cname[0] = 0;
+	if (fam == RT_AF_INET6)
+		r = rt_resolve_name6((const char *)name, a6, 8, cname, sizeof(cname));
+	else
+		r = rt_resolve_name((const char *)name, addrs, 8, cname, sizeof(cname));
+	if (r <= 0) {
+		c->herrno = herr_of(r);
+		if (c->herrnoptr)
+			*c->herrnoptr = c->herrno;
+		return 0;
+	}
+	if (fam == RT_AF_INET6)
+		return (ULONG)bsd_make_hostent6(c, cname[0] ? cname : (const char *)name, a6, r);
 	return (ULONG)bsd_make_hostent(c, cname[0] ? cname : (const char *)name, addrs, r);
 }
 
@@ -251,7 +279,7 @@ void riptide_freeaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) APTR aihead)
 	}
 }
 
-static int service_port(const char *serv, int socktype, u16 *port)
+static int service_port(const char *serv, int socktype, LONG flags, u16 *port)
 {
 	const char *end;
 	unsigned long v;
@@ -268,6 +296,8 @@ static int service_port(const char *serv, int socktype, u16 *port)
 		*port = (u16)v;
 		return 0;
 	}
+	if (flags & AI_NUMERICSERV)
+		return EAI_NONAME;
 	si = rt_getservbyname(serv, socktype == RT_SOCK_DGRAM ? "udp" : "tcp");
 	if (!si)
 		return EAI_SERVICE;
@@ -275,34 +305,76 @@ static int service_port(const char *serv, int socktype, u16 *port)
 	return 0;
 }
 
-static struct addrinfo *ai_new(const struct addrinfo *hints, int socktype, u32 addr, u16 port,
-                               const char *canon)
+/* One result. as6: return a sockaddr_in6 (IPv6, or IPv4-mapped for
+ * AI_V4MAPPED); otherwise a is IPv4-mapped and a sockaddr_in is built. */
+static struct addrinfo *ai_new(const struct addrinfo *hints, int socktype, const rt_in6_addr *a, int as6,
+                               u32 scope, u16 port, const char *canon)
 {
 	u32 cl = canon ? (u32)strlen(canon) + 1 : 0;
-	struct addrinfo *ai = AllocVec(sizeof(*ai) + sizeof(struct rt_sockaddr_in) + cl,
-	                               MEMF_PUBLIC | MEMF_CLEAR);
-	struct rt_sockaddr_in *sin;
+	u32 sl = as6 ? sizeof(struct rt_sockaddr_in6) : sizeof(struct rt_sockaddr_in);
+	struct addrinfo *ai = AllocVec(sizeof(*ai) + sl + cl, MEMF_PUBLIC | MEMF_CLEAR);
 
 	if (!ai)
 		return NULL;
-	sin = (struct rt_sockaddr_in *)(ai + 1);
-	sin->sin_len = sizeof(*sin);
-	sin->sin_family = RT_AF_INET;
-	sin->sin_port = rt_htons(port);
-	sin->sin_addr = addr;
+	if (as6) {
+		struct rt_sockaddr_in6 *sin6 = (struct rt_sockaddr_in6 *)(ai + 1);
+		sin6->sin6_len = sizeof(*sin6);
+		sin6->sin6_family = RT_AF_INET6;
+		sin6->sin6_port = rt_htons(port);
+		sin6->sin6_addr = *a;
+		sin6->sin6_scope_id = scope;
+		ai->ai_family = RT_AF_INET6;
+		ai->ai_addr = sin6;
+	} else {
+		struct rt_sockaddr_in *sin = (struct rt_sockaddr_in *)(ai + 1);
+		sin->sin_len = sizeof(*sin);
+		sin->sin_family = RT_AF_INET;
+		sin->sin_port = rt_htons(port);
+		sin->sin_addr = rt_in6_v4(a);
+		ai->ai_family = RT_AF_INET;
+		ai->ai_addr = sin;
+	}
 	ai->ai_flags = hints ? hints->ai_flags : 0;
-	ai->ai_family = RT_AF_INET;
 	ai->ai_socktype = socktype;
 	ai->ai_protocol = socktype == RT_SOCK_DGRAM ? 17 : socktype == RT_SOCK_STREAM ? 6 : 0;
 	if (hints && hints->ai_protocol)
 		ai->ai_protocol = hints->ai_protocol;
-	ai->ai_addrlen = sizeof(*sin);
-	ai->ai_addr = sin;
+	ai->ai_addrlen = sl;
 	if (canon) {
-		ai->ai_canonname = (char *)(sin + 1);
+		ai->ai_canonname = (char *)(ai + 1) + sl;
 		memcpy(ai->ai_canonname, canon, cl);
 	}
 	return ai;
+}
+
+#define GAI_MAX 16
+
+/* "fe80::1%eth0" / "fe80::1%2": IPv6 literal with an optional zone */
+static int parse_literal6(const char *host, rt_in6_addr *a, u32 *scope)
+{
+	char zone[RT_IFNAMSIZ + 1];
+	int plen;
+
+	zone[0] = 0;
+	if (rt_inet6_parse_prefix(host, a, &plen, zone, sizeof(zone)) < 0 || plen >= 0)
+		return -1;
+	*scope = 0;
+	if (zone[0]) {
+		const char *end;
+		unsigned long v = rt_strtoul(zone, &end, 10);
+		if (end != zone && !*end) {
+			*scope = (u32)v;
+		} else {
+			struct rt_netif *n;
+			rt_lock();
+			n = rt_netif_find(zone);
+			*scope = n ? n->index : 0;
+			rt_unlock();
+			if (!*scope)
+				return -1;
+		}
+	}
+	return 0;
 }
 
 LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR hostname,
@@ -311,23 +383,25 @@ LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR 
 	const struct addrinfo *hints = hintsp;
 	struct addrinfo *head = NULL, **tail = &head;
 	const char *host = (const char *)hostname, *serv = (const char *)servname;
-	int types[2], ntypes = 0, i, j, naddr, e;
-	u32 addrs[8];
+	int types[2], ntypes = 0, i, j, naddr = 0, e;
+	rt_in6_addr addrs[GAI_MAX];
+	u32 scope = 0, v4;
 	char cname[256];
 	LONG flags = hints ? hints->ai_flags : 0;
+	LONG family = hints ? hints->ai_family : RT_AF_UNSPEC;
+	int want4, want6, mapped;
 
 	if (!result)
 		return EAI_FAIL;
 	*result = NULL;
-	if (hints) {
-		if (hints->ai_family != RT_AF_UNSPEC && hints->ai_family != RT_AF_INET)
-			return EAI_FAMILY;
-		if (flags & ~(AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST))
-			return EAI_BADFLAGS;
-		if (hints->ai_socktype && hints->ai_socktype != RT_SOCK_STREAM &&
-		    hints->ai_socktype != RT_SOCK_DGRAM && hints->ai_socktype != RT_SOCK_RAW)
-			return EAI_SOCKTYPE;
-	}
+	if (family != RT_AF_UNSPEC && family != RT_AF_INET && family != RT_AF_INET6)
+		return EAI_FAMILY;
+	if (flags & ~(AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV | AI_ALL |
+	              AI_V4MAPPED_CFG | AI_ADDRCONFIG | AI_V4MAPPED))
+		return EAI_BADFLAGS;
+	if (hints && hints->ai_socktype && hints->ai_socktype != RT_SOCK_STREAM &&
+	    hints->ai_socktype != RT_SOCK_DGRAM && hints->ai_socktype != RT_SOCK_RAW)
+		return EAI_SOCKTYPE;
 	if (!host && !serv)
 		return EAI_NONAME;
 	if (hints && hints->ai_socktype)
@@ -336,29 +410,82 @@ LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR 
 		types[ntypes++] = RT_SOCK_STREAM;
 		types[ntypes++] = RT_SOCK_DGRAM;
 	}
+	/* IPv4 results as IPv4-mapped IPv6 (RFC 3493 6.1) */
+	mapped = family == RT_AF_INET6 && (flags & AI_V4MAPPED);
+	want6 = family != RT_AF_INET;
+	want4 = family != RT_AF_INET6 || mapped;
+	if ((flags & AI_ADDRCONFIG) && host) {
+		int h4, h6;
+		rt_lock();
+		h4 = rt_inet_have_addr(RT_AF_INET);
+		h6 = rt_inet_have_addr(RT_AF_INET6);
+		rt_unlock();
+		if (h4 || h6) {         /* nothing configured: do not filter at all */
+			want4 &= h4;
+			want6 &= h6;
+		}
+		if (!want4 && !want6)
+			return EAI_NONAME;
+	}
 	cname[0] = 0;
 	if (!host) {
-		addrs[0] = (flags & AI_PASSIVE) ? 0 : rt_htonl(0x7f000001u);
-		naddr = 1;
-	} else if (amiga_inet_aton(host, &addrs[0])) {
+		/* RFC 3493 6.1: the unspecified or the loopback address */
+		if (want6)
+			addrs[naddr++] = (flags & AI_PASSIVE) ? rt_in6addr_any : rt_in6addr_loopback;
+		if (want4 && family != RT_AF_INET6)
+			rt_in6_set_v4mapped(&addrs[naddr++], (flags & AI_PASSIVE) ? 0 : rt_htonl(0x7f000001u));
+	} else if (amiga_inet_aton(host, &v4)) {
+		if (family == RT_AF_INET6 && !mapped)
+			return EAI_ADDRFAMILY;
+		rt_in6_set_v4mapped(&addrs[naddr++], v4);
+		rt_strlcpy(cname, host, sizeof(cname));
+	} else if (parse_literal6(host, &addrs[0], &scope) == 0) {
+		if (family == RT_AF_INET)
+			return EAI_ADDRFAMILY;
 		naddr = 1;
 		rt_strlcpy(cname, host, sizeof(cname));
-	} else if (flags & AI_NUMERICHOST) {
+	} else if (strchr(host, ':') || (flags & AI_NUMERICHOST)) {
 		return EAI_NONAME;
 	} else {
-		naddr = rt_resolve_name(host, addrs, 8, cname, sizeof(cname));
-		if (naddr == -RT_TRY_AGAIN)
-			return EAI_AGAIN;
-		if (naddr == -RT_NO_DATA || naddr == 0)
-			return EAI_NODATA;
-		if (naddr == -RT_HOST_NOT_FOUND)
-			return EAI_NONAME;
-		if (naddr < 0)
+		int r6 = -RT_NO_DATA, r4 = -RT_NO_DATA;
+		if (want6) {
+			r6 = rt_resolve_name6(host, addrs, GAI_MAX, cname, sizeof(cname));
+			if (r6 > 0)
+				naddr = r6;
+		}
+		/* with AI_V4MAPPED, IPv4 only when there is no AAAA, unless AI_ALL */
+		if (want4 && (!mapped || naddr == 0 || (flags & AI_ALL)) && naddr < GAI_MAX) {
+			u32 a4[8];
+			char c4[256];
+			c4[0] = 0;
+			r4 = rt_resolve_name(host, a4, 8, c4, sizeof(c4));
+			for (i = 0; i < r4 && naddr < GAI_MAX; i++)
+				rt_in6_set_v4mapped(&addrs[naddr++], a4[i]);
+			if (!cname[0])
+				rt_strlcpy(cname, c4, sizeof(cname));
+		}
+		if (naddr == 0) {
+			int r = r6 == -RT_TRY_AGAIN || r4 == -RT_TRY_AGAIN ? -RT_TRY_AGAIN :
+			        r6 == -RT_HOST_NOT_FOUND || r4 == -RT_HOST_NOT_FOUND ? -RT_HOST_NOT_FOUND :
+			        r6 == -RT_NO_DATA || r4 == -RT_NO_DATA || r6 == 0 || r4 == 0 ? -RT_NO_DATA : -RT_NO_RECOVERY;
+			if (r == -RT_TRY_AGAIN)
+				return EAI_AGAIN;
+			if (r == -RT_NO_DATA)
+				return EAI_NODATA;
+			if (r == -RT_HOST_NOT_FOUND)
+				return EAI_NONAME;
 			return EAI_FAIL;
+		}
 		if (!cname[0])
 			rt_strlcpy(cname, host, sizeof(cname));
+		if (naddr > 1) {
+			rt_lock();
+			rt_inet_sort_dest(addrs, naddr);
+			rt_unlock();
+		}
 	}
 	for (i = 0; i < naddr; i++) {
+		int as6 = mapped || !rt_in6_is_v4mapped(&addrs[i]);
 		for (j = 0; j < ntypes; j++) {
 			u16 port;
 			struct addrinfo *ai;
@@ -366,14 +493,14 @@ LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR 
 				if (serv)
 					continue;
 				port = 0;
-			} else if ((e = service_port(serv, types[j], &port)) != 0) {
-				if (ntypes == 1) {
+			} else if ((e = service_port(serv, types[j], flags, &port)) != 0) {
+				if (ntypes == 1 || e == EAI_NONAME) {
 					riptide_freeaddrinfo(base, head);
 					return e;
 				}
 				continue;
 			}
-			ai = ai_new(hints, types[j], addrs[i], port,
+			ai = ai_new(hints, types[j], &addrs[i], as6, as6 ? scope : 0, port,
 			            (head == NULL && (flags & AI_CANONNAME)) ? cname : NULL);
 			if (!ai) {
 				riptide_freeaddrinfo(base, head);
@@ -394,15 +521,36 @@ LONG riptide_getnameinfo(RTREG(a6) struct Library *base, RTREG(a0) const APTR sa
                        RTREG(d2) LONG servlen, RTREG(d3) LONG flags)
 {
 	const struct rt_sockaddr_in *sin = sa;
+	const struct rt_sockaddr_in6 *sin6 = sa;
+	rt_in6_addr a6;
+	u32 scope = 0;
+	u16 nport;
+	int v6;
 	char name[256];
 
-	if (!sin || salen < (LONG)sizeof(*sin))
+	if (!sin || salen < 2)
 		return EAI_FAIL;
-	if (sin->sin_family != RT_AF_INET)
+	if (sin->sin_family == RT_AF_INET) {
+		if (salen < (LONG)sizeof(*sin))
+			return EAI_FAIL;
+		v6 = 0;
+		rt_in6_set_v4mapped(&a6, sin->sin_addr);
+		nport = sin->sin_port;
+	} else if (sin->sin_family == RT_AF_INET6) {
+		if (salen < RT_SIN6_LEN_RFC2133)
+			return EAI_FAIL;
+		v6 = 1;
+		memcpy(a6.b, sin6->sin6_addr.b, 16);
+		if (salen >= RT_SIN6_LEN)
+			scope = sin6->sin6_scope_id;
+		nport = sin6->sin6_port;
+	} else {
 		return EAI_FAMILY;
+	}
 	if (host && hostlen > 0) {
 		int done = 0;
-		if (!(flags & NI_NUMERICHOST) && rt_resolve_addr(sin->sin_addr, name, sizeof(name)) == 0) {
+		if (!(flags & NI_NUMERICHOST) &&
+		    (v6 ? rt_resolve_addr6(&a6, name, sizeof(name)) : rt_resolve_addr(sin->sin_addr, name, sizeof(name))) == 0) {
 			if (flags & NI_NOFQDN) {
 				char *dot = strchr(name, '.');
 				if (dot)
@@ -413,7 +561,23 @@ LONG riptide_getnameinfo(RTREG(a6) struct Library *base, RTREG(a0) const APTR sa
 		if (!done) {
 			if (flags & NI_NAMEREQD)
 				return EAI_NONAME;
-			rt_format_ipv4(sin->sin_addr, name);
+			if (!v6) {
+				rt_format_ipv4(sin->sin_addr, name);
+			} else {
+				rt_inet6_ntop(&a6, name, sizeof(name));
+				/* RFC 4007 11: a zone for scoped addresses */
+				if (scope && (rt_in6_is_linklocal(&a6) || rt_in6_is_mc_linklocal(&a6))) {
+					struct rt_netif *n;
+					u32 l = (u32)strlen(name);
+					rt_lock();
+					n = rt_netif_by_index(scope);
+					if (n)
+						rt_snprintf(name + l, sizeof(name) - l, "%%%s", n->name);
+					else
+						rt_snprintf(name + l, sizeof(name) - l, "%%%lu", (unsigned long)scope);
+					rt_unlock();
+				}
+			}
 		}
 		if ((LONG)strlen(name) >= hostlen)
 			return EAI_MEMORY;
@@ -421,7 +585,7 @@ LONG riptide_getnameinfo(RTREG(a6) struct Library *base, RTREG(a0) const APTR sa
 	}
 	if (serv && servlen > 0) {
 		const struct rt_servent_info *si = NULL;
-		u16 port = rt_ntohs(sin->sin_port);
+		u16 port = rt_ntohs(nport);
 		if (!(flags & NI_NUMERICSERV))
 			si = rt_getservbyport(port, (flags & NI_DGRAM) ? "udp" : "tcp");
 		if (si)
@@ -499,7 +663,7 @@ void riptide_if_freenameindex(RTREG(a6) struct Library *base, RTREG(a0) APTR ptr
 
 LONG riptide_RiptideSupportsIPV6(RTREG(a6) struct Library *base)
 {
-	return 0;
+	return 1;      /* AF_INET6 sockets, sockaddr_in6, getaddrinfo() & co. */
 }
 
 LONG riptide_RiptideResGetOptions(RTREG(a6) struct Library *base)

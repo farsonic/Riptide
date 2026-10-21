@@ -16,6 +16,97 @@ static const struct rt_sysctl inet_sysctl[] = {
 	  &rt_ip6_v6only, 0, 1, NULL, "IPV6_V6ONLY default of new AF_INET6 sockets" },
 };
 
+/* ---- destination address selection (RFC 6724 6) ---- */
+
+struct dest_key {
+	rt_in6_addr d, s;
+	int usable;
+	int ds, ss;                   /* scopes */
+	int dl, sl;                   /* labels */
+	int prec;
+};
+
+static void dest_key(const rt_in6_addr *d, struct dest_key *k)
+{
+	struct rt_inet_route r;
+
+	k->d = *d;
+	k->usable = rt_inet_route(d, 0, &r) == 0 && !rt_inaddr_is_any(&r.src);
+	k->s = k->usable ? r.src : rt_in6addr_any;
+	k->ds = rt_in6_scope(d);
+	k->ss = k->usable ? rt_in6_scope(&k->s) : -1;
+	k->dl = rt_in6_label(d);
+	k->sl = k->usable ? rt_in6_label(&k->s) : -1;
+	k->prec = rt_in6_precedence(d);
+}
+
+/* < 0: a before b, > 0: b before a, 0: keep the order (rule 10) */
+static int dest_cmp(const struct dest_key *a, const struct dest_key *b)
+{
+	int ca, cb;
+
+	if (a->usable != b->usable)                              /* rule 1 */
+		return a->usable ? -1 : 1;
+	if ((a->ds == a->ss) != (b->ds == b->ss))                /* rule 2 */
+		return a->ds == a->ss ? -1 : 1;
+	if ((a->dl == a->sl) != (b->dl == b->sl))                /* rule 5 */
+		return a->dl == a->sl ? -1 : 1;
+	if (a->prec != b->prec)                                  /* rule 6 */
+		return a->prec > b->prec ? -1 : 1;
+	if (a->ds != b->ds)                                      /* rule 8 */
+		return a->ds < b->ds ? -1 : 1;
+	if (a->usable && !rt_in6_is_v4mapped(&a->d) && !rt_in6_is_v4mapped(&b->d)) {
+		ca = rt_in6_common_prefix(&a->d, &a->s);             /* rule 9 */
+		cb = rt_in6_common_prefix(&b->d, &b->s);
+		if (ca > 64)
+			ca = 64;                                         /* RFC 6724 2.2: up to the prefix */
+		if (cb > 64)
+			cb = 64;
+		if (ca != cb)
+			return ca > cb ? -1 : 1;
+	}
+	return 0;
+}
+
+void rt_inet_sort_dest(rt_in6_addr *a, int n)
+{
+	struct dest_key k[16], t;
+	int i, j;
+
+	if (n > 16)
+		n = 16;
+	for (i = 0; i < n; i++)
+		dest_key(&a[i], &k[i]);
+	for (i = 1; i < n; i++) {                                /* insertion sort: stable */
+		t = k[i];
+		for (j = i; j > 0 && dest_cmp(&t, &k[j - 1]) < 0; j--)
+			k[j] = k[j - 1];
+		k[j] = t;
+	}
+	for (i = 0; i < n; i++)
+		a[i] = k[i].d;
+}
+
+int rt_inet_have_addr(int family)
+{
+	struct rt_netif *n;
+
+	for (n = rt_netif_list(); n; n = n->next) {
+		if (n->type == RT_IFT_LOOP || !(n->flags & RT_IFF_UP))
+			continue;
+		if (family == RT_AF_INET && n->addr)
+			return 1;
+		if (family == RT_AF_INET6) {
+			struct rt_in6_ifaddr_info ai[8];
+			int c = rt_in6_addr_list(n, ai, 8), i;
+			for (i = 0; i < c && i < 8; i++)
+				if (!rt_in6_is_linklocal(&ai[i].addr) && !(ai[i].flags & RT_IN6_IFF_TENTATIVE))
+					return 1;
+		}
+	}
+	return 0;
+}
+
 void rt_inet_init(void);
 void rt_inet_init(void)
 {
