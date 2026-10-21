@@ -191,6 +191,7 @@ learned routes (redirects, path MTU) are dropped.
 interface NAME device=DEVICE [unit=N] [mtu=N] [raw]
 interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N]
 interface NAME delete              # at run time: close the driver, drop the interface
+interface NAME|all resetstats      # zero the interface and driver counters (ip link resetstats)
 user NAME [uid=N] [gid=N] [home=DIR] [realname=TEXT]
 compat aliases on|off              # publish the compat alias library (default on)
 loglevel N
@@ -207,9 +208,13 @@ uses its name.
   hardware type, address size), `S2_GETSTATIONADDRESS`,
   `S2_CONFIGINTERFACE` with the factory address, and `S2_ONLINE`.
 * On Ethernet-like devices (hardware type Ethernet or IEEE 802) Riptide
-  keeps 8 `CMD_READ` requests queued for IPv4 and 4 for ARP. Point-to-point
-  devices (PPP, SLIP, and any other hardware type) get only the IPv4
-  reads and are configured with `ifconfig NAME A.B.C.D peer P.Q.R.S`.
+  keeps 48 `CMD_READ` requests queued for IPv4 (`reads=N`, 4 to 128), 4
+  for ARP and 24 for IPv6. A frame that arrives while the driver holds no
+  read of its type is dropped by the driver; `ip -s link` shows how low
+  each queue got, and Riptide logs a warning (at most once a minute) when
+  one ran out. Point-to-point devices (PPP, SLIP, and any other hardware
+  type) get only the IPv4 and IPv6 reads and are configured with
+  `ifconfig NAME A.B.C.D peer P.Q.R.S`.
 * Cooked mode is the default. `raw` makes Riptide build and strip the
   Ethernet header itself, using `SANA2IOF_RAW`. Use it only for drivers
   with a broken cooked mode.
@@ -338,6 +343,7 @@ default via 10.0.2.2 dev eth0 proto dhcp src 10.0.2.15
 | `ip link add NAME type sana2 device DEV [unit N] [mtu N]` | open a SANA-II device at run time |
 | `ip link add NAME type mni driver FILE [unit N] [options TEXT]` | load an MNI driver |
 | `ip link del [dev] NAME` | close a driver interface |
+| `ip link resetstats [[dev] IF]` | **Riptide extension:** zero the counters of IF (all interfaces without IF) |
 | `ip addr [show [dev] IF]` | addresses; DHCP addresses are `dynamic` with the lease time left |
 | `ip addr add\|replace A.B.C.D/BITS [peer P] [broadcast B] dev IF` | Riptide keeps one IPv4 address per interface: `add` refuses a second one, `replace` changes it |
 | `ip addr del A.B.C.D[/BITS] dev IF`, `ip addr flush dev IF` | |
@@ -352,10 +358,46 @@ default via 10.0.2.2 dev eth0 proto dhcp src 10.0.2.15
 | `ip dhcp start\|stop\|renew [dev] IF` | **Riptide extension** |
 | `ip dns [show]`, `ip dns add\|del ADDR`, `ip dns flush`, `ip dns search DOMAIN` | **Riptide extension:** resolver configuration (resolv.conf style output) |
 
+**Driver counters.** For SANA-II and MNI interfaces `ip -s link` adds what
+the driver side saw since the last `ip link resetstats`; `ip -s -s link`
+(or `-ss`) adds the details:
+
+```
+1> ip -s -s link show eth0
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP mode DEFAULT
+    ...
+    driver sana2 uaenet.device unit 0, counters of the last 179 s
+    RX reads: IPv4 48/48 lowest 41 ran out 0, ARP 4/4 lowest 4 ran out 0, IPv6 24/24 lowest 24 ran out 0
+    RX: frames 5120 bytes 7421440 errors 0 nobuf 0, wakeups 830, at most 17 frames per wakeup
+    TX: frames 2600 bytes 156000 errors 0 queue full 0, in flight 0 (most 3 of 32)
+    driver stats: rx 5120 tx 2600 bad 0 overruns 0 unknown types 0
+    RX frames per wakeup: 1: 410 2-3: 250 4-7: 120 8-15: 45 16-31: 5 32+: 0
+    device query: hardware type 1, level 0, mtu 1500, raw mtu 0, 10000000 bit/s
+    driver stats: reconfigurations 0, online since 0, 0.2 s old
+    special stats: none
+```
+
+| Line | |
+|---|---|
+| `RX reads` | per packet type: reads queued now / configured, the fewest the driver still held when Riptide woke up to collect frames, and how often it held none. **`ran out` above 0 means the driver probably dropped frames**: raise `reads=N` on the `interface` line. For MNI drivers one buffer pool serves every type (`RX buffers`) |
+| `RX` | frames and bytes the driver delivered, read errors, receive buffers Riptide could not allocate (`nobuf`), wakeups that collected frames and the largest batch |
+| `TX` | frames handed to the driver, errors, packets dropped because every write request was busy (`queue full`), writes outstanding now and at most |
+| `driver stats` | the driver's own `S2_GETGLOBALSTATS` (`overruns` are frames the hardware missed); MNI drivers report `driver dropped` (frames refused for lack of a buffer) instead |
+| `RX frames per wakeup` | how many frames each wakeup collected: large batches mean frames arrive faster than Riptide gets to run |
+| `RX/TX errors` | error codes and counts (`IOERR_*`, `S2ERR_*`, MNI status) |
+| `special stats` | `S2_GETSPECIALSTATS` (retries, FIFO underruns, ... as the driver names them) |
+
+Riptide asks the driver for its statistics when they are read (outside the
+stack lock), so `ip -s link` waits 0.2 s for fresh ones when the last
+query is older than half a second. Driver statistics are not reset.
+
 ### ifconfig
 
 net-tools output (`ifconfig` lists the interfaces that are up, `-a` all,
-`-s` the short table). The extra `device` line names the driver.
+`-s` the short table). The extra `device` line names the driver; `RX ...
+overruns` are the frames the driver says it missed. `-v` adds two lines of
+driver counters (IPv4 reads queued/configured, the lowest, how often they
+ran out, wakeups, the largest batch, writes in flight); see `ip -s link`.
 
 ```
 1> ifconfig eth0
@@ -672,6 +714,7 @@ byte order, everything else in host order; there are no pointers.
 | 4 | `net.riptide.sockets` | `struct rt_ctl_sock`: TCP, UDP and raw sockets with state, queues, RTT, cwnd |
 | 5 | `net.riptide.dns` | one `struct rt_ctl_dns`: name servers, search domain, host name |
 | 6..9 | `net.riptide.{ip,icmp,udp,tcp}stat` | one `struct rt_{ip,icmp,udp,tcp}_stats` |
+| 20 | `net.riptide.drivers` | `struct rt_ctl_driver`, one per driver interface (SANA-II, MNI): receive queues (reads configured/queued, lowest, times empty), frames per wakeup, buffer shortages, errors by code, transmits in flight, the `S2_DEVICEQUERY` values and the driver's own `S2_GETGLOBALSTATS`/`S2_GETSPECIALSTATS` |
 
 Use BSD sysctl semantics: call with `oldp = NULL` to get the size,
 allocate a bit more (a table can grow in between) and call again. If it

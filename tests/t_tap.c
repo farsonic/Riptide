@@ -352,6 +352,43 @@ static void test_ipv6(void)
 	}
 }
 
+/* net.riptide.drivers after 2.25 MB went both ways */
+static void check_drvstats(void)
+{
+	static u8 buf[4096];
+	struct rt_ctl_hdr h;
+	const struct rt_ctl_driver *r = NULL;
+	u32 len = sizeof(buf), i, j;
+
+	u32 opackets;
+
+	rt_lock();
+	CHECK(rt_sysctl_byname("net.riptide.drivers", buf, &len, NULL, 0) == 0);
+	opackets = tap->stats.opackets;
+	rt_unlock();
+	memcpy(&h, buf, sizeof(h));
+	for (i = 0; i < h.count; i++) {
+		const struct rt_ctl_driver *x = (const void *)(buf + sizeof(h) + i * h.recsize);
+		if (!strcmp(x->name, tap->name))
+			r = x;
+	}
+	CHECK(r != NULL);
+	if (!r)
+		return;
+	CHECK(!strcmp(r->kind, "tap") && strstr(r->driver, tap_name) != NULL);
+	CHECK(r->flags & RT_CTL_DRVF_NOQ);
+	CHECK(r->rx_frames > 1000 && r->rx_bytes > (2u << 20));
+	CHECK(r->tx_frames > 1000 && r->tx_bytes > (1u << 20));
+	CHECK(r->tx_inflight == 0 && r->tx_errors == 0);
+	CHECK(r->tx_frames == opackets);   /* the interface counts every frame once */
+	for (i = j = 0; i < RT_CTL_DRV_BATCH; i++)
+		j += r->batch[i];
+	CHECK(j > 0 && r->batch_max >= 1);
+	printf("t_tap: driver counters: rx %lu frames, tx %lu frames, %lu wakeups, at most %lu frames per wakeup\n",
+	       (unsigned long)r->rx_frames, (unsigned long)r->tx_frames, (unsigned long)j,
+	       (unsigned long)r->batch_max);
+}
+
 int main(void)
 {
 	setvbuf(stdout, NULL, _IOLBF, 0);
@@ -386,6 +423,7 @@ int main(void)
 	CHECK(sh("ip neigh show dev %s | grep -q '10.78.7.2 .*lladdr 02:52:54:00:78:02'", tap_name) == 0);
 	/* an AF_INET6 listener on [::] takes the IPv4 client (dual-stack) */
 	linux_to_riptide(AF_INET, NULL, "10.78.7.2", 9003, 256u << 10, 1);
+	check_drvstats();
 
 	if (access("/proc/net/if_inet6", R_OK) == 0)
 		test_ipv6();

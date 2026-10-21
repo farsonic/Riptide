@@ -50,6 +50,7 @@
 #define RT_CTL_IP6STAT   15       /* net.riptide.ip6stat   one struct rt_ip6_stats   */
 #define RT_CTL_ICMP6STAT 16       /* net.riptide.icmp6stat one struct rt_icmp6_stats */
 #define RT_CTL_IFACES6   17       /* net.riptide.ifaces6   struct rt_ctl_iface6[] */
+#define RT_CTL_DRIVERS   20       /* net.riptide.drivers   struct rt_ctl_driver[] */
 
 struct rt_ctl_hdr {
 	u16 version;              /* RT_CTL_VERSION */
@@ -275,6 +276,74 @@ static inline int rt_ctl_prefixlen(u32 mask_n)
 		}
 	return n;
 }
+
+/* ---- driver counters (net.riptide.drivers) ----
+ * One record per interface whose driver keeps them (SANA-II, MNI, host
+ * TAP). Counters run since the last "interface NAME resetstats"; the
+ * dq_*, gs_* and special[] values come from the driver and are not reset. */
+#define RT_CTL_DRV_RXQ      3     /* rxq[]: 0 IPv4, 1 ARP, 2 IPv6 */
+#define RT_CTL_DRV_BATCH    6     /* batch[]: 1, 2-3, 4-7, 8-15, 16-31, 32+ frames */
+#define RT_CTL_DRV_NERR     8     /* rxerr[], txerr[] */
+#define RT_CTL_DRV_NSPECIAL 8     /* special[] */
+#define RT_CTL_DRV_ERR_OTHER  0x7fffffff /* rt_ctl_drv_err.code: all codes that did not fit */
+#define RT_CTL_DRV_ERR_LENGTH 0x7ffffffe /* rt_ctl_drv_err.code: frame too short or too long */
+
+/* rt_ctl_driver.flags */
+#define RT_CTL_DRVF_DQ      0x01  /* dq_* valid (S2_DEVICEQUERY) */
+#define RT_CTL_DRVF_GS      0x02  /* gs_* valid (S2_GETGLOBALSTATS) */
+#define RT_CTL_DRVF_SS      0x04  /* special[] valid (S2_GETSPECIALSTATS) */
+#define RT_CTL_DRVF_DROPS   0x08  /* drv_drops valid (MNI: frames refused, no free buffer) */
+#define RT_CTL_DRVF_SHARED  0x10  /* rxq[0] is one buffer pool for every packet type (MNI) */
+#define RT_CTL_DRVF_NOQ     0x20  /* no receive queue to report (host TAP) */
+
+struct rt_ctl_drv_rxq {
+	u32  cfg;                 /* reads (receive buffers) configured */
+	u32  queued;              /* handed to the driver now */
+	u32  low;                 /* fewest the driver held at a wakeup (0: frames may be lost) */
+	u32  empty;               /* wakeups at which the driver held none */
+};
+
+struct rt_ctl_drv_err {
+	s32  code;                /* SANA-II io_Error (IOERR_* < 0), MNI status, -errno */
+	u32  count;
+};
+
+struct rt_ctl_drv_special {
+	u32  type;                /* S2SS_* */
+	u32  count;
+	char name[24];            /* the driver's name for it, may be empty */
+};
+
+struct rt_ctl_driver {
+	char name[16];            /* interface */
+	u32  index;
+	char kind[8];             /* "sana2", "mni", "tap" */
+	char driver[48];          /* device or driver file */
+	u32  unit;
+	u32  flags;               /* RT_CTL_DRVF_* */
+	u32  since_s;             /* seconds since the counters were reset */
+	u32  rx_frames, rx_bytes, tx_frames, tx_bytes;
+	struct rt_ctl_drv_rxq rxq[RT_CTL_DRV_RXQ];
+	u32  batch[RT_CTL_DRV_BATCH]; /* wakeups, by number of frames received in them */
+	u32  batch_max;           /* most frames received in one wakeup */
+	u32  rx_nobuf;            /* receive buffer allocation failures */
+	u32  rx_errors, tx_errors;
+	struct rt_ctl_drv_err rxerr[RT_CTL_DRV_NERR];
+	struct rt_ctl_drv_err txerr[RT_CTL_DRV_NERR];
+	u32  tx_slots;            /* transmit requests available, 0 = no limit */
+	u32  tx_inflight;         /* handed to the driver, not completed */
+	u32  tx_inflight_max;
+	u32  tx_full;             /* packets dropped: no transmit request free */
+	u32  drv_drops;           /* RT_CTL_DRVF_DROPS */
+	/* S2_DEVICEQUERY */
+	u32  dq_hwtype, dq_level, dq_mtu, dq_rawmtu, dq_bps;
+	/* S2_GETGLOBALSTATS */
+	u32  gs_rx, gs_tx, gs_baddata, gs_overruns, gs_unknown, gs_reconfig;
+	u32  gs_laststart_s;      /* LastStart.tv_secs */
+	u32  gs_age_ms;           /* age of gs_* and special[] */
+	u32  nspecial;
+	struct rt_ctl_drv_special special[RT_CTL_DRV_NSPECIAL];
+};
 
 /* State names shared by the core and the tools (never NULL). */
 static inline const char *rt_ctl_tcp_state_name(int st)

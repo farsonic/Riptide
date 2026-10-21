@@ -1061,6 +1061,20 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 			return cfg_err(err, errlen, r, "dhcp: %s", rt_strerror(-r));
 		return 0;
 	}
+	if (!strcmp(k, "interface") && argc == 3 && !strcmp(argv[2], "resetstats")) {
+		/* interface NAME|all resetstats: zero interface and driver counters */
+		struct rt_netif *nif;
+		if (!strcmp(argv[1], "all")) {
+			for (nif = rt_netif_list(); nif; nif = nif->next)
+				rt_netif_reset_stats(nif);
+			return 0;
+		}
+		nif = rt_netif_find(argv[1]);
+		if (!nif)
+			return cfg_err(err, errlen, -RT_ENXIO, "interface: no interface '%s'", argv[1]);
+		rt_netif_reset_stats(nif);
+		return 0;
+	}
 	if (unknown)
 		return unknown(argc, argv, err, errlen);
 	return cfg_err(err, errlen, -RT_EINVAL, "unknown keyword '%s'", k);

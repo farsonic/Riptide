@@ -57,6 +57,34 @@ struct Sana2DeviceQuery {
 #define S2WireType_SLIP    254
 #define S2WireType_CSLIP   255
 
+/* S2_GETGLOBALSTATS */
+struct Sana2DeviceStats {
+	ULONG PacketsReceived;
+	ULONG PacketsSent;
+	ULONG BadData;
+	ULONG Overruns;
+	ULONG Unused;
+	ULONG UnknownTypesReceived;
+	ULONG Reconfigurations;
+	struct timeval LastStart;
+};
+
+/* S2_GETSPECIALSTATS: the header is followed by RecordCountMax records */
+struct Sana2SpecialStatRecord {
+	ULONG  Type;
+	ULONG  Count;
+	STRPTR String;
+};
+
+struct Sana2SpecialStatHeader {
+	ULONG RecordCountMax;
+	ULONG RecordCountSupplied;
+};
+
+#define S2SS_ETHERNET_BADMULTICAST   ((((S2WireType_Ethernet) & 0xffff) << 16) | 0x0000)
+#define S2SS_ETHERNET_RETRIES        ((((S2WireType_Ethernet) & 0xffff) << 16) | 0x0001)
+#define S2SS_ETHERNET_FIFO_UNDERRUNS ((((S2WireType_Ethernet) & 0xffff) << 16) | 0x0002)
+
 #define S2_START               CMD_NONSTD
 #define S2_DEVICEQUERY         (S2_START + 0)
 #define S2_GETSTATIONADDRESS   (S2_START + 1)

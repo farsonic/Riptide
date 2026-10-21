@@ -93,9 +93,41 @@ static void print_inet6(const struct rt_ctl_iface *f, void *d6, const struct rt_
 	}
 }
 
-static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6)
+static int verbose;
+
+static const struct rt_ctl_driver *find_driver(const struct rt_ctl_iface *f, void *dd, const struct rt_ctl_hdr *dh)
+{
+	u32 k;
+
+	for (k = 0; dd && k < dh->count; k++) {
+		const struct rt_ctl_driver *r = cl_rec(dd, dh, k);
+		if (r->index == f->index)
+			return r;
+	}
+	return NULL;
+}
+
+/* ifconfig -v: the driver counters in one or two lines */
+static void print_driver(const struct rt_ctl_driver *r)
+{
+	u32 q, wakeups = 0;
+
+	for (q = 0; q < RT_CTL_DRV_BATCH; q++)
+		wakeups += r->batch[q];
+	if (!(r->flags & RT_CTL_DRVF_NOQ))
+		cl_printf("        RX reads %lu/%lu  lowest %lu  ran out %lu  nobuf %lu\n",
+		          (unsigned long)r->rxq[0].queued, (unsigned long)r->rxq[0].cfg,
+		          (unsigned long)r->rxq[0].low, (unsigned long)r->rxq[0].empty, (unsigned long)r->rx_nobuf);
+	cl_printf("        RX wakeups %lu  most frames per wakeup %lu  TX in flight %lu (most %lu)  queue full %lu\n",
+	          (unsigned long)wakeups, (unsigned long)r->batch_max, (unsigned long)r->tx_inflight,
+	          (unsigned long)r->tx_inflight_max, (unsigned long)r->tx_full);
+}
+
+static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6,
+                     const struct rt_ctl_driver *dr)
 {
 	char fl[128], a[16], b[16], c[16], h[24];
+	u32 overruns = 0;
 
 	flag_names(f->flags, fl, sizeof(fl));
 	cl_printf("%s: flags=%lu<%s>  mtu %u\n", f->name, (unsigned long)linux_flags(f->flags), fl,
@@ -118,8 +150,11 @@ static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl
 	human(f->ibytes, h);
 	cl_printf("        RX packets %lu  bytes %lu (%s)\n", (unsigned long)f->ipackets,
 	          (unsigned long)f->ibytes, h);
-	cl_printf("        RX errors %lu  dropped %lu  overruns 0  frame 0\n", (unsigned long)f->ierrors,
-	          (unsigned long)f->iqdrops);
+	if (dr)
+		overruns = (dr->flags & RT_CTL_DRVF_DROPS) ? dr->drv_drops :
+		           (dr->flags & RT_CTL_DRVF_GS) ? dr->gs_overruns : 0;
+	cl_printf("        RX errors %lu  dropped %lu  overruns %lu  frame 0\n", (unsigned long)f->ierrors,
+	          (unsigned long)f->iqdrops, (unsigned long)overruns);
 	human(f->obytes, h);
 	cl_printf("        TX packets %lu  bytes %lu (%s)\n", (unsigned long)f->opackets,
 	          (unsigned long)f->obytes, h);
@@ -127,6 +162,8 @@ static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl
 	          (unsigned long)f->oerrors, (unsigned long)f->collisions);
 	if (f->descr[0] && f->type != RT_IFT_LOOP)
 		cl_printf("        device %s\n", f->descr);
+	if (verbose && dr)
+		print_driver(dr);
 	cl_puts("\n");
 }
 
@@ -150,13 +187,14 @@ static void print_short(const struct rt_ctl_iface *f)
 
 static int list(int all, int shortfmt, const char *only)
 {
-	struct rt_ctl_hdr h, h6;
-	void *d = cl_dump(RT_CTL_IFACES, &h), *d6;
+	struct rt_ctl_hdr h, h6, dh;
+	void *d = cl_dump(RT_CTL_IFACES, &h), *d6, *dd;
 	u32 k;
 
 	if (!d)
 		return CL_FAIL;
 	d6 = shortfmt ? NULL : cl_dump(RT_CTL_ADDRS6, &h6);
+	dd = shortfmt ? NULL : cl_dump(RT_CTL_DRIVERS, &dh);
 	if (only && !cl_find_iface(d, &h, only)) {
 		cl_printf("%s: error fetching interface information: Device not found\n", only);
 		FreeVec(d);
@@ -171,11 +209,13 @@ static int list(int all, int shortfmt, const char *only)
 		if (shortfmt)
 			print_short(f);
 		else
-			print_if(f, d6, &h6);
+			print_if(f, d6, &h6, find_driver(f, dd, &dh));
 	}
 	FreeVec(d);
 	if (d6)
 		FreeVec(d6);
+	if (dd)
+		FreeVec(dd);
 	return CL_OK;
 }
 
@@ -362,7 +402,7 @@ static int ifconfig_main(int argc, char **argv)
 		else if (!strcmp(argv[i], "-s"))
 			shortfmt = 1;
 		else if (!strcmp(argv[i], "-v"))
-			;
+			verbose = 1;
 		else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") || !strcmp(argv[i], "-?")) {
 			usage();
 			return CL_OK;

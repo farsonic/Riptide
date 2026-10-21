@@ -111,6 +111,12 @@ netstat_r|netstat -rn
 netstat_i|netstat -i
 netstat_s|netstat -s
 nc_out|nc -d -w 3 127.0.0.1 7778
+ip_ss_link|ip -s -s link show eth0
+ifconfig_v|ifconfig -v eth0
+ip_link_reset|ip link resetstats dev eth0
+ip_s_link2|ip -s link show dev eth0
+ip_link_reset_all|ip link resetstats
+ip_link_reset_bad|ip link resetstats nosuch0
 ip_link_add|ip link add eth1 type sana2 device uaenet.device unit 1
 ip_link_after|ip -br link
 ip_link_del|ip link del eth1
@@ -239,7 +245,34 @@ expect ip_a '^1: lo0: <LOOPBACK,MULTICAST,UP,LOWER_UP> mtu 16384 state UNKNOWN' 
 reject ip_addr_lo 'eth0'
 expect ip_br_a '^lo0 +UNKNOWN +127\.0\.0\.1/8' '^eth0 +(UP|DOWN) +10\.0\.2\.15/24'
 expect ip_br_link '^eth0 +(UP|DOWN) +([0-9a-f]{2}:){5}'
-expect ip_s_link 'RX: +bytes +packets' 'TX: +bytes +packets' 'driver uaenet\.device unit 0'
+expect ip_s_link 'RX: +bytes +packets' 'TX: +bytes +packets' 'driver uaenet\.device unit 0' \
+	'^    driver sana2 uaenet\.device unit 0, counters of the last [0-9]+ s' \
+	'^    RX reads: IPv4 48/48 lowest [0-9]+ ran out 0, ARP 4/4 lowest [0-9]+ ran out 0, IPv6 24/24 lowest [0-9]+ ran out 0' \
+	'^    RX: frames [0-9]+ bytes [0-9]+ errors 0 nobuf 0, wakeups [0-9]+, at most [0-9]+ frames per wakeup' \
+	'^    TX: frames [0-9]+ bytes [0-9]+ errors 0 queue full 0, in flight [0-9]+ \(most [0-9]+ of 32\)'
+reject ip_s_link 'RX frames per wakeup'
+# driver counters after traffic went out on eth0 (nothing comes back here)
+expect ip_ss_link '^    TX: frames [1-9][0-9]* bytes [1-9][0-9]* errors 0 queue full 0, in flight [0-9]+ \(most [1-9][0-9]* of 32\)' \
+	'^    RX frames per wakeup: 1: [0-9]+ 2-3: [0-9]+ 4-7: [0-9]+ 8-15: [0-9]+ 16-31: [0-9]+ 32\+: [0-9]+' \
+	'^    device query: hardware type 1, level [0-9]+, mtu 1500, raw mtu [0-9]+, [0-9]+ bit/s' \
+	'^    driver stats: (reconfigurations [0-9]+, online since [0-9]+, [0-9]+\.[0-9] s old|not supported by the driver)' \
+	'ran out 0, IPv6 24/24'
+# the interface and the driver count each frame once (before any packet
+# waited for an unanswered ARP request; the driver table is
+# read a moment after the interface table)
+pk=$(out ip_s_link | awk '/TX: +bytes +packets/ { getline; print $2 }')
+fr=$(out ip_s_link | sed -n 's/^    TX: frames \([0-9]*\) .*/\1/p')
+if [ -z "$pk" ] || [ -z "$fr" ] || [ "$pk" -gt "$fr" ] || [ $((fr - pk)) -gt 3 ]; then
+	echo "FAIL ip_s_link: interface TX packets '$pk' vs driver TX frames '$fr'"
+	fails=$((fails + 1))
+fi
+expect ifconfig_v '^        RX reads 48/48  lowest [0-9]+  ran out 0  nobuf 0' \
+	'^        RX wakeups [0-9]+  most frames per wakeup [0-9]+  TX in flight [0-9]+ \(most [0-9]+\)  queue full 0' \
+	'RX errors 0  dropped [0-9]+  overruns [0-9]+  frame 0'
+reject ifconfig 'RX reads'
+expect ip_s_link2 '^    driver sana2 uaenet\.device unit 0, counters of the last [0-9] s' \
+	'^    TX: frames [0-9]{1,2} bytes [0-9]+ errors 0 ' '^ +[0-9]{1,4} +[0-9]{1,2} +0 +0 +0 +0$'
+expect ip_link_reset_bad "no interface 'nosuch0'"
 expect ip_r '^default via 10\.0\.2\.2 dev eth0 proto static' \
 	'^10\.0\.2\.0/24 dev eth0 proto kernel scope link src 10\.0\.2\.15' '^127\.0\.0\.0/8 dev lo0 proto kernel'
 expect ip_route_add_dup 'exists'

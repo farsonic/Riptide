@@ -94,6 +94,8 @@ struct mniif {
 	struct mni_rx rx[MNI_RX_POOL];
 	struct mni_tx tx[MNI_TX_POOL];
 	ULONG  overruns;
+	struct rt_drv_stats drv;     /* net.riptide.drivers */
+	ULONG  overruns0;            /* overruns at the last counter reset */
 };
 
 static BYTE mni_sigbit = -1;
@@ -189,22 +191,64 @@ static int rx_attach_buf(struct mniif *mi, struct mni_rx *r)
 	return 0;
 }
 
+/* Receive buffers the driver can still take at this wakeup (one pool for
+ * every packet type). Lock held. */
+static void mni_sample_rx(struct mniif *mi)
+{
+	struct MinNode *n;
+	u32 nfree = 0;
+	int any;
+
+	Disable();
+	any = mi->rx_done.mlh_Head->mln_Succ != NULL;
+	for (n = mi->rx_free.mlh_Head; n->mln_Succ; n = n->mln_Succ)
+		nfree++;
+	Enable();
+	mi->drv.rxq[RT_DRV_RX_IP].queued = nfree;
+	if (any)
+		rt_drv_rx_avail(&mi->ai.nif, RT_DRV_RX_IP, nfree);
+}
+
+/* rt_drv_stats hooks: lock held */
+static void mni_drv_info(struct rt_netif *nif, struct rt_ctl_driver *r)
+{
+	struct mniif *mi = nif->driver;
+
+	rt_strlcpy(r->kind, "mni", sizeof(r->kind));
+	rt_strlcpy(r->driver, mi->driver, sizeof(r->driver));
+	r->unit = mi->unit;
+	r->flags |= RT_CTL_DRVF_DROPS | RT_CTL_DRVF_SHARED;
+	r->drv_drops = mi->overruns - mi->overruns0;
+}
+
+static void mni_drv_reset(struct rt_netif *nif)
+{
+	struct mniif *mi = nif->driver;
+
+	mi->overruns0 = mi->overruns;
+}
+
 static void mni_poll(struct amiga_if *ai)
 {
 	struct mniif *mi = (struct mniif *)ai;
 	struct rt_netif *nif = &ai->nif;
 	struct mni_rx *r;
 	struct mni_tx *t;
+	u32 nrx = 0;
 
+	mni_sample_rx(mi);
 	for (;;) {
 		Disable();
 		r = (struct mni_rx *)remhead_min(&mi->rx_done);
 		Enable();
 		if (!r)
 			break;
+		nrx++;
 		if (r->status < 0 || r->len > r->frag.len || r->len == 0) {
+			rt_drv_rx_done(nif, -1, 0, r->status < 0 ? (s32)r->status : (s32)RT_CTL_DRV_ERR_LENGTH);
 			nif->stats.ierrors++;
 		} else {
+			rt_drv_rx_done(nif, -1, r->len, 0);
 			struct rt_buf *b = r->b;
 			u16 fl = 0;
 			r->b = NULL;
@@ -212,11 +256,10 @@ static void mni_poll(struct amiga_if *ai)
 			b->netif = nif;
 			if (r->flags & MNI_FLAG_BCAST)
 				fl |= RT_BUFF_BCAST;
-			nif->stats.ipackets++;
-			nif->stats.ibytes += b->len;
 			rt_netif_input(nif, b, (u16)r->type, r->src, fl);
 		}
 		if (rx_attach_buf(mi, r) < 0) {
+			rt_drv_rx_nobuf(nif);
 			addtail_min(&mi->rx_nobuf, &r->node);
 		} else {
 			Disable();
@@ -224,6 +267,7 @@ static void mni_poll(struct amiga_if *ai)
 			Enable();
 		}
 	}
+	rt_drv_batch(nif, nrx);
 	/* records that could not get a buffer earlier */
 	while (mi->rx_nobuf.mlh_Head->mln_Succ) {
 		r = (struct mni_rx *)mi->rx_nobuf.mlh_Head;
@@ -243,6 +287,7 @@ static void mni_poll(struct amiga_if *ai)
 		t = (struct mni_tx *)((UBYTE *)t - offsetof(struct mni_tx, node));
 		if (t->pkt.status < 0)
 			nif->stats.oerrors++;
+		rt_drv_tx_done(nif, t->pkt.status < 0 ? (s32)t->pkt.status : 0);
 		rt_buf_free(t->b);
 		t->b = NULL;
 		t->busy = 0;
@@ -295,6 +340,8 @@ static int mni_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u
 
 	if (!t || !mi->handle) {
 		nif->stats.oerrors++;
+		if (!t)
+			rt_drv_tx_full(nif);
 		rt_buf_free(b);
 		return t ? -RT_ENETDOWN : -RT_ENOBUFS;
 	}
@@ -312,12 +359,12 @@ static int mni_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u
 	t->pkt.length = b->len;
 	t->b = b;
 	t->busy = 1;
-	nif->stats.opackets++;
-	nif->stats.obytes += b->len;
+	rt_drv_tx_start(nif, b->len);
 	r = MNI_Send(mi->base, mi->handle, &t->pkt);
 	if (r == 1)
 		return 0;          /* completion comes through the tx callback */
 	/* refused (0) or not online (-9): we keep the descriptor */
+	rt_drv_tx_done(nif, r ? (s32)r : -1);
 	nif->stats.oerrors++;
 	t->b = NULL;
 	t->busy = 0;
@@ -430,6 +477,11 @@ int mni_open_if(const char *name, const char *driver, ULONG unit, const char *op
 	nif->flags = RT_IFF_BROADCAST | RT_IFF_SIMPLEX | RT_IFF_MULTICAST;
 	nif->link_output = mni_output;
 	nif->driver = mi;
+	mi->drv.info = mni_drv_info;
+	mi->drv.reset = mni_drv_reset;
+	mi->drv.rxq[RT_DRV_RX_IP].cfg = MNI_RX_POOL;
+	mi->drv.tx_slots = MNI_TX_POOL;
+	rt_drv_attach(nif, &mi->drv);
 
 	rt_lock();
 	for (i = 0; i < MNI_RX_POOL; i++) {
