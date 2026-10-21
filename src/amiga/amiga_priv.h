@@ -195,6 +195,7 @@ int  amiga_config_unknown(int argc, char **argv, char *err, u32 errlen);
 #define AMIGA_STACK_PRI 2   /* default exec priority of the Riptide process */
 int  sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw, int reads,
                    char *err, u32 errlen);
+int  sana2_set_reads(struct amiga_if *ai, int reads, char *err, u32 errlen);
 int  mni_open_if(const char *name, const char *driver, ULONG unit, const char *options,
                  int mtu, char *err, u32 errlen);
 struct amiga_if *amiga_if_find(const char *name);

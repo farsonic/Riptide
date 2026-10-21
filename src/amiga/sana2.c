@@ -43,7 +43,7 @@ struct s2req {
 	UBYTE kind;
 	UBYTE busy;
 	UBYTE idle;                  /* read waiting for resubmission */
-	UBYTE pad;
+	UBYTE retired;               /* IPv4 read taken out by 'reads=N' */
 };
 
 struct s2if {
@@ -61,6 +61,7 @@ struct s2if {
 	int    nwrites, wbusy;
 	int    want_online;          /* request from RiptideOnOffline */
 	struct rt_timer retry;
+	int    reads;                /* IPv4 reads in service ('reads=N') */
 	u32    rx_errors;
 	/* multicast filter changes waiting for the Riptide process */
 	struct { u8 hw[6]; u8 join; } mcq[S2_MCQ];
@@ -146,6 +147,10 @@ static u32 rx_size(struct s2if *si)
 /* lock held */
 static int s2_submit_read(struct s2if *si, struct s2req *r)
 {
+	if (r->retired) {
+		r->idle = 0;
+		return 0;
+	}
 	if (!r->b) {
 		r->b = rt_buf_alloc(S2_RX_HEADROOM, rx_size(si));
 		if (!r->b) {
@@ -466,6 +471,51 @@ static void sana2_close(struct amiga_if *ai)
 	rt_free(si);
 }
 
+/* "interface NAME reads=N" on a running interface. Lock held. New reads
+ * are queued at once; surplus ones leave service as they complete (an
+ * AbortIO would look like the device going offline). */
+int sana2_set_reads(struct amiga_if *ai, int reads, char *err, u32 errlen)
+{
+	struct s2if *si = (struct s2if *)ai;
+	struct s2req *r;
+	int n = 0;
+
+	if (ai->poll != sana2_poll) {
+		rt_snprintf(err, errlen, "%s: reads= applies to SANA-II interfaces", ai->nif.name);
+		return -RT_EINVAL;
+	}
+	if (reads < S2_READS_IP_MIN || reads > S2_READS_IP_MAX) {
+		rt_snprintf(err, errlen, "reads: %d..%d", S2_READS_IP_MIN, S2_READS_IP_MAX);
+		return -RT_EINVAL;
+	}
+	for (r = si->all; r; r = r->all_next) {
+		if (r->kind != REQ_READ || r->io.ios2_PacketType != RT_ETH_P_IP)
+			continue;
+		if (n < reads) {
+			if (r->retired) {
+				r->retired = 0;
+				if (!r->busy)
+					s2_submit_read(si, r);
+			}
+			n++;
+		} else {
+			r->retired = 1;
+		}
+	}
+	for (; n < reads; n++) {
+		r = s2_newreq(si, REQ_READ);
+		if (!r) {
+			rt_snprintf(err, errlen, "%s: out of memory after %d reads", ai->nif.name, n);
+			si->reads = n;
+			return -RT_ENOMEM;
+		}
+		r->io.ios2_PacketType = RT_ETH_P_IP;
+		s2_submit_read(si, r);
+	}
+	si->reads = reads;
+	return 0;
+}
+
 int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw, int reads,
                   char *err, u32 errlen)
 {
@@ -578,6 +628,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	if (reads <= 0)
 		reads = S2_READS_IP_DEF;
 	reads = RT_MAX(S2_READS_IP_MIN, RT_MIN(reads, S2_READS_IP_MAX));
+	si->reads = reads;
 	nreads = reads + (si->ether ? S2_READS_ARP : 0);
 	for (i = 0; i < nreads; i++) {
 		r = s2_newreq(si, REQ_READ);

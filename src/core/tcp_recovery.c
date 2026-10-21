@@ -663,6 +663,7 @@ static void tcp_enter_recovery(struct tcp_sock *tp, int ece_ack)
 		tcp_init_cwnd_reduction(tp);
 	}
 	tcp_set_ca_state(tp, TCP_CA_Recovery);
+	tp->dg.fast_recoveries++;
 }
 
 /* RTO: Linux tcp_timeout_mark_lost() + tcp_enter_loss() */

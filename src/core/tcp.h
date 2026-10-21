@@ -221,6 +221,25 @@ struct tcp_rx_opt {
 	u16 user_mss;
 };
 
+/* Diagnostics (net.riptide.tcpinfo, TCP_INFO): plain counters and
+ * Linux-style chronographs, all in ms. Updated with increments only. */
+#define TCP_CHRONO_NONE   0
+#define TCP_CHRONO_BUSY   1      /* data in flight or queued */
+#define TCP_CHRONO_RWND   2      /* sending held back by the peer's window */
+#define TCP_CHRONO_SNDBUF 3      /* the application is held back by the send buffer */
+struct tcp_diag {
+	u32 chrono_start;
+	u32 chrono_stat[3];          /* busy, rwnd-limited, sndbuf-limited */
+	u8  chrono_type;
+	u32 unread_start, unread_ms; /* data waiting for the reader (start 0: idle) */
+	u32 zwin_start, zwin_ms;     /* our advertised window at zero */
+	u32 estab_ms;                /* when ESTABLISHED was entered (0 never) */
+	u32 fast_recoveries, rto_timeouts, tlp_probes;
+	u32 dupacks_in, dupacks_out, sack_blocks_out;
+	u32 acks_out, delayed_acks_out;  /* pure ACKs; of those, sent by the delack timer */
+	u32 zwin_out, zwin_in;       /* zero windows advertised / received */
+};
+
 /* ---- the connection (struct tcp_sock + inet_connection_sock) ---- */
 struct tcp_request_sock;
 
@@ -368,8 +387,10 @@ struct tcp_sock {
 	u32 max_ack_backlog;
 
 	int err_soft;
-	/* stats for TCP_INFO */
-	u32 bytes_acked, bytes_received, segs_in, segs_out, data_segs_out;
+	/* stats for TCP_INFO and net.riptide.tcpinfo */
+	u64 bytes_acked, bytes_received;
+	u32 segs_in, segs_out, data_segs_in, data_segs_out;
+	struct tcp_diag dg;
 };
 
 /* SYN queue entry (Linux tcp_request_sock) */
@@ -421,7 +442,8 @@ extern s32 sysctl_tcp_timestamps, sysctl_tcp_window_scaling, sysctl_tcp_sack,
            sysctl_tcp_rmem_max, sysctl_tcp_wmem_max, sysctl_tcp_moderate_rcvbuf,
            sysctl_tcp_slow_start_after_idle, sysctl_tcp_max_orphans,
            sysctl_tcp_mssdflt,
-           sysctl_tcp_keepidle, sysctl_tcp_keepintvl, sysctl_tcp_max_tw;
+           sysctl_tcp_keepidle, sysctl_tcp_keepintvl, sysctl_tcp_max_tw,
+           sysctl_tcp_delack_segs, sysctl_tcp_delack_ms, sysctl_tcp_quickack;
 extern char sysctl_tcp_cc[16];
 #define TCP_RACK_LOSS_DETECTION 0x1
 #define TCP_RACK_STATIC_REO_WND 0x2
@@ -500,6 +522,27 @@ static inline u32 keepalive_probes(const struct tcp_sock *tp)
 {
 	return tp->keepalive_probes ? tp->keepalive_probes : (u32)sysctl_tcp_keepcnt;
 }
+/* Linux tcp_chrono_start/stop: a higher type overrides a lower one */
+static inline u32 tcp_diag_now(void)
+{
+	u32 t = tcp_jiffies();
+	return t ? t : 1;                  /* 0 means "not running" */
+}
+void tcp_chrono_set(struct tcp_sock *tp, u8 type);
+static inline void tcp_chrono_start(struct tcp_sock *tp, u8 type)
+{
+	if (type > tp->dg.chrono_type)
+		tcp_chrono_set(tp, type);
+}
+void tcp_chrono_stop(struct tcp_sock *tp, u8 type);
+static inline void tcp_diag_unread_stop(struct tcp_sock *tp)
+{
+	if (tp->dg.unread_start && !tp->rcvq_bytes) {
+		tp->dg.unread_ms += tcp_jiffies() - tp->dg.unread_start;
+		tp->dg.unread_start = 0;
+	}
+}
+
 static inline void tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
 {
 	if (val < 1)

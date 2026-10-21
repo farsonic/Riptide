@@ -185,8 +185,15 @@ static u16 tcp_select_window(struct tcp_sock *tp)
 	tp->rcv_wup = tp->rcv_nxt;
 	new_win = RT_MIN(new_win, TCP_MAX_WINDOW << ws);
 	new_win >>= ws;
-	if (new_win == 0)
+	if (new_win == 0) {
 		tp->pred_flags = 0;
+		tp->dg.zwin_out++;
+		if (!tp->dg.zwin_start)
+			tp->dg.zwin_start = tcp_diag_now();
+	} else if (tp->dg.zwin_start) {
+		tp->dg.zwin_ms += tcp_jiffies() - tp->dg.zwin_start;
+		tp->dg.zwin_start = 0;
+	}
 	return (u16)new_win;
 }
 
@@ -418,8 +425,10 @@ int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 		}
 	}
 	tcp_options_write(th + TCP_HDR_LEN, &opts);
-	if (opts.num_sack_blocks)
+	if (opts.num_sack_blocks) {
 		tp->rx_opt.dsack = 0;
+		tp->dg.sack_blocks_out += opts.num_sack_blocks;
+	}
 	/* ECN (Linux tcp_ecn_send) */
 	if ((tp->ecn_flags & TCP_ECN_OK) && !(flags & TCPHDR_SYN)) {
 		if (data_len && !rt_seq_before(tcb->seq, tp->snd_nxt)) {
@@ -582,6 +591,9 @@ void tcp_send_ack(struct tcp_sock *tp)
 	}
 	TCP_SKB_CB(b)->seq = TCP_SKB_CB(b)->end_seq = tcp_acceptable_seq(tp);
 	TCP_SKB_CB(b)->tcp_flags = TCPHDR_ACK;
+	tp->dg.acks_out++;
+	if (!rt_bufq_empty(&tp->ofoq) || tp->rx_opt.dsack)
+		tp->dg.dupacks_out++;
 	tcp_transmit_skb(tp, b, 0);
 }
 
@@ -593,7 +605,7 @@ void tcp_send_delayed_ack(struct tcp_sock *tp)
 	if (ato > TCP_DELACK_MIN) {
 		u32 max_ato = 500;
 		if (tp->pingpong || (tp->ack.pending & ICSK_ACK_PUSHED))
-			max_ato = TCP_DELACK_MAX;
+			max_ato = (u32)sysctl_tcp_delack_ms;
 		if (tp->srtt_us) {
 			u32 rtt = RT_MAX((tp->srtt_us >> 3) / 1000u, (u32)TCP_DELACK_MIN);
 			if (rtt < max_ato)
@@ -601,7 +613,7 @@ void tcp_send_delayed_ack(struct tcp_sock *tp)
 		}
 		ato = RT_MIN(ato, max_ato);
 	}
-	ato = RT_MIN(ato, (u32)TCP_DELACK_MAX);
+	ato = RT_MIN(ato, (u32)sysctl_tcp_delack_ms);
 	timeout = now + ato;
 	if (tp->ack.pending & ICSK_ACK_TIMER) {
 		if ((s32)(tp->ack.timeout - (now + (ato >> 2))) <= 0) {
@@ -882,7 +894,7 @@ int tcp_write_xmit(struct tcp_sock *tp, u32 mss_now, int nonagle, int push_one)
 {
 	struct rt_buf *b;
 	u32 sent = 0;
-	int is_cwnd_limited = 0;
+	int is_cwnd_limited = 0, is_rwnd_limited = 0;
 
 	if (tp->state == RT_TCPS_CLOSED || tp->state == RT_TCPS_SYN_SENT)
 		return 0;
@@ -905,8 +917,10 @@ int tcp_write_xmit(struct tcp_sock *tp, u32 mss_now, int nonagle, int push_one)
 				break;
 			}
 		}
-		if (!tcp_snd_wnd_test(tp, b, mss_now))
+		if (!tcp_snd_wnd_test(tp, b, mss_now)) {
+			is_rwnd_limited = 1;
 			break;
+		}
 		if (!tcp_nagle_test(tp, b, mss_now, b == tp->wq.tail ? nonagle : TCP_NAGLE_PUSH))
 			break;
 		if (tcp_transmit_skb(tp, b, 1))
@@ -920,6 +934,10 @@ int tcp_write_xmit(struct tcp_sock *tp, u32 mss_now, int nonagle, int push_one)
 		if (push_one)
 			break;
 	}
+	if (is_rwnd_limited)
+		tcp_chrono_start(tp, TCP_CHRONO_RWND);
+	else if (tp->dg.chrono_type == TCP_CHRONO_RWND)
+		tcp_chrono_stop(tp, TCP_CHRONO_RWND);
 	if (sent) {
 		if (push_one != 2)
 			tcp_schedule_loss_probe(tp, 0);
@@ -1170,6 +1188,7 @@ void tcp_send_loss_probe(struct tcp_sock *tp)
 probe_sent:
 	tp->tlp_high_seq = tp->snd_nxt;
 	rt_tcpstat.TCPLossProbes++;
+	tp->dg.tlp_probes++;
 	tp->icsk_pending = 0;
 rearm_timer:
 	tcp_rearm_rto(tp);

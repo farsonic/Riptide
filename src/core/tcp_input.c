@@ -448,13 +448,13 @@ static void tcp_event_data_recv(struct tcp_sock *tp, const struct rt_buf *b)
 		tcp_grow_window(tp, b->len);
 }
 
-/* Linux __tcp_ack_snd_check(): ACK every 2 full segments, in quickack
- * mode, or when requested; otherwise delay. */
+/* Linux __tcp_ack_snd_check(): ACK every net.inet.tcp.delack_segs (2)
+ * full segments, in quickack mode, or when requested; otherwise delay. */
 static void __tcp_ack_snd_check(struct tcp_sock *tp, int ofo_possible)
 {
-	if (((tp->rcv_nxt - tp->rcv_wup) > tp->ack.rcv_mss &&
+	if (((tp->rcv_nxt - tp->rcv_wup) > (u32)(sysctl_tcp_delack_segs - 1) * tp->ack.rcv_mss &&
 	     __tcp_select_window(tp) >= tp->rcv_wnd) ||
-	    tcp_in_quickack_mode(tp) || (tp->ack.pending & ICSK_ACK_NOW)) {
+	    tcp_in_quickack_mode(tp) || (tp->ack.pending & ICSK_ACK_NOW) || sysctl_tcp_quickack) {
 		tcp_send_ack(tp);
 		return;
 	}
@@ -679,6 +679,8 @@ static int tcp_ack_update_window(struct tcp_sock *tp, const struct rt_buf *b, u3
 		flag |= FLAG_WIN_UPDATE;
 		tp->snd_wl1 = ack_seq;
 		if (tp->snd_wnd != nwin) {
+			if (!nwin)
+				tp->dg.zwin_in++;
 			tp->snd_wnd = nwin;
 			tp->pred_flags = 0;
 			tcp_fast_path_check(tp);
@@ -782,6 +784,8 @@ static int tcp_clean_rtx_queue(struct tcp_sock *tp, u32 prior_fack, u32 prior_sn
 	b = tcp_rtx_head(tp);
 	if (b && (TCP_SKB_CB(b)->sacked & TCPCB_SACKED_ACKED))
 		flag |= FLAG_SACK_RENEGING;
+	if (!b && tp->dg.chrono_type)
+		tcp_chrono_stop(tp, TCP_CHRONO_BUSY);
 
 	if (first_ackt && !(flag & FLAG_RETRANS_DATA_ACKED)) {
 		seq_rtt_us = (s32)(tcp_clock_us - first_ackt);
@@ -877,8 +881,10 @@ static int tcp_ack(struct tcp_sock *tp, struct rt_buf *b, int flag)
 	if (tp->tlp_high_seq)
 		tcp_process_tlp_ack(tp, ack, flag);
 	if (tcp_ack_is_dubious(tp, flag)) {
-		if (!(flag & (FLAG_SND_UNA_ADVANCED | FLAG_NOT_DUP | FLAG_DSACKING_ACK)))
+		if (!(flag & (FLAG_SND_UNA_ADVANCED | FLAG_NOT_DUP | FLAG_DSACKING_ACK))) {
 			num_dupack = 1;
+			tp->dg.dupacks_in++;
+		}
 		tcp_fastretrans_alert(tp, prior_snd_una, num_dupack, &flag, &rexmit);
 	}
 	if (tp->state == RT_TCPS_CLOSED)
@@ -916,6 +922,8 @@ static void tcp_queue_rcv(struct tcp_sock *tp, struct rt_buf *b)
 	u32 len = b->len;
 
 	tp->bytes_received += len;
+	if (!tp->rcvq_bytes && len && !tp->dg.unread_start)
+		tp->dg.unread_start = tcp_diag_now();
 	tp->rcvq_bytes += len;
 	if (tail && len <= rt_buf_tailroom(tail) &&
 	    TCP_SKB_CB(tail)->end_seq == TCP_SKB_CB(b)->seq) {
@@ -2010,6 +2018,8 @@ static void tcp_rcv(struct rt_buf *b, const rt_in6_addr *saddr, const rt_in6_add
 
 process:
 	tp->segs_in++;
+	if (b->len > cb->hdr_len)
+		tp->data_segs_in++;
 	if (tp->state == RT_TCPS_ESTABLISHED) {
 		tcp_rcv_established(tp, b);
 		goto out;

@@ -82,6 +82,15 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 			rt_snprintf(err, errlen, "interface name '%s' too long", argv[1]);
 			return -RT_EINVAL;
 		}
+		/* "interface NAME reads=N" on a running interface */
+		if (argc == 3 && (v = kv(argv[2], "reads")) != NULL &&
+		    (amiga_if_find(argv[1]) || rt_netif_find(argv[1]))) {
+			if (!amiga_if_find(argv[1])) {
+				rt_snprintf(err, errlen, "%s: reads= applies to SANA-II interfaces", argv[1]);
+				return -RT_EINVAL;
+			}
+			return sana2_set_reads(amiga_if_find(argv[1]), (int)rt_strtoul(v, NULL, 0), err, errlen);
+		}
 		if (amiga_if_find(argv[1]) || rt_netif_find(argv[1])) {
 			rt_snprintf(err, errlen, "interface %s exists already", argv[1]);
 			return -RT_EEXIST;

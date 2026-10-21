@@ -50,6 +50,7 @@
 #define RT_CTL_IP6STAT   15       /* net.riptide.ip6stat   one struct rt_ip6_stats   */
 #define RT_CTL_ICMP6STAT 16       /* net.riptide.icmp6stat one struct rt_icmp6_stats */
 #define RT_CTL_IFACES6   17       /* net.riptide.ifaces6   struct rt_ctl_iface6[] */
+#define RT_CTL_TCPINFO   18       /* net.riptide.tcpinfo   struct rt_ctl_tcpinfo[] (TCP, both families) */
 
 struct rt_ctl_hdr {
 	u16 version;              /* RT_CTL_VERSION */
@@ -232,6 +233,59 @@ struct rt_ctl_sock6 {
 	u32  sendq, recvq;
 	u32  rtt_us, cwnd;
 	u32  retrans;
+};
+
+/* ---- TCP connection details (netstat -T) ----
+ * One record per TCP socket of either family (listeners included, time-wait
+ * records not). Times are in ms; "_ago" fields count back from now (0 =
+ * never). Sender chronographs follow Linux: busy_ms counts all time with
+ * data unacknowledged or unsent, rwnd_limited_ms / sndbuf_limited_ms the
+ * part of it held back by the peer's window / by our send buffer. Receive
+ * side: unread_ms is time with received data waiting for the application,
+ * zwin_ms time with our advertised window at zero. 64-bit byte counts are
+ * split into _hi/_lo words. */
+#define RT_CTL_TCPI_TS    1       /* options: timestamps */
+#define RT_CTL_TCPI_SACK  2
+#define RT_CTL_TCPI_WSCALE 4
+#define RT_CTL_TCPI_ECN   8
+struct rt_ctl_tcpinfo {
+	u8   family;              /* RT_AF_INET / RT_AF_INET6 (socket domain) */
+	u8   state;               /* RT_TCPS_* */
+	u8   ca_state;            /* 0 open 1 disorder 2 cwr 3 recovery 4 loss */
+	u8   options;             /* RT_CTL_TCPI_* */
+	u8   snd_wscale, rcv_wscale;
+	u8   backoff;             /* RTO backoff exponent */
+	u8   pad;
+	u16  lport, fport;        /* host order */
+	u8   laddr[16], faddr[16];/* IPv4 as ::ffff:a.b.c.d */
+	u32  srtt_us, rttvar_us, min_rtt_us, rto_us;
+	u32  snd_mss, rcv_mss, advmss;
+	u32  cwnd, ssthresh;      /* packets */
+	u32  snd_wnd;             /* the peer's window, bytes */
+	u32  rcv_wnd;             /* the window we advertised, bytes */
+	u32  rcv_ssthresh;        /* window growth limit, bytes */
+	u32  sndbuf, rcvbuf;      /* current (auto-tuned) buffer sizes, bytes */
+	u32  sendq, recvq;        /* bytes unacknowledged+unsent / unread */
+	u32  ofo_bytes, ofo_segs; /* out-of-order queue */
+	u32  packets_out, retrans_out, sacked_out, lost_out;
+	u32  total_retrans;       /* segments retransmitted */
+	u32  fast_recoveries;     /* entries into fast recovery */
+	u32  rto_timeouts;        /* retransmission timeouts */
+	u32  tlp_probes;          /* tail loss probes */
+	u32  dupacks_in;          /* duplicate ACKs received */
+	u32  dupacks_out;         /* ACKs sent with out-of-order data held (or D-SACK) */
+	u32  sack_blocks_out;     /* SACK blocks sent */
+	u32  acks_out;            /* pure ACKs sent */
+	u32  delayed_acks_out;    /* of those, sent by the delayed ACK timer */
+	u32  zwin_out, zwin_in;   /* zero windows advertised / received */
+	u32  segs_in, segs_out, data_segs_in, data_segs_out;
+	u32  bytes_received_hi, bytes_received_lo;
+	u32  bytes_acked_hi, bytes_acked_lo;
+	u32  busy_ms, rwnd_limited_ms, sndbuf_limited_ms;
+	u32  unread_ms, zwin_ms;
+	u32  age_ms;              /* since the connection was established (0 never) */
+	u32  last_data_recv_ago, last_data_sent_ago, last_ack_recv_ago;
+	char cc[16];              /* congestion control */
 };
 
 /* every resolver server, IPv4 ones IPv4-mapped (rt_ctl_dns keeps the IPv4 list) */
