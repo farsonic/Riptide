@@ -44,6 +44,7 @@ struct s2req {
 	UBYTE busy;
 	UBYTE idle;                  /* read waiting for resubmission */
 	UBYTE retired;               /* IPv4 read taken out by 'reads=N' */
+	UBYTE q;                     /* read: receive queue, RT_DRV_RX_* */
 };
 
 struct s2if {
@@ -67,6 +68,16 @@ struct s2if {
 	struct { u8 hw[6]; u8 join; } mcq[S2_MCQ];
 	int    mcq_n;
 	int    mc_unsupported;      /* driver said S2ERR_NOT_SUPPORTED: warned */
+	/* counters (net.riptide.drivers) */
+	struct rt_drv_stats drv;
+	struct Sana2DeviceQuery dq;
+	/* the driver's own statistics, refreshed by sana2_poll after a reader
+	 * asked for them (S2_GETGLOBALSTATS/S2_GETSPECIALSTATS may block) */
+	struct Sana2DeviceStats gs;
+	struct rt_ctl_drv_special ss[RT_CTL_DRV_NSPECIAL];
+	u32    nss;
+	u32    gs_ms;                /* rt_now_ms() of the last query */
+	UBYTE  gs_want, gs_ok, ss_ok, gs_unsupported, ss_unsupported;
 };
 
 /* ---- buffer management callbacks (may be called from interrupts) ---- */
@@ -155,6 +166,7 @@ static int s2_submit_read(struct s2if *si, struct s2req *r)
 		r->b = rt_buf_alloc(S2_RX_HEADROOM, rx_size(si));
 		if (!r->b) {
 			r->idle = 1;
+			rt_drv_rx_nobuf(&si->ai.nif);
 			return -1;
 		}
 	}
@@ -166,6 +178,7 @@ static int s2_submit_read(struct s2if *si, struct s2req *r)
 	r->io.ios2_Data = r->b;
 	r->idle = 0;
 	r->busy = 1;
+	rt_drv_rx_queued(&si->ai.nif, r->q);
 	SendIO((struct IORequest *)&r->io);
 	return 0;
 }
@@ -194,6 +207,7 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 
 	r->busy = 0;
 	if (r->io.ios2_Req.io_Error) {
+		rt_drv_rx_done(nif, r->q, 0, (s32)r->io.ios2_Req.io_Error);
 		nif->stats.ierrors++;
 		si->rx_errors++;
 		r->idle = 1;
@@ -207,6 +221,7 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 	}
 	if (b->len == 0 || b->len > rx_size(si))
 		b->len = RT_MIN(r->io.ios2_DataLength, rx_size(si));
+	rt_drv_rx_done(nif, r->q, b->len, 0);
 	if (si->raw && si->ether) {
 		if (b->len < ETH_HLEN) {
 			nif->stats.ierrors++;
@@ -221,10 +236,6 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 		flags |= RT_BUFF_BCAST;
 	if (r->io.ios2_Req.io_Flags & SANA2IOF_MCAST)
 		flags |= RT_BUFF_MCAST;
-	nif->stats.ipackets++;
-	nif->stats.ibytes += b->len;
-	if (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST))
-		nif->stats.imcasts++;
 	if (!si->ai.online) {
 		si->ai.online = 1;
 		nif->flags |= RT_IFF_RUNNING;
@@ -249,6 +260,7 @@ static void s2_write_done(struct s2if *si, struct s2req *r)
 
 	if (r->io.ios2_Req.io_Error)
 		nif->stats.oerrors++;
+	rt_drv_tx_done(nif, (s32)r->io.ios2_Req.io_Error);
 	rt_buf_free(r->b);
 	r->b = NULL;
 	r->busy = 0;
@@ -310,18 +322,137 @@ static void s2_mcast_flush(struct s2if *si)
 	}
 }
 
+/* How many reads of each queue the driver still holds at this wakeup:
+ * those we queued minus the replies waiting on our port. Lock held. */
+static void s2_sample_reads(struct s2if *si)
+{
+	struct Node *n;
+	u32 done[RT_DRV_NRXQ] = { 0, 0, 0 };
+	int q;
+
+	Disable();                   /* drivers reply from interrupts */
+	for (n = si->port->mp_MsgList.lh_Head; n->ln_Succ; n = n->ln_Succ) {
+		struct s2req *r = (struct s2req *)n;
+		if (r->kind == REQ_READ && r->q < RT_DRV_NRXQ)
+			done[r->q]++;
+	}
+	Enable();
+	for (q = 0; q < RT_DRV_NRXQ; q++)
+		if (done[q])
+			rt_drv_rx_avail(&si->ai.nif, q, si->drv.rxq[q].queued > done[q] ?
+			                si->drv.rxq[q].queued - done[q] : 0);
+}
+
+/* S2_GETGLOBALSTATS / S2_GETSPECIALSTATS for net.riptide.drivers; lock
+ * held, dropped around the device calls like s2_mcast_flush. */
+static void s2_query_stats(struct s2if *si)
+{
+	struct Sana2DeviceStats gs;
+	struct {
+		struct Sana2SpecialStatHeader h;
+		struct Sana2SpecialStatRecord r[RT_CTL_DRV_NSPECIAL];
+	} ss;
+	int askg = !si->gs_unsupported, asks = !si->ss_unsupported;
+	LONG eg = 0, es = 0;
+	u32 i;
+
+	si->gs_want = 0;
+	rt_unlock();
+	if (askg) {
+		memset(&gs, 0, sizeof(gs));
+		si->ctl->ios2_StatData = &gs;
+		eg = s2_ctl(si, S2_GETGLOBALSTATS);
+	}
+	if (asks) {
+		memset(&ss, 0, sizeof(ss));
+		ss.h.RecordCountMax = RT_CTL_DRV_NSPECIAL;
+		si->ctl->ios2_StatData = &ss;
+		es = s2_ctl(si, S2_GETSPECIALSTATS);
+	}
+	si->ctl->ios2_StatData = NULL;
+	rt_lock();
+	si->gs_ms = rt_now_ms();
+	/* unknown commands are not asked again; other errors (offline) are */
+	if (askg && eg == 0) {
+		si->gs = gs;
+		si->gs_ok = 1;
+	} else if (askg && (eg == S2ERR_NOT_SUPPORTED || eg == IOERR_NOCMD)) {
+		si->gs_unsupported = 1;
+	}
+	if (asks && (es == S2ERR_NOT_SUPPORTED || es == IOERR_NOCMD))
+		si->ss_unsupported = 1;
+	if (asks && es == 0) {
+		si->nss = RT_MIN(ss.h.RecordCountSupplied, (u32)RT_CTL_DRV_NSPECIAL);
+		for (i = 0; i < si->nss; i++) {
+			si->ss[i].type = ss.r[i].Type;
+			si->ss[i].count = ss.r[i].Count;
+			si->ss[i].name[0] = 0;
+			if (ss.r[i].String)
+				rt_strlcpy(si->ss[i].name, (const char *)ss.r[i].String, sizeof(si->ss[i].name));
+		}
+		si->ss_ok = 1;
+	}
+}
+
+/* rt_drv_stats info hook: any task, lock held, must not block */
+static void sana2_drv_info(struct rt_netif *nif, struct rt_ctl_driver *r)
+{
+	struct s2if *si = nif->driver;
+	u32 now = rt_now_ms(), i;
+
+	rt_strlcpy(r->kind, "sana2", sizeof(r->kind));
+	rt_strlcpy(r->driver, si->device, sizeof(r->driver));
+	r->unit = si->unit;
+	r->flags |= RT_CTL_DRVF_DQ;
+	r->dq_hwtype = si->dq.HardwareType;
+	r->dq_level = si->dq.DeviceLevel;
+	r->dq_mtu = si->dq.MTU;
+	r->dq_rawmtu = si->dq.SizeSupplied >= sizeof(si->dq) ? si->dq.RawMTU : 0;
+	r->dq_bps = si->dq.BPS;
+	r->gs_age_ms = si->gs_unsupported && si->ss_unsupported ? 0 : now - si->gs_ms;
+	if (si->gs_ok) {
+		r->flags |= RT_CTL_DRVF_GS;
+		r->gs_rx = si->gs.PacketsReceived;
+		r->gs_tx = si->gs.PacketsSent;
+		r->gs_baddata = si->gs.BadData;
+		r->gs_overruns = si->gs.Overruns;
+		r->gs_unknown = si->gs.UnknownTypesReceived;
+		r->gs_reconfig = si->gs.Reconfigurations;
+		r->gs_laststart_s = si->gs.LastStart.tv_secs;
+	}
+	if (si->ss_ok) {
+		r->flags |= RT_CTL_DRVF_SS;
+		r->nspecial = si->nss;
+		for (i = 0; i < si->nss; i++)
+			r->special[i] = si->ss[i];
+	}
+	/* ask the Riptide process for fresh numbers for the next reader */
+	if ((!si->gs_unsupported || !si->ss_unsupported) && si->dev_open &&
+	    (!si->gs_ms || r->gs_age_ms >= 500)) {
+		si->gs_want = 1;
+		rt_kick();
+	}
+}
+
 /* lock held */
 static void sana2_poll(struct amiga_if *ai)
 {
 	struct s2if *si = (struct s2if *)ai;
 	struct s2req *r;
+	u32 nrx = 0;
 
+	s2_sample_reads(si);
 	while ((r = (struct s2req *)GetMsg(si->port)) != NULL) {
-		if (r->kind == REQ_READ)
+		if (r->kind == REQ_READ) {
 			s2_read_done(si, r);
-		else
+			nrx++;
+		} else {
 			s2_write_done(si, r);
+		}
 	}
+	rt_drv_batch(&ai->nif, nrx);
+	if (si->gs_want && si->dev_open)
+		s2_query_stats(si);
 	if (si->mcq_n)
 		s2_mcast_flush(si);
 	if (si->want_online >= 0 && si->dev_open) {
@@ -371,6 +502,7 @@ static int sana2_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw,
 	if (!r) {
 		nif->stats.oerrors++;
 		nif->stats.iqdrops++;
+		rt_drv_tx_full(nif);
 		rt_buf_free(b);
 		return -RT_ENOBUFS;
 	}
@@ -417,8 +549,7 @@ static int sana2_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw,
 	r->b = b;
 	r->busy = 1;
 	si->wbusy++;
-	nif->stats.opackets++;
-	nif->stats.obytes += b->len;
+	rt_drv_tx_start(nif, b->len);
 	SendIO((struct IORequest *)&r->io);
 	return 0;
 }
@@ -507,12 +638,15 @@ int sana2_set_reads(struct amiga_if *ai, int reads, char *err, u32 errlen)
 		if (!r) {
 			rt_snprintf(err, errlen, "%s: out of memory after %d reads", ai->nif.name, n);
 			si->reads = n;
+			si->drv.rxq[RT_DRV_RX_IP].cfg = (u32)n;
 			return -RT_ENOMEM;
 		}
 		r->io.ios2_PacketType = RT_ETH_P_IP;
+		r->q = RT_DRV_RX_IP;
 		s2_submit_read(si, r);
 	}
 	si->reads = reads;
+	si->drv.rxq[RT_DRV_RX_IP].cfg = (u32)reads;
 	return 0;
 }
 
@@ -578,6 +712,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		q.MTU = 1500;
 		q.AddrFieldSize = 48;
 	}
+	si->dq = q;
 	si->hwtype = q.HardwareType;
 	si->bps = q.BPS;
 	si->ether = q.HardwareType == S2WireType_Ethernet || q.HardwareType == S2WireType_IEEE802;
@@ -614,6 +749,9 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	nif->link_output = sana2_output;
 	nif->mcast = sana2_mcast;
 	nif->driver = si;
+	si->drv.info = sana2_drv_info;
+	si->drv.tx_slots = S2_MAX_WRITES;
+	rt_drv_attach(nif, &si->drv);
 
 	rt_lock();
 	i = rt_netif_add(nif);
@@ -635,6 +773,8 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		if (!r)
 			break;
 		r->io.ios2_PacketType = i < reads ? RT_ETH_P_IP : RT_ETH_P_ARP;
+		r->q = i < reads ? RT_DRV_RX_IP : RT_DRV_RX_ARP;
+		si->drv.rxq[r->q].cfg++;
 		s2_submit_read(si, r);
 	}
 	si->ai.next = amiga_ifs;
@@ -646,6 +786,8 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		if (!r)
 			break;
 		r->io.ios2_PacketType = RT_ETH_P_IPV6;
+		r->q = RT_DRV_RX_IP6;
+		si->drv.rxq[r->q].cfg++;
 		s2_submit_read(si, r);
 	}
 	rt_unlock();

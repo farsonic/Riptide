@@ -106,6 +106,31 @@ static int h_ifaces(const struct rt_sysctl *e, void *old, u32 *oldlen, const voi
 	return r;
 }
 
+/* ---- driver counters ---- */
+
+static int h_drivers(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_netif *n;
+	struct rt_ctl_driver *recs;
+	u32 count = 0, i = 0;
+	int r;
+
+	for (n = rt_netif_list(); n; n = n->next)
+		if (n->drv)
+			count++;
+	if (!old)
+		return dump_emit(NULL, oldlen, sizeof(*recs), count, NULL);
+	recs = count ? rt_malloc(count * sizeof(*recs)) : NULL;
+	if (count && !recs)
+		return -RT_ENOMEM;
+	for (n = rt_netif_list(); n && i < count; n = n->next)
+		if (rt_drv_fill(n, &recs[i]) == 0)
+			i++;
+	r = dump_emit(old, oldlen, sizeof(*recs), i, recs);
+	rt_free(recs);
+	return r;
+}
+
 /* ---- routes ---- */
 
 static u8 route_proto(u32 flags)
@@ -530,6 +555,7 @@ static const struct rt_sysctl ctl_sysctls[] = {
 	STATS("icmp6stat", RT_CTL_ICMP6STAT, rt_icmp6stat),
 	DUMP("ifaces6", RT_CTL_IFACES6, h_ifaces6, "rt_ctl_hdr + struct rt_ctl_iface6[]"),
 	DUMP("tcpinfo", RT_CTL_TCPINFO, h_tcpinfo, "rt_ctl_hdr + struct rt_ctl_tcpinfo[]"),
+	DUMP("drivers", RT_CTL_DRIVERS, h_drivers, "rt_ctl_hdr + struct rt_ctl_driver[]"),
 };
 
 void rt_ctl_init(void)

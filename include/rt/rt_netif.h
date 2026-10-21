@@ -87,7 +87,70 @@ struct rt_netif {
 	/* IPv6 state (src/core/ip6_if.c), NULL while IPv6 is off */
 	void *ip6;
 	u8    ip6_disabled;      /* "ipv6 off": not enabled automatically */
+	/* optional driver counters (net.riptide.drivers), owned by the driver */
+	struct rt_drv_stats *drv;
 };
+
+/* ---- driver counters (src/core/drvstats.c) ----
+ * Kept by a driver under the stack lock with the rt_drv_* helpers and
+ * published as net.riptide.drivers (struct rt_ctl_driver). */
+#define RT_DRV_RX_IP  0          /* receive queues */
+#define RT_DRV_RX_ARP 1
+#define RT_DRV_RX_IP6 2
+#define RT_DRV_NRXQ   3
+#define RT_DRV_NBATCH 6          /* 1, 2-3, 4-7, 8-15, 16-31, 32+ */
+#define RT_DRV_NERR   8
+
+struct rt_ctl_driver;
+struct rt_drv_err {
+	s32 code;
+	u32 count;
+};
+
+struct rt_drv_stats {
+	struct {
+		u32 cfg, queued, low, empty;
+	} rxq[RT_DRV_NRXQ];
+	u32 rx_frames, rx_bytes, tx_frames, tx_bytes;
+	u32 batch[RT_DRV_NBATCH], batch_max;
+	u32 rx_nobuf, rx_errors, tx_errors;
+	struct rt_drv_err rxerr[RT_DRV_NERR], txerr[RT_DRV_NERR];
+	u32 tx_slots, tx_inflight, tx_inflight_max, tx_full;
+	u32 reset_ms;            /* rt_now_ms() at the last reset */
+	u32 warn_ms;             /* last "reads ran out" warning */
+	u32 warn_empty;          /* empty count at that warning */
+	u8  warned;
+	u8  noqueue;             /* driver has no receive queue (RT_CTL_DRVF_NOQ) */
+	/* optional: fill the driver specific fields of a record (kind,
+	 * driver, unit, flags, dq_/gs_/special). Lock held; must not block. */
+	void (*info)(struct rt_netif *nif, struct rt_ctl_driver *r);
+	/* optional: called by rt_drv_reset() for the driver's own counters */
+	void (*reset)(struct rt_netif *nif);
+};
+
+/* Prepare 'd' (zeroed by the caller) and attach it to nif. */
+void rt_drv_attach(struct rt_netif *nif, struct rt_drv_stats *d);
+/* A read for queue q was handed to the driver / came back (len bytes, or
+ * err != 0: the driver's error code, counted in rxerr[]). */
+void rt_drv_rx_queued(struct rt_netif *nif, int q);
+void rt_drv_rx_done(struct rt_netif *nif, int q, u32 len, s32 err);
+/* At a wakeup the driver still held 'avail' reads of queue q: updates the
+ * low-water mark; avail 0 counts an empty queue and logs a warning at
+ * most once a minute. */
+void rt_drv_rx_avail(struct rt_netif *nif, int q, u32 avail);
+/* 'n' frames were received in one wakeup (n > 0). */
+void rt_drv_batch(struct rt_netif *nif, u32 n);
+int  rt_drv_batch_bucket(u32 n);
+void rt_drv_rx_nobuf(struct rt_netif *nif);
+void rt_drv_tx_start(struct rt_netif *nif, u32 len);
+void rt_drv_tx_done(struct rt_netif *nif, s32 err);
+void rt_drv_tx_full(struct rt_netif *nif);
+/* Count 'code' in an error table (fixed size, last slot for the rest). */
+void rt_drv_count_err(struct rt_drv_err *tab, s32 code);
+/* Zero the interface and driver counters (keeps cfg/queued/in flight). */
+void rt_netif_reset_stats(struct rt_netif *nif);
+/* Fill a net.riptide.drivers record; 0, or -RT_ENOENT without counters. */
+int  rt_drv_fill(struct rt_netif *nif, struct rt_ctl_driver *r);
 
 /* Register an interface (assigns index, name must be set). The interface
  * starts down; set address with rt_netif_set_addr() then rt_netif_up(). */

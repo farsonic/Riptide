@@ -34,6 +34,7 @@ struct tap_dev {
 	u8 mc[TAP_MAX_MC][6];    /* multicast filter */
 	u32 mc_refs[TAP_MAX_MC];
 	int nmc;
+	struct rt_drv_stats drv;
 };
 
 static const u8 bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -55,11 +56,21 @@ static int tap_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u
 	memcpy(h, dsthw ? dsthw : bcast, 6);
 	memcpy(h + 6, nif->hwaddr, 6);
 	rt_put_be16(h + 12, ethertype);
+	rt_drv_tx_start(nif, b->len);
 	r = write(t->fd, b->data, b->len);
+	rt_drv_tx_done(nif, r < 0 ? -errno : 0);
 	rt_buf_free(b);
 	if (r < 0)
 		return errno == EAGAIN ? -RT_ENOBUFS : -RT_EIO;
 	return 0;
+}
+
+static void tap_info(struct rt_netif *nif, struct rt_ctl_driver *r)
+{
+	const struct tap_dev *t = nif->driver;
+
+	rt_strlcpy(r->kind, "tap", sizeof(r->kind));
+	rt_snprintf(r->driver, sizeof(r->driver), "/dev/net/tun %s", t->name);
 }
 
 /* lock held */
@@ -108,7 +119,7 @@ static int mc_wanted(const struct tap_dev *t, const u8 *dst)
 static void tap_rx(void *arg)
 {
 	struct tap_dev *t = arg;
-	u32 room = (u32)t->nif.mtu + ETH_HLEN;
+	u32 room = (u32)t->nif.mtu + ETH_HLEN, got = 0;
 	int i;
 
 	for (i = 0; i < TAP_RX_BURST; i++) {
@@ -117,16 +128,24 @@ static void tap_rx(void *arg)
 		u16 et, flags = 0;
 		ssize_t n;
 
-		if (!b)
-			return;
+		if (!b) {
+			rt_drv_rx_nobuf(&t->nif);
+			break;
+		}
 		n = read(t->fd, b->data, room);
 		if (n < ETH_HLEN) {
 			rt_buf_free(b);
-			if (n < 0)
-				return;
+			if (n < 0) {
+				if (errno != EAGAIN && errno != EWOULDBLOCK)
+					rt_drv_rx_done(&t->nif, -1, 0, -errno);
+				break;
+			}
+			rt_drv_rx_done(&t->nif, -1, 0, RT_CTL_DRV_ERR_LENGTH);
 			continue;
 		}
 		b->len = (u32)n;
+		got++;
+		rt_drv_rx_done(&t->nif, -1, (u32)n, 0);
 		if (!memcmp(b->data, bcast, 6)) {
 			flags = RT_BUFF_BCAST;
 		} else if (b->data[0] & 1) {
@@ -144,6 +163,7 @@ static void tap_rx(void *arg)
 		rt_buf_pull(b, ETH_HLEN);
 		rt_netif_input(&t->nif, b, et, src, flags);
 	}
+	rt_drv_batch(&t->nif, got);
 }
 
 struct rt_netif *rt_host_tap_open(const char *ifname, const u8 mac[6])
@@ -180,6 +200,9 @@ struct rt_netif *rt_host_tap_open(const char *ifname, const u8 mac[6])
 	t->nif.link_output = tap_output;
 	t->nif.mcast = tap_mcast;
 	t->nif.driver = t;
+	t->drv.noqueue = 1;
+	t->drv.info = tap_info;
+	rt_drv_attach(&t->nif, &t->drv);
 
 	rt_lock();
 	r = rt_netif_add(&t->nif);

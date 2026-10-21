@@ -82,7 +82,11 @@ SANA_STRUCTS = (
     S('IOSana2Req', 'ios2_WireError', 'ios2_PacketType', 'ios2_SrcAddr', 'ios2_DstAddr',
       'ios2_DataLength', 'ios2_Data', 'ios2_StatData', 'ios2_BufferManagement') +
     S('Sana2DeviceQuery', 'SizeAvailable', 'SizeSupplied', 'DevQueryFormat', 'DeviceLevel',
-      'AddrFieldSize', 'MTU', 'BPS', 'HardwareType', 'RawMTU')
+      'AddrFieldSize', 'MTU', 'BPS', 'HardwareType', 'RawMTU') +
+    S('Sana2DeviceStats', 'PacketsReceived', 'PacketsSent', 'BadData', 'Overruns',
+      'UnknownTypesReceived', 'Reconfigurations', 'LastStart') +
+    S('Sana2SpecialStatRecord', 'Type', 'Count', 'String') +
+    S('Sana2SpecialStatHeader', 'RecordCountMax', 'RecordCountSupplied')
 )
 NDK_CONSTS = '''NT_LIBRARY NT_MSGPORT NT_MESSAGE NT_REPLYMSG NT_TASK NT_PROCESS LIBF_CHANGED
 LIBF_SUMUSED LIBF_DELEXP PA_SIGNAL PA_IGNORE SIGBREAKF_CTRL_C SIGBREAKF_CTRL_D SIGBREAKF_CTRL_E
@@ -93,7 +97,7 @@ ACCESS_READ ERROR_DISK_FULL ERROR_NO_MORE_ENTRIES ERROR_BREAK GVF_GLOBAL_ONLY TI
 SYS_Asynch'''.split()
 SANA_CONSTS = '''SANA2IOF_RAW SANA2IOF_BCAST SANA2IOF_MCAST S2_CopyToBuff S2_CopyFromBuff S2_PacketFilter
 S2_DEVICEQUERY S2_GETSTATIONADDRESS S2_CONFIGINTERFACE S2_BROADCAST S2_ONEVENT S2_ONLINE S2_OFFLINE
-S2_GETGLOBALSTATS S2WireType_Ethernet S2WireType_PPP S2WireType_SLIP S2ERR_OUTOFSERVICE S2ERR_BAD_STATE
+S2_GETGLOBALSTATS S2_GETSPECIALSTATS S2SS_ETHERNET_BADMULTICAST S2SS_ETHERNET_RETRIES S2SS_ETHERNET_FIFO_UNDERRUNS S2WireType_Ethernet S2WireType_PPP S2WireType_SLIP S2ERR_OUTOFSERVICE S2ERR_BAD_STATE
 S2WERR_IS_CONFIGURED S2EVENT_ONLINE S2EVENT_OFFLINE S2EVENT_ERROR SANA2_MAX_ADDR_BYTES'''.split()
 
 NET_STRUCTS = (
@@ -287,8 +291,8 @@ def main():
                             [inc])
         sana = os.path.join(ndk, 'SANA+RoadshowTCP-IP', 'include')
         if os.path.isdir(sana):
-            ok &= check_against(tmp, 'sana2', SANA_STRUCTS, SANA_CONSTS, ['exec.h', 'sana2.h'],
-                                ['devices/sana2.h'], [sana, inc])
+            ok &= check_against(tmp, 'sana2', SANA_STRUCTS, SANA_CONSTS, ['exec.h', 'devices.h'],
+                                ['devices/timer.h', 'devices/sana2.h', 'devices/sana2specialstats.h'], [sana, inc])
         if compat and os.path.isdir(compat):
             ni = os.path.join(compat, 'netinclude')
             refs = ['sys/types.h', 'sys/uio.h', 'sys/socket.h', 'sys/ioctl.h', 'sys/errno.h', 'netinet/in.h',

@@ -27,6 +27,7 @@ static void usage(void)
 	        "  ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]\n"
 	        "  ip link add NAME type mni driver FILE [unit N] [options TEXT]\n"
 	        "  ip link del [dev] NAME\n"
+	        "  ip link resetstats [[dev] IF]   (all interfaces without IF)\n"
 	        "  ip addr [show [dev] IF]\n"
 	        "  ip addr { add | replace } A.B.C.D/BITS [peer P] [broadcast B] dev IF\n"
 	        "  ip addr del A.B.C.D[/BITS] dev IF | ip addr flush dev IF\n"
@@ -103,6 +104,158 @@ static void print_link_line(const struct rt_ctl_iface *f)
 		cl_printf("    %10lu %8lu %6lu %7lu %7lu %7lu\n", (unsigned long)f->obytes,
 		          (unsigned long)f->opackets, (unsigned long)f->oerrors, 0UL, 0UL,
 		          (unsigned long)f->collisions);
+	}
+}
+
+/* ---- driver counters (net.riptide.drivers), ip -s / ip -s -s ---- */
+
+static const char *drv_err_name(const struct rt_ctl_driver *r, s32 code, char *buf)
+{
+	static const char *const ioerr[] = { "", "IOERR_OPENFAIL", "IOERR_ABORTED", "IOERR_NOCMD",
+	                                     "IOERR_BADLENGTH", "IOERR_BADADDRESS", "IOERR_UNITBUSY",
+	                                     "IOERR_SELFTEST" };
+	static const char *const s2err[] = { "", "S2ERR_NO_RESOURCES", "", "S2ERR_BAD_ARGUMENT",
+	                                     "S2ERR_BAD_STATE", "S2ERR_BAD_ADDRESS", "S2ERR_MTU_EXCEEDED",
+	                                     "", "S2ERR_NOT_SUPPORTED", "S2ERR_SOFTWARE",
+	                                     "S2ERR_OUTOFSERVICE", "S2ERR_TX_FAILURE" };
+
+	if (code == RT_CTL_DRV_ERR_OTHER)
+		return "other";
+	if (code == RT_CTL_DRV_ERR_LENGTH)
+		return "bad length";
+	if (!strcmp(r->kind, "sana2")) {
+		if (code < 0 && code >= -7)
+			return ioerr[-code];
+		if (code > 0 && code <= 11 && s2err[code][0])
+			return s2err[code];
+	}
+	rt_snprintf(buf, 16, "%ld", (long)code);
+	return buf;
+}
+
+static void print_drv_errs(const char *what, const struct rt_ctl_driver *r, const struct rt_ctl_drv_err *e)
+{
+	char b[16];
+	int i;
+
+	if (!e[0].count)
+		return;
+	cl_printf("    %s errors:", what);
+	for (i = 0; i < RT_CTL_DRV_NERR && e[i].count; i++)
+		cl_printf(" %s %lu", drv_err_name(r, e[i].code, b), (unsigned long)e[i].count);
+	cl_puts("\n");
+}
+
+static const char *special_name(const struct rt_ctl_drv_special *s, char *buf)
+{
+	if (s->type == S2SS_ETHERNET_BADMULTICAST)
+		return "bad multicast";
+	if (s->type == S2SS_ETHERNET_RETRIES)
+		return "retries";
+	if (s->type == S2SS_ETHERNET_FIFO_UNDERRUNS)
+		return "FIFO underruns";
+	if (s->name[0])
+		return s->name;
+	rt_snprintf(buf, 16, "type 0x%lx", (unsigned long)s->type);
+	return buf;
+}
+
+static void print_driver(const struct rt_ctl_driver *r)
+{
+	static const char *const qn[RT_CTL_DRV_RXQ] = { "IPv4", "ARP", "IPv6" };
+	static const char *const bn[RT_CTL_DRV_BATCH] = { "1", "2-3", "4-7", "8-15", "16-31", "32+" };
+	u32 q, wakeups = 0;
+	char b[16];
+
+	for (q = 0; q < RT_CTL_DRV_BATCH; q++)
+		wakeups += r->batch[q];
+	cl_printf("    driver %s %s unit %lu, counters of the last %lu s\n", r->kind, r->driver,
+	          (unsigned long)r->unit, (unsigned long)r->since_s);
+	if (r->flags & RT_CTL_DRVF_SHARED) {
+		cl_printf("    RX buffers: %lu, free %lu, lowest %lu, ran out %lu\n",
+		          (unsigned long)r->rxq[0].cfg, (unsigned long)r->rxq[0].queued,
+		          (unsigned long)r->rxq[0].low, (unsigned long)r->rxq[0].empty);
+	} else if (!(r->flags & RT_CTL_DRVF_NOQ)) {
+		cl_puts("    RX reads:");
+		for (q = 0; q < RT_CTL_DRV_RXQ; q++)
+			if (r->rxq[q].cfg)
+				cl_printf(" %s %lu/%lu lowest %lu ran out %lu%s", qn[q], (unsigned long)r->rxq[q].queued,
+				          (unsigned long)r->rxq[q].cfg, (unsigned long)r->rxq[q].low,
+				          (unsigned long)r->rxq[q].empty, q + 1 < RT_CTL_DRV_RXQ ? "," : "");
+		cl_puts("\n");
+	}
+	cl_printf("    RX: frames %lu bytes %lu errors %lu nobuf %lu, wakeups %lu, at most %lu frames per wakeup\n",
+	          (unsigned long)r->rx_frames, (unsigned long)r->rx_bytes, (unsigned long)r->rx_errors,
+	          (unsigned long)r->rx_nobuf, (unsigned long)wakeups, (unsigned long)r->batch_max);
+	cl_printf("    TX: frames %lu bytes %lu errors %lu queue full %lu, in flight %lu (most %lu",
+	          (unsigned long)r->tx_frames, (unsigned long)r->tx_bytes, (unsigned long)r->tx_errors,
+	          (unsigned long)r->tx_full, (unsigned long)r->tx_inflight, (unsigned long)r->tx_inflight_max);
+	if (r->tx_slots)
+		cl_printf(" of %lu", (unsigned long)r->tx_slots);
+	cl_puts(")\n");
+	if (r->flags & RT_CTL_DRVF_DROPS)
+		cl_printf("    driver dropped %lu frames (no free buffer)\n", (unsigned long)r->drv_drops);
+	if (r->flags & RT_CTL_DRVF_GS)
+		cl_printf("    driver stats: rx %lu tx %lu bad %lu overruns %lu unknown types %lu\n",
+		          (unsigned long)r->gs_rx, (unsigned long)r->gs_tx, (unsigned long)r->gs_baddata,
+		          (unsigned long)r->gs_overruns, (unsigned long)r->gs_unknown);
+	if (opt_stats < 2)
+		return;
+	cl_puts("    RX frames per wakeup:");
+	for (q = 0; q < RT_CTL_DRV_BATCH; q++)
+		cl_printf(" %s: %lu", bn[q], (unsigned long)r->batch[q]);
+	cl_puts("\n");
+	print_drv_errs("RX", r, r->rxerr);
+	print_drv_errs("TX", r, r->txerr);
+	if (r->flags & RT_CTL_DRVF_DQ)
+		cl_printf("    device query: hardware type %lu, level %lu, mtu %lu, raw mtu %lu, %lu bit/s\n",
+		          (unsigned long)r->dq_hwtype, (unsigned long)r->dq_level, (unsigned long)r->dq_mtu,
+		          (unsigned long)r->dq_rawmtu, (unsigned long)r->dq_bps);
+	if (r->flags & RT_CTL_DRVF_GS)
+		cl_printf("    driver stats: reconfigurations %lu, online since %lu, %lu.%lu s old\n",
+		          (unsigned long)r->gs_reconfig, (unsigned long)r->gs_laststart_s,
+		          (unsigned long)(r->gs_age_ms / 1000), (unsigned long)(r->gs_age_ms % 1000 / 100));
+	else if (!strcmp(r->kind, "sana2"))
+		cl_puts("    driver stats: not supported by the driver\n");
+	if (r->flags & RT_CTL_DRVF_SS) {
+		cl_puts("    special stats:");
+		if (!r->nspecial)
+			cl_puts(" none");
+		for (q = 0; q < r->nspecial && q < RT_CTL_DRV_NSPECIAL; q++)
+			cl_printf("%s %s %lu", q ? "," : "", special_name(&r->special[q], b),
+			          (unsigned long)r->special[q].count);
+		cl_puts("\n");
+	}
+}
+
+/* net.riptide.drivers for ip -s. The driver's own statistics are fetched
+ * by Riptide when someone reads them: ask again shortly for fresh ones. */
+static void *get_drivers(struct rt_ctl_hdr *h)
+{
+	void *d = cl_dump(RT_CTL_DRIVERS, h);
+	u32 k;
+
+	for (k = 0; d && k < h->count; k++) {
+		struct rt_ctl_driver *r = cl_rec(d, h, k);
+		if (!strcmp(r->kind, "sana2") && r->gs_age_ms >= 500) {
+			FreeVec(d);
+			Delay(10);
+			return cl_dump(RT_CTL_DRIVERS, h);
+		}
+	}
+	return d;
+}
+
+static void print_driver_of(const struct rt_ctl_iface *f, void *dd, const struct rt_ctl_hdr *dh)
+{
+	u32 k;
+
+	for (k = 0; dd && k < dh->count; k++) {
+		struct rt_ctl_driver *r = cl_rec(dd, dh, k);
+		if (r->index == f->index) {
+			print_driver(r);
+			return;
+		}
 	}
 }
 
@@ -235,8 +388,8 @@ static int run(const char *line)
 
 static int do_show_ifs(int argc, char **argv, int i, int addrs)
 {
-	struct rt_ctl_hdr h, h6;
-	void *d, *d6 = NULL;
+	struct rt_ctl_hdr h, h6, dh;
+	void *d, *d6 = NULL, *dd = NULL;
 	const char *only = NULL;
 	u32 k, j;
 	char a[RT_INET6_ADDRSTRLEN], mac[64], fl[128], ab[160];
@@ -264,6 +417,8 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 	}
 	if (addrs && opt_family != 4)
 		d6 = cl_dump(RT_CTL_ADDRS6, &h6);
+	if (opt_stats && !opt_brief)
+		dd = get_drivers(&dh);
 	for (k = 0; k < h.count; k++) {
 		struct rt_ctl_iface *f = cl_rec(d, &h, k);
 		if (only && strcmp(f->name, only))
@@ -293,6 +448,8 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 			continue;
 		}
 		print_link_line(f);
+		if (dd)
+			print_driver_of(f, dd, &dh);
 		if (addrs && opt_family != 6)
 			print_addr_lines(f);
 		if (addrs)
@@ -301,6 +458,8 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 	FreeVec(d);
 	if (d6)
 		FreeVec(d6);
+	if (dd)
+		FreeVec(dd);
 	return CL_OK;
 }
 
@@ -420,6 +579,14 @@ static int do_link(int argc, char **argv, int i)
 			return CL_ERROR;
 		}
 		return run(cl_line("interface %s delete", dev));
+	}
+	if (!strcmp(cmd, "resetstats")) {
+		const char *dev = i < argc ? dev_arg(argc, argv, &i) : "all";
+		if (!dev) {
+			usage();
+			return CL_ERROR;
+		}
+		return run(cl_line("interface %s resetstats", dev));
 	}
 	cl_printf("Command \"%s\" is unknown, try \"ip link help\".\n", cmd);
 	return CL_ERROR;
@@ -1208,8 +1375,10 @@ static int ip_main(int argc, char **argv)
 		const char *o = argv[i] + 1;
 		if (*o == '-')
 			o++;
-		if (!strcmp(o, "s") || cl_match(o, "statistics") || !strcmp(o, "ss"))
+		if (!strcmp(o, "s") || cl_match(o, "statistics"))
 			opt_stats++;
+		else if (!strcmp(o, "ss"))
+			opt_stats += 2;
 		else if (cl_match(o, "brief") && strlen(o) >= 2)
 			opt_brief = 1;
 		else if (cl_match(o, "details"))
