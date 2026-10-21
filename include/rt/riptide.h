@@ -21,7 +21,7 @@
 #include "rt_ctl.h"
 #include "rt_diag.h"
 
-#define RIPTIDE_VERSION_STRING "0.11"
+#define RIPTIDE_VERSION_STRING "0.12"
 
 /* Initialise every module and create lo0. Call once, without the lock. */
 int  rt_init(void);

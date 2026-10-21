@@ -294,7 +294,7 @@ struct rt_tcp_info {
 	u32 tcpi_segs_in;
 	u32 tcpi_reordering;
 	char tcpi_ca_name[16];
-	/* Riptide 0.11 (a shorter optlen gets the fields above only): the
+	/* Riptide 0.12 (a shorter optlen gets the fields above only): the
 	 * counters of net.riptide.tcpinfo, see rt_ctl.h */
 	u32 tcpi_busy_ms, tcpi_rwnd_limited_ms, tcpi_sndbuf_limited_ms;
 	u32 tcpi_unread_ms, tcpi_zwin_ms;
