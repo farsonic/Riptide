@@ -8,7 +8,7 @@
  * Everything runs with the stack lock held.
  */
 #include "sock_internal.h"
-#include "infra.h"
+#include "ip6_internal.h"
 
 #define DUMP_HDR ((u32)sizeof(struct rt_ctl_hdr))
 
@@ -219,7 +219,10 @@ static int h_sockets(const struct rt_sysctl *e, void *old, u32 *oldlen, const vo
 	nu = RT_MIN(nu, rt_udp_list(pi + nt, nu));
 	nr = RT_MIN(nr, rt_raw_list(pi + nt + nu, nr));
 	for (i = 0; i < nt + nu + nr; i++) {
-		struct rt_ctl_sock *s = &recs[n++];
+		struct rt_ctl_sock *s;
+		if (pi[i].v6)
+			continue;               /* AF_INET6 sockets: net.riptide.sockets6 */
+		s = &recs[n++];
 		memset(s, 0, sizeof(*s));
 		s->kind = i < nt ? RT_CTL_SOCK_TCP : i < nt + nu ? RT_CTL_SOCK_UDP : RT_CTL_SOCK_RAW;
 		s->proto = pi[i].proto;
@@ -238,6 +241,229 @@ static int h_sockets(const struct rt_sysctl *e, void *old, u32 *oldlen, const vo
 	rt_free(pi);
 	rt_free(recs);
 	return ret;
+}
+
+/* ---- IPv6 tables ---- */
+
+static void ifname_of(u32 index, char *out)
+{
+	struct rt_netif *n = rt_netif_by_index(index);
+
+	if (n)
+		rt_strlcpy(out, n->name, 16);
+}
+
+static int h_addrs6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_in6_ifaddr_info *ai;
+	struct rt_ctl_addr6 *recs;
+	int count = rt_in6_addr_list(NULL, NULL, 0), i, ret;
+
+	if (!old || !count)
+		return dump_emit(old, oldlen, sizeof(*recs), old ? 0 : (u32)count, NULL);
+	ai = rt_malloc((u32)count * sizeof(*ai));
+	recs = rt_malloc((u32)count * sizeof(*recs));
+	if (!ai || !recs) {
+		rt_free(ai);
+		rt_free(recs);
+		return -RT_ENOMEM;
+	}
+	count = RT_MIN(count, rt_in6_addr_list(NULL, ai, count));
+	for (i = 0; i < count; i++) {
+		struct rt_ctl_addr6 *r = &recs[i];
+		memset(r, 0, sizeof(*r));
+		memcpy(r->addr, ai[i].addr.b, 16);
+		r->ifindex = ai[i].ifindex;
+		r->valid_s = ai[i].valid_s;
+		r->pref_s = ai[i].pref_s;
+		r->flags = ai[i].flags;
+		r->plen = ai[i].plen;
+		r->scope = ai[i].scope;
+		ifname_of(ai[i].ifindex, r->ifname);
+	}
+	ret = dump_emit(old, oldlen, sizeof(*recs), (u32)count, recs);
+	rt_free(ai);
+	rt_free(recs);
+	return ret;
+}
+
+static int h_ifaces6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_netif *n;
+	struct rt_ctl_iface6 *recs;
+	u32 count = 0, i = 0;
+	int r;
+
+	for (n = rt_netif_list(); n; n = n->next)
+		count++;
+	if (!old)
+		return dump_emit(NULL, oldlen, sizeof(*recs), count, NULL);
+	recs = count ? rt_malloc(count * sizeof(*recs)) : NULL;
+	if (count && !recs)
+		return -RT_ENOMEM;
+	for (n = rt_netif_list(); n && i < count; n = n->next) {
+		struct rt_ctl_iface6 *f = &recs[i++];
+		const struct ip6_if *ifp = ip6_ifp(n);
+		memset(f, 0, sizeof(*f));
+		rt_strlcpy(f->name, n->name, sizeof(f->name));
+		f->index = n->index;
+		f->enabled = ifp != NULL;
+		if (ifp) {
+			f->nd = ifp->nd;
+			f->cur_hlim = ip6_default_hlim(n);
+			f->ra_flags = (u8)((ifp->ra_managed ? 0x80 : 0) | (ifp->ra_other ? 0x40 : 0));
+			f->mtu = rt_ip6_link_mtu(n);
+			f->reachable_ms = ifp->base_reachable_ms;
+			f->retrans_ms = ifp->retrans_ms;
+		}
+	}
+	r = dump_emit(old, oldlen, sizeof(*recs), i, recs);
+	rt_free(recs);
+	return r;
+}
+
+static int h_routes6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_route6 *rt;
+	struct rt_ctl_route6 *recs, *r;
+	u32 count = 0, i = 0, now = rt_ip6_seconds();
+	int ret;
+
+	for (rt = rt_route6_list(); rt; rt = rt->next)
+		count++;
+	if (!old)
+		return dump_emit(NULL, oldlen, sizeof(*recs), count, NULL);
+	recs = count ? rt_malloc(count * sizeof(*recs)) : NULL;
+	if (count && !recs)
+		return -RT_ENOMEM;
+	for (rt = rt_route6_list(); rt && i < count; rt = rt->next) {
+		r = &recs[i++];
+		memset(r, 0, sizeof(*r));
+		memcpy(r->dst, rt->dst.b, 16);
+		memcpy(r->gateway, rt->gateway.b, 16);
+		r->flags = rt->flags;
+		r->metric = rt->metric;
+		r->mtu = rt->mtu;
+		r->use = rt->use;
+		r->plen = rt->plen;
+		r->pref = rt->pref;
+		if (rt->expire_s)
+			r->expire_s = (s32)(rt->expire_s - now) > 0 ? rt->expire_s - now : 0;
+		r->proto = (rt->flags & RT_RTF_RA) ? RT_PROTO_RA : route_proto(rt->flags);
+		if (rt->netif) {
+			r->ifindex = rt->netif->index;
+			rt_strlcpy(r->ifname, rt->netif->name, sizeof(r->ifname));
+			r->linkdown = !(rt->netif->flags & RT_IFF_UP);
+		}
+	}
+	ret = dump_emit(old, oldlen, sizeof(*recs), i, recs);
+	rt_free(recs);
+	return ret;
+}
+
+static int h_neigh6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_nd6_info *ni;
+	struct rt_ctl_neigh6 *recs;
+	int count = rt_nd6_list(NULL, 0), i, ret;
+
+	if (!old || !count)
+		return dump_emit(old, oldlen, sizeof(*recs), old ? 0 : (u32)count, NULL);
+	ni = rt_malloc((u32)count * sizeof(*ni));
+	recs = rt_malloc((u32)count * sizeof(*recs));
+	if (!ni || !recs) {
+		rt_free(ni);
+		rt_free(recs);
+		return -RT_ENOMEM;
+	}
+	count = RT_MIN(count, rt_nd6_list(ni, count));
+	for (i = 0; i < count; i++) {
+		memset(&recs[i], 0, sizeof(recs[i]));
+		memcpy(recs[i].addr, ni[i].addr.b, 16);
+		recs[i].ifindex = ni[i].ifindex;
+		recs[i].age_s = ni[i].age_s;
+		memcpy(recs[i].hwaddr, ni[i].hw, 6);
+		recs[i].state = ni[i].state;
+		recs[i].router = ni[i].router;
+		ifname_of(ni[i].ifindex, recs[i].ifname);
+	}
+	ret = dump_emit(old, oldlen, sizeof(*recs), (u32)count, recs);
+	rt_free(ni);
+	rt_free(recs);
+	return ret;
+}
+
+static int h_sockets6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_pcb_info *pi;
+	struct rt_ctl_sock6 *recs;
+	int nt = rt_tcp_list(NULL, 0), nu = rt_udp_list(NULL, 0), nr = rt_raw_list(NULL, 0);
+	int count = nt + nu + nr, i, n = 0, ret;
+
+	pi = count ? rt_malloc((u32)count * sizeof(*pi)) : NULL;
+	if (count && !pi)
+		return -RT_ENOMEM;
+	if (count) {
+		nt = RT_MIN(nt, rt_tcp_list(pi, nt));
+		nu = RT_MIN(nu, rt_udp_list(pi + nt, nu));
+		nr = RT_MIN(nr, rt_raw_list(pi + nt + nu, nr));
+	}
+	for (i = 0; i < nt + nu + nr; i++)
+		n += pi[i].v6;
+	if (!old || !n) {
+		rt_free(pi);
+		return dump_emit(old, oldlen, sizeof(*recs), old ? 0 : (u32)n, NULL);
+	}
+	recs = rt_malloc((u32)n * sizeof(*recs));
+	if (!recs) {
+		rt_free(pi);
+		return -RT_ENOMEM;
+	}
+	n = 0;
+	for (i = 0; i < nt + nu + nr; i++) {
+		struct rt_ctl_sock6 *s;
+		if (!pi[i].v6)
+			continue;
+		s = &recs[n++];
+		memset(s, 0, sizeof(*s));
+		s->kind = i < nt ? RT_CTL_SOCK_TCP : i < nt + nu ? RT_CTL_SOCK_UDP : RT_CTL_SOCK_RAW;
+		s->proto = pi[i].proto;
+		s->state = pi[i].state;
+		s->v6only = pi[i].v6only;
+		s->lport = pi[i].lport;
+		s->fport = pi[i].fport;
+		memcpy(s->laddr, pi[i].laddr6.b, 16);
+		memcpy(s->faddr, pi[i].faddr6.b, 16);
+		s->sendq = pi[i].sendq;
+		s->recvq = pi[i].recvq;
+		s->rtt_us = pi[i].rtt_us;
+		s->cwnd = pi[i].cwnd;
+		s->retrans = pi[i].retrans;
+	}
+	ret = dump_emit(old, oldlen, sizeof(*recs), (u32)n, recs);
+	rt_free(pi);
+	rt_free(recs);
+	return ret;
+}
+
+static int h_dns6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_ctl_dns6 d;
+	rt_in6_addr a[RT_CTL_MAXNS];
+	u32 idx[RT_CTL_MAXNS];
+	u8 src[RT_CTL_MAXNS];
+	int n, i;
+
+	memset(&d, 0, sizeof(d));
+	n = rt_dns_get_servers6(a, idx, src, RT_CTL_MAXNS);
+	d.nservers = (u32)RT_MIN(n, RT_CTL_MAXNS);
+	for (i = 0; i < (int)d.nservers; i++) {
+		memcpy(d.servers[i].addr, a[i].b, 16);
+		d.servers[i].ifindex = idx[i];
+		d.servers[i].source = src[i];
+	}
+	rt_strlcpy(d.domain, rt_dns_search_domain(), sizeof(d.domain));
+	return dump_emit(old, oldlen, sizeof(d), 1, &d);
 }
 
 /* ---- resolver and statistics ---- */
@@ -277,6 +503,14 @@ static const struct rt_sysctl ctl_sysctls[] = {
 	STATS("icmpstat", RT_CTL_ICMPSTAT, rt_icmpstat),
 	STATS("udpstat", RT_CTL_UDPSTAT, rt_udpstat),
 	STATS("tcpstat", RT_CTL_TCPSTAT, rt_tcpstat),
+	DUMP("addrs6", RT_CTL_ADDRS6, h_addrs6, "rt_ctl_hdr + struct rt_ctl_addr6[]"),
+	DUMP("routes6", RT_CTL_ROUTES6, h_routes6, "rt_ctl_hdr + struct rt_ctl_route6[]"),
+	DUMP("neigh6", RT_CTL_NEIGH6, h_neigh6, "rt_ctl_hdr + struct rt_ctl_neigh6[]"),
+	DUMP("sockets6", RT_CTL_SOCKETS6, h_sockets6, "rt_ctl_hdr + struct rt_ctl_sock6[]"),
+	DUMP("dns6", RT_CTL_DNS6, h_dns6, "rt_ctl_hdr + one struct rt_ctl_dns6"),
+	STATS("ip6stat", RT_CTL_IP6STAT, rt_ip6stat),
+	STATS("icmp6stat", RT_CTL_ICMP6STAT, rt_icmp6stat),
+	DUMP("ifaces6", RT_CTL_IFACES6, h_ifaces6, "rt_ctl_hdr + struct rt_ctl_iface6[]"),
 };
 
 void rt_ctl_init(void)

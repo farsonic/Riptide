@@ -63,5 +63,7 @@ int  rt_ioctl_net(u32 req, void *arg);
 
 /* resolv.c */
 void rt_dns_remove_server(u32 addr);
+const char *rt_dns_search_domain(void);
+void rt_dns_set_search_auto(const char *domain);
 
 #endif

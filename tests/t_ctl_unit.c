@@ -542,6 +542,157 @@ static void test_sockets(struct rt_sockctx *ctx)
 	rt_api_close(ctx, raw);
 }
 
+/* IPv6 configuration verbs and the IPv6 tables */
+static int find_addr6(const char *a, u8 plen)
+{
+	rt_in6_addr x;
+	int n = fetch("net.riptide.addrs6", sizeof(struct rt_ctl_addr6)), i;
+
+	rt_inet6_pton(a, &x);
+	for (i = 0; i < n; i++) {
+		const struct rt_ctl_addr6 *r = rec(i, sizeof(*r));
+		if (!memcmp(r->addr, x.b, 16) && r->plen == plen)
+			return i;
+	}
+	return -1;
+}
+
+static const struct rt_ctl_route6 *find_route6(const char *dst, u8 plen, const char *gw)
+{
+	rt_in6_addr d, g;
+	int n = fetch("net.riptide.routes6", sizeof(struct rt_ctl_route6)), i;
+
+	rt_inet6_pton(dst, &d);
+	if (gw)
+		rt_inet6_pton(gw, &g);
+	for (i = 0; i < n; i++) {
+		const struct rt_ctl_route6 *r = rec(i, sizeof(*r));
+		if (!memcmp(r->dst, d.b, 16) && r->plen == plen && (!gw || !memcmp(r->gateway, g.b, 16)) &&
+		    !(r->flags & RT_RTF_PMTU))
+			return r;
+	}
+	return NULL;
+}
+
+static void test_ipv6(struct rt_sockctx *ctx)
+{
+	char out[512];
+	int i, n, found;
+
+	/* interfaces came up with IPv6: link-local addresses, ::1 on lo0 */
+	CHECK(find_addr6("::1", 128) >= 0);
+	n = fetch("net.riptide.ifaces6", sizeof(struct rt_ctl_iface6));
+	for (i = 0, found = 0; i < n; i++) {
+		const struct rt_ctl_iface6 *f = rec(i, sizeof(*f));
+		if (!strcmp(f->name, "eth0") && f->enabled && f->nd && f->mtu == 1500 && f->cur_hlim == 64)
+			found = 1;
+	}
+	CHECK(found);
+	CHECK(cmd("ifconfig eth0 inet6 2001:db8:a::10/64", out, sizeof(out)) == 0);
+	CHECK(cmd("ifconfig eth0 inet6 2001:db8:a::11 prefixlen 80 nodad", out, sizeof(out)) == 0);
+	CHECK(find_addr6("2001:db8:a::10", 64) >= 0 && find_addr6("2001:db8:a::11", 80) >= 0);
+	i = find_addr6("2001:db8:a::10", 64);
+	{
+		const struct rt_ctl_addr6 *r = rec(i, sizeof(*r));
+		CHECK(!strcmp(r->ifname, "eth0") && r->scope == 14 && (r->flags & RT_CTL_IN6_TENTATIVE) &&
+		      r->valid_s == 0xffffffffu);
+	}
+	CHECK(find_route6("2001:db8:a::", 64, NULL) != NULL);
+	CHECK(cmd("ifconfig eth0 inet6 2001:db8:zz::1/64", out, sizeof(out)) < 0 && strstr(out, "bad IPv6"));
+	/* routes: -inet6, iproute2 style, link-local gateways need a device */
+	CHECK(cmd("route add -inet6 default 2001:db8:a::1", out, sizeof(out)) == 0);
+	CHECK(find_route6("::", 0, "2001:db8:a::1") != NULL);
+	CHECK(cmd("route add 2001:db8:b::/48 via fe80::1", out, sizeof(out)) < 0 && strstr(out, "dev IF"));
+	CHECK(cmd("route add 2001:db8:b::/48 via fe80::1 dev eth0 metric 5", out, sizeof(out)) == 0);
+	{
+		const struct rt_ctl_route6 *r = find_route6("2001:db8:b::", 48, "fe80::1");
+		CHECK(r && !strcmp(r->ifname, "eth0") && r->metric == 5 && r->proto == RT_PROTO_STATIC &&
+		      (r->flags & RT_RTF_GATEWAY));
+	}
+	CHECK(cmd("route add 2001:db8:c::/48 via fe80::2%eth0", out, sizeof(out)) == 0);
+	CHECK(cmd("route add 2001:db8:d::/48 via 2001:db8:99::1", out, sizeof(out)) < 0);
+	CHECK(cmd("route del -inet6 2001:db8:b::/48", out, sizeof(out)) == 0);
+	CHECK(find_route6("2001:db8:b::", 48, NULL) == NULL);
+	CHECK(cmd("route del -inet6 2001:db8:b::/48", out, sizeof(out)) < 0);
+	CHECK(cmd("route flush -inet6 dev eth0", out, sizeof(out)) == 0 && find_route6("2001:db8:c::", 48, NULL) == NULL);
+	/* the IPv4 table is untouched */
+	CHECK(fetch("net.riptide.routes", sizeof(struct rt_ctl_route)) > 0);
+	/* resolver: IPv6 nameservers, zone required for link-local */
+	CHECK(cmd("nameserver 2001:4860:4860::8888", out, sizeof(out)) == 0);
+	CHECK(cmd("nameserver fe80::53", out, sizeof(out)) < 0);
+	CHECK(cmd("nameserver fe80::53%eth0", out, sizeof(out)) == 0);
+	CHECK(fetch("net.riptide.dns6", sizeof(struct rt_ctl_dns6)) == 1);
+	{
+		const struct rt_ctl_dns6 *d = rec(0, sizeof(*d));
+		int k;
+		for (k = 0, found = 0; k < (int)d->nservers; k++)
+			if (d->servers[k].addr[15] == 0x53 && d->servers[k].ifindex == eth0.index)
+				found = 1;
+		CHECK(found);
+	}
+	CHECK(cmd("nameserver del fe80::53", out, sizeof(out)) == 0);
+	CHECK(cmd("nameserver del 2001:4860:4860::8888", out, sizeof(out)) == 0);
+	CHECK(cmd("host six.example 2001:db8:a::99", out, sizeof(out)) == 0);
+	/* neighbours */
+	CHECK(cmd("arp add 2001:db8:a::42 02:00:00:00:00:42 dev eth0", out, sizeof(out)) == 0);
+	n = fetch("net.riptide.neigh6", sizeof(struct rt_ctl_neigh6));
+	for (i = 0, found = 0; i < n; i++) {
+		const struct rt_ctl_neigh6 *e = rec(i, sizeof(*e));
+		if (e->addr[15] == 0x42 && e->state == RT_NUD_PERMANENT && e->hwaddr[5] == 0x42 && !strcmp(e->ifname, "eth0"))
+			found = 1;
+	}
+	CHECK(found);
+	CHECK(cmd("arp del 2001:db8:a::42 dev eth0", out, sizeof(out)) == 0);
+	CHECK(cmd("arp del 2001:db8:a::42 dev eth0", out, sizeof(out)) < 0);
+	/* sysctls */
+	CHECK(cmd("sysctl net.inet6.ip6.hlim=32", out, sizeof(out)) == 0 && strstr(out, "= 32"));
+	CHECK(cmd("sysctl net.inet6.ip6.forwarding net.inet6.ip6.accept_rtadv net.inet6.ip6.use_tempaddr",
+	          out, sizeof(out)) == 0 && strstr(out, "forwarding = 0") && strstr(out, "accept_rtadv = 1") &&
+	      strstr(out, "use_tempaddr = 0"));
+	CHECK(cmd("sysctl net.inet6.ip6.hlim=64", out, sizeof(out)) == 0);
+	{
+		s32 mib[4] = { RT_CTL_NET, 28, 41, 3 }, v = 0;
+		u32 l = sizeof(v);
+		rt_lock();
+		CHECK(rt_sysctl_bymib(mib, 4, &v, &l, NULL, 0) == 0 && v == 64);
+		rt_unlock();
+	}
+	/* sockets: AF_INET6 ones in sockets6 only */
+	{
+		struct rt_sockaddr_in6 s6;
+		int fd = rt_api_socket(ctx, RT_AF_INET6, RT_SOCK_DGRAM, 0);
+		memset(&s6, 0, sizeof(s6));
+		s6.sin6_len = sizeof(s6);
+		s6.sin6_family = RT_AF_INET6;
+		s6.sin6_port = rt_htons(6666);
+		CHECK(rt_api_bind(ctx, fd, &s6, sizeof(s6)) == 0);
+		n = fetch("net.riptide.sockets6", sizeof(struct rt_ctl_sock6));
+		for (i = 0, found = 0; i < n; i++) {
+			const struct rt_ctl_sock6 *s = rec(i, sizeof(*s));
+			if (s->kind == RT_CTL_SOCK_UDP && s->lport == 6666)
+				found = 1;
+		}
+		CHECK(found);
+		n = fetch("net.riptide.sockets", sizeof(struct rt_ctl_sock));
+		for (i = 0, found = 0; i < n; i++) {
+			const struct rt_ctl_sock *s = rec(i, sizeof(*s));
+			if (s->lport == 6666)
+				found = 1;
+		}
+		CHECK(!found);
+		rt_api_close(ctx, fd);
+	}
+	CHECK(fetch("net.riptide.ip6stat", sizeof(struct rt_ip6_stats)) == 1);
+	CHECK(fetch("net.riptide.icmp6stat", sizeof(struct rt_icmp6_stats)) == 1);
+	CHECK(cmd("ifconfig eth0 inet6 2001:db8:a::10 delete", out, sizeof(out)) == 0 &&
+	      find_addr6("2001:db8:a::10", 64) < 0);
+	/* ipv6 off / on per interface: off drops every IPv6 address */
+	CHECK(cmd("ipv6 eth0 off", out, sizeof(out)) == 0 && !rt_ip6_ifenabled(&eth0) &&
+	      find_addr6("2001:db8:a::11", 80) < 0);
+	CHECK(cmd("ipv6 eth0 on", out, sizeof(out)) == 0 && rt_ip6_ifenabled(&eth0));
+	CHECK(cmd("ipv6 nosuch on", out, sizeof(out)) < 0);
+}
+
 int main(void)
 {
 	struct rt_sockctx ctx;
@@ -556,6 +707,7 @@ int main(void)
 	test_ioctls(&ctx, fd);
 	test_commands();
 	test_sockets(&ctx);
+	test_ipv6(&ctx);
 	rt_api_close(&ctx, fd);
 	rt_ctx_destroy(&ctx);
 	printf("t_ctl_unit: %d checks, %d failures\n", checks, failures);

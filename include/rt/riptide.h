@@ -56,6 +56,12 @@ int rt_raw_list(struct rt_pcb_info *out, int max);
  *   sysctl NAME=VALUE
  *   ifconfig IFNAME A.B.C.D[/BITS] [peer A.B.C.D] [mtu N] [up|down]
  *   dhcp IFNAME
+ * IPv6 (see docs/AMIGA.md):
+ *   ipv6 [IFNAME] on|off
+ *   ifconfig IFNAME inet6 ADDR[/PLEN] [nodad] [delete] | ifconfig IFNAME inet6 [-]ifdisabled
+ *   route add|del [-inet6] DEST[/PLEN]|default [via] GW[%IF] [dev IF] (IPv6 when -inet6
+ *     is given or an address contains ':')
+ *   nameserver IPV6[%IF] | host NAME IPV6 | arp add|del IPV6 [MAC] dev IF
  * Unknown keywords are passed to 'unknown' (OS glue: "interface" lines
  * that open SANA-II devices / TUN devices). Returns 0 or -errno and fills
  * err with a message. */

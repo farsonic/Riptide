@@ -203,6 +203,11 @@ int rt_dns_get_servers6(rt_in6_addr *out, u32 *ifindex, u8 *source, int max)
 	return dns_nservers;
 }
 
+const char *rt_dns_search_domain(void)
+{
+	return dns_search;
+}
+
 /* RFC 8106 DNSSL / DHCPv6 domain list: only when none is configured */
 void rt_dns_set_search_auto(const char *domain);
 void rt_dns_set_search_auto(const char *domain)
