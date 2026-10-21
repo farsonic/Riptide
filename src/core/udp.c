@@ -919,7 +919,7 @@ static int udp_rcv(struct rt_buf *b, const rt_in6_addr *saddr, const rt_in6_addr
 	return 0;
 }
 
-void rt_udp_input(struct rt_buf *b, const struct rt_iphdr *ip)
+static void udp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 {
 	rt_in6_addr sa, da;
 	u32 ulen;
@@ -961,7 +961,14 @@ err:
 	rt_buf_free(b);
 }
 
-void rt_udp_input6(struct rt_buf *b, const struct rt_ip6hdr *ip6)
+void rt_udp_input(struct rt_buf *b, const struct rt_iphdr *ip)
+{
+	RT_PROF_ENTER(RT_PROF_UDP_IN);
+	udp_input_body(b, ip);
+	RT_PROF_EXIT(RT_PROF_UDP_IN);
+}
+
+static void udp_input6_body(struct rt_buf *b, const struct rt_ip6hdr *ip6)
 {
 	u32 ulen;
 	u16 sport, dport;
@@ -996,6 +1003,13 @@ void rt_udp_input6(struct rt_buf *b, const struct rt_ip6hdr *ip6)
 err:
 	rt_udpstat.InErrors++;
 	rt_buf_free(b);
+}
+
+void rt_udp_input6(struct rt_buf *b, const struct rt_ip6hdr *ip6)
+{
+	RT_PROF_ENTER(RT_PROF_UDP_IN);
+	udp_input6_body(b, ip6);
+	RT_PROF_EXIT(RT_PROF_UDP_IN);
 }
 
 static void udp_err(const rt_in6_addr *src, const rt_in6_addr *dst, u16 sport, u16 dport, int err)

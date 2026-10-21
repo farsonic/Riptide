@@ -455,13 +455,19 @@ static void __tcp_ack_snd_check(struct tcp_sock *tp, int ofo_possible)
 	if (((tp->rcv_nxt - tp->rcv_wup) > (u32)(sysctl_tcp_delack_segs - 1) * tp->ack.rcv_mss &&
 	     __tcp_select_window(tp) >= tp->rcv_wnd) ||
 	    tcp_in_quickack_mode(tp) || (tp->ack.pending & ICSK_ACK_NOW) || sysctl_tcp_quickack) {
+		TCP_DBG(tp, "ack now: %lu bytes unacked%s%s%s", (unsigned long)(tp->rcv_nxt - tp->rcv_wup),
+		        tcp_in_quickack_mode(tp) ? ", quickack" : "",
+		        (tp->ack.pending & ICSK_ACK_NOW) ? ", requested" : "",
+		        sysctl_tcp_quickack ? ", quickack sysctl" : "");
 		tcp_send_ack(tp);
 		return;
 	}
 	if (!ofo_possible || rt_bufq_empty(&tp->ofoq)) {
+		TCP_DBG(tp, "ack delayed: %lu bytes unacked", (unsigned long)(tp->rcv_nxt - tp->rcv_wup));
 		tcp_send_delayed_ack(tp);
 		return;
 	}
+	TCP_DBG(tp, "ack now: out-of-order data queued");
 	tcp_send_ack(tp);
 }
 
@@ -679,6 +685,9 @@ static int tcp_ack_update_window(struct tcp_sock *tp, const struct rt_buf *b, u3
 		flag |= FLAG_WIN_UPDATE;
 		tp->snd_wl1 = ack_seq;
 		if (tp->snd_wnd != nwin) {
+			if (!nwin || (!tp->snd_wnd && tp->max_window))
+				TCP_DBG(tp, "peer window %lu -> %lu%s", (unsigned long)tp->snd_wnd, (unsigned long)nwin,
+				        nwin ? "" : " (zero window)");
 			if (!nwin)
 				tp->dg.zwin_in++;
 			tp->snd_wnd = nwin;
@@ -1139,6 +1148,8 @@ static void tcp_data_queue_ofo(struct tcp_sock *tp, struct rt_buf *b)
 	tp->pred_flags = 0;
 	tp->ack.pending |= ICSK_ACK_SCHED;
 	rt_tcpstat.TCPOFOQueue++;
+	TCP_DBG(tp, "out of order: seq %lu-%lu, expected %lu (+%lu)", (unsigned long)seq, (unsigned long)end_seq,
+	        (unsigned long)tp->rcv_nxt, (unsigned long)(seq - tp->rcv_nxt));
 
 	/* find the last segment starting at or before seq (scan from the
 	 * tail: new data usually extends the right edge) */
@@ -2035,7 +2046,7 @@ out:
 	return;
 }
 
-void rt_tcp_input(struct rt_buf *b, const struct rt_iphdr *ip)
+static void tcp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 {
 	const u8 *th;
 	u32 saddr, daddr, doff;
@@ -2075,7 +2086,14 @@ drop:
 	tcp_api_exit();
 }
 
-void rt_tcp_input6(struct rt_buf *b, const struct rt_ip6hdr *ip6)
+void rt_tcp_input(struct rt_buf *b, const struct rt_iphdr *ip)
+{
+	RT_PROF_ENTER(RT_PROF_TCP_IN);
+	tcp_input_body(b, ip);
+	RT_PROF_EXIT(RT_PROF_TCP_IN);
+}
+
+static void tcp_input6_body(struct rt_buf *b, const struct rt_ip6hdr *ip6)
 {
 	const u8 *th;
 	u32 doff, scope = 0;
@@ -2107,4 +2125,11 @@ bad:
 drop:
 	rt_buf_free(b);
 	tcp_api_exit();
+}
+
+void rt_tcp_input6(struct rt_buf *b, const struct rt_ip6hdr *ip6)
+{
+	RT_PROF_ENTER(RT_PROF_TCP_IN);
+	tcp_input6_body(b, ip6);
+	RT_PROF_EXIT(RT_PROF_TCP_IN);
 }

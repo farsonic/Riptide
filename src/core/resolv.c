@@ -665,12 +665,16 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 			}
 			if (r < 0)
 				continue;
+			RT_DBG(RT_DBG_DNS, "query %s type %u to server %d, attempt %d", qname ? qname : "(raw)",
+			       (unsigned)qtype, s + 1, att + 1);
 			for (;;) {
 				struct rt_sockaddr_in6 from;
 				u32 el = rt_now_ms() - start, fl = sizeof(from), set;
 				int ok;
-				if (el >= DNS_TIMEOUT_MS)
+				if (el >= DNS_TIMEOUT_MS) {
+					RT_DBG(RT_DBG_DNS, "no answer from server %d in %lu ms", s + 1, (unsigned long)el);
 					break;
+				}
 				set = 1u << fd;
 				r = rt_api_select(&w->ctx, fd + 1, &set, NULL, NULL,
 				                  (s32)(DNS_TIMEOUT_MS - el), NULL);
@@ -717,6 +721,7 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 		}
 	}
 out:
+	RT_DBG(RT_DBG_DNS, "query %s: result %d", qname ? qname : "(raw)", result);
 	if (fd4 >= 0)
 		rt_api_close(&w->ctx, fd4);
 	if (fd6 >= 0)

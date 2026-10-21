@@ -292,6 +292,8 @@ static void tcp_retransmit_timer(struct tcp_sock *tp)
 	}
 	rt_tcpstat.TCPTimeouts++;
 	tp->dg.rto_timeouts++;
+	TCP_DBG(tp, "RTO after %lu ms: retransmit %lu, cwnd %lu, %lu in flight", (unsigned long)tp->icsk_rto,
+	        (unsigned long)TCP_SKB_CB(b)->seq, (unsigned long)tp->snd_cwnd, (unsigned long)tp->packets_out);
 	if (tcp_write_timeout(tp))
 		return;
 	tcp_enter_loss(tp);
@@ -399,6 +401,7 @@ static void tcp_delack_timer(void *arg)
 		}
 		rt_tcpstat.DelayedACKs++;
 		tp->dg.delayed_acks_out++;
+		RT_DBG(RT_DBG_TIMER, "delayed ACK timer, ato %lu ms", (unsigned long)tp->ack.ato);
 		tcp_send_ack(tp);
 	}
 out:

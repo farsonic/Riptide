@@ -102,3 +102,12 @@ u32 rt_csum_pseudo(u32 saddr, u32 daddr, u8 proto, u16 len)
 	s += rt_htons(len);
 	return s;
 }
+
+/* rt_csum_partial() while profiling: the checksum as a section */
+u32 rt_csum_partial_prof(const void *data, u32 len, u32 sum)
+{
+	RT_PROF_ENTER(RT_PROF_CSUM);
+	sum = rt_arch.csum(data, len, sum);
+	RT_PROF_EXIT(RT_PROF_CSUM);
+	return sum;
+}

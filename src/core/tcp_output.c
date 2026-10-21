@@ -187,6 +187,8 @@ static u16 tcp_select_window(struct tcp_sock *tp)
 	new_win >>= ws;
 	if (new_win == 0) {
 		tp->pred_flags = 0;
+		TCP_DBG(tp, "advertising a zero window (%lu bytes unread)",
+		        (unsigned long)(tp->rcv_nxt - tp->copied_seq));
 		tp->dg.zwin_out++;
 		if (!tp->dg.zwin_start)
 			tp->dg.zwin_start = tcp_diag_now();
@@ -371,7 +373,7 @@ static void tcp_fill_csum_hdr(struct rt_buf *b, const rt_in6_addr *saddr, const 
 	memcpy(b->data + 16, &c, 2);
 }
 
-int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
+static int tcp_transmit_skb_body(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 {
 	struct tcp_skb_cb *tcb = TCP_SKB_CB(skb);
 	struct tcp_out_options opts;
@@ -458,6 +460,16 @@ int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 	 * retransmission machinery recovers. */
 	(void)tcp_ip_send(tp, b, tos);
 	return 0;
+}
+
+int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
+{
+	int r;
+
+	RT_PROF_ENTER(RT_PROF_TCP_OUT);
+	r = tcp_transmit_skb_body(tp, skb, clone_it);
+	RT_PROF_EXIT(RT_PROF_TCP_OUT);
+	return r;
 }
 
 /* ---- stateless segments (RST, time-wait ACKs, SYN-ACKs of requests) ---- */
@@ -1145,6 +1157,7 @@ void tcp_send_probe0(struct tcp_sock *tp)
 		return;
 	}
 	tp->icsk_probes_out++;
+	TCP_DBG(tp, "zero window probe %lu", (unsigned long)tp->icsk_probes_out);
 	if (err <= 0) {
 		if (tp->icsk_backoff < (u32)sysctl_tcp_retries2)
 			tp->icsk_backoff++;

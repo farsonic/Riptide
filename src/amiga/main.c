@@ -3,18 +3,22 @@
  *
  *   Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
  *           [CAPTURE start|stop|status|save FILE|clear ...]
+ *   Riptide PROFILE START|STOP|RESET|SHOW
+ *   Riptide DEBUG CATEGORIES|NONE|SHOW [N]|CLEAR|DUMP FILE|STATUS [SIZE=KB]
  *
- * Without QUIT/STATUS it starts the stack and stays in this process (start
- * it with "Run >NIL: Riptide"). QUIT and STATUS talk to a running instance
- * through the public message port "RIPTIDE", as does CAPTURE (packet
- * capture, the rest of the line is the "capture" command). BENCH times the checksum and
- * copy routines (bench.c) and exits.
+ * Without QUIT/STATUS/CAPTURE/PROFILE/DEBUG it starts the stack and stays
+ * in this process (start it with "Run >NIL: Riptide"); a numeric DEBUG is
+ * then the log level. The others talk to a running instance through the
+ * public message port "RIPTIDE" (CAPTURE: packet capture, the rest of the
+ * line is the "capture" command). BENCH times the checksum and copy
+ * routines (bench.c) and exits.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
 
-#define TEMPLATE "CONFIG/K,DEBUG/N,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,CAPTURE/K/F"
-enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_CAPTURE, ARG_COUNT };
+#define TEMPLATE "CONFIG/K,DEBUG/K,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,PROFILE/K,CAPTURE/K,ARGS/M"
+enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_PROFILE, ARG_CAPTURE,
+       ARG_ARGS, ARG_COUNT };
 
 const char riptide_version_tag[] = "$VER: Riptide " RIPTIDE_VERSION_STRING " (" RIPTIDE_DATE ")";
 
@@ -44,7 +48,7 @@ static int send_command(ULONG cmd, const char *line)
 	m->msg.mn_Length = sizeof(*m);
 	m->cmd = cmd;
 	if (line)
-		rt_snprintf(m->text, sizeof(m->text), "capture %s", line);
+		strncpy((char *)m->text, line, sizeof(m->text) - 1);
 	m->reply = (STRPTR)out;
 	m->replysize = 8192;
 	Forbid();
@@ -79,11 +83,36 @@ out:
 	return rc;
 }
 
+static int is_number(const char *s)
+{
+	if (!*s)
+		return 0;
+	for (; *s; s++)
+		if (*s < '0' || *s > '9')
+			return 0;
+	return 1;
+}
+
+/* "Riptide PROFILE SHOW", "Riptide DEBUG DUMP RAM:x": one line of the
+ * configuration language for the running instance */
+static int send_verb(const char *verb, const char *first, char **more)
+{
+	char line[256];
+	u32 o;
+
+	o = (u32)rt_snprintf(line, sizeof(line), "%s %s", verb, first);
+	/* words with spaces (file names) quoted again */
+	for (; more && *more && o < sizeof(line); more++)
+		o += (u32)rt_snprintf(line + o, sizeof(line) - o, strchr(*more, ' ') ? " \"%s\"" : " %s", *more);
+	return send_command(RTCMD_COMMAND, line);
+}
+
 static int riptide_main(void)
 {
 	LONG args[ARG_COUNT];
 	struct RDArgs *rda;
 	const char *config = NULL;
+	char **more;
 	int rc = 0;
 
 	memset(args, 0, sizeof(args));
@@ -92,18 +121,30 @@ static int riptide_main(void)
 		PrintFault(IoErr(), (CONST_STRPTR)"Riptide");
 		return 10;
 	}
-	if (args[ARG_CAPTURE]) {
-		rc = send_command(RTCMD_COMMAND, (const char *)args[ARG_CAPTURE]);
-		FreeArgs(rda);
-		return rc;
-	}
 	if (args[ARG_QUIT] || args[ARG_STATUS]) {
 		rc = send_command(args[ARG_QUIT] ? RTCMD_QUIT : RTCMD_STATUS, NULL);
 		FreeArgs(rda);
 		return rc;
 	}
+	more = (char **)args[ARG_ARGS];
+	if (args[ARG_CAPTURE]) {
+		rc = send_verb("capture", (char *)args[ARG_CAPTURE], more);
+		FreeArgs(rda);
+		return rc;
+	}
+	if (args[ARG_PROFILE] || (args[ARG_DEBUG] && (more || !is_number((char *)args[ARG_DEBUG])))) {
+		rc = send_verb(args[ARG_PROFILE] ? "profile" : "debug",
+		               (char *)(args[ARG_PROFILE] ? args[ARG_PROFILE] : args[ARG_DEBUG]), more);
+		FreeArgs(rda);
+		return rc;
+	}
+	if (more) {
+		put("Riptide: unexpected argument (see Riptide ?)\n");
+		FreeArgs(rda);
+		return 10;
+	}
 	if (args[ARG_DEBUG])
-		rt_log_level = (int)*(LONG *)args[ARG_DEBUG];
+		rt_log_level = (int)rt_strtoul((char *)args[ARG_DEBUG], NULL, 10);
 	if (args[ARG_CONFIG])
 		config = (const char *)args[ARG_CONFIG];
 	if (args[ARG_BENCH]) {

@@ -480,7 +480,7 @@ drop:
 	rt_buf_free(b);
 }
 
-void rt_ip6_input(struct rt_netif *nif, struct rt_buf *b)
+static void ip6_input_body(struct rt_netif *nif, struct rt_buf *b)
 {
 	struct rt_ip6hdr *ip6;
 	struct rt_netif *owner;
@@ -557,15 +557,25 @@ void rt_ip6_input(struct rt_netif *nif, struct rt_buf *b)
 	return;
 hdrerr:
 	rt_ip6stat.InHdrErrors++;
+	RT_DBG(RT_DBG_IP6, "in: header error, %lu bytes from %s", (unsigned long)b->len, nif->name);
 	rt_buf_free(b);
 	return;
 addrerr:
 	rt_ip6stat.InAddrErrors++;
+	RT_DBG(RT_DBG_IP6, "in: not for us, %lu bytes from %s", (unsigned long)b->len, nif->name);
 	rt_buf_free(b);
 	return;
 discard:
 	rt_ip6stat.InDiscards++;
+	RT_DBG(RT_DBG_IP6, "in: discarded, %lu bytes from %s", (unsigned long)b->len, nif->name);
 	rt_buf_free(b);
+}
+
+void rt_ip6_input(struct rt_netif *nif, struct rt_buf *b)
+{
+	RT_PROF_ENTER(RT_PROF_IP6_IN);
+	ip6_input_body(nif, b);
+	RT_PROF_EXIT(RT_PROF_IP6_IN);
 }
 
 void rt_ip6_init(void)

@@ -267,6 +267,9 @@ static void dhcp_send(struct dhcp_client *c, u8 type)
 	int unicast = type != DHCPRELEASE && c->state == ST_RENEWING;
 	u32 ciaddr = (c->state == ST_RENEWING || c->state == ST_REBINDING ||
 	              type == DHCPRELEASE) ? c->addr : 0;
+
+	RT_DBG(RT_DBG_DHCP, "%s: send message type %u%s, try %u", c->nif->name, (unsigned)type,
+	       unicast ? " (unicast)" : "", (unsigned)c->tries);
 	struct rt_buf *b = dhcp_build(c, type, ciaddr);
 
 	if (!b)
@@ -307,6 +310,7 @@ static void unconfigure(struct dhcp_client *c)
 static void start_init(struct dhcp_client *c, u32 delay_ms)
 {
 	c->state = ST_INIT;
+	RT_DBG(RT_DBG_DHCP, "%s: state INIT", c->nif->name);
 	c->tries = 0;
 	c->xid = rt_random32();
 	rt_timer_after(&c->timer, delay_ms);
@@ -394,6 +398,7 @@ static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts
 	c->acc_s = 0;
 	c->acc_ms = rt_now_ms();
 	c->state = ST_BOUND;
+	RT_DBG(RT_DBG_DHCP, "%s: state BOUND", c->nif->name);
 	c->tries = 0;
 	rt_timer_del(&c->timer);
 	if (c->lease_s != 0xffffffffu)
@@ -414,6 +419,7 @@ static void dhcp_timeout(void *arg)
 		if (c->state == ST_INIT) {
 			c->start_ms = rt_now_ms();
 			c->state = ST_SELECTING;
+			RT_DBG(RT_DBG_DHCP, "%s: state SELECTING", c->nif->name);
 			if (!(c->nif->flags & RT_IFF_UP))
 				rt_netif_up(c->nif);
 		}
@@ -440,11 +446,13 @@ static void dhcp_timeout(void *arg)
 			if (c->state != ST_REBINDING)
 				c->xid = rt_random32();
 			c->state = ST_REBINDING;
+			RT_DBG(RT_DBG_DHCP, "%s: state REBINDING", c->nif->name);
 			left = c->lease_s - el;
 		} else if (el >= c->t1_s) {
 			if (c->state == ST_BOUND)
 				c->xid = rt_random32();
 			c->state = ST_RENEWING;
+			RT_DBG(RT_DBG_DHCP, "%s: state RENEWING", c->nif->name);
 			left = c->t2_s - el;
 		} else {
 			arm_s(c, c->t1_s - el);    /* long lease: not yet */
@@ -539,6 +547,7 @@ static void dhcp_input(const u8 *m, u32 len, u32 from)
 		c->offered = yiaddr;
 		c->server = o->server;
 		c->state = ST_REQUESTING;
+		RT_DBG(RT_DBG_DHCP, "%s: state REQUESTING", c->nif->name);
 		c->tries = 0;
 		dhcp_send(c, DHCPREQUEST);
 		rt_timer_after(&c->timer, backoff_ms(c->tries++));
@@ -735,6 +744,7 @@ int rt_dhcp_renew(struct rt_netif *nif)
 		 * schedule takes over. */
 		c->xid = rt_random32();
 		c->state = ST_RENEWING;
+		RT_DBG(RT_DBG_DHCP, "%s: state RENEWING", c->nif->name);
 		dhcp_send(c, DHCPREQUEST);
 	} else {
 		start_init(c, 0);

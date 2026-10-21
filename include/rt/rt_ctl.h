@@ -51,6 +51,7 @@
 #define RT_CTL_ICMP6STAT 16       /* net.riptide.icmp6stat one struct rt_icmp6_stats */
 #define RT_CTL_IFACES6   17       /* net.riptide.ifaces6   struct rt_ctl_iface6[] */
 #define RT_CTL_TCPINFO   18       /* net.riptide.tcpinfo   struct rt_ctl_tcpinfo[] (TCP, both families) */
+#define RT_CTL_PROFILE   19       /* net.riptide.profile   struct rt_ctl_prof[] ("profile") */
 #define RT_CTL_DRIVERS   20       /* net.riptide.drivers   struct rt_ctl_driver[] */
 
 struct rt_ctl_hdr {
@@ -151,6 +152,24 @@ struct rt_ctl_sock {
 	u32  sendq, recvq;        /* bytes queued (listen: SYN queue) */
 	u32  rtt_us, cwnd;        /* TCP only: smoothed RTT, cwnd in packets */
 	u32  retrans;
+};
+
+/* ---- profiler ("profile start", see rt_diag.h) ----
+ * Record 0 is the run itself (kind WALL): total = wall-clock time since
+ * "profile start" (until "profile stop"), count = 1 while running,
+ * rx_bytes = bytes received by all interfaces in that time. Then one
+ * record per section (exclusive time) and per counter. */
+#define RT_CTL_PROF_WALL    0
+#define RT_CTL_PROF_SECTION 1
+#define RT_CTL_PROF_COUNTER 2
+struct rt_ctl_prof {
+	char name[16];
+	u32  kind;                /* RT_CTL_PROF_* */
+	u32  count;               /* completed calls */
+	u32  total_ms;            /* total time */
+	u32  total_us;            /* the same in microseconds (saturates at 0xffffffff) */
+	u32  max_us;              /* longest single call (sections: including nested sections) */
+	u32  rx_bytes;            /* WALL record only */
 };
 
 /* ---- resolver configuration ---- */

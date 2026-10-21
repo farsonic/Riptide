@@ -75,6 +75,7 @@ static void fq_destroy(struct frag_q *q)
 static void fq_kill(struct frag_q *q)
 {
 	rt_ipstat.ReasmFails++;
+	RT_DBG(RT_DBG_IP, "reassembly failed (timeout or limit)");
 	fq_destroy(q);
 }
 
@@ -153,6 +154,7 @@ static struct rt_buf *fq_assemble(struct frag_q *q)
 	ip->check = 0;
 	ip->check = rt_inet_csum(ip, hlen);
 	rt_ipstat.ReasmOKs++;
+	RT_DBG(RT_DBG_IP, "reassembled %lu bytes", (unsigned long)b->len);
 	fq_destroy(q);
 	return b;
 }

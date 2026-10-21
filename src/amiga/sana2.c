@@ -91,11 +91,13 @@ struct s2if {
 S2CB ULONG s2_copy_to_buff(RTREG(a0) APTR to, RTREG(a1) APTR from, RTREG(d0) ULONG n)
 {
 	struct rt_buf *b = to;
+	u32 t0 = RT_PROF_T0();       /* driver context: a counter, not a section */
 
 	if (!b || n > rt_buf_tailroom(b) + b->len)
 		return FALSE;
 	rt_copy(b->data, from, n);   /* reentrant; never MOVE16 (driver memory) */
 	b->len = n;
+	RT_PROF_ADD(RT_PROF_DRV_RX, t0);
 	return TRUE;
 }
 
@@ -193,8 +195,10 @@ static void s2_retry_timer(void *arg)
 		if (r->kind == REQ_READ && r->idle && s2_submit_read(si, r) < 0)
 			pending = 1;
 	}
-	if (pending)
+	if (pending) {
+		RT_DBG(RT_DBG_DRIVER, "%s: no buffers for reads, retry in 1 s", si->ai.nif.name);
 		rt_timer_after(&si->retry, 1000);
+	}
 }
 
 static void s2_read_done(struct s2if *si, struct s2req *r)
@@ -208,6 +212,8 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 	r->busy = 0;
 	if (r->io.ios2_Req.io_Error) {
 		rt_drv_rx_done(nif, r->q, 0, (s32)r->io.ios2_Req.io_Error);
+		RT_DBG(RT_DBG_DRIVER, "%s: read error %ld/%ld", nif->name, (long)r->io.ios2_Req.io_Error,
+		       (long)r->io.ios2_WireError);
 		nif->stats.ierrors++;
 		si->rx_errors++;
 		r->idle = 1;
@@ -250,6 +256,7 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 	}
 	r->b = NULL;
 	s2_submit_read(si, r);
+	RT_DBG(RT_DBG_DRIVER, "%s: rx %lu bytes type %04x", nif->name, (unsigned long)b->len, (unsigned)type);
 	b->netif = nif;
 	rt_netif_input(nif, b, type, si->ether ? src : NULL, flags);
 }
@@ -550,7 +557,9 @@ static int sana2_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw,
 	r->busy = 1;
 	si->wbusy++;
 	rt_drv_tx_start(nif, b->len);
+	RT_PROF_ENTER(RT_PROF_DRV_TX);
 	SendIO((struct IORequest *)&r->io);
+	RT_PROF_EXIT(RT_PROF_DRV_TX);
 	return 0;
 }
 

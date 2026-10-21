@@ -15,6 +15,7 @@
  */
 #include "rt/rt_timer.h"
 #include "rt/rt_os.h"
+#include "rt/rt_diag.h"
 
 static struct rt_timer timer_list = { &timer_list, &timer_list, 0, NULL, NULL, 0 };
 static struct rt_timer firing_list = { &firing_list, &firing_list, 0, NULL, NULL, 0 };
@@ -85,6 +86,7 @@ u32 rt_timers_next(u32 now)
 u32 rt_timers_run(u32 now)
 {
 	struct rt_timer *t;
+	u32 fired = 0;
 
 	/* Detach the expired prefix of the sorted list onto firing_list. */
 	while ((t = timer_list.next) != &timer_list && !time_before(now, t->expires)) {
@@ -95,6 +97,10 @@ u32 rt_timers_run(u32 now)
 		timer_unlink(t);
 		t->pending = 0;
 		t->fn(t->arg);
+		fired++;
 	}
+	if (fired)
+		RT_DBG(RT_DBG_TIMER, "ran %lu timers, next in %lu ms", (unsigned long)fired,
+		       (unsigned long)rt_timers_next(now));
 	return rt_timers_next(now);
 }

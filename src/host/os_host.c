@@ -16,6 +16,7 @@
 #include "rt/rt_errno.h"
 #include "rt/rt_arch.h"
 #include "rt/rt_host.h"
+#include "rt/rt_diag.h"
 #include "host_priv.h"
 
 /* ---- stack lock ---- */
@@ -26,13 +27,21 @@ static volatile int lock_owned;
 
 void rt_lock(void)
 {
-	pthread_mutex_lock(&stack_lock);
+	if (rt_prof_on && pthread_mutex_trylock(&stack_lock) != 0) {
+		u32 t0 = rt_prof_ticks();
+		pthread_mutex_lock(&stack_lock);
+		rt_prof_add(RT_PROF_LOCK_APP, rt_prof_ticks() - t0);
+	} else if (!rt_prof_on) {
+		pthread_mutex_lock(&stack_lock);
+	}
 	lock_owner = pthread_self();
 	lock_owned = 1;
 }
 
 void rt_unlock(void)
 {
+	if (rt_prof_depth)
+		rt_prof_unwind();     /* no section spans a lock release */
 	lock_owned = 0;
 	pthread_mutex_unlock(&stack_lock);
 }
@@ -74,6 +83,20 @@ u32 rt_now_ms(void)
 u32 rt_wallclock(void)
 {
 	return (u32)time(NULL);
+}
+
+/* profiling clock: microseconds (wraps after 71 minutes) */
+u32 rt_prof_ticks(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (u32)ts.tv_sec * 1000000u + (u32)ts.tv_nsec / 1000u;
+}
+
+u32 rt_prof_hz(void)
+{
+	return 1000000u;
 }
 
 /* ---- memory (with accounting, so tests can check for leaks) ---- */
@@ -211,6 +234,12 @@ void rt_log(int level, const char *fmt, ...)
 	char line[256];
 	va_list ap;
 
+	if ((rt_dbg_mask & RT_DBG_LOG) && rt_lock_held()) {
+		va_start(ap, fmt);
+		vsnprintf(line, sizeof(line), fmt, ap);
+		va_end(ap);
+		rt_dbg_line(RT_DBG_LOG, line);
+	}
 	if (level > rt_log_level)
 		return;
 	va_start(ap, fmt);

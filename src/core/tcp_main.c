@@ -602,11 +602,33 @@ void tcp_chrono_stop(struct tcp_sock *tp, u8 type)
 	else if (type == tp->dg.chrono_type)
 		tcp_chrono_set(tp, TCP_CHRONO_BUSY);
 }
+#ifndef RT_NO_DIAG
+void tcp_dbg(const struct tcp_sock *tp, const char *fmt, ...)
+{
+	char line[180];
+	va_list ap;
+	int n;
+
+	n = rt_snprintf(line, sizeof(line), "%u>%u ", (unsigned)rt_ntohs(tp->sport), (unsigned)rt_ntohs(tp->dport));
+	va_start(ap, fmt);
+	rt_vsnprintf(line + n, sizeof(line) - (u32)n, fmt, ap);
+	va_end(ap);
+	rt_dbg_line(RT_DBG_TCP, line);
+}
+#endif
 
 void tcp_set_state(struct tcp_sock *tp, int state)
 {
 	int old = tp->state;
 
+#ifndef RT_NO_DIAG
+	static const char *const names[] = { "CLOSED", "LISTEN", "SYN_SENT", "SYN_RECEIVED", "ESTABLISHED",
+	                                     "CLOSE_WAIT", "FIN_WAIT_1", "CLOSING", "LAST_ACK", "FIN_WAIT_2",
+	                                     "TIME_WAIT" };
+	if (state != old)
+		TCP_DBG(tp, "state %s -> %s", old <= RT_TCPS_TIME_WAIT ? names[old] : "?",
+		        state <= RT_TCPS_TIME_WAIT ? names[state] : "?");
+#endif
 	if (state == RT_TCPS_ESTABLISHED && old != RT_TCPS_ESTABLISHED) {
 		rt_tcpstat.CurrEstab++;
 		if (!tp->dg.estab_ms)

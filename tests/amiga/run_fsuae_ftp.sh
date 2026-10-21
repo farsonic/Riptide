@@ -9,6 +9,9 @@
 # ftp:// URL forms. DH0: is a host directory, so the transferred files are
 # compared here, byte for byte. A packet capture (Riptide CAPTURE) of one
 # URL download is saved to DH0: and checked here (and with tcpdump).
+# Riptide PROFILE and DEBUG are checked on
+# the same transfers: a 1 MB download without diagnostics, with the
+# profiler, and with profiler plus debug log (throughput of each printed).
 #
 #   tests/amiga/run_fsuae_ftp.sh [BUILDDIR] [TIMEOUT_SECONDS]
 # Environment: FSUAE_MODEL (default A1200), FSUAE_EXTRA (more fs-uae
@@ -147,6 +150,14 @@ get hello.txt act46.txt
 bye
 SCRIPT
 
+# throughput with and without the diagnostics
+cat > "$dh0/S/ftpspeed" <<'SCRIPT'
+user test secret
+get big.bin NIL:
+get big.bin NIL:
+bye
+SCRIPT
+
 cat > "$dh0/S/badlogin" <<'SCRIPT'
 user baduser wrong
 ls
@@ -178,6 +189,26 @@ SCRIPT
 	echo 'DH0:C/ftp -v -n ::1 2122 <DH0:S/ftp6 >DH0:out/ftp6'
 	echo 'DH0:C/ftp -v -n 127.0.0.1 2122 <DH0:S/ftp46 >DH0:out/ftp46'
 	echo 'DH0:C/ftp -o DH0:local/url6.dat ftp://[::1]:2122/sub/a.dat >DH0:out/url6'
+	# diagnostics: profile and debug log around the same download
+	echo 'DH0:C/Riptide DEBUG STATUS >DH0:out/debug_off'
+	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/ftpspeed >DH0:out/speed_off'
+	echo 'DH0:C/Riptide PROFILE START >DH0:out/prof_start'
+	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/ftpspeed >DH0:out/speed_prof'
+	echo 'DH0:C/Riptide PROFILE SHOW >DH0:out/prof_show'
+	echo 'DH0:C/Riptide PROFILE RESET >NIL:'
+	echo 'DH0:C/Riptide DEBUG tcp,socket,timer SIZE=32 >DH0:out/debug_on'
+	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/ftpspeed >DH0:out/speed_dbg'
+	echo 'DH0:C/Riptide PROFILE STOP >DH0:out/prof_stop'
+	# a short session whose lines all fit the ring (2 MB Chip RAM only:
+	# a bigger ring leaves no room to load the Riptide command again)
+	echo 'DH0:C/Riptide DEBUG CLEAR >NIL:'
+	echo 'DH0:C/ftp -o NIL: ftp://127.0.0.1:2121/hello.txt >NIL:'
+	echo 'DH0:C/Riptide PROFILE SHOW >DH0:out/prof_show2'
+	echo 'DH0:C/Riptide DEBUG SHOW 5 >DH0:out/debug_show'
+	echo 'DH0:C/Riptide DEBUG DUMP DH0:out/debug.dump >DH0:out/debug_dump'
+	echo 'DH0:C/Riptide DEBUG NONE >DH0:out/debug_none'
+	echo 'DH0:C/Riptide DEBUG BOGUS >DH0:out/debug_bad'
+	echo 'DH0:C/Riptide PROFILE BOGUS >DH0:out/prof_bad'
 	echo 'DH0:C/ftp -h >DH0:out/zz_done'
 } > "$dh0/S/Startup-Sequence"
 
@@ -293,6 +324,36 @@ expect ftp46 '^Connected to 127\.0\.0\.1 \(127\.0\.0\.1\)\.' '^---> PASV$' '^227
 expect url6 '^3000 bytes received in [0-9]+\.[0-9]{2} secs'
 expect ftpd6.log 'connection from ::1' 'connection from ::ffff:127\.0\.0\.1'
 
+# diagnostics
+expect debug_off '^debug: off; ring 0 KB'
+expect prof_start '^profile: started'
+expect prof_show '^profile: running, [0-9]+\.[0-9] ms wall clock, [0-9]+ KB received' \
+	'^section +calls +total ms +%wall +us/call +max us +us/KB' \
+	'^tcp input +[1-9][0-9]* ' '^tcp output +[1-9][0-9]* ' '^ip input +[1-9][0-9]* ' \
+	'^copy to app +[1-9][0-9]* ' '^copy from app +[1-9][0-9]* ' '^stack loop +[1-9][0-9]* ' \
+	'^idle +[1-9][0-9]* ' '^timers +[1-9][0-9]* ' '^not in Riptide '
+expect debug_on '^debug: tcp,timer,socket; ring 32 KB'
+expect prof_stop '^profile: stopped'
+expect prof_show2 '^profile: stopped' '^tcp input +[1-9][0-9]* '
+expect debug_show ' (tcp|socket|timer): '
+expect debug_dump '^debug: [0-9]+ bytes written to DH0:out/debug\.dump'
+expect debug_none '^debug: off; ring 32 KB'
+expect debug_bad "unknown category 'BOGUS'"
+expect prof_bad '^usage: profile start'
+for f in speed_off speed_prof speed_dbg; do
+	expect $f '^1048576 bytes received in'
+done
+if [ -s "$dh0/out/debug.dump" ]; then
+	grep -Eq '^ *[0-9]+\.[0-9]{6} tcp: [0-9]+>[0-9]+ state [A-Z_]+ -> ESTABLISHED' "$dh0/out/debug.dump" ||
+		{ echo "FAIL debug.dump: no TCP state change"; fails=$((fails + 1)); }
+	grep -Eq '^ *[0-9]+\.[0-9]{6} socket: socket\(2, 1, [06]\) = [0-9]+' "$dh0/out/debug.dump" ||
+		{ echo "FAIL debug.dump: no socket() line"; fails=$((fails + 1)); }
+	grep -Eq ' tcp: [0-9]+>[0-9]+ ack (now|delayed)' "$dh0/out/debug.dump" ||
+		{ echo "FAIL debug.dump: no ACK decisions"; fails=$((fails + 1)); }
+else
+	echo "FAIL debug.dump missing"; fails=$((fails + 1))
+fi
+
 # files, byte for byte
 same "$loc/big.copy" "$root/big.bin" "get"
 same "$root/up.bin" "$loc/up.bin" "put"
@@ -380,6 +441,13 @@ echo "---- throughput (loopback, client and server on the same emulated ${FSUAE_
 grep -E 'bytes (received|sent) in' "$dh0/out/ftp1" | grep -E '^(1048576|648576|748576) ' | head -8 | sed 's/^/  /'
 echo "---- the same over IPv6 (::1)"
 grep -E 'bytes (received|sent) in' "$dh0/out/ftp6" | grep -E '^1048576 ' | sed 's/^/  /'
+for f in speed_off speed_prof speed_dbg; do
+	case $f in speed_off) d="diagnostics off";; speed_prof) d="profiling";; *) d="profiling + debug tcp,socket,timer";; esac
+	echo "---- 1 MB get, $d"
+	grep -E '^1048576 bytes received in' "$dh0/out/$f" | sed 's/^/  /'
+done
+echo "---- profile of the profiled run"
+sed 's/^/  /' "$dh0/out/prof_show" 2>/dev/null
 echo "---- work dir $work (outputs in $dh0/out)"
 if [ ! -s "$dh0/out/zz_done" ]; then
 	echo "run_fsuae_ftp: did not finish (timeout ${TIMEOUT}s)"
