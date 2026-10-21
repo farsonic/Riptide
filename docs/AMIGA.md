@@ -400,6 +400,15 @@ to 227 KB/s. Remove it under WinUAE, or once FS-UAE is fixed. At run time:
 `ip link set eth0 tcpwindow 0` (or `1440`), for connections opened
 afterwards.
 
+**FS-UAE bridged to your network.** `tools/fs-uae/` has a patch for FS-UAE
+3.2.35 and a build script (macOS with Homebrew, Linux): it fixes the frame
+drops and adds a libpcap backend, so `uaenet.device` unit 2 is a host
+interface (`uaenet_pcap = en0` in the `.fs-uae` file) and the Amiga is on
+your LAN with its own MAC address: DHCP from your router, IPv6 from your
+router's advertisements, no slirp, no NAT. Use
+`interface eth0 device=uaenet.device unit=2` without `tcpwindow`. It needs
+a wired interface and permission to capture; see `tools/fs-uae/README.md`.
+
 ### TCP window per interface
 
 `tcpwindow=N` on the `interface` line, `ifconfig IF tcpwindow N` or `ip
@@ -1428,6 +1437,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
+| `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
 | `tests/amiga/run_fsuae_bsdsocktest.sh build/amiga` | [bsdsocktest](https://github.com/tbdye/bsdsocktest), an independent bsdsocket.library conformance suite (`BSDSOCKTEST=` its Amiga binary from the release archive), on FS-UAE: its loopback tests (socket lifecycle, send/recv, options, WaitSelect, signals, DNS, utility calls, descriptor transfer, errno, ICMP, throughput). Passes when every test that ran passed; 0.12: 130 of 130, 12 skipped (they need a host helper or a network). |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real
