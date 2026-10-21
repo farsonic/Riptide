@@ -60,7 +60,10 @@ void rt_prof_add(int c, u32 ticks);  /* counters */
 #define RT_PROF_ENTER(s) do { if (rt_prof_on) rt_prof_enter(s); } while (0)
 #define RT_PROF_EXIT(s)  do { if (rt_prof_on) rt_prof_exit(s); } while (0)
 #define RT_PROF_T0()     (rt_prof_on ? rt_prof_ticks() | 1u : 0u)
-#define RT_PROF_ADD(c, t0) do { if (t0) rt_prof_add((c), rt_prof_ticks() - (t0)); } while (0)
+/* t0 has its low bit set (0 = profiling was off), so it can be one tick
+ * ahead of the clock: no time passed then, not 2^32 - 1 ticks */
+#define RT_PROF_ADD(c, t0) do { if (t0) { u32 rt_d_ = rt_prof_ticks() - (t0); \
+	rt_prof_add((c), (s32)rt_d_ < 0 ? 0u : rt_d_); } } while (0)
 #else
 #define rt_prof_on 0
 #define rt_prof_depth 0

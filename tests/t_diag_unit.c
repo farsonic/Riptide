@@ -108,6 +108,13 @@ static void test_profiler(void)
 	rt_prof_add(RT_PROF_IDLE, 700);
 	p = prof_rec("idle");
 	CHECK(p && p->kind == RT_CTL_PROF_COUNTER && p->count == 2 && p->total_us == 1200 && p->max_us == 700);
+	/* a T0 one tick ahead of the clock (its low bit is forced on) counts 0 */
+	{
+		u32 t0 = rt_prof_ticks() + 1000u;
+		RT_PROF_ADD(RT_PROF_IDLE, t0);
+	}
+	p = prof_rec("idle");
+	CHECK(p && p->count == 3 && p->total_us == 1200 && p->max_us == 700);
 
 	/* a section still open when the lock is released is closed there */
 	rt_lock();
