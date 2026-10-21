@@ -5,6 +5,8 @@ replacement for MiamiDx 1.0c: we reverse engineered MiamiDx's binary
 interfaces and reimplemented them on a new protocol core whose TCP follows
 the modern Linux TCP stack.
 
+<a href="https://buymeacoffee.com/farsonic" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60"></a>
+
 * **Compatible:** publishes `bsdsocket.library` 4 (AmiTCP API, 46 LVOs),
   `miami.library` 21 (Miami API, 83 vectors) and `usergroup.library` 4, all
   with the same LVO layouts as MiamiDx. These were verified against the
