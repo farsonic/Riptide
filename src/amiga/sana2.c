@@ -6,7 +6,7 @@
  * The device is opened with buffer management callbacks that copy straight
  * into and out of rt_bufs (ios2_Data points at the rt_buf). The callbacks
  * may run in the driver's interrupt code, so they only copy. Ethernet-like
- * devices get 8 CMD_READs for IPv4, 4 for ARP and 4 for IPv6; point-to-point
+ * devices get CMD_READs for IPv4, ARP and IPv6 (S2_READS_IP6); point-to-point
  * devices (PPP, SLIP: HardwareType != Ethernet) the IPv4 and IPv6 ones.
  * IPv6 multicast groups (solicited-node, all-nodes, MLD joins) are passed to
  * the driver with S2_ADDMULTICASTADDRESS / S2_DELMULTICASTADDRESS; the core
@@ -21,7 +21,7 @@
 
 #define S2_READS_IP   8
 #define S2_READS_ARP  4
-#define S2_READS_IP6  4
+#define S2_READS_IP6  24           /* a 32 KB window of IPv6 segments */
 #define S2_MCQ        16             /* queued multicast filter changes */
 #define S2_MAX_WRITES 32
 #define S2_RX_HEADROOM 64
@@ -560,17 +560,25 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	}
 	if (si->ai.online)
 		nif->flags |= RT_IFF_RUNNING;
-	nreads = S2_READS_IP + S2_READS_IP6 + (si->ether ? S2_READS_ARP : 0);
+	nreads = S2_READS_IP + (si->ether ? S2_READS_ARP : 0);
 	for (i = 0; i < nreads; i++) {
 		r = s2_newreq(si, REQ_READ);
 		if (!r)
 			break;
-		r->io.ios2_PacketType = i < S2_READS_IP ? RT_ETH_P_IP :
-		                        i < S2_READS_IP + S2_READS_IP6 ? RT_ETH_P_IPV6 : RT_ETH_P_ARP;
+		r->io.ios2_PacketType = i < S2_READS_IP ? RT_ETH_P_IP : RT_ETH_P_ARP;
 		s2_submit_read(si, r);
 	}
 	si->ai.next = amiga_ifs;
 	amiga_ifs = &si->ai;
+	/* IPv6 has its own reads: a burst of IPv6 segments must not depend
+	 * on the IPv4 ones being queued */
+	for (i = 0; i < S2_READS_IP6; i++) {
+		r = s2_newreq(si, REQ_READ);
+		if (!r)
+			break;
+		r->io.ios2_PacketType = RT_ETH_P_IPV6;
+		s2_submit_read(si, r);
+	}
 	rt_unlock();
 	rt_log(RT_LOG_INFO, "%s: %s unit %lu, %s, mtu %u", name, device, (unsigned long)unit,
 	       si->ether ? "Ethernet" : "point-to-point", (unsigned)nif->mtu);
