@@ -193,6 +193,8 @@
   (P_DEL (tackon #rm-bin "nc"))
   (P_DEL (tackon #rm-bin "ftp"))
   (P_DEL (tackon #rm-bin "ftpd-test"))
+  (P_DEL (tackon #rm-bin "ping6"))
+  (P_DEL (tackon #rm-bin "traceroute6"))
   (complete 40)
 
   (if (NOT (= #old-doc ""))
@@ -437,6 +439,16 @@
     (dest #bindir)
     (choices "ip" "ifconfig" "route" "arp" "netstat" "ping" "traceroute"
              "host" "sysctl" "hostname" "nc" "ftp")
+    (optional "force")))
+
+; ping6 and traceroute6: ping -6 and traceroute -6
+(if (IN #opts 0)
+  (copyfiles
+    (prompt "Copying the IPv6 network tools")
+    (help @copyfiles-help)
+    (source (tackon #pkg "C"))
+    (dest #bindir)
+    (choices "ping6" "traceroute6")
     (optional "force")))
 
 (if (IN #opts 3)
