@@ -284,12 +284,12 @@ before DNS.
 
 Riptide comes with the usual Linux network commands, written for AmigaOS:
 `ip`, `ifconfig`, `route`, `arp`, `netstat`, `traceroute`, `ping`, `host`,
-`sysctl`, `hostname`, `nc` and `ftp`, plus `ping6` and `traceroute6`
-(see "IPv6"). Copy them to `C:`. They take Linux style
+`sysctl`, `hostname`, `nc` and `ftp`. Copy them to `C:`. They take Linux style
 arguments (`-n`, `-c 3`, ...), print what their Linux counterparts print,
 stop on Ctrl-C and return 0 (ok), 5 (warning, e.g. no ping reply), 10
 (error) or 20 (failure, e.g. no stack). Each has `-h` / `--help`. They
 need little stack (buffers come from AllocVec()).
+`ping6` and `traceroute6` are `ping -6` and `traceroute -6` (see "IPv6").
 
 Where the data comes from:
 

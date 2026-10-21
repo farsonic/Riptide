@@ -23,9 +23,14 @@ AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/ami
 LIBS      := bsdsocket riptide usergroup
 HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h) tests/amiga/rtcheck_body.h
 # network tools (src/amiga/cmd), each linked with cmdlib.o
-TOOLS     := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp ping6 traceroute6
+TOOLS     := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp
 # test programs linked like the tools (tests/amiga): a minimal FTP server for the ftp test
 TESTTOOLS := ftpd-test
+
+# IPv6 variants of ping and traceroute (ping6.c / traceroute6.c include
+# ping.c / traceroute.c); NETTOOLS is the list of tools linked with cmdlib
+NETTOOLS  += ping6 traceroute6
+TOOLS     += ping6 traceroute6
 
 ifeq ($(TOOLCHAIN),gcc)
 # ---------------------------------------------------------------- GCC ----
