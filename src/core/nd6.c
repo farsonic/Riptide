@@ -143,6 +143,14 @@ static struct nd6_entry *nd_create(struct rt_netif *nif, const rt_in6_addr *a)
 
 static void nd_set_state(struct nd6_entry *e, u8 st, u32 timeout_ms)
 {
+#ifndef RT_NO_DIAG
+	if ((rt_dbg_mask & RT_DBG_ARP) && st != e->state) {
+		char a[48];
+		rt_inet6_ntop(&e->addr, a, sizeof(a));
+		rt_dbg_printf(RT_DBG_ARP, "nd6 %s: %s state %u -> %u", e->nif->name, a, (unsigned)e->state,
+		              (unsigned)st);
+	}
+#endif
 	e->state = st;
 	e->probes = 0;
 	e->updated_ms = rt_now_ms();

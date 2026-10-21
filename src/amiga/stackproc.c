@@ -583,10 +583,12 @@ void amiga_stack_loop(void)
 		u32 ms;
 
 		rt_lock();
+		RT_PROF_ENTER(RT_PROF_STACK);
 		for (ai = amiga_ifs; ai; ai = ai->next)
 			if (ai->poll)
 				ai->poll(ai);
 		ms = rt_stack_poll();
+		RT_PROF_EXIT(RT_PROF_STACK);
 		rt_unlock();
 		amiga_log_flush();
 		if (quit_requested == 2)
@@ -604,8 +606,11 @@ void amiga_stack_loop(void)
 		if (ms == 0) {
 			sigs = SetSignal(0, wait) & wait;
 		} else {
+			u32 t0;
 			arm_timer(ms);
+			t0 = RT_PROF_T0();
 			sigs = Wait(wait);
+			RT_PROF_ADD(RT_PROF_IDLE, t0);
 		}
 		if (timer_pending && CheckIO(&treq->tr_node)) {
 			WaitIO(&treq->tr_node);

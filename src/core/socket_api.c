@@ -354,6 +354,7 @@ int rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol)
 		return r;
 	}
 	fd_install(c, fd, so, 1);
+	RT_DBG(RT_DBG_SOCKET, "socket(%d, %d, %d) = %d", domain, type, protocol, fd);
 	rt_unlock();
 	return fd;
 }
@@ -517,6 +518,7 @@ int rt_api_connect(struct rt_sockctx *c, int fd, const void *a, u32 alen)
 	r = sock_addr_in(so->domain, a, alen, &sin);
 	if (r < 0)
 		goto out;
+	RT_DBG(RT_DBG_SOCKET, "connect(%d) to port %u", fd, (unsigned)rt_ntohs(sin.sin6_port));
 	if (sin.sin6_family != (so->domain == RT_AF_INET6 ? RT_AF_INET6 : RT_AF_INET) &&
 	    !(sin.sin6_family == RT_AF_UNSPEC && so->type != RT_SOCK_STREAM)) {
 		r = -RT_EAFNOSUPPORT;
@@ -1388,6 +1390,7 @@ int rt_api_close(struct rt_sockctx *c, int fd)
 		rt_unlock();
 		return -RT_EBADF;
 	}
+	RT_DBG(RT_DBG_SOCKET, "close(%d)", fd);
 	if (so != SOCK_RESERVED && so->refcnt == 1 && so->linger_on && so->linger_s &&
 	    so->type == RT_SOCK_STREAM && (so->state & RT_SS_ISCONNECTED) &&
 	    !(so->state & RT_SS_NBIO)) {

@@ -56,6 +56,12 @@ The core files are owned per area:
   callbacks and frame input run in the stack thread, also under the lock.
 * Errors are negative errno values (`-RT_EWOULDBLOCK`), with BSD numbering.
 * Time: `rt_now_ms()` for timers, and `rt_now_us()` for RTT samples.
+* Diagnostics (`rt_diag.h`): `RT_DBG(RT_DBG_TCP, ...)` logs to the debug
+  ring when that category is on, and costs one test otherwise.
+  `RT_PROF_ENTER/EXIT` bracket a profiler section. Sections run under the
+  lock and must not span a sleep (`rt_unlock()` closes what is still open);
+  code outside the lock (driver callbacks) uses the `RT_PROF_T0/ADD`
+  counters. `-DRT_NO_DIAG` compiles all of it out.
 * Every file starts with `/* ... SPDX-License-Identifier: GPL-2.0-only */`.
 * Keep comments purposeful. Name Linux functions or RFC sections where an
   algorithm follows them (`/* RFC 8985 6.2: RACK detect loss */`).

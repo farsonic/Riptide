@@ -126,6 +126,8 @@ while Riptide runs.
 
 ```
 Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
+Riptide PROFILE START|STOP|RESET|SHOW
+Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
 ```
 
 | Argument | Meaning |
@@ -136,9 +138,12 @@ Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
 | `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
 | `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and exit. Needs timer.device, so not under vamos. |
+| `PROFILE ...` | Control the running stack's profiler (see "Profiling and debug log"). |
+| `DEBUG ...` | With a word instead of a number: control the running stack's debug log (see "Profiling and debug log"). A number is still the log level of a new instance. |
 
-`QUIT` and `STATUS` talk to the running stack through the public message
-port `RIPTIDE`. You can also signal the Riptide process directly:
+`QUIT`, `STATUS`, `PROFILE` and `DEBUG` talk to the running stack through
+the public message port `RIPTIDE`. You can also signal the Riptide process
+directly:
 
 * **Ctrl-C** works like `QUIT`. If programs still have the libraries open,
   Riptide sends each of them Ctrl-C, as the historical stack does. It then quits once
@@ -170,6 +175,8 @@ ifconfig IFNAME [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D]
 dhcp IFNAME [start|stop|renew]     # run (stop, renew) the DHCP client on IFNAME
 arp add A.B.C.D MAC [dev IF] | arp del A.B.C.D [dev IF] | arp flush [dev IF]
 cpu routines auto|generic|020|040|060   # checksum/copy routines (troubleshooting)
+profile start|stop|reset|show      # the profiler (see "Profiling and debug log")
+debug CATEGORY[,...]|all|none [size=KB] | debug show [N] | debug clear | debug dump FILE
 ```
 
 The short forms of older versions (`route add default 10.0.2.2`,
@@ -654,6 +661,105 @@ command in the background and waits until bsdsocket.library appears;
 every check on its own numbered line (`ok` or `FAIL`), grouped by section;
 without it only failures and the summary are shown.
 
+## Profiling and debug log
+
+Two diagnostics are built into every Riptide. Both cost next to nothing
+while they are off (one test of a variable per probe), and neither writes
+to the console while it runs. While on they do cost something: on an
+emulated A1200 (68020, loopback ftp, 1 MB gets) throughput went from
+about 245 KB/s to 225 KB/s with the profiler on, and to 180 KB/s with the
+profiler plus `debug tcp,socket,timer`, which logs every ACK decision.
+Use them from the Shell (`Riptide PROFILE ...`, `Riptide DEBUG ...`), in
+the configuration file (`profile start`, `debug tcp`), or through the
+RIPTIDE port.
+
+### Profiler
+
+```
+Riptide PROFILE START      ; zero the counters and start
+  ... run the download ...
+Riptide PROFILE SHOW       ; the table (also while it runs)
+Riptide PROFILE STOP       ; stop; SHOW still shows the run
+Riptide PROFILE RESET      ; zero the counters, keep running or stopped
+```
+
+The profiler times the stack's code paths with the EClock (about 1.4 µs
+resolution on PAL machines, 709379 Hz):
+
+```
+profile: running, 14247.1 ms wall clock, 2064 KB received (all interfaces), clock 709379 Hz
+section           calls   total ms  %wall  us/call   max us   us/KB
+idle                221     5112.8   35.8    23135   811288    2477
+tcp output          313     2595.8   18.2     8293    18877    1257
+tcp input           317     2202.9   15.4     6949    64574    1067
+...
+not in Riptide              2213.0   15.5
+```
+
+| Section | What it covers |
+|---|---|
+| `stack loop` | Riptide process under the lock, outside the sections below (driver replies, loopback) |
+| `timers` | timer callbacks: retransmissions, delayed ACKs, ARP, DHCP |
+| `ip input`, `ip6 input` | IPv4/IPv6 input up to the transport |
+| `tcp input`, `udp input` | transport input (the ACKs and data it sends count as `tcp output`) |
+| `tcp output` | building segments and IP output (the driver call excluded) |
+| `checksum` | checksums that are not combined with a copy |
+| `copy to app`, `copy from app` | copying between the application's buffer and Riptide |
+| `driver send` | the `SendIO()` / `MNI_Send()` call |
+| `driver rx copy` | the SANA-II driver's `CopyToBuff` callback (driver context) |
+| `lock wait app`, `lock wait rt` | time applications / the Riptide process waited for the stack lock |
+| `idle` | the Riptide process waiting for work in `Wait()` |
+
+* Sections nest. Their times are exclusive: `tcp input` does not include
+  the `checksum` or `tcp output` it calls. `max us` is the longest single
+  call including what it called.
+* `driver rx copy`, the lock waits and `idle` are counters measured outside
+  the lock. They overlap the sections (a driver copying in an interrupt
+  is also charged to whatever was running).
+* `%wall` is the share of the wall-clock time since `PROFILE START`;
+  `us/KB` divides by the bytes received on all interfaces in that time
+  (the cost of a download per KB). `not in Riptide` is the wall-clock time
+  left after the sections and `idle`: applications, the OS, other tasks.
+* Times are wall-clock times of the task that runs the code, so a task
+  switch in the middle (to a higher priority task) is counted too.
+* The table is also available to programs as `net.riptide.profile`
+  (`{4, 255, 19}`, `struct rt_ctl_prof`, see "Interfaces for tools").
+
+### Debug log
+
+```
+Riptide DEBUG tcp,driver           ; log these categories (16 KB ring)
+Riptide DEBUG +dns -driver         ; add / remove categories
+Riptide DEBUG all SIZE=64          ; everything, in a 64 KB ring
+Riptide DEBUG SHOW 40              ; the last 40 lines
+Riptide DEBUG DUMP RAM:riptide.dbg ; the whole ring to a file
+Riptide DEBUG CLEAR                ; empty the ring
+Riptide DEBUG NONE                 ; stop logging (the ring keeps its lines)
+Riptide DEBUG STATUS               ; categories, ring size, lines, bytes lost
+```
+
+Lines go to a ring buffer in memory, with a time stamp in seconds since
+the ring was created or cleared. When the ring is full the oldest lines
+are overwritten (`DEBUG STATUS` says how many bytes). `DUMP` copies the
+ring and writes the file from the Riptide process without holding up the
+network.
+
+| Category | Lines |
+|---|---|
+| `tcp` | state changes, every ACK decision (now or delayed, and why), out-of-order segments, SACK blocks, fast recovery, retransmission timeouts, zero windows (ours and the peer's), window probes |
+| `ip`, `ip6` | dropped datagrams (header errors, not for us, discarded), reassembly |
+| `driver` (`sana2`, `mni`) | each received frame, read errors, waits for buffers |
+| `timer` | timer runs, delayed ACK timers |
+| `socket` (`udp`) | `socket()`, `connect()`, `close()` |
+| `dns` | queries, servers, timeouts, results |
+| `dhcp` | DHCP state changes and messages sent |
+| `arp` (`nd`) | ARP requests and replies, failed resolutions, IPv6 neighbour states |
+| `log` | a copy of the log messages, at every level |
+
+The ring takes memory (`SIZE=1..1024` KB): on a machine with Chip RAM
+only, keep it small, or the Shell may not be able to load the `Riptide`
+command again to read it.
+
 ## Interfaces for tools
 
 ### Tables: `RiptideSysCtl()` and `net.riptide.*`
@@ -672,6 +778,7 @@ byte order, everything else in host order; there are no pointers.
 | 4 | `net.riptide.sockets` | `struct rt_ctl_sock`: TCP, UDP and raw sockets with state, queues, RTT, cwnd |
 | 5 | `net.riptide.dns` | one `struct rt_ctl_dns`: name servers, search domain, host name |
 | 6..9 | `net.riptide.{ip,icmp,udp,tcp}stat` | one `struct rt_{ip,icmp,udp,tcp}_stats` |
+| 19 | `net.riptide.profile` | `struct rt_ctl_prof`: the profiler (`profile start`): record 0 the run (wall-clock time, bytes received), then one per section and counter (calls, total and longest time) |
 
 Use BSD sysctl semantics: call with `oldp = NULL` to get the size,
 allocate a bit more (a table can grow in between) and call again. If it
@@ -700,7 +807,7 @@ The public message port `RIPTIDE` takes a `struct RiptideMsg`
 |---|---|
 | `RTCMD_STATUS` (1) | status text, as `Riptide STATUS` prints it |
 | `RTCMD_QUIT` (2) | quit if no program has the libraries open, else `result` = EBUSY |
-| `RTCMD_COMMAND` (3) | `text` holds one line of the configuration language (all keywords above, including `interface ...` and `interface NAME delete`), or a query: `sysctl -a`, `sysctl [-n] NAME...`, `sysctl [-w] NAME=VALUE` |
+| `RTCMD_COMMAND` (3) | `text` holds one line of the configuration language (all keywords above, including `interface ...` and `interface NAME delete`), or a query: `sysctl -a`, `sysctl [-n] NAME...`, `sysctl [-w] NAME=VALUE`. `profile ...` and `debug ...` answer in the reply text (the table, the ring) |
 
 The client allocates the message in public memory, sets `mn_ReplyPort`
 and `mn_Length = sizeof(struct RiptideMsg)`, and may point `reply` /

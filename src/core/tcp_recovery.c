@@ -241,6 +241,8 @@ int tcp_sacktag_write_queue(struct tcp_sock *tp, const struct rt_buf *ack_skb,
 		num_sacks = TCP_NUM_SACKS;
 	if (num_sacks <= 0 || tp->rx_opt.sack_off + 2u + (u32)num_sacks * 8u > TCP_SKB_CB(ack_skb)->hdr_len)
 		return 0;
+	TCP_DBG(tp, "SACK: %d blocks, first %lu-%lu, snd_una %lu", num_sacks, (unsigned long)rt_get_be32(sp),
+	        (unsigned long)rt_get_be32(sp + 4), (unsigned long)tp->snd_una);
 	state->reord = tp->snd_nxt;
 	found_dup_sack = tcp_check_dsack(tp, ack_skb, sp, num_sacks, prior_snd_una, &flag);
 	if (found_dup_sack) {
@@ -649,6 +651,9 @@ static int tcp_time_to_recover(const struct tcp_sock *tp)
 
 static void tcp_enter_recovery(struct tcp_sock *tp, int ece_ack)
 {
+	TCP_DBG(tp, "fast recovery%s: cwnd %lu, %lu in flight, %lu SACKed, %lu lost", ece_ack ? " (ECN)" : "",
+	        (unsigned long)tp->snd_cwnd, (unsigned long)tp->packets_out, (unsigned long)tp->sacked_out,
+	        (unsigned long)tp->lost_out);
 	if (tcp_is_reno(tp))
 		rt_tcpstat.TCPRenoRecovery++;
 	else

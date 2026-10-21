@@ -164,6 +164,8 @@ static void arp_send(struct rt_netif *nif, u16 op, const u8 *dst, u32 sip,
 	else
 		memset(p + 18, 0, 6);
 	memcpy(p + 24, &tip, 4);
+	RT_DBG(RT_DBG_ARP, "%s: send %s for %u.%u.%u.%u", nif->name, op == ARPOP_REQUEST ? "request" : "reply",
+	       p[24], p[25], p[26], p[27]);
 	nif->stats.opackets++;
 	nif->stats.obytes += b->len;
 	if (nif->link_output(nif, b, dst, RT_ETH_P_ARP) < 0)
@@ -212,6 +214,8 @@ static void arp_timer_fn(void *arg)
 			rt_timer_after(&e->timer, ARP_RETRANS_MS);
 			return;
 		}
+		RT_DBG(RT_DBG_ARP, "%s: no answer from %u.%u.%u.%u", e->nif->name, ((u8 *)&e->ip)[0],
+		       ((u8 *)&e->ip)[1], ((u8 *)&e->ip)[2], ((u8 *)&e->ip)[3]);
 		/* Resolution failed: tell the senders (RFC 1122 2.3.2.2). The
 		 * error to a local source is looped back to the transport. */
 		{
@@ -325,6 +329,9 @@ void rt_arp_input(struct rt_netif *nif, struct rt_buf *b)
 	memcpy(&sip, p + 14, 4);
 	memcpy(tha, p + 18, 6);
 	memcpy(&tip, p + 24, 4);
+	RT_DBG(RT_DBG_ARP, "%s: %s from %u.%u.%u.%u (%02x:%02x:%02x:%02x:%02x:%02x)", nif->name,
+	       op == ARPOP_REQUEST ? "request" : "reply", p[14], p[15], p[16], p[17],
+	       sha[0], sha[1], sha[2], sha[3], sha[4], sha[5]);
 
 	/* Our own frames looped back, or senders with nonsense addresses. */
 	if (memcmp(sha, nif->hwaddr, 6) == 0 || (sha[0] & 1))

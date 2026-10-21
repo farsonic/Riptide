@@ -35,6 +35,7 @@ int rt_init(void)
 	rt_tcp_init();
 	rt_socket_init();
 	rt_ctl_init();
+	rt_diag_init();
 	rt_lock();
 	r = rt_loopback_init();
 	rt_unlock();
@@ -50,7 +51,9 @@ u32 rt_stack_poll(void)
 	u32 now = rt_now_ms(), next;
 	int more = rt_loopback_poll();
 
+	RT_PROF_ENTER(RT_PROF_TIMERS);
 	next = rt_timers_run(now);
+	RT_PROF_EXIT(RT_PROF_TIMERS);
 	if (more || rt_loopback_poll())
 		return 0;
 	return next;

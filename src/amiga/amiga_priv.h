@@ -46,6 +46,7 @@ extern int amiga_virtual_clock;
 extern u32 amiga_virtual_ms;
 /* Format with the core's rt_vsnprintf and log. */
 void amiga_out(const char *fmt, ...);     /* stack process only: Write(Output()) */
+int  amiga_dbg_dump(const char *path, char *err, u32 errlen);  /* "debug dump FILE" */
 
 /* ---- libs.c: library construction ---------------------------------- */
 

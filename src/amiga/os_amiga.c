@@ -27,11 +27,26 @@ int amiga_log_to_stdout = 1;
 
 void rt_lock(void)
 {
+	u32 t0;
+
+	if (!rt_prof_on) {
+		ObtainSemaphore(&stack_sem);
+		return;
+	}
+	/* profiling: time the waits (an uncontended lock costs no clock read) */
+	if (AttemptSemaphore(&stack_sem))
+		return;
+	t0 = rt_prof_ticks();
 	ObtainSemaphore(&stack_sem);
+	rt_prof_add(FindTask(NULL) == amiga_stack_task ? RT_PROF_LOCK_STACK : RT_PROF_LOCK_APP,
+	            rt_prof_ticks() - t0);
 }
 
 void rt_unlock(void)
 {
+	/* no profiled section spans a lock release */
+	if (rt_prof_depth && stack_sem.ss_NestCount == 1)
+		rt_prof_unwind();
 	ReleaseSemaphore(&stack_sem);
 }
 
@@ -104,6 +119,22 @@ u64 rt_now_us(void)
 	/* r * 10^6 / f = 1000 * (r * 1000 / f) + (r * 1000 % f) * 1000 / f */
 	m = r * 1000u;
 	return rt_mul32x32(q, 1000000u) + (m / eclock_freq) * 1000u + (m % eclock_freq) * 1000u / eclock_freq;
+}
+
+/* profiling clock: the EClock's low 32 bits (wraps after 100 minutes) */
+u32 rt_prof_ticks(void)
+{
+	struct EClockVal ev;
+
+	if (amiga_virtual_clock || !TimerBase)
+		return amiga_virtual_ms;
+	ReadEClock(&ev);
+	return ev.ev_lo;
+}
+
+u32 rt_prof_hz(void)
+{
+	return amiga_virtual_clock || !TimerBase || !eclock_freq ? 1000u : eclock_freq;
 }
 
 u32 rt_wallclock(void)
@@ -224,6 +255,13 @@ void rt_log(int level, const char *fmt, ...)
 	va_list ap;
 	int n;
 
+	/* "debug log": a copy in the debug ring (whose writers hold the lock) */
+	if ((rt_dbg_mask & RT_DBG_LOG) && rt_lock_held()) {
+		va_start(ap, fmt);
+		rt_vsnprintf(line, sizeof(line), fmt, ap);
+		va_end(ap);
+		rt_dbg_line(RT_DBG_LOG, line);
+	}
 	if (level > rt_log_level)
 		return;
 	n = rt_snprintf(line, sizeof(line), "Riptide: %s", lvl[level & 3]);
@@ -275,6 +313,43 @@ void amiga_log_flush(void)
 		log_dropped = 0;
 		amiga_out("Riptide: %lu log lines dropped\n", (unsigned long)n);
 	}
+}
+
+/* "debug dump FILE" (rt_dbg_dump_hook). Runs in the Riptide process with
+ * the lock held; the ring is copied first, the file written without it. */
+int amiga_dbg_dump(const char *path, char *err, u32 errlen)
+{
+	u32 n, done = 0;
+	char *buf;
+	BPTR fh;
+	LONG w;
+
+	if (!DOSBase || FindTask(NULL) != amiga_stack_task) {
+		rt_strlcpy(err, "debug dump: only the Riptide process can write files", errlen);
+		return -RT_EPERM;
+	}
+	n = rt_dbg_snapshot(NULL, 0);
+	buf = rt_malloc(n ? n : 1);
+	if (!buf) {
+		rt_strlcpy(err, "debug dump: out of memory", errlen);
+		return -RT_ENOMEM;
+	}
+	n = rt_dbg_snapshot(buf, n);
+	rt_unlock();
+	fh = Open((CONST_STRPTR)path, MODE_NEWFILE);
+	if (fh) {
+		while (done < n && (w = Write(fh, buf + done, (LONG)(n - done))) > 0)
+			done += (u32)w;
+		Close(fh);
+	}
+	rt_lock();
+	rt_free(buf);
+	if (!fh || done < n) {
+		rt_snprintf(err, errlen, "debug dump: cannot %s %s", fh ? "write" : "create", path);
+		return -RT_EIO;
+	}
+	rt_snprintf(err, errlen, "debug: %lu bytes written to %s\n", (unsigned long)n, path);
+	return 0;
 }
 
 void amiga_out(const char *fmt, ...)
@@ -516,6 +591,7 @@ int amiga_os_init(void)
 	BYTE kb;
 
 	InitSemaphore(&stack_sem);
+	rt_dbg_dump_hook = amiga_dbg_dump;
 	rt_newminlist(&orphan_sleepers);
 	rt_arch_cpu = amiga_cpu_model();
 	amiga_have_fast = AvailMem(MEMF_FAST) != 0;

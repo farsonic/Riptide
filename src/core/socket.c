@@ -392,6 +392,7 @@ u32 rt_iov_to_buf(const struct rt_iov *iov, int iovcnt, u32 offset, void *dst, u
 	u32 done = 0;
 	int i;
 
+	RT_PROF_ENTER(RT_PROF_FROM_APP);
 	for (i = 0; i < iovcnt && done < len; i++) {
 		u32 n;
 		if (offset >= iov[i].len) {
@@ -403,6 +404,7 @@ u32 rt_iov_to_buf(const struct rt_iov *iov, int iovcnt, u32 offset, void *dst, u
 		done += n;
 		offset = 0;
 	}
+	RT_PROF_EXIT(RT_PROF_FROM_APP);
 	return done;
 }
 
@@ -413,6 +415,7 @@ u32 rt_iov_to_buf_csum(const struct rt_iov *iov, int iovcnt, u32 offset, void *d
 	u32 done = 0, s = 0;
 	int i;
 
+	RT_PROF_ENTER(RT_PROF_FROM_APP);
 	for (i = 0; i < iovcnt && done < len; i++) {
 		u32 n;
 		if (offset >= iov[i].len) {
@@ -425,6 +428,7 @@ u32 rt_iov_to_buf_csum(const struct rt_iov *iov, int iovcnt, u32 offset, void *d
 		offset = 0;
 	}
 	*sum = s;
+	RT_PROF_EXIT(RT_PROF_FROM_APP);
 	return done;
 }
 
@@ -434,6 +438,7 @@ u32 rt_buf_to_iov(const struct rt_iov *iov, int iovcnt, u32 offset, const void *
 	u32 done = 0;
 	int i;
 
+	RT_PROF_ENTER(RT_PROF_TO_APP);
 	for (i = 0; i < iovcnt && done < len; i++) {
 		u32 n;
 		if (offset >= iov[i].len) {
@@ -445,6 +450,7 @@ u32 rt_buf_to_iov(const struct rt_iov *iov, int iovcnt, u32 offset, const void *
 		done += n;
 		offset = 0;
 	}
+	RT_PROF_EXIT(RT_PROF_TO_APP);
 	return done;
 }
 

@@ -568,6 +568,13 @@ int  tcp_listen_input(struct tcp_sock *lp, struct rt_buf *b, const rt_in6_addr *
                       const rt_in6_addr *daddr, u32 tw_isn);
 void tcp_api_enter(void);
 void tcp_api_exit(void);
+/* "debug tcp": a line prefixed with the connection's ports */
+#ifndef RT_NO_DIAG
+void tcp_dbg(const struct tcp_sock *tp, const char *fmt, ...) RT_PRINTF(2, 3);
+#define TCP_DBG(...) do { if (rt_dbg_mask & RT_DBG_TCP) tcp_dbg(__VA_ARGS__); } while (0)
+#else
+#define TCP_DBG(...) do { } while (0)
+#endif
 
 /* ---- tcp_output.c ---- */
 int  tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *b, int clone);

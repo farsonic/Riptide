@@ -1031,6 +1031,11 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 	}
 	if (!strcmp(k, "ifconfig"))
 		return cfg_ifconfig(argc, argv, err, errlen);
+	/* diagnostics; their output goes to err (the reply of a command) */
+	if (!strcmp(k, "profile"))
+		return rt_prof_command(argc, argv, err, errlen);
+	if (!strcmp(k, "debug"))
+		return rt_dbg_command(argc, argv, err, errlen);
 	if (!strcmp(k, "ipv6"))
 		return cfg_ipv6(argc, argv, err, errlen);
 	if (!strcmp(k, "dhcp")) {

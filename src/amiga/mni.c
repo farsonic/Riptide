@@ -314,7 +314,9 @@ static int mni_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u
 	t->busy = 1;
 	nif->stats.opackets++;
 	nif->stats.obytes += b->len;
+	RT_PROF_ENTER(RT_PROF_DRV_TX);
 	r = MNI_Send(mi->base, mi->handle, &t->pkt);
+	RT_PROF_EXIT(RT_PROF_DRV_TX);
 	if (r == 1)
 		return 0;          /* completion comes through the tx callback */
 	/* refused (0) or not online (-9): we keep the descriptor */
