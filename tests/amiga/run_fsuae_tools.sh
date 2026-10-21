@@ -118,6 +118,11 @@ ip_reads|ip link set eth0 reads 64
 ip_reads_bad|ip link set eth0 reads 2
 ip_reads_lo|ip link set lo0 reads 16
 ip_reads_back|ip link set eth0 reads 48
+ip_tcpwin|ip link set eth0 tcpwindow 1440
+ip_tcpwin_show|ip link show eth0
+ip_tcpwin_bad|ip link set eth0 tcpwindow 100
+ip_tcpwin_off|ip link set eth0 tcpwindow 0
+ip_tcpwin_off_show|ip link show eth0
 nc_out|nc -d -w 3 127.0.0.1 7778
 ip_ss_link|ip -s -s link show eth0
 ifconfig_v|ifconfig -v eth0
@@ -353,6 +358,11 @@ reject ip_reads '.'
 expect ip_reads_bad 'reads: 4\.\.128'
 expect ip_reads_lo 'applies to SANA-II'
 reject ip_reads_back '.'
+reject ip_tcpwin '.'
+expect ip_tcpwin_show '^[0-9]+: eth0: <.*> mtu 1500 tcpwindow 1440 state '
+expect ip_tcpwin_bad 'tcpwindow is 0 \(no limit\) or 536\.\.16777216'
+reject ip_tcpwin_off '.'
+reject ip_tcpwin_off_show 'tcpwindow'
 reject netstat_l 'ESTABLISHED'
 expect netstat_r '^Kernel IP routing table' '^0\.0\.0\.0 +10\.0\.2\.2 '
 expect netstat_i '^Kernel Interface table' '^eth0 +1500 ' '^lo0 '

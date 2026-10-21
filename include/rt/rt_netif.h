@@ -89,6 +89,10 @@ struct rt_netif {
 	u8    ip6_disabled;      /* "ipv6 off": not enabled automatically */
 	/* optional driver counters (net.riptide.drivers), owned by the driver */
 	struct rt_drv_stats *drv;
+	/* "ifconfig IF tcpwindow N": the largest receive window TCP offers on
+	 * connections routed over this interface (bytes, 0 = no limit; Linux
+	 * "ip route ... window N" per interface) */
+	u32   tcp_window;
 };
 
 /* ---- driver counters (src/core/drvstats.c) ----

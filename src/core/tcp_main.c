@@ -700,6 +700,7 @@ void tcp_sync_rcvbuf(struct tcp_sock *tp)
 		if (tp->state != RT_TCPS_CLOSED && tp->state != RT_TCPS_LISTEN &&
 		    tp->window_clamp > tp->rcvbuf)
 			tp->window_clamp = RT_MAX(tp->rcvbuf, (u32)tp->advmss * 2u);
+		tcp_apply_window_limit(tp);
 	}
 	if (so->sndbuf != tp->so_sndbuf_seen) {
 		tp->sndbuf = RT_MAX(so->sndbuf, 2048u);
@@ -762,6 +763,7 @@ void tcp_rcv_space_adjust(struct tcp_sock *tp)
 		if (rcvwin > tp->rcvbuf) {
 			tp->rcvbuf = rcvwin;
 			tp->window_clamp = RT_MIN(rcvwin, TCP_MAX_WINDOW << tp->rx_opt.rcv_wscale);
+			tcp_apply_window_limit(tp);
 			tcp_set_so_buffers(tp);
 		}
 	}

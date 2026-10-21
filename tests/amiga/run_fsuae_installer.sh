@@ -158,7 +158,7 @@ for f in AMIGA.md COMPARISON.md README.md LICENSE; do
 done
 [ -f "$dh0/Riptide.info" ] || fail "no icon for DH0:Riptide"
 conf=$dh0/Prefs/Env-Archive/Riptide/riptide.conf
-grep -q '^interface eth0 device=uaenet.device unit=0 mtu=1500$' "$conf" 2>/dev/null || fail "riptide.conf: no uaenet.device interface"
+grep -q '^interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440$' "$conf" 2>/dev/null || fail "riptide.conf: no uaenet.device interface"
 grep -q '^dhcp eth0$' "$conf" 2>/dev/null || fail "riptide.conf: no dhcp eth0"
 grep -q '^#ifconfig  eth0 10.0.2.15/24 up$' "$conf" 2>/dev/null || fail "riptide.conf: no commented static block"
 cmp -s "$conf" "$dh0/ENV/Riptide/riptide.conf" || fail "ENV:Riptide/riptide.conf differs from ENVARC:"

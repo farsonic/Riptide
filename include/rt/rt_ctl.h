@@ -93,6 +93,7 @@ struct rt_ctl_iface {
 	u32  dhcp_lease_s;        /* lease time, 0xffffffff = infinite */
 	u32  dhcp_left_s;         /* seconds until the lease expires */
 	char descr[RT_CTL_DESCRLEN]; /* driver, e.g. "uaenet.device unit 0" */
+	u32  tcp_window;          /* "tcpwindow": TCP receive window limit, 0 = none (0.11) */
 };
 
 /* ---- routes ---- */

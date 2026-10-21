@@ -83,6 +83,7 @@ static void fill_iface(struct rt_ctl_iface *r, const struct rt_netif *n)
 	r->dhcp_lease_s = di.lease_s;
 	r->dhcp_left_s = di.left_s;
 	rt_strlcpy(r->descr, n->descr, sizeof(r->descr));
+	r->tcp_window = n->tcp_window;
 }
 
 static int h_ifaces(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)

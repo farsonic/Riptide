@@ -70,13 +70,14 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 		const char *dev = NULL, *mni = NULL, *opts = NULL, *v;
 		unsigned long unit = 0;
 		int mtu = 0, raw = 0, reads = 0, r;
+		long tcpwin = -1;
 
 		if (argc == 3 && (!rt_strcasecmp(argv[2], "delete") || !rt_strcasecmp(argv[2], "del") ||
 		                  !rt_strcasecmp(argv[2], "remove")))
 			return amiga_if_delete(argv[1], err, errlen);
 
 		if (argc < 3) {
-			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] [raw] [options=TEXT]");
+			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] [tcpwindow=N] [raw] [options=TEXT]");
 			return -RT_EINVAL;
 		}
 		if (strlen(argv[1]) >= RT_IFNAMSIZ) {
@@ -107,7 +108,14 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 				mtu = (int)rt_strtoul(v, NULL, 0);
 			else if ((v = kv(argv[i], "reads")) != NULL)
 				reads = (int)rt_strtoul(v, NULL, 0);
-			else if ((v = kv(argv[i], "options")) != NULL)
+			else if ((v = kv(argv[i], "tcpwindow")) != NULL) {
+				const char *e;
+				tcpwin = (long)rt_strtoul(v, &e, 0);
+				if (*e || !*v || (tcpwin && tcpwin < 536) || tcpwin > 16L * 1024 * 1024) {
+					rt_snprintf(err, errlen, "interface: tcpwindow is 0 or 536..16777216 bytes");
+					return -RT_EINVAL;
+				}
+			} else if ((v = kv(argv[i], "options")) != NULL)
 				opts = v;
 			else if (!rt_strcasecmp(argv[i], "raw"))
 				raw = 1;
@@ -128,6 +136,8 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 		else
 			r = mni_open_if(argv[1], mni, (ULONG)unit, opts, mtu, err, errlen);
 		rt_lock();
+		if (r == 0 && tcpwin >= 0 && rt_netif_find(argv[1]))
+			rt_netif_find(argv[1])->tcp_window = (u32)tcpwin;
 		return r;
 	}
 	if (!rt_strcasecmp(argv[0], "user")) {
@@ -329,9 +339,13 @@ int amiga_status_text(char *buf, u32 len)
 	}
 	for (n = rt_netif_list(); n; n = n->next) {
 		struct rt_dhcp_info di;
-		ADD("%-6s %s/%s mtu %u %s%s in %lu out %lu err %lu/%lu\n",
+		char tw[24];
+		tw[0] = 0;
+		if (n->tcp_window)
+			rt_snprintf(tw, sizeof(tw), " tcpwindow %lu", (unsigned long)n->tcp_window);
+		ADD("%-6s %s/%s mtu %u%s %s%s in %lu out %lu err %lu/%lu\n",
 		    n->name, rt_format_ipv4(n->addr, a), rt_format_ipv4(n->netmask, m),
-		    (unsigned)n->mtu, (n->flags & RT_IFF_UP) ? "UP" : "DOWN",
+		    (unsigned)n->mtu, tw, (n->flags & RT_IFF_UP) ? "UP" : "DOWN",
 		    (n->flags & RT_IFF_RUNNING) ? ",RUNNING" : "",
 		    (unsigned long)n->stats.ipackets, (unsigned long)n->stats.opackets,
 		    (unsigned long)n->stats.ierrors, (unsigned long)n->stats.oerrors);

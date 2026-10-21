@@ -23,7 +23,8 @@ static void usage(void)
 	        "       OPTIONS := { -s[tatistics] | -d[etails] | -4 | -6 | -br[ief] | -V[ersion] }\n"
 	        "\n"
 	        "  ip link [show [dev] IF]\n"
-	        "  ip link set [dev] IF { up | down | mtu N | promisc on|off | arp on|off | reads N }\n"
+	        "  ip link set [dev] IF { up | down | mtu N | promisc on|off | arp on|off | reads N |\n"
+	        "                         tcpwindow N }\n"
 	        "  ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]\n"
 	        "  ip link add NAME type mni driver FILE [unit N] [options TEXT]\n"
 	        "  ip link del [dev] NAME\n"
@@ -85,8 +86,10 @@ static void print_link_line(const struct rt_ctl_iface *f)
 	char fl[128], mac[64];
 
 	link_flags(f, fl, sizeof(fl));
-	cl_printf("%lu: %s: %s mtu %u state %s mode DEFAULT\n", (unsigned long)f->index, f->name, fl,
-	          (unsigned)f->mtu, link_state(f));
+	cl_printf("%lu: %s: %s mtu %u ", (unsigned long)f->index, f->name, fl, (unsigned)f->mtu);
+	if (f->tcp_window)
+		cl_printf("tcpwindow %lu ", (unsigned long)f->tcp_window);
+	cl_printf("state %s mode DEFAULT\n", link_state(f));
 	if (f->type == RT_IFT_LOOP)
 		cl_puts("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n");
 	else if (f->type == RT_IFT_ETHER)
@@ -491,7 +494,7 @@ static int do_link(int argc, char **argv, int i)
 				i++;
 			} else if (!strcmp(k, "up") || !strcmp(k, "down")) {
 				o += (u32)rt_snprintf(line + o, sizeof(line) - o, " %s", k);
-			} else if (!strcmp(k, "mtu") || !strcmp(k, "metric")) {
+			} else if (!strcmp(k, "mtu") || !strcmp(k, "metric") || !strcmp(k, "tcpwindow")) {
 				o += (u32)rt_snprintf(line + o, sizeof(line) - o, " %s %s", k, v);
 				i++;
 			} else if (!strcmp(k, "promisc") || !strcmp(k, "arp")) {
@@ -1394,7 +1397,7 @@ static int ip_main(int argc, char **argv)
 			}
 			opt_family = !strcmp(argv[i], "inet6") ? 6 : !strcmp(argv[i], "inet") ? 4 : 0;
 		} else if (cl_match(o, "Version")) {
-			cl_puts("ip utility, Riptide 0.10\n");
+			cl_puts("ip utility, Riptide 0.11\n");
 			return CL_OK;
 		} else if (cl_match(o, "help")) {
 			usage();

@@ -90,7 +90,7 @@ has "$root/SYS/Riptide/Docs/LICENSE"
 hasnt "$root/SYS/Riptide/SDK"
 conf=$root/ENVARC/Riptide/riptide.conf
 has "$conf"
-grepf "$conf" '^interface eth0 device=uaenet.device unit=0 mtu=1500$'
+grepf "$conf" '^interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440$'
 grepf "$conf" '^dhcp eth0$'
 grepf "$conf" '^hostname amiga$'
 grepf "$conf" '^#ifconfig  eth0 10.0.2.15/24 up$'

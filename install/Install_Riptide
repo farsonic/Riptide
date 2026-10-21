@@ -1,4 +1,4 @@
-; $VER: Install_Riptide 0.10 (21.10.2026)
+; $VER: Install_Riptide 0.11 (21.10.2026)
 ;
 ; Installer script for Riptide, a TCP/IP stack for AmigaOS 3.x (68020+).
 ; Written for the Commodore/Amiga Technologies Installer V43 language; it
@@ -19,7 +19,7 @@
 ;
 ; SPDX-License-Identifier: GPL-2.0-only
 
-(set #version "0.10")
+(set #version "0.11")
 (if (= @app-name "") (set @app-name "Riptide"))
 
 ; ---------------------------------------------------------------------------
@@ -610,7 +610,10 @@
            "# name without a DEVS:Networks/ path. unit= picks the host network\n"
            "# adapter (0 = the first one in the emulator's network settings).\n"
            "# FS-UAE needs uae_sana2 = 1 and network_card = a2065.\n"
-           ("interface eth0 device=%s unit=%ld mtu=1500\n" #device #unit))
+           "# tcpwindow=1440: FS-UAE 3.x drops all but the first frame\n"
+           "# that waits for the Amiga, so TCP offers one segment at a\n"
+           "# time. Remove it under WinUAE or a fixed FS-UAE.\n"
+           ("interface eth0 device=%s unit=%ld mtu=1500 tcpwindow=1440\n" #device #unit))
       ("interface eth0 device=%s unit=%ld\n" #device #unit)))
   (set #c-addr
     (if #dhcp

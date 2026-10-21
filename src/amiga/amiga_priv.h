@@ -10,7 +10,7 @@
 #include "rt/riptide.h"
 
 #include "rt/riptide_port.h"
-#define RIPTIDE_DATE     "20.10.2026"
+#define RIPTIDE_DATE     "21.10.2026"
 
 /* ---- os_amiga.c ---------------------------------------------------- */
 

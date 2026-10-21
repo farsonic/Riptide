@@ -355,12 +355,12 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 	u32 addr = 0, mask = 0, peer = 0, bcast = 0;
 	int bits = 0, i, r, up = -1, have_addr = 0, mtu = 0, have_mask = 0, del = 0;
 	int promisc = -1, arp = -1;
-	long metric = -1;
+	long metric = -1, tcpwin = -1;
 	const char *end;
 
 	if (need_args(argc, 2, err, errlen,
 	              "ifconfig IFNAME [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D] "
-	              "[mtu N] [metric N] [[-]promisc] [[-]arp] [delete] [up|down]"))
+	              "[mtu N] [metric N] [tcpwindow N] [[-]promisc] [[-]arp] [delete] [up|down]"))
 		return -RT_EINVAL;
 	nif = rt_netif_find(argv[1]);
 	if (!nif)
@@ -387,6 +387,12 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 			if (++i >= argc || parse_uint(argv[i], 0x7fffffff, &v) < 0)
 				return cfg_err(err, errlen, -RT_EINVAL, "ifconfig: bad metric", NULL);
 			metric = (long)v;
+		} else if (!strcmp(k, "tcpwindow")) {
+			u32 v;
+			if (++i >= argc || parse_uint(argv[i], 16u * 1024u * 1024u, &v) < 0 || (v && v < 536))
+				return cfg_err(err, errlen, -RT_EINVAL,
+				               "ifconfig: tcpwindow is 0 (no limit) or 536..16777216 bytes", NULL);
+			tcpwin = (long)v;
 		} else if (!strcmp(k, "peer") || !strcmp(k, "dest") || !strcmp(k, "pointopoint") ||
 		           !strcmp(k, "broadcast") || !strcmp(k, "netmask")) {
 			u32 *dst = !strcmp(k, "netmask") ? &mask : !strcmp(k, "broadcast") ? &bcast : &peer;
@@ -419,6 +425,8 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 		nif->mtu = (u16)mtu;
 	if (metric >= 0)
 		nif->metric = (u32)metric;
+	if (tcpwin >= 0)
+		nif->tcp_window = (u32)tcpwin;     /* new connections */
 	if (promisc >= 0)
 		if_set_flag(nif, RT_IFF_PROMISC, promisc);
 	if (arp >= 0)

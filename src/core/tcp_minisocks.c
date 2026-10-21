@@ -162,14 +162,25 @@ u32 tcp_route_mtu(const rt_in6_addr *daddr, u32 scope)
 	return v4 ? 576 : RT_IP6_MIN_MTU;
 }
 
+u32 tcp_route_window(const rt_in6_addr *daddr, u32 scope)
+{
+	struct rt_inet_route rt;
+
+	if (rt_inet_route(daddr, scope, &rt) == 0 && rt.netif)
+		return rt.netif->tcp_window;
+	return 0;
+}
+
 static void tcp_req_window(struct tcp_sock *lp, struct tcp_request_sock *req)
 {
-	u32 clamp;
+	u32 clamp, limit = tcp_route_window(&req->rmt_addr, req->scope);
 
 	if (lp->rcvbuf_locked || !sysctl_tcp_moderate_rcvbuf)
 		clamp = tcp_full_space(lp);
 	else
 		clamp = RT_MAX((u32)sysctl_tcp_rmem_max, tcp_full_space(lp));
+	if (limit && clamp > limit)
+		clamp = limit;
 	req->window_clamp = clamp;
 	tcp_select_initial_window(tcp_full_space(lp),
 	                          req->mss - (req->tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0),
@@ -354,6 +365,7 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->max_window = tp->snd_wnd;
 	tp->rcv_wnd = req->rcv_wnd;
 	tp->window_clamp = req->window_clamp;
+	tp->window_limit = tcp_route_window(&tp->daddr, tp->scope);
 	tp->rcv_ssthresh = req->rcv_wnd;
 	tp->ecn_flags = req->ecn_ok ? TCP_ECN_OK : 0;
 	tp->rx_opt.mss_clamp = req->peer_mss;

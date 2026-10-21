@@ -720,6 +720,9 @@ int tcp_connect(struct tcp_sock *tp)
 		clamp = tcp_full_space(tp);
 	else
 		clamp = RT_MAX((u32)sysctl_tcp_rmem_max, tcp_full_space(tp));
+	tp->window_limit = tcp_route_window(&tp->daddr, tp->scope);
+	if (tp->window_limit && clamp > tp->window_limit)
+		clamp = tp->window_limit;
 	tp->window_clamp = clamp;
 	tcp_select_initial_window(tcp_full_space(tp),
 	                          tp->advmss - (tp->rx_opt.tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0),

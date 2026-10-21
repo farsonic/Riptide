@@ -556,6 +556,53 @@ static void test_delack(void)
 	CHECKV(r4 >= 0.18 && r4 <= 0.45, "delack_segs 4: %.2f", r4);
 }
 
+/* "ifconfig lo0 tcpwindow N": connections over lo0 offer at most N bytes
+ * (both the active and the passive side), auto-tuning stays below it, and
+ * connections opened after "tcpwindow 0" are not limited */
+static int cfg(const char *line)
+{
+	char err[256];
+	int r;
+
+	rt_lock();
+	r = rt_config_line(line, err, sizeof(err), NULL);
+	rt_unlock();
+	return r;
+}
+
+static void test_tcpwindow(void)
+{
+	struct rt_tcp_info ti;
+	struct rt_ctl_tcpinfo c, a;
+	int lfd, cfd, afd;
+	u64 total = 300000;
+	double t0;
+
+	CHECK(cfg("ifconfig lo0 tcpwindow 100") < 0);
+	CHECK(cfg("ifconfig lo0 tcpwindow 1440") == 0);
+	CHECK(rt_netif_find("lo0")->tcp_window == 1440);
+	t0 = t_now();
+	CHECK(pull(5071, total, &ti, &cfd, &afd, &lfd) == total);
+	CHECK(find_tcpinfo(local_port(&cs, cfd), 5071, &c));
+	CHECK(find_tcpinfo(5071, local_port(&cs, cfd), &a));
+	CHECKV(c.rcv_wnd > 0 && c.rcv_wnd <= 1440 && c.rcv_ssthresh <= 1440, "client rcv_wnd %u ssthresh %u",
+	       c.rcv_wnd, c.rcv_ssthresh);
+	CHECKV(a.rcv_wnd > 0 && a.rcv_wnd <= 1440, "server rcv_wnd %u", a.rcv_wnd);
+	printf("tcpwindow 1440: %llu bytes in %.2fs, client rcv_wnd %u rcvbuf %u\n", (unsigned long long)total,
+	       t_now() - t0, c.rcv_wnd, c.rcvbuf);
+	rt_api_close(&cs, cfd);
+	rt_api_close(&ss, afd);
+	rt_api_close(&ss, lfd);
+
+	CHECK(cfg("ifconfig lo0 tcpwindow 0") == 0);
+	CHECK(pull(5072, total, &ti, &cfd, &afd, &lfd) == total);
+	CHECK(find_tcpinfo(local_port(&cs, cfd), 5072, &c));
+	CHECKV(c.rcv_wnd > 1440, "unlimited rcv_wnd %u", c.rcv_wnd);
+	rt_api_close(&cs, cfd);
+	rt_api_close(&ss, afd);
+	rt_api_close(&ss, lfd);
+}
+
 /* listen backlog overflow: SYN cookies, nothing lost */
 static void test_backlog(void)
 {
@@ -869,6 +916,7 @@ int main(int argc, char **argv)
 	test_zero_window();
 	test_tcpinfo();
 	test_delack();
+	test_tcpwindow();
 	test_backlog();
 	test_many();
 	test_simultaneous_open();

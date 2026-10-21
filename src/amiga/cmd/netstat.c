@@ -647,7 +647,7 @@ static int netstat_main(int argc, char **argv)
 		case '6': opt_family = 6; break;
 		case 'A': opt_family = !strcmp(g.arg, "inet6") ? 6 : !strcmp(g.arg, "inet") ? 4 : 0; break;
 		case 'r': case 'i': case 's': case 'T': mode = c; break;
-		case 'V': cl_puts("netstat (Riptide) 0.10\n"); return CL_OK;
+		case 'V': cl_puts("netstat (Riptide) 0.11\n"); return CL_OK;
 		case '?': usage(); return CL_ERROR;
 		default: break;
 		}

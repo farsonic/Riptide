@@ -173,7 +173,7 @@ route add|del|replace|change DEST[/BITS]|default [netmask M] [via|gw] GATEWAY
 route flush [dev IF] | route flush cache
 sysctl NAME=VALUE                  # e.g. sysctl net.inet.tcp.sack=1
 ifconfig IFNAME [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D]
-      [mtu N] [metric N] [[-]promisc] [[-]arp] [delete] [up|down]
+      [mtu N] [metric N] [tcpwindow N] [[-]promisc] [[-]arp] [delete] [up|down]
 dhcp IFNAME [start|stop|renew]     # run (stop, renew) the DHCP client on IFNAME
 arp add A.B.C.D MAC [dev IF] | arp del A.B.C.D [dev IF] | arp flush [dev IF]
 cpu routines auto|generic|020|040|060   # checksum/copy routines (troubleshooting)
@@ -275,7 +275,7 @@ off the cost is one test per packet.
 ### Amiga keywords
 
 ```
-interface NAME device=DEVICE [unit=N] [mtu=N] [reads=N] [raw]
+interface NAME device=DEVICE [unit=N] [mtu=N] [reads=N] [tcpwindow=N] [raw]
 interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N]
 interface NAME reads=N             # at run time: change a SANA-II interface's IPv4 reads
 interface NAME delete              # at run time: close the driver, drop the interface
@@ -377,6 +377,40 @@ a2065` for the built-in slirp NAT. Under slirp the Amiga gets 10.0.2.15 by
 DHCP. The gateway (your host computer) is 10.0.2.2 and the DNS forwarder is
 10.0.2.3. Incoming connections from the LAN need slirp port forwarding.
 
+**FS-UAE drops frames: `tcpwindow=1440`.** FS-UAE 3.x (3.1.66 and 3.2.35)
+passes the Amiga only the first of the frames that wait for it at one
+interrupt and drops the others, although Riptide has dozens of reads
+queued (`uaenet_int_handler()` in its `sana2.cpp` resets a per-opener flag
+once per interrupt instead of once per frame). slirp sends two or three
+frames for each ACK, so a download loses a segment in every burst; slirp's
+TCP has no SACK and waits for its retransmission timer, 1.5 to 12 s each
+time, and downloads crawl at well under 1 KB/s. `netstat -T` shows the
+signs: out-of-order bytes (`ooo`), duplicate ACKs, almost no data.
+
+The workaround is a one-segment receive window on that interface: slirp
+then never has two frames queued at once. The Installer and
+`examples/riptide-uaenet.conf` set it:
+
+```
+interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440
+```
+
+On a Mac with FS-UAE 3.2.35 an Aminet download went from about 0.3 KB/s
+to 227 KB/s. Remove it under WinUAE, or once FS-UAE is fixed. At run time:
+`ip link set eth0 tcpwindow 0` (or `1440`), for connections opened
+afterwards.
+
+### TCP window per interface
+
+`tcpwindow=N` on the `interface` line, `ifconfig IF tcpwindow N` or `ip
+link set IF tcpwindow N` limit the receive window that TCP offers on
+connections routed over that interface (like Linux `ip route ... window
+N`). Buffer auto-tuning still runs but never offers more. 0 removes the
+limit; the value is 0 or 536..16777216 bytes and applies to connections
+opened after the change. `ip link` and `Riptide STATUS` show it. Other
+interfaces keep the full window, so the limit costs nothing on a real
+network card.
+
 ### Hosts file
 
 `ENV:Riptide/hosts` uses the usual format, `A.B.C.D name [alias...]`, with
@@ -431,6 +465,7 @@ default via 10.0.2.2 dev eth0 proto dhcp src 10.0.2.15
 |---|---|
 | `ip link [show [dev] IF]` | interfaces (`-s`: counters) |
 | `ip link set [dev] IF up\|down\|mtu N\|promisc on\|off\|arp on\|off` | |
+| `ip link set [dev] IF tcpwindow N` | largest TCP receive window on connections over IF (bytes, 0 = no limit; see "TCP window per interface") |
 | `ip link set [dev] IF reads N` | IPv4 read requests queued with a SANA-II driver (4..128) |
 | `ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]` | open a SANA-II device at run time |
 | `ip link add NAME type mni driver FILE [unit N] [options TEXT]` | load an MNI driver |
@@ -991,7 +1026,7 @@ byte order, everything else in host order; there are no pointers.
 
 | n | name | records |
 |---|---|---|
-| 1 | `net.riptide.ifaces` | `struct rt_ctl_iface`: name, index, type, flags, MTU, hardware address, address/netmask/broadcast/peer, metric, all packet counters, DHCP state/server/router/lease, driver description |
+| 1 | `net.riptide.ifaces` | `struct rt_ctl_iface`: name, index, type, flags, MTU, hardware address, address/netmask/broadcast/peer, metric, all packet counters, DHCP state/server/router/lease, driver description, `tcpwindow` (0.11) |
 | 2 | `net.riptide.routes` | `struct rt_ctl_route`: destination, mask, gateway, interface, flags, proto (kernel/static/dhcp/redirect), metric, MTU, use count, expiry, linkdown |
 | 3 | `net.riptide.neigh` | `struct rt_ctl_neigh`: ARP entries with state (INCOMPLETE/REACHABLE/STALE/PERMANENT) |
 | 4 | `net.riptide.sockets` | `struct rt_ctl_sock`: TCP, UDP and raw sockets with state, queues, RTT, cwnd |

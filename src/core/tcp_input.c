@@ -341,6 +341,7 @@ void tcp_init_buffer_space(struct tcp_sock *tp)
 	                              (u32)sysctl_tcp_initcwnd * tp->advmss);
 	if (tp->window_clamp > tcp_full_space(tp) && tp->rcvbuf_locked)
 		tp->window_clamp = tcp_full_space(tp);
+	tcp_apply_window_limit(tp);
 	tp->rcv_ssthresh = RT_MIN(tp->rcv_ssthresh, tp->window_clamp);
 }
 

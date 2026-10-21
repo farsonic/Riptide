@@ -286,6 +286,7 @@ struct tcp_sock {
 	u32 snd_una, snd_nxt, snd_wnd, snd_wl1, max_window;
 	u32 snd_sml, snd_up, write_seq, pushed_seq;
 	u32 rcv_nxt, rcv_wnd, rcv_wup, copied_seq, rcv_ssthresh, window_clamp;
+	u32 window_limit;              /* the route's interface tcpwindow, 0 = none */
 	u32 pred_flags;
 	u16 tcp_header_len;            /* 20 + fixed options (timestamps) */
 	u16 mss_cache;                 /* current effective send MSS */
@@ -738,5 +739,13 @@ int  tcp_tw_port_used(u16 port, const rt_in6_addr *addr, int v6only, int reuse);
 u32  tcp_tw_hashfn(const rt_in6_addr *laddr, u16 lport, const rt_in6_addr *faddr, u16 fport);
 /* route MTU towards daddr (576 / 1280 when unknown) */
 u32  tcp_route_mtu(const rt_in6_addr *daddr, u32 scope);
+/* the outgoing interface's tcpwindow towards daddr (0 = no limit) */
+u32  tcp_route_window(const rt_in6_addr *daddr, u32 scope);
+/* keep window_clamp within the interface limit (auto-tuning raises it) */
+static inline void tcp_apply_window_limit(struct tcp_sock *tp)
+{
+	if (tp->window_limit && tp->window_clamp > tp->window_limit)
+		tp->window_clamp = tp->window_limit;
+}
 
 #endif
