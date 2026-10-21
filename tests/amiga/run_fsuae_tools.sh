@@ -110,6 +110,14 @@ netstat_l|netstat -l -n
 netstat_r|netstat -rn
 netstat_i|netstat -i
 netstat_s|netstat -s
+netstat_T|netstat -Tn
+netstat_T6l|netstat -T -6 -ln
+sysctl_delack|sysctl -w net.inet.tcp.delack_segs=1
+sysctl_delack_back|sysctl -w net.inet.tcp.delack_segs=2
+ip_reads|ip link set eth0 reads 64
+ip_reads_bad|ip link set eth0 reads 2
+ip_reads_lo|ip link set lo0 reads 16
+ip_reads_back|ip link set eth0 reads 48
 nc_out|nc -d -w 3 127.0.0.1 7778
 ip_link_add|ip link add eth1 type sana2 device uaenet.device unit 1
 ip_link_after|ip -br link
@@ -295,6 +303,21 @@ expect netstat_an '^Active Internet connections \(servers and established\)' \
 	'^tcp +0 +0 0\.0\.0\.0:7778 +0\.0\.0\.0:\* +LISTEN' \
 	'^tcp +0 +0 127\.0\.0\.1:7777 +127\.0\.0\.1:[0-9]+ +ESTABLISHED'
 expect netstat_l 'LISTEN'
+expect netstat_T '^TCP connection details \(w/o servers\)' \
+	'^tcp +127\.0\.0\.1:7777 127\.0\.0\.1:[0-9]+ ESTABLISHED' \
+	'^  (cubic|reno) (open|disorder) age [0-9.]+m?s  rtt [0-9.]+/[0-9.]+ ms min' \
+	'^  opts ts sack ws wscale [0-9]+/[0-9]+ mss [0-9]+/[0-9]+' '^  wnd snd [0-9]+ rcv [0-9]+' \
+	'^  rx [0-9]+ bytes, [0-9]+ segs' '^  acks out [0-9]+ \(delayed [0-9]+, dup 0' \
+	'^  retrans 0  fast recovery 0  rto 0' '^  time busy [0-9.]+m?s' '^       unread [0-9.]+m?s zero-wnd'
+reject netstat_T 'LISTEN'
+expect netstat_T6l '^tcp6 :::7780 :::\* LISTEN' '^  syn queue 0  rcvbuf [0-9]+'
+reject netstat_T6l '^tcp '
+expect sysctl_delack '^net\.inet\.tcp\.delack_segs = 1'
+expect sysctl_delack_back '^net\.inet\.tcp\.delack_segs = 2'
+reject ip_reads '.'
+expect ip_reads_bad 'reads: 4\.\.128'
+expect ip_reads_lo 'applies to SANA-II'
+reject ip_reads_back '.'
 reject netstat_l 'ESTABLISHED'
 expect netstat_r '^Kernel IP routing table' '^0\.0\.0\.0 +10\.0\.2\.2 '
 expect netstat_i '^Kernel Interface table' '^eth0 +1500 ' '^lo0 '

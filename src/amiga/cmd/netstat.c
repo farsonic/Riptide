@@ -6,6 +6,7 @@
  *   netstat -r [-n] [-e]          routing table
  *   netstat -i                    interfaces
  *   netstat -s                    protocol statistics
+ *   netstat -T [-46anc]           TCP connection details (net.riptide.tcpinfo)
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "cmdlib.h"
@@ -20,10 +21,12 @@ static void usage(void)
 	cl_puts("usage: netstat [-veenNcCF] [<Af>] -r         netstat {-V|--version|-h|--help}\n"
 	        "       netstat [-vnNcaeol] [<Socket> ...]\n"
 	        "       netstat { [-veenNac] -i | [-cnNe] -M | -s [-6tuw] }\n"
+	        "       netstat -T [-46anlc]\n"
 	        "\n"
 	        "        -r, --route              display routing table\n"
 	        "        -i, --interfaces         display interface table\n"
 	        "        -s, --statistics         display networking statistics\n"
+	        "        -T, --tcp-info           display TCP connection details\n"
 	        "        -n, --numeric            don't resolve names\n"
 	        "        -e, --extend             display other/more information\n"
 	        "        -c, --continuous         continuous listing (Ctrl-C stops)\n"
@@ -205,6 +208,137 @@ static int show_sockets(void)
 	FreeVec(d);
 	if (opt_family != 4)
 		show_sockets6();
+	return CL_OK;
+}
+
+/* ---- netstat -T: TCP connection details ---- */
+
+static int v4mapped(const u8 *a)
+{
+	static const u8 pfx[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+	return !memcmp(a, pfx, 12);
+}
+
+static void tcpi_endpoint(char *b, u32 len, const u8 *addr, u32 port, int v4)
+{
+	u32 a;
+
+	if (v4) {
+		memcpy(&a, addr + 12, 4);
+		endpoint(b, len, a, port, "tcp", 0);
+	} else {
+		endpoint6(b, len, addr, port, "tcp", 0);
+	}
+}
+
+/* a 64-bit byte count, shortened past 4 GB */
+static const char *tcpi_bytes(u32 hi, u32 lo, char *b, u32 len)
+{
+	if (hi)
+		rt_snprintf(b, len, "%luG", (unsigned long)(hi * 4u + (lo >> 30)));
+	else
+		rt_snprintf(b, len, "%lu", (unsigned long)lo);
+	return b;
+}
+
+/* ms as "12.3s" from 10 s on, else "1234ms" */
+static const char *tcpi_ms(u32 ms, char *b, u32 len)
+{
+	if (ms >= 10000)
+		rt_snprintf(b, len, "%lu.%01lus", (unsigned long)(ms / 1000), (unsigned long)(ms % 1000 / 100));
+	else
+		rt_snprintf(b, len, "%lums", (unsigned long)ms);
+	return b;
+}
+
+static void show_tcpinfo_rec(const struct rt_ctl_tcpinfo *t, int v4)
+{
+	static const char *const ca[] = { "open", "disorder", "cwr", "recovery", "loss" };
+	char l[64], f[64], b1[16], b2[16], b3[16], b4[16], b5[16];
+	u32 rate = 0;
+
+	tcpi_endpoint(l, sizeof(l), t->laddr, t->lport, v4);
+	tcpi_endpoint(f, sizeof(f), t->faddr, t->fport, v4);
+	cl_printf("%s %s %s %s\n", v4 ? "tcp " : "tcp6", l, f, rt_ctl_tcp_state_name(t->state));
+	if (t->state == RT_TCPS_LISTEN) {
+		cl_printf("  syn queue %lu  rcvbuf %lu  sndbuf %lu\n", (unsigned long)t->recvq,
+		          (unsigned long)t->rcvbuf, (unsigned long)t->sndbuf);
+		return;
+	}
+	cl_printf("  %s %s age %s  rtt %lu.%01lu/%lu.%01lu ms min %lu.%01lu rto %lu ms backoff %u\n",
+	          t->cc, t->ca_state < 5 ? ca[t->ca_state] : "?", tcpi_ms(t->age_ms, b1, sizeof(b1)),
+	          (unsigned long)(t->srtt_us / 1000), (unsigned long)(t->srtt_us % 1000 / 100),
+	          (unsigned long)(t->rttvar_us / 1000), (unsigned long)(t->rttvar_us % 1000 / 100),
+	          (unsigned long)(t->min_rtt_us / 1000), (unsigned long)(t->min_rtt_us % 1000 / 100),
+	          (unsigned long)(t->rto_us / 1000), (unsigned)t->backoff);
+	cl_printf("  opts%s%s%s%s wscale %u/%u mss %lu/%lu advmss %lu cwnd %lu ssthresh ",
+	          t->options & RT_CTL_TCPI_TS ? " ts" : "", t->options & RT_CTL_TCPI_SACK ? " sack" : "",
+	          t->options & RT_CTL_TCPI_WSCALE ? " ws" : "", t->options & RT_CTL_TCPI_ECN ? " ecn" : "",
+	          (unsigned)t->snd_wscale, (unsigned)t->rcv_wscale, (unsigned long)t->snd_mss,
+	          (unsigned long)t->rcv_mss, (unsigned long)t->advmss, (unsigned long)t->cwnd);
+	if (t->ssthresh >= 0x7fffffffu)
+		cl_puts("-\n");
+	else
+		cl_printf("%lu\n", (unsigned long)t->ssthresh);
+	cl_printf("  wnd snd %lu rcv %lu (limit %lu)  buf rcv %lu snd %lu\n", (unsigned long)t->snd_wnd,
+	          (unsigned long)t->rcv_wnd, (unsigned long)t->rcv_ssthresh, (unsigned long)t->rcvbuf,
+	          (unsigned long)t->sndbuf);
+	cl_printf("  queue recv %lu send %lu ooo %lu/%lu seg  inflight %lu sacked %lu lost %lu\n",
+	          (unsigned long)t->recvq, (unsigned long)t->sendq, (unsigned long)t->ofo_bytes,
+	          (unsigned long)t->ofo_segs, (unsigned long)t->packets_out, (unsigned long)t->sacked_out,
+	          (unsigned long)t->lost_out);
+	if (t->age_ms >= 100 && !t->bytes_received_hi)
+		rate = t->bytes_received_lo / (t->age_ms / 100) * 10u / 1024u;     /* KB/s */
+	cl_printf("  rx %s bytes, %lu segs (%lu with data), %lu KB/s average\n",
+	          tcpi_bytes(t->bytes_received_hi, t->bytes_received_lo, b2, sizeof(b2)),
+	          (unsigned long)t->segs_in, (unsigned long)t->data_segs_in, (unsigned long)rate);
+	cl_printf("  tx %s bytes acked, %lu segs (%lu with data)\n",
+	          tcpi_bytes(t->bytes_acked_hi, t->bytes_acked_lo, b3, sizeof(b3)),
+	          (unsigned long)t->segs_out, (unsigned long)t->data_segs_out);
+	cl_printf("  acks out %lu (delayed %lu, dup %lu, sack blocks %lu)  dupacks in %lu\n",
+	          (unsigned long)t->acks_out, (unsigned long)t->delayed_acks_out, (unsigned long)t->dupacks_out,
+	          (unsigned long)t->sack_blocks_out, (unsigned long)t->dupacks_in);
+	cl_printf("  retrans %lu  fast recovery %lu  rto %lu  tlp %lu  zero wnd out %lu in %lu\n",
+	          (unsigned long)t->total_retrans, (unsigned long)t->fast_recoveries,
+	          (unsigned long)t->rto_timeouts, (unsigned long)t->tlp_probes, (unsigned long)t->zwin_out,
+	          (unsigned long)t->zwin_in);
+	cl_printf("  time busy %s rwnd-limited %s sndbuf-limited %s\n", tcpi_ms(t->busy_ms, b1, sizeof(b1)),
+	          tcpi_ms(t->rwnd_limited_ms, b2, sizeof(b2)), tcpi_ms(t->sndbuf_limited_ms, b3, sizeof(b3)));
+	/* "last ... ago": 0 means never */
+	cl_printf("       unread %s zero-wnd %s  last rx %s tx %s ack %s ago\n",
+	          tcpi_ms(t->unread_ms, b1, sizeof(b1)), tcpi_ms(t->zwin_ms, b2, sizeof(b2)),
+	          t->last_data_recv_ago ? tcpi_ms(t->last_data_recv_ago, b3, sizeof(b3)) : "-",
+	          t->last_data_sent_ago ? tcpi_ms(t->last_data_sent_ago, b4, sizeof(b4)) : "-",
+	          t->last_ack_recv_ago ? tcpi_ms(t->last_ack_recv_ago, b5, sizeof(b5)) : "-");
+}
+
+static int show_tcpinfo(void)
+{
+	struct rt_ctl_hdr h;
+	void *d = cl_dump(RT_CTL_TCPINFO, &h);
+	u32 k, shown = 0;
+
+	if (!d)
+		return CL_FAIL;
+	cl_printf("TCP connection details %s\n",
+	          opt_listen ? "(only servers)" : opt_all ? "(servers and established)" : "(w/o servers)");
+	for (k = 0; k < h.count && !cl_break(); k++) {
+		struct rt_ctl_tcpinfo t;
+		int listening, v4;
+		/* records may be longer (newer Riptide) or, in theory, shorter */
+		memset(&t, 0, sizeof(t));
+		memcpy(&t, cl_rec(d, &h, k), RT_MIN((u32)h.recsize, (u32)sizeof(t)));
+		listening = t.state == RT_TCPS_LISTEN;
+		if (opt_listen ? !listening : (!opt_all && listening))
+			continue;
+		v4 = t.family == RT_AF_INET || v4mapped(t.faddr);
+		if ((opt_family == 4 && !v4) || (opt_family == 6 && v4))
+			continue;
+		if (shown++)
+			cl_puts("\n");
+		show_tcpinfo_rec(&t, v4);
+	}
+	FreeVec(d);
 	return CL_OK;
 }
 
@@ -496,9 +630,10 @@ static int netstat_main(int argc, char **argv)
 		else if (!strcmp(a, "--extend")) argv[i] = "-e";
 		else if (!strcmp(a, "--inet")) argv[i] = "-4";
 		else if (!strcmp(a, "--inet6")) argv[i] = "-6";
+		else if (!strcmp(a, "--tcp-info")) argv[i] = "-T";
 	}
 	memset(&g, 0, sizeof(g));
-	while ((c = cl_getopt(argc, argv, "anNtuwlrisceveopF46CVA:", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "anNtuwlrisceveopF46CVTA:", &g)) != -1) {
 		switch (c) {
 		case 'a': opt_all = 1; break;
 		case 'n': case 'N': opt_n = 1; break;
@@ -511,7 +646,7 @@ static int netstat_main(int argc, char **argv)
 		case '4': opt_family = 4; break;
 		case '6': opt_family = 6; break;
 		case 'A': opt_family = !strcmp(g.arg, "inet6") ? 6 : !strcmp(g.arg, "inet") ? 4 : 0; break;
-		case 'r': case 'i': case 's': mode = c; break;
+		case 'r': case 'i': case 's': case 'T': mode = c; break;
 		case 'V': cl_puts("netstat (Riptide) 0.10\n"); return CL_OK;
 		case '?': usage(); return CL_ERROR;
 		default: break;
@@ -521,7 +656,7 @@ static int netstat_main(int argc, char **argv)
 		return CL_FAIL;
 	for (;;) {
 		rc = mode == 'r' ? show_routes() : mode == 'i' ? show_ifaces() : mode == 's' ? show_stats() :
-		     show_sockets();
+		     mode == 'T' ? show_tcpinfo() : show_sockets();
 		cl_flush();
 		if (!cont || rc)
 			return rc;

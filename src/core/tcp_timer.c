@@ -291,6 +291,7 @@ static void tcp_retransmit_timer(struct tcp_sock *tp)
 		goto out_reset_timer;
 	}
 	rt_tcpstat.TCPTimeouts++;
+	tp->dg.rto_timeouts++;
 	if (tcp_write_timeout(tp))
 		return;
 	tcp_enter_loss(tp);
@@ -397,6 +398,7 @@ static void tcp_delack_timer(void *arg)
 			tp->ack.ato = TCP_ATO_MIN;
 		}
 		rt_tcpstat.DelayedACKs++;
+		tp->dg.delayed_acks_out++;
 		tcp_send_ack(tp);
 	}
 out:

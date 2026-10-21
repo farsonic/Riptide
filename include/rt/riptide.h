@@ -46,6 +46,7 @@ struct rt_pcb_info {
 	rt_in6_addr laddr6, faddr6;  /* both families (IPv4 as IPv4-mapped) */
 };
 int rt_tcp_list(struct rt_pcb_info *out, int max);   /* returns total count */
+int rt_tcp_info_list(struct rt_ctl_tcpinfo *out, int max);  /* net.riptide.tcpinfo */
 int rt_udp_list(struct rt_pcb_info *out, int max);
 int rt_raw_list(struct rt_pcb_info *out, int max);
 

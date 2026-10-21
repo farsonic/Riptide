@@ -466,6 +466,24 @@ static int h_dns6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void 
 	return dump_emit(old, oldlen, sizeof(d), 1, &d);
 }
 
+/* ---- TCP connection details ---- */
+
+static int h_tcpinfo(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_ctl_tcpinfo *recs;
+	int count = rt_tcp_info_list(NULL, 0), ret;
+
+	if (!old || !count)
+		return dump_emit(old, oldlen, sizeof(*recs), old ? 0 : (u32)count, NULL);
+	recs = rt_malloc((u32)count * sizeof(*recs));
+	if (!recs)
+		return -RT_ENOMEM;
+	count = RT_MIN(count, rt_tcp_info_list(recs, count));
+	ret = dump_emit(old, oldlen, sizeof(*recs), (u32)count, recs);
+	rt_free(recs);
+	return ret;
+}
+
 /* ---- resolver and statistics ---- */
 
 static int h_dns(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
@@ -511,6 +529,7 @@ static const struct rt_sysctl ctl_sysctls[] = {
 	STATS("ip6stat", RT_CTL_IP6STAT, rt_ip6stat),
 	STATS("icmp6stat", RT_CTL_ICMP6STAT, rt_icmp6stat),
 	DUMP("ifaces6", RT_CTL_IFACES6, h_ifaces6, "rt_ctl_hdr + struct rt_ctl_iface6[]"),
+	DUMP("tcpinfo", RT_CTL_TCPINFO, h_tcpinfo, "rt_ctl_hdr + struct rt_ctl_tcpinfo[]"),
 };
 
 void rt_ctl_init(void)

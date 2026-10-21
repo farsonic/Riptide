@@ -121,6 +121,13 @@ static inline void t_print_info(const char *tag, const struct rt_tcp_info *ti)
 	       ti->tcpi_rttvar_us, ti->tcpi_min_rtt_us, ti->tcpi_rto_us / 1000, ti->tcpi_snd_cwnd,
 	       ti->tcpi_snd_ssthresh, ti->tcpi_total_retrans, ti->tcpi_reordering,
 	       ti->tcpi_snd_wnd, ti->tcpi_rcv_wnd, ti->tcpi_ca_name);
+	printf("%s: segs in %u (%u data) out %u (%u data) acks out %u (delayed %u dup %u sack blocks %u) "
+	       "dupacks in %u recov %u rto %u tlp %u zwin %u/%u busy %u rwnd %u sndbuf %u unread %u zwin %u ms\n",
+	       tag, ti->tcpi_segs_in, ti->tcpi_data_segs_in, ti->tcpi_segs_out, ti->tcpi_data_segs_out,
+	       ti->tcpi_acks_out, ti->tcpi_delayed_acks_out, ti->tcpi_dupacks_out, ti->tcpi_sack_blocks_out,
+	       ti->tcpi_dupacks_in, ti->tcpi_fast_recoveries, ti->tcpi_rto_timeouts, ti->tcpi_tlp_probes,
+	       ti->tcpi_zwin_out, ti->tcpi_zwin_in, ti->tcpi_busy_ms, ti->tcpi_rwnd_limited_ms,
+	       ti->tcpi_sndbuf_limited_ms, ti->tcpi_unread_ms, ti->tcpi_zwin_ms);
 }
 
 static inline void t_print_stats(const char *tag)

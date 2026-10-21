@@ -185,11 +185,33 @@ the same gateway stays); when an interface is removed all its routes go.
 While an interface is down its routes stay but are not used (`linkdown`);
 learned routes (redirects, path MTU) are dropped.
 
+**TCP switches for side-by-side tests.** All of these can be changed at
+run time with the `sysctl` tool and apply to every connection at once,
+so two runs of the same download can be compared without restarting:
+
+| sysctl | default | |
+|---|---|---|
+| `net.inet.tcp.sack`, `timestamps`, `window_scaling`, `ecn` | 1, 1, 1, 2 | the TCP options (`rfc1323` sets timestamps and window scaling together) |
+| `net.inet.tcp.recvspace`, `sendspace` | 32768, 32768 | initial buffer sizes |
+| `net.inet.tcp.rmem_max`, `moderate_rcvbuf` | 65536, 1 | receive buffer auto-tuning and its limit (host test builds: 262144) |
+| `net.inet.tcp.delack_segs` | 2 | send an ACK every N full-sized segments (1 = every segment) |
+| `net.inet.tcp.delack_ms` | 200 | longest an ACK is delayed (ms) |
+| `net.inet.tcp.quickack` | 0 | 1 = never delay ACKs |
+| `net.inet.tcp.cc` | cubic | congestion control (`cubic`, `reno`) |
+
+`delack_segs` counts like Linux: an ACK goes out once more than N-1
+segments are unacknowledged, but only if the window it advertises is not
+smaller than the last one; otherwise the ACK waits until the application
+reads (or for the delayed ACK timer). The SANA-II read count is changed
+with `ip link set NAME reads N` (see below). `netstat -T` shows the effect
+on each connection.
+
 ### Amiga keywords
 
 ```
-interface NAME device=DEVICE [unit=N] [mtu=N] [raw]
+interface NAME device=DEVICE [unit=N] [mtu=N] [reads=N] [raw]
 interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N]
+interface NAME reads=N             # at run time: change a SANA-II interface's IPv4 reads
 interface NAME delete              # at run time: close the driver, drop the interface
 user NAME [uid=N] [gid=N] [home=DIR] [realname=TEXT]
 compat aliases on|off              # publish the compat alias library (default on)
@@ -207,7 +229,12 @@ uses its name.
   hardware type, address size), `S2_GETSTATIONADDRESS`,
   `S2_CONFIGINTERFACE` with the factory address, and `S2_ONLINE`.
 * On Ethernet-like devices (hardware type Ethernet or IEEE 802) Riptide
-  keeps 8 `CMD_READ` requests queued for IPv4 and 4 for ARP. Point-to-point
+  keeps 48 `CMD_READ` requests queued for IPv4 (`reads=N`, 4 to 128), 24
+  for IPv6 and 4 for ARP. A frame that arrives while no read is queued is
+  lost, so the IPv4 reads must cover a burst of the sender's window.
+  `interface NAME reads=N` sent to the running stack (`ip link set NAME
+  reads N`) changes the count at once: new reads are queued
+  immediately, surplus ones leave service as they complete. Point-to-point
   devices (PPP, SLIP, and any other hardware type) get only the IPv4
   reads and are configured with `ifconfig NAME A.B.C.D peer P.Q.R.S`.
 * Cooked mode is the default. `raw` makes Riptide build and strip the
@@ -335,7 +362,8 @@ default via 10.0.2.2 dev eth0 proto dhcp src 10.0.2.15
 |---|---|
 | `ip link [show [dev] IF]` | interfaces (`-s`: counters) |
 | `ip link set [dev] IF up\|down\|mtu N\|promisc on\|off\|arp on\|off` | |
-| `ip link add NAME type sana2 device DEV [unit N] [mtu N]` | open a SANA-II device at run time |
+| `ip link set [dev] IF reads N` | IPv4 read requests queued with a SANA-II driver (4..128) |
+| `ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]` | open a SANA-II device at run time |
 | `ip link add NAME type mni driver FILE [unit N] [options TEXT]` | load an MNI driver |
 | `ip link del [dev] NAME` | close a driver interface |
 | `ip addr [show [dev] IF]` | addresses; DHCP addresses are `dynamic` with the lease time left |
@@ -411,8 +439,8 @@ Flags: `C` complete, `M` permanent. Proxy ARP (`pub`) is not supported.
 `netstat [-a] [-n] [-t] [-u] [-w] [-l] [-e] [-c]` lists sockets (default:
 connected ones; `-a` all, `-l` listening; `-e` adds RTT, cwnd and
 retransmissions of TCP), `-r` the routing table, `-i` the interface
-counters, `-s` the protocol statistics; `-c` repeats every second until
-Ctrl-C.
+counters, `-s` the protocol statistics, `-T` (`--tcp-info`) the details
+of each TCP connection; `-c` repeats every second until Ctrl-C.
 
 ```
 1> netstat -an
@@ -425,6 +453,57 @@ raw        0      0 0.0.0.0:1               0.0.0.0:*
 ```
 
 As on Linux, the "port" of a raw socket is its protocol (1 = ICMP).
+
+`netstat -T [-4|-6] [-a|-l] [-n] [-c]` prints what TCP knows about each
+connection, in the spirit of Linux `ss -ti`. It is the first thing to
+look at when a transfer is slow:
+
+```
+1> netstat -Tn
+TCP connection details (w/o servers)
+tcp  10.0.2.15:1027 10.0.2.2:21 ESTABLISHED
+  cubic open age 12.4s  rtt 3.2/1.1 ms min 1.0 rto 204 ms backoff 0
+  opts ts sack ws wscale 7/2 mss 1460/1460 advmss 1460 cwnd 10 ssthresh -
+  wnd snd 65535 rcv 32768 (limit 32768)  buf rcv 32768 snd 16384
+  queue recv 0 send 0 ooo 0/0 seg  inflight 0 sacked 0 lost 0
+  rx 1048576 bytes, 731 segs (720 with data), 84 KB/s average
+  tx 120 bytes acked, 402 segs (6 with data)
+  acks out 396 (delayed 12, dup 0, sack blocks 0)  dupacks in 0
+  retrans 0  fast recovery 0  rto 0  tlp 0  zero wnd out 0 in 0
+  time busy 120ms rwnd-limited 0ms sndbuf-limited 0ms
+       unread 2340ms zero-wnd 0ms  last rx 10ms tx 1200ms ack 10ms ago
+```
+
+* **rtt** smoothed RTT / variation, the lowest RTT seen, the
+  retransmission timeout; **mss** send/receive.
+* **wnd snd** is the peer's window, **rcv** the one we advertise (bytes,
+  after scaling) and **limit** how far it may grow; **buf** the
+  (auto-tuned) socket buffers.
+* **queue**: bytes not yet read by the program, not yet acknowledged by
+  the peer, and held out of order waiting for a lost segment.
+* **rx/tx**: bytes and segments; the average rate is over the life of the
+  connection.
+* **acks out**: pure ACKs we sent; *delayed* ones came from the delayed
+  ACK timer, *dup* ones were sent while data was missing (loss), *sack
+  blocks* counts the SACK blocks in them. **dupacks in**: duplicate ACKs
+  from the peer (our data was lost).
+* **retrans**: segments resent; **fast recovery** and **rto** count
+  recoveries from loss (an RTO means a stall of at least 200 ms); **tlp**
+  tail loss probes; **zero wnd** windows of 0 we advertised / received.
+* **time busy**: time with data of ours in flight; of that,
+  *rwnd-limited* is time the peer's window held us back and
+  *sndbuf-limited* time the program waited for buffer space (as in
+  Linux, the later condition wins). **unread**: time received data sat
+  waiting for the program to read it; **zero-wnd**: time our window was
+  0. A download whose `unread` time grows while `zero-wnd` stays 0 is
+  limited by the program, not the network. **last rx/tx/ack**: when data
+  last arrived, data last left, and the peer last acknowledged (`-`:
+  never).
+
+The same numbers are in the `net.riptide.tcpinfo` table and, for one
+socket, `getsockopt(IPPROTO_TCP, TCP_INFO)`: `struct rt_tcp_info` in
+`include/rt/rt_bsd.h` grew the Riptide counters at its end (a caller with
+the shorter 0.10 structure gets exactly what it asked for).
 
 ### traceroute
 
@@ -672,6 +751,7 @@ byte order, everything else in host order; there are no pointers.
 | 4 | `net.riptide.sockets` | `struct rt_ctl_sock`: TCP, UDP and raw sockets with state, queues, RTT, cwnd |
 | 5 | `net.riptide.dns` | one `struct rt_ctl_dns`: name servers, search domain, host name |
 | 6..9 | `net.riptide.{ip,icmp,udp,tcp}stat` | one `struct rt_{ip,icmp,udp,tcp}_stats` |
+| 18 | `net.riptide.tcpinfo` | `struct rt_ctl_tcpinfo`: every TCP socket of both families with RTT, windows, buffers, queues, loss and ACK counters, 64-bit byte counts and time spent busy, window/buffer limited, with unread data and with a zero window (`netstat -T`) |
 
 Use BSD sysctl semantics: call with `oldp = NULL` to get the size,
 allocate a bit more (a table can grow in between) and call again. If it

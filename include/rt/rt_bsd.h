@@ -294,6 +294,16 @@ struct rt_tcp_info {
 	u32 tcpi_segs_in;
 	u32 tcpi_reordering;
 	char tcpi_ca_name[16];
+	/* Riptide 0.11 (a shorter optlen gets the fields above only): the
+	 * counters of net.riptide.tcpinfo, see rt_ctl.h */
+	u32 tcpi_busy_ms, tcpi_rwnd_limited_ms, tcpi_sndbuf_limited_ms;
+	u32 tcpi_unread_ms, tcpi_zwin_ms;
+	u32 tcpi_fast_recoveries, tcpi_rto_timeouts, tcpi_tlp_probes;
+	u32 tcpi_dupacks_in, tcpi_dupacks_out, tcpi_sack_blocks_out;
+	u32 tcpi_acks_out, tcpi_delayed_acks_out;
+	u32 tcpi_zwin_out, tcpi_zwin_in;
+	u32 tcpi_data_segs_in, tcpi_data_segs_out;
+	u32 tcpi_ofo_bytes, tcpi_rcvbuf, tcpi_sndbuf;
 };
 
 /* TCP states (numbering follows 4.4BSD TCPS_* so netstat tools work) */

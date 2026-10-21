@@ -23,8 +23,8 @@ static void usage(void)
 	        "       OPTIONS := { -s[tatistics] | -d[etails] | -4 | -6 | -br[ief] | -V[ersion] }\n"
 	        "\n"
 	        "  ip link [show [dev] IF]\n"
-	        "  ip link set [dev] IF { up | down | mtu N | promisc on|off | arp on|off }\n"
-	        "  ip link add NAME type sana2 device DEV [unit N] [mtu N]\n"
+	        "  ip link set [dev] IF { up | down | mtu N | promisc on|off | arp on|off | reads N }\n"
+	        "  ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]\n"
 	        "  ip link add NAME type mni driver FILE [unit N] [options TEXT]\n"
 	        "  ip link del [dev] NAME\n"
 	        "  ip addr [show [dev] IF]\n"
@@ -317,15 +317,20 @@ static int do_link(int argc, char **argv, int i)
 		return CL_OK;
 	}
 	if (cl_match(cmd, "set")) {
-		const char *dev = dev_arg(argc, argv, &i);
+		const char *dev = dev_arg(argc, argv, &i), *reads = NULL;
+		u32 base;
 		if (!dev) {
 			usage();
 			return CL_ERROR;
 		}
-		o = (u32)rt_snprintf(line, sizeof(line), "ifconfig %s", dev);
+		o = base = (u32)rt_snprintf(line, sizeof(line), "ifconfig %s", dev);
 		for (; i < argc; i++) {
 			const char *k = argv[i], *v = i + 1 < argc ? argv[i + 1] : "";
-			if (!strcmp(k, "up") || !strcmp(k, "down")) {
+			if (!strcmp(k, "reads")) {
+				/* SANA-II read requests: a line of its own */
+				reads = v;
+				i++;
+			} else if (!strcmp(k, "up") || !strcmp(k, "down")) {
 				o += (u32)rt_snprintf(line + o, sizeof(line) - o, " %s", k);
 			} else if (!strcmp(k, "mtu") || !strcmp(k, "metric")) {
 				o += (u32)rt_snprintf(line + o, sizeof(line) - o, " %s %s", k, v);
@@ -343,10 +348,15 @@ static int do_link(int argc, char **argv, int i)
 				return CL_ERROR;
 			}
 		}
+		if (reads) {
+			int rc = o > base ? run(line) : CL_OK;
+			return rc != CL_OK ? rc : run(cl_line("interface %s reads=%s", dev, reads));
+		}
 		return run(line);
 	}
 	if (cl_match(cmd, "add")) {
 		const char *name = NULL, *type = NULL, *dev = NULL, *unit = "0", *mtu = NULL, *opts = NULL;
+		const char *reads = NULL;
 		for (; i < argc; i++) {
 			const char *k = argv[i], *eq = strchr(k, '=');
 			char key[16];
@@ -369,6 +379,8 @@ static int do_link(int argc, char **argv, int i)
 				TAKE(unit);
 			else if (!strcmp(key, "mtu"))
 				TAKE(mtu);
+			else if (!strcmp(key, "reads"))
+				TAKE(reads);
 			else if (!strcmp(key, "options"))
 				TAKE(opts);
 			else if (!strcmp(key, "name") || !strcmp(key, "dev"))
@@ -395,6 +407,8 @@ static int do_link(int argc, char **argv, int i)
 		}
 		if (mtu)
 			o += (u32)rt_snprintf(line + o, sizeof(line) - o, " mtu=%s", mtu);
+		if (reads)
+			o += (u32)rt_snprintf(line + o, sizeof(line) - o, " reads=%s", reads);
 		if (opts)
 			rt_snprintf(line + o, sizeof(line) - o, " options=\"%s\"", opts);
 		return run(line);

@@ -315,6 +315,18 @@ static void test_zero_window(void)
 	t_get_info(&cs, cfd, &ti);
 	CHECKV(ti.tcpi_snd_wnd == 0, "snd_wnd %u", ti.tcpi_snd_wnd);
 	CHECKV(rt_tcpstat.TCPWinProbe > probes0, "probes %u", rt_tcpstat.TCPWinProbe - probes0);
+	/* diagnostics: the sender saw a zero window and was held back by it,
+	 * the receiver advertised one and its reader left data unread */
+	CHECKV(ti.tcpi_zwin_in >= 1, "zwin_in %u", ti.tcpi_zwin_in);
+	/* sndbuf-limited takes precedence over rwnd-limited (as in Linux) */
+	CHECKV(ti.tcpi_rwnd_limited_ms + ti.tcpi_sndbuf_limited_ms >= 1500, "rwnd %u sndbuf %u ms",
+	       ti.tcpi_rwnd_limited_ms, ti.tcpi_sndbuf_limited_ms);
+	CHECKV(ti.tcpi_busy_ms >= ti.tcpi_rwnd_limited_ms + ti.tcpi_sndbuf_limited_ms, "busy %u",
+	       ti.tcpi_busy_ms);
+	t_get_info(&ss, afd, &ti);
+	CHECKV(ti.tcpi_zwin_out >= 1, "zwin_out %u", ti.tcpi_zwin_out);
+	CHECKV(ti.tcpi_zwin_ms >= 1500, "zwin %u ms", ti.tcpi_zwin_ms);
+	CHECKV(ti.tcpi_unread_ms >= 1500, "unread %u ms", ti.tcpi_unread_ms);
 	rt_api_shutdown(&cs, cfd, 1);
 	got = t_recv_pattern(&ss, afd, 77, &bad, 1000);
 	CHECKV(got == (u64)total && bad == 0, "got %llu of %d bad %llu", (unsigned long long)got,
@@ -324,6 +336,224 @@ static void test_zero_window(void)
 	rt_api_close(&cs, cfd);
 	rt_api_close(&ss, afd);
 	rt_api_close(&ss, lfd);
+}
+
+/* ---- diagnostics: net.riptide.tcpinfo and TCP_INFO ---- */
+static int find_tcpinfo(u16 lport, u16 fport, struct rt_ctl_tcpinfo *out)
+{
+	u8 *buf;
+	u32 len = 0, k;
+	struct rt_ctl_hdr h;
+	int found = 0;
+
+	rt_lock();
+	rt_sysctl_byname("net.riptide.tcpinfo", NULL, &len, NULL, 0);
+	len += 4096;
+	buf = malloc(len);
+	if (rt_sysctl_byname("net.riptide.tcpinfo", buf, &len, NULL, 0) != 0) {
+		rt_unlock();
+		free(buf);
+		return 0;
+	}
+	rt_unlock();
+	memcpy(&h, buf, sizeof(h));
+	CHECKV(h.recsize == sizeof(struct rt_ctl_tcpinfo), "recsize %u", h.recsize);
+	for (k = 0; k < h.count; k++) {
+		struct rt_ctl_tcpinfo *t = (void *)(buf + sizeof(h) + k * h.recsize);
+		if (t->lport == lport && t->fport == fport) {
+			*out = *t;
+			found = 1;
+		}
+	}
+	free(buf);
+	return found;
+}
+
+/* sender thread: 'total' bytes of pattern on the server side, then FIN */
+struct snd_arg {
+	int fd;
+	u64 total, sent;
+	u32 seed;
+};
+
+static void *snd_thread(void *p)
+{
+	struct snd_arg *a = p;
+
+	a->sent = t_send_pattern(&ss, a->fd, a->total, a->seed, 16384);
+	rt_api_shutdown(&ss, a->fd, 1);
+	return NULL;
+}
+
+static u16 local_port(struct rt_sockctx *c, int fd)
+{
+	struct rt_sockaddr_in a;
+	u32 l = sizeof(a);
+
+	memset(&a, 0, sizeof(a));
+	rt_api_getsockname(c, fd, &a, &l);
+	return rt_ntohs(a.sin_port);
+}
+
+/* server -> client bulk on a fresh pair; *ti = the client's TCP_INFO */
+static u64 pull(u16 port, u64 total, struct rt_tcp_info *ti, int *cfd_out, int *afd_out, int *lfd_out)
+{
+	int lfd, cfd, afd;
+	u64 got = 0, bad = 0;
+	struct snd_arg sa;
+	pthread_t th;
+
+	*cfd_out = *afd_out = *lfd_out = -1;
+	if (!pair(port, &lfd, &cfd, &afd)) {
+		CHECK(0);
+		return 0;
+	}
+	t_set_nbio(&ss, afd, 0);
+	memset(&sa, 0, sizeof(sa));
+	sa.fd = afd;
+	sa.total = total;
+	sa.seed = port;
+	pthread_create(&th, NULL, snd_thread, &sa);
+	got = t_recv_pattern(&cs, cfd, port, &bad, 32768);
+	pthread_join(th, NULL);
+	CHECKV(got == total && bad == 0, "got %llu bad %llu", (unsigned long long)got, (unsigned long long)bad);
+	t_get_info(&cs, cfd, ti);
+	*cfd_out = cfd;
+	*afd_out = afd;
+	*lfd_out = lfd;
+	return got;
+}
+
+static void test_tcpinfo(void)
+{
+	int lfd, cfd, afd;
+	u64 total = 2u << 20, got, bad = 0;
+	struct rt_tcp_info ci, si;
+	struct rt_ctl_tcpinfo t;
+
+	pull(5060, total, &ci, &cfd, &afd, &lfd);
+	/* the other way: data sits unread for a while */
+	CHECK(t_send_pattern(&cs, cfd, 65536, 5, 16384) == 65536);
+	usleep(300000);
+	rt_api_shutdown(&cs, cfd, 1);
+	got = t_recv_pattern(&ss, afd, 5, &bad, 32768);
+	CHECK(got == 65536 && bad == 0);
+	usleep(100000);
+	t_get_info(&cs, cfd, &ci);
+	t_get_info(&ss, afd, &si);
+	CHECKV(ci.tcpi_data_segs_in > 0 && ci.tcpi_data_segs_in <= ci.tcpi_segs_in, "data_segs_in %u segs_in %u",
+	       ci.tcpi_data_segs_in, ci.tcpi_segs_in);
+	CHECKV(ci.tcpi_acks_out > 0 && ci.tcpi_acks_out <= ci.tcpi_data_segs_in + 8, "acks_out %u data_segs_in %u",
+	       ci.tcpi_acks_out, ci.tcpi_data_segs_in);
+	CHECK(ci.tcpi_delayed_acks_out <= ci.tcpi_acks_out);
+	CHECKV(si.tcpi_data_segs_out + 1 >= ci.tcpi_data_segs_in, "out %u in %u", si.tcpi_data_segs_out,
+	       ci.tcpi_data_segs_in);
+	CHECKV(si.tcpi_unread_ms >= 250, "server unread %u ms", si.tcpi_unread_ms);
+	CHECKV(ci.tcpi_rcvbuf > 0 && ci.tcpi_sndbuf > 0, "rcvbuf %u sndbuf %u", ci.tcpi_rcvbuf, ci.tcpi_sndbuf);
+	CHECK(ci.tcpi_rto_timeouts == 0 && ci.tcpi_fast_recoveries == 0);
+	/* the table carries the same counters, 64-bit byte counts included */
+	CHECK(find_tcpinfo(local_port(&cs, cfd), 5060, &t));
+	CHECKV(t.bytes_received_lo == total && t.bytes_received_hi == 0, "rx %u", t.bytes_received_lo);
+	CHECKV(t.bytes_acked_lo == 65536, "acked %u", t.bytes_acked_lo);
+	CHECK(t.family == RT_AF_INET && t.faddr[10] == 0xff && t.faddr[12] == 127);
+	CHECK(t.acks_out >= ci.tcpi_acks_out && t.data_segs_in == ci.tcpi_data_segs_in);
+	CHECKV(t.age_ms >= 300 && t.age_ms < 60000, "age %u", t.age_ms);
+	CHECKV(!strcmp(t.cc, "cubic") || !strcmp(t.cc, "reno"), "cc %s", t.cc);
+	CHECK(find_tcpinfo(5060, 0, &t) && t.state == RT_TCPS_LISTEN);
+	printf("tcpinfo: client rx %u data segs, %u ACKs (%u delayed), server unread %u ms\n",
+	       ci.tcpi_data_segs_in, ci.tcpi_acks_out, ci.tcpi_delayed_acks_out, si.tcpi_unread_ms);
+	rt_api_close(&cs, cfd);
+	rt_api_close(&ss, afd);
+	rt_api_close(&ss, lfd);
+}
+
+/* net.inet.tcp.delack_segs / quickack: ACKs per data segment received.
+ * The sender paces full segments 1 ms apart and a reader thread empties
+ * the queue in between, as a receiving application that keeps up does. */
+static void *drain_thread(void *p)
+{
+	static u8 buf[65536];
+	int fd = *(int *)p;
+
+	while (rt_api_recv(&cs, fd, buf, sizeof(buf), 0) > 0)
+		;
+	return NULL;
+}
+
+static double ack_ratio(u16 port, const char *segs, const char *quick)
+{
+	static u8 buf[1460];
+	int lfd, cfd, afd, k, sent = 0;
+	struct rt_tcp_info t0, t1;
+	u32 segs_in, acks;
+	pthread_t th;
+	double ratio;
+
+	rt_lock();
+	CHECK(rt_sysctl_set_text("net.inet.tcp.delack_segs", segs) == 0);
+	CHECK(rt_sysctl_set_text("net.inet.tcp.quickack", quick) == 0);
+	/* no SACK, no tail loss probes: on loopback a probe beats the
+	 * delayed ACK timer, and the duplicate it causes means quick ACKs */
+	rt_sysctl_set_text("net.inet.tcp.sack", "0");
+	rt_unlock();
+	lfd = listen_on(&ss, port, 5);
+	cfd = rt_api_socket(&cs, RT_AF_INET, RT_SOCK_STREAM, 0);
+	t_set_int(&cs, cfd, RT_IPPROTO_TCP, RT_TCP_MAXSEG, 1460);     /* Ethernet-sized */
+	{
+		struct rt_sockaddr_in a = t_sa(LO, port);
+		CHECK(rt_api_connect(&cs, cfd, &a, sizeof(a)) == 0);
+	}
+	afd = accept_wait(&ss, lfd, 2000);
+	CHECK(lfd >= 0 && cfd >= 0 && afd >= 0);
+	t_set_nbio(&ss, afd, 0);
+	t_set_int(&ss, afd, RT_IPPROTO_TCP, RT_TCP_NODELAY, 1);
+	t_get_info(&ss, afd, &t0);
+	pthread_create(&th, NULL, drain_thread, &cfd);
+	memset(buf, 0x5a, sizeof(buf));
+	for (k = 0; k < 400; k++) {
+		if (k == 40) {
+			usleep(300000);                   /* delayed ACK timer, then */
+			t_get_info(&cs, cfd, &t0);        /* past the initial quick ACKs */
+		}
+		sent += rt_api_send(&ss, afd, buf, t0.tcpi_snd_mss ? t0.tcpi_snd_mss : 1448, 0) > 0;
+		usleep(1000);
+	}
+	CHECKV(sent == 400, "sent %d", sent);
+	usleep(300000);
+	t_get_info(&cs, cfd, &t1);
+	rt_api_shutdown(&ss, afd, 1);
+	pthread_join(th, NULL);
+	rt_api_close(&cs, cfd);
+	rt_api_close(&ss, afd);
+	rt_api_close(&ss, lfd);
+	segs_in = t1.tcpi_data_segs_in - t0.tcpi_data_segs_in;
+	acks = t1.tcpi_acks_out - t0.tcpi_acks_out;
+	ratio = segs_in ? (double)acks / segs_in : 0;
+	printf("delack_segs %s quickack %s: %u data segs, %u ACKs (%u delayed): %.2f ACKs/seg\n", segs, quick,
+	       segs_in, acks, t1.tcpi_delayed_acks_out - t0.tcpi_delayed_acks_out, ratio);
+	return ratio;
+}
+
+static void test_delack(void)
+{
+	double r1, r2, r4, rq;
+
+	r2 = ack_ratio(5061, "2", "0");
+	r1 = ack_ratio(5062, "1", "0");
+	r4 = ack_ratio(5063, "4", "0");
+	rq = ack_ratio(5064, "4", "1");
+	rt_lock();
+	rt_sysctl_set_text("net.inet.tcp.delack_segs", "2");
+	rt_sysctl_set_text("net.inet.tcp.quickack", "0");
+	rt_sysctl_set_text("net.inet.tcp.sack", "1");
+	CHECK(rt_sysctl_set_text("net.inet.tcp.delack_segs", "0") != 0);
+	CHECK(rt_sysctl_set_text("net.inet.tcp.delack_ms", "100") == 0);
+	CHECK(rt_sysctl_set_text("net.inet.tcp.delack_ms", "200") == 0);
+	rt_unlock();
+	CHECKV(r1 >= 0.8, "delack_segs 1: %.2f", r1);
+	CHECKV(rq >= 0.8, "quickack: %.2f", rq);
+	CHECKV(r2 >= 0.4 && r2 <= 0.75, "delack_segs 2: %.2f", r2);
+	CHECKV(r4 >= 0.18 && r4 <= 0.45, "delack_segs 4: %.2f", r4);
 }
 
 /* listen backlog overflow: SYN cookies, nothing lost */
@@ -637,6 +867,8 @@ int main(int argc, char **argv)
 	test_time_wait();
 	test_oob();
 	test_zero_window();
+	test_tcpinfo();
+	test_delack();
 	test_backlog();
 	test_many();
 	test_simultaneous_open();

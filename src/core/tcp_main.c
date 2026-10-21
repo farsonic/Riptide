@@ -38,6 +38,9 @@ s32 sysctl_tcp_mssdflt = TCP_MSS_DEFAULT;
 s32 sysctl_tcp_keepidle = 7200;
 s32 sysctl_tcp_keepintvl = 75;
 s32 sysctl_tcp_max_tw = 1024;
+s32 sysctl_tcp_delack_segs = 2;
+s32 sysctl_tcp_delack_ms = TCP_DELACK_MAX;
+s32 sysctl_tcp_quickack = 0;
 char sysctl_tcp_cc[16] = "cubic";
 
 u32 tcp_orphan_count;
@@ -581,12 +584,34 @@ void tcp_reap(void)
 	}
 }
 
+/* ---- chronographs (Linux tcp_chrono_set / tcp_chrono_stop) ---- */
+void tcp_chrono_set(struct tcp_sock *tp, u8 type)
+{
+	u32 now = tcp_jiffies();
+
+	if (tp->dg.chrono_type > TCP_CHRONO_NONE)
+		tp->dg.chrono_stat[tp->dg.chrono_type - 1] += now - tp->dg.chrono_start;
+	tp->dg.chrono_start = now;
+	tp->dg.chrono_type = type;
+}
+
+void tcp_chrono_stop(struct tcp_sock *tp, u8 type)
+{
+	if (!tp->packets_out && !tp->send_head)
+		tcp_chrono_set(tp, TCP_CHRONO_NONE);
+	else if (type == tp->dg.chrono_type)
+		tcp_chrono_set(tp, TCP_CHRONO_BUSY);
+}
+
 void tcp_set_state(struct tcp_sock *tp, int state)
 {
 	int old = tp->state;
 
-	if (state == RT_TCPS_ESTABLISHED && old != RT_TCPS_ESTABLISHED)
+	if (state == RT_TCPS_ESTABLISHED && old != RT_TCPS_ESTABLISHED) {
 		rt_tcpstat.CurrEstab++;
+		if (!tp->dg.estab_ms)
+			tp->dg.estab_ms = tcp_diag_now();
+	}
 	if (old == RT_TCPS_ESTABLISHED && state != RT_TCPS_ESTABLISHED && rt_tcpstat.CurrEstab)
 		rt_tcpstat.CurrEstab--;
 	if (state == RT_TCPS_CLOSED) {
@@ -733,7 +758,9 @@ void tcp_cleanup_rbuf(struct tcp_sock *tp, int copied)
 	    tp->state == RT_TCPS_SYN_SENT)
 		return;
 	if (tp->ack.pending & ICSK_ACK_SCHED) {
-		if (tp->rcv_nxt - tp->rcv_wup > tp->ack.rcv_mss ||
+		/* once per net.inet.tcp.delack_segs segments, if tcp_input.c did not */
+		if (tp->rcv_nxt - tp->rcv_wup > (u32)(sysctl_tcp_delack_segs - 1) * tp->ack.rcv_mss ||
+		    sysctl_tcp_quickack ||
 		    (copied > 0 &&
 		     ((tp->ack.pending & ICSK_ACK_PUSHED2) ||
 		      ((tp->ack.pending & ICSK_ACK_PUSHED) && !tp->pingpong)) &&
@@ -777,6 +804,8 @@ void tcp_check_space(struct tcp_sock *tp)
 	/* Linux tcp_new_space(): grow the buffer when cwnd is not the limit */
 	if (tcp_packets_in_flight(tp) < tp->snd_cwnd && tp->state == RT_TCPS_ESTABLISHED)
 		tcp_sndbuf_expand(tp);
+	if (tp->dg.chrono_type == TCP_CHRONO_SNDBUF && tcp_stream_is_writeable(tp))
+		tcp_chrono_stop(tp, TCP_CHRONO_SNDBUF);
 	if (tp->so && tp->write_space_wanted && tcp_stream_is_writeable(tp)) {
 		tp->write_space_wanted = 0;
 		rt_sock_wakeup(tp->so, RT_SEV_WRITE);
@@ -1166,8 +1195,10 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 		u32 space = used < tp->sndbuf ? tp->sndbuf - used : 0;
 		u32 copy = 0;
 
-		if (space == 0)
+		if (space == 0) {
+			tcp_chrono_start(tp, TCP_CHRONO_SNDBUF);
 			break;
+		}
 		if (skb && tp->send_head && skb->len < mss_now &&
 		    !(TCP_SKB_CB(skb)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN)) &&
 		    !TCP_SKB_CB(skb)->eor) {
@@ -1185,6 +1216,7 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 			if (!tp->send_head)
 				tp->send_head = skb;
 			tp->wmem_queued += tcp_buf_truesize(skb);
+			tcp_chrono_start(tp, TCP_CHRONO_BUSY);
 			copy = mss_now;
 			if (copy > rt_buf_tailroom(skb))
 				copy = rt_buf_tailroom(skb);
@@ -1344,6 +1376,7 @@ skip_copy:
 		tp->copied_seq = seq;
 	if (copied) {
 		if (!peek) {
+			tcp_diag_unread_stop(tp);
 			tcp_rcv_space_adjust(tp);
 			tcp_cleanup_rbuf(tp, (int)copied);
 		}
@@ -1416,8 +1449,134 @@ out:
 	return err;
 }
 
+/* Chronograph and receive-side times up to now (ms) */
+struct tcp_diag_times {
+	u32 busy, rwnd, sndbuf, unread, zwin;
+};
+
+static void tcp_diag_times(const struct tcp_sock *tp, struct tcp_diag_times *t)
+{
+	u32 now = tcp_jiffies(), st[3];
+
+	st[0] = tp->dg.chrono_stat[0];
+	st[1] = tp->dg.chrono_stat[1];
+	st[2] = tp->dg.chrono_stat[2];
+	if (tp->dg.chrono_type > TCP_CHRONO_NONE)
+		st[tp->dg.chrono_type - 1] += now - tp->dg.chrono_start;
+	t->busy = st[0] + st[1] + st[2];
+	t->rwnd = st[1];
+	t->sndbuf = st[2];
+	t->unread = tp->dg.unread_ms + (tp->dg.unread_start && tp->rcvq_bytes ? now - tp->dg.unread_start : 0);
+	t->zwin = tp->dg.zwin_ms + (tp->dg.zwin_start ? now - tp->dg.zwin_start : 0);
+}
+
+static u32 tcp_ago(u32 then)
+{
+	return then ? tcp_jiffies() - then : 0;
+}
+
+static void tcp_fill_ctl_info(struct tcp_sock *tp, struct rt_ctl_tcpinfo *r)
+{
+	struct tcp_diag_times t;
+	const struct rt_buf *b;
+
+	memset(r, 0, sizeof(*r));
+	r->family = tp->family;
+	r->state = tp->state;
+	r->ca_state = tp->ca_state;
+	if (tp->rx_opt.tstamp_ok)
+		r->options |= RT_CTL_TCPI_TS;
+	if (tp->rx_opt.sack_ok)
+		r->options |= RT_CTL_TCPI_SACK;
+	if (tp->rx_opt.wscale_ok) {
+		r->options |= RT_CTL_TCPI_WSCALE;
+		r->snd_wscale = tp->rx_opt.snd_wscale;
+		r->rcv_wscale = tp->rx_opt.rcv_wscale;
+	}
+	if (tp->ecn_flags & TCP_ECN_OK)
+		r->options |= RT_CTL_TCPI_ECN;
+	r->backoff = tp->icsk_backoff;
+	r->lport = rt_ntohs(tp->sport);
+	r->fport = rt_ntohs(tp->dport);
+	memcpy(r->laddr, tp->saddr.b, 16);
+	memcpy(r->faddr, tp->daddr.b, 16);
+	r->srtt_us = tp->srtt_us >> 3;
+	r->rttvar_us = tp->mdev_us >> 2;
+	r->min_rtt_us = tcp_min_rtt(tp);
+	r->rto_us = tp->icsk_rto * 1000u;
+	r->snd_mss = tp->mss_cache;
+	r->rcv_mss = tp->ack.rcv_mss;
+	r->advmss = tp->advmss;
+	r->cwnd = tp->snd_cwnd;
+	r->ssthresh = tp->snd_ssthresh;
+	r->snd_wnd = tp->snd_wnd;
+	r->rcv_wnd = tp->rcv_wnd;
+	r->rcv_ssthresh = tp->rcv_ssthresh;
+	r->sndbuf = tp->sndbuf;
+	r->rcvbuf = tp->rcvbuf;
+	r->sendq = tp->state == RT_TCPS_LISTEN ? 0 : tp->write_seq - tp->snd_una;
+	r->recvq = tp->state == RT_TCPS_LISTEN ? tp->synq_len : tp->rcvq_bytes;
+	r->ofo_bytes = tp->ofo_bytes;
+	for (b = tp->ofoq.head; b; b = b->next)
+		r->ofo_segs++;
+	r->packets_out = tp->packets_out;
+	r->retrans_out = tp->retrans_out;
+	r->sacked_out = tp->sacked_out;
+	r->lost_out = tp->lost_out;
+	r->total_retrans = tp->total_retrans;
+	r->fast_recoveries = tp->dg.fast_recoveries;
+	r->rto_timeouts = tp->dg.rto_timeouts;
+	r->tlp_probes = tp->dg.tlp_probes;
+	r->dupacks_in = tp->dg.dupacks_in;
+	r->dupacks_out = tp->dg.dupacks_out;
+	r->sack_blocks_out = tp->dg.sack_blocks_out;
+	r->acks_out = tp->dg.acks_out;
+	r->delayed_acks_out = tp->dg.delayed_acks_out;
+	r->zwin_out = tp->dg.zwin_out;
+	r->zwin_in = tp->dg.zwin_in;
+	r->segs_in = tp->segs_in;
+	r->segs_out = tp->segs_out;
+	r->data_segs_in = tp->data_segs_in;
+	r->data_segs_out = tp->data_segs_out;
+	r->bytes_received_hi = (u32)(tp->bytes_received >> 32);
+	r->bytes_received_lo = (u32)tp->bytes_received;
+	r->bytes_acked_hi = (u32)(tp->bytes_acked >> 32);
+	r->bytes_acked_lo = (u32)tp->bytes_acked;
+	tcp_diag_times(tp, &t);
+	r->busy_ms = t.busy;
+	r->rwnd_limited_ms = t.rwnd;
+	r->sndbuf_limited_ms = t.sndbuf;
+	r->unread_ms = t.unread;
+	r->zwin_ms = t.zwin;
+	r->age_ms = tcp_ago(tp->dg.estab_ms);
+	if (tp->bytes_received)
+		r->last_data_recv_ago = tcp_ago(tp->ack.lrcvtime);
+	if (tp->data_segs_out)
+		r->last_data_sent_ago = tcp_ago(tp->lsndtime);
+	r->last_ack_recv_ago = tcp_ago(tp->rcv_tstamp);
+	rt_strlcpy(r->cc, tp->ca_ops ? tp->ca_ops->name : "", sizeof(r->cc));
+}
+
+/* net.riptide.tcpinfo (ctl.c): returns the total count */
+int rt_tcp_info_list(struct rt_ctl_tcpinfo *out, int max)
+{
+	struct tcp_sock *tp;
+	int n = 0;
+
+	for (tp = tcp_all; tp; tp = tp->all_next) {
+		if (tp->destroyed)
+			continue;
+		if (n < max && out)
+			tcp_fill_ctl_info(tp, &out[n]);
+		n++;
+	}
+	return n;
+}
+
 static void tcp_get_info(struct tcp_sock *tp, struct rt_tcp_info *info)
 {
+	struct tcp_diag_times t;
+
 	memset(info, 0, sizeof(*info));
 	info->tcpi_state = tp->state;
 	info->tcpi_ca_state = tp->ca_state;
@@ -1456,6 +1615,27 @@ static void tcp_get_info(struct tcp_sock *tp, struct rt_tcp_info *info)
 	info->tcpi_segs_in = tp->segs_in;
 	info->tcpi_reordering = tp->reordering;
 	rt_strlcpy(info->tcpi_ca_name, tp->ca_ops->name, sizeof(info->tcpi_ca_name));
+	tcp_diag_times(tp, &t);
+	info->tcpi_busy_ms = t.busy;
+	info->tcpi_rwnd_limited_ms = t.rwnd;
+	info->tcpi_sndbuf_limited_ms = t.sndbuf;
+	info->tcpi_unread_ms = t.unread;
+	info->tcpi_zwin_ms = t.zwin;
+	info->tcpi_fast_recoveries = tp->dg.fast_recoveries;
+	info->tcpi_rto_timeouts = tp->dg.rto_timeouts;
+	info->tcpi_tlp_probes = tp->dg.tlp_probes;
+	info->tcpi_dupacks_in = tp->dg.dupacks_in;
+	info->tcpi_dupacks_out = tp->dg.dupacks_out;
+	info->tcpi_sack_blocks_out = tp->dg.sack_blocks_out;
+	info->tcpi_acks_out = tp->dg.acks_out;
+	info->tcpi_delayed_acks_out = tp->dg.delayed_acks_out;
+	info->tcpi_zwin_out = tp->dg.zwin_out;
+	info->tcpi_zwin_in = tp->dg.zwin_in;
+	info->tcpi_data_segs_in = tp->data_segs_in;
+	info->tcpi_data_segs_out = tp->data_segs_out;
+	info->tcpi_ofo_bytes = tp->ofo_bytes;
+	info->tcpi_rcvbuf = tp->rcvbuf;
+	info->tcpi_sndbuf = tp->sndbuf;
 }
 
 static int get_int(const void *val, u32 len, s32 *out)
@@ -1956,6 +2136,9 @@ static const struct rt_sysctl tcp_sysctls[] = {
 	INT_RW("net.inet.tcp.slow_start_after_idle", NO_MIB, sysctl_tcp_slow_start_after_idle, 0, 1, "Restart cwnd after idle"),
 	INT_RW("net.inet.tcp.max_orphans", NO_MIB, sysctl_tcp_max_orphans, 0, 65536, "Max orphaned connections"),
 	INT_RW("net.inet.tcp.max_tw_buckets", NO_MIB, sysctl_tcp_max_tw, 0, 65536, "Max TIME_WAIT records"),
+	INT_RW("net.inet.tcp.delack_segs", NO_MIB, sysctl_tcp_delack_segs, 1, 64, "ACK every N full segments"),
+	INT_RW("net.inet.tcp.delack_ms", NO_MIB, sysctl_tcp_delack_ms, 1, 500, "Max delayed ACK time (ms)"),
+	INT_RW("net.inet.tcp.quickack", NO_MIB, sysctl_tcp_quickack, 0, 1, "ACK every segment at once"),
 };
 
 void rt_tcp_init(void)
