@@ -6,8 +6,12 @@
  * The device is opened with buffer management callbacks that copy straight
  * into and out of rt_bufs (ios2_Data points at the rt_buf). The callbacks
  * may run in the driver's interrupt code, so they only copy. Ethernet-like
- * devices get 8 CMD_READs for IPv4 and 4 for ARP; point-to-point devices
- * (PPP, SLIP: HardwareType != Ethernet) only the IPv4 ones. Cooked mode is
+ * devices get 8 CMD_READs for IPv4, 4 for ARP and 4 for IPv6; point-to-point
+ * devices (PPP, SLIP: HardwareType != Ethernet) the IPv4 and IPv6 ones.
+ * IPv6 multicast groups (solicited-node, all-nodes, MLD joins) are passed to
+ * the driver with S2_ADDMULTICASTADDRESS / S2_DELMULTICASTADDRESS; the core
+ * asks under the stack lock from any task, so the requests are queued and
+ * issued by the Riptide process in sana2_poll. Cooked mode is
  * the default; "raw" makes Riptide build and strip the Ethernet header
  * itself (SANA2IOF_RAW). All replies come to a port of the Riptide process,
  * which processes them under the stack lock (sana2_poll).
@@ -17,6 +21,8 @@
 
 #define S2_READS_IP   8
 #define S2_READS_ARP  4
+#define S2_READS_IP6  4
+#define S2_MCQ        16             /* queued multicast filter changes */
 #define S2_MAX_WRITES 32
 #define S2_RX_HEADROOM 64
 #define ETH_HLEN 14
@@ -50,6 +56,10 @@ struct s2if {
 	int    want_online;          /* request from RiptideOnOffline */
 	struct rt_timer retry;
 	u32    rx_errors;
+	/* multicast filter changes waiting for the Riptide process */
+	struct { u8 hw[6]; u8 join; } mcq[S2_MCQ];
+	int    mcq_n;
+	int    mc_unsupported;      /* driver said S2ERR_NOT_SUPPORTED: warned */
 };
 
 /* ---- buffer management callbacks (may be called from interrupts) ---- */
@@ -227,6 +237,59 @@ static void s2_write_done(struct s2if *si, struct s2req *r)
 	si->wfree = r;
 }
 
+/* rt_netif mcast hook: lock held, any task. Queue for sana2_poll. */
+static int sana2_mcast(struct rt_netif *nif, const u8 *hw, int join)
+{
+	struct s2if *si = nif->driver;
+	int i;
+
+	if (!si->ether || nif->hwlen != 6)
+		return 0;
+	/* a pending opposite request for the same address cancels out */
+	for (i = 0; i < si->mcq_n; i++) {
+		if (!memcmp(si->mcq[i].hw, hw, 6) && si->mcq[i].join != (u8)join) {
+			si->mcq_n--;
+			memmove(&si->mcq[i], &si->mcq[i + 1], (u32)(si->mcq_n - i) * sizeof(si->mcq[0]));
+			return 0;
+		}
+	}
+	if (si->mcq_n >= S2_MCQ) {
+		rt_log(RT_LOG_WARN, "%s: multicast filter queue full", nif->name);
+		return -RT_ENOBUFS;
+	}
+	memcpy(si->mcq[si->mcq_n].hw, hw, 6);
+	si->mcq[si->mcq_n].join = (u8)join;
+	si->mcq_n++;
+	rt_kick();
+	return 0;
+}
+
+/* lock held (dropped around the device calls) */
+static void s2_mcast_flush(struct s2if *si)
+{
+	while (si->mcq_n > 0 && si->dev_open) {
+		u8 hw[6], join = si->mcq[0].join;
+		LONG e;
+		memcpy(hw, si->mcq[0].hw, 6);
+		si->mcq_n--;
+		memmove(&si->mcq[0], &si->mcq[1], (u32)si->mcq_n * sizeof(si->mcq[0]));
+		rt_unlock();
+		memset(si->ctl->ios2_SrcAddr, 0, sizeof(si->ctl->ios2_SrcAddr));
+		memcpy(si->ctl->ios2_SrcAddr, hw, 6);
+		e = s2_ctl(si, join ? S2_ADDMULTICASTADDRESS : S2_DELMULTICASTADDRESS);
+		rt_lock();
+		if (e == S2ERR_NOT_SUPPORTED) {
+			if (!si->mc_unsupported)
+				rt_log(RT_LOG_WARN, "%s: driver has no multicast filter: IPv6 neighbour "
+				       "discovery may not work", si->ai.nif.name);
+			si->mc_unsupported = 1;
+		} else if (e && join) {
+			rt_log(RT_LOG_WARN, "%s: S2_ADDMULTICASTADDRESS failed: %s/%s", si->ai.nif.name,
+			       amiga_s2err_str(e), amiga_s2werr_str((LONG)si->ctl->ios2_WireError));
+		}
+	}
+}
+
 /* lock held */
 static void sana2_poll(struct amiga_if *ai)
 {
@@ -239,6 +302,8 @@ static void sana2_poll(struct amiga_if *ai)
 		else
 			s2_write_done(si, r);
 	}
+	if (si->mcq_n)
+		s2_mcast_flush(si);
 	if (si->want_online >= 0 && si->dev_open) {
 		int want = si->want_online;
 		LONG e;
@@ -315,7 +380,10 @@ static int sana2_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw,
 		}
 		if (dsthw) {
 			memcpy(r->io.ios2_DstAddr, dsthw, nif->hwlen);
-			r->io.ios2_Req.io_Command = CMD_WRITE;
+			/* SANA-II wants S2_MULTICAST for group addresses; IPv4
+			 * keeps CMD_WRITE as before */
+			r->io.ios2_Req.io_Command = ethertype == RT_ETH_P_IPV6 && (dsthw[0] & 1) ?
+			                            S2_MULTICAST : CMD_WRITE;
 		} else {
 			r->io.ios2_Req.io_Command = S2_BROADCAST;
 		}
@@ -479,6 +547,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		nif->hwlen = 0;
 	}
 	nif->link_output = sana2_output;
+	nif->mcast = sana2_mcast;
 	nif->driver = si;
 
 	rt_lock();
@@ -491,12 +560,13 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	}
 	if (si->ai.online)
 		nif->flags |= RT_IFF_RUNNING;
-	nreads = S2_READS_IP + (si->ether ? S2_READS_ARP : 0);
+	nreads = S2_READS_IP + S2_READS_IP6 + (si->ether ? S2_READS_ARP : 0);
 	for (i = 0; i < nreads; i++) {
 		r = s2_newreq(si, REQ_READ);
 		if (!r)
 			break;
-		r->io.ios2_PacketType = i < S2_READS_IP ? RT_ETH_P_IP : RT_ETH_P_ARP;
+		r->io.ios2_PacketType = i < S2_READS_IP ? RT_ETH_P_IP :
+		                        i < S2_READS_IP + S2_READS_IP6 ? RT_ETH_P_IPV6 : RT_ETH_P_ARP;
 		s2_submit_read(si, r);
 	}
 	si->ai.next = amiga_ifs;

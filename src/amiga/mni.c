@@ -9,7 +9,10 @@
  * driver's interrupt code. Receive is zero copy: the driver writes frames
  * straight into rt_bufs taken from a pre-filled pool. The callbacks only
  * move records between lists under Disable() and Signal() the Riptide
- * process, which feeds the stack under the lock (mni_poll).
+ * process, which feeds the stack under the lock (mni_poll). IPv6 is added
+ * as a third packet type; its multicast groups go to the driver's hash
+ * filter with AddMulticast/RemMulticast (-78/-84), called directly like
+ * Send, under the stack lock.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
@@ -268,6 +271,22 @@ static void mni_set_online(struct amiga_if *ai, int online)
 	((struct mniif *)ai)->want_online = online;
 }
 
+/* rt_netif mcast hook: lock held */
+static int mni_mcast(struct rt_netif *nif, const u8 *hw, int join)
+{
+	struct mniif *mi = nif->driver;
+	UBYTE a[6];
+	LONG e;
+
+	if (!mi->handle)
+		return -RT_ENETDOWN;
+	memcpy(a, hw, 6);
+	e = join ? MNI_AddMulticast(mi->base, mi->handle, a) : MNI_RemMulticast(mi->base, mi->handle, a);
+	if (e && join)
+		rt_log(RT_LOG_WARN, "%s: MNI AddMulticast failed (%ld)", nif->name, (long)e);
+	return 0;
+}
+
 static int mni_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
 	struct mniif *mi = nif->driver;
@@ -446,6 +465,8 @@ int mni_open_if(const char *name, const char *driver, ULONG unit, const char *op
 	memcpy(nif->hwaddr, memcmp(current, "\0\0\0\0\0\0", 6) ? current : factory, 6);
 	MNI_AddPacketType(mi->base, mi->handle, RT_ETH_P_IP);
 	MNI_AddPacketType(mi->base, mi->handle, RT_ETH_P_ARP);
+	MNI_AddPacketType(mi->base, mi->handle, RT_ETH_P_IPV6);
+	nif->mcast = mni_mcast;
 	e = MNI_Online(mi->base, mi->handle);
 	mi->ai.online = e == 0;
 	if (e)
