@@ -69,6 +69,7 @@ SMALL="--download-sizes 350,500 --upload-sizes 32,64 --count 2 --duration 60"
 cat > "$work/test.fs-uae" <<CFG
 [fs-uae]
 amiga_model = ${FSUAE_MODEL:-A1200}
+fast_memory = ${FSUAE_FAST:-8192}
 ${FSUAE_EXTRA:-}
 hard_drive_0 = $dh0
 hard_drive_0_label = DH0

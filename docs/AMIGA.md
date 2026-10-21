@@ -15,6 +15,11 @@ these libraries:
 `docs/COMPARISON.md` compares Riptide with that historical stack and with
 Roadshow, feature by feature.
 
+**Memory.** The `Riptide` program is about 450 KB, and with IPv6 it needs
+roughly 0.6–1 MB at run time, mostly packet buffers (48 receive buffers per
+interface by default, see `reads=`). Fast RAM is strongly recommended: a 2 MB
+Chip-RAM-only A1200 can run it, but leaves little room for other programs.
+
 Riptide runs as one ordinary CLI process. That process owns the timers and
 the network drivers. Socket calls run in the calling program's own task,
 under one exec semaphore (the stack lock).
