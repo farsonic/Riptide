@@ -1,0 +1,439 @@
+diff --git a/Makefile.am b/Makefile.am
+index 234a66e..93af29c 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -312,6 +312,7 @@ libuae_a_SOURCES = \
+ 	src/driveclick.cpp \
+ 	src/enforcer.cpp \
+ 	src/ethernet.cpp \
++	src/uaenet_pcap.cpp \
+ 	src/events.cpp \
+ 	src/expansion.cpp \
+ 	src/fake86_cpu.cpp \
+@@ -875,6 +876,7 @@ noinst_LIBRARIES += libslirp.a
+ AM_CPPFLAGS += -I$(s)/src/slirp/include
+ fs_uae_LDADD += libslirp.a
+ LIBS += @SLIRP_LIBS@
++LIBS += @PCAP_LIBS@
+ libslirp_a_SOURCES = \
+ 	slirp/src/arp_table.c \
+ 	slirp/src/bootp.c \
+diff --git a/configure.ac b/configure.ac
+index 32a57b6..b8ec35c 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -775,6 +775,22 @@ OPT_FEATURE([SERIAL_PORT], [serial_port], [serial-port],
+             [serial port emulation])
+ OPT_FEATURE([WITH_SLIRP], [slirp], [slirp],
+             [SLIRP (user mode NAT)])
++
++# uaenet.device / A2065 bridged to a host network interface (libpcap)
++AC_ARG_ENABLE([uaenet-pcap], [AS_HELP_STRING([--disable-uaenet-pcap],
++              [uaenet.device bridged to host network interfaces (libpcap)])])
++PCAP_LIBS=
++AS_IF([test x$enable_uaenet_pcap != xno], [
++    AC_CHECK_HEADER([pcap.h], [
++        AC_CHECK_LIB([pcap], [pcap_create], [
++            AC_DEFINE([WITH_UAENET_PCAP], [1], [uaenet.device bridged through libpcap])
++            PCAP_LIBS=-lpcap
++        ])
++    ])
++    AS_IF([test x$enable_uaenet_pcap = xyes && test "x$PCAP_LIBS" = x],
++          [AC_MSG_ERROR([--enable-uaenet-pcap: libpcap not found])])
++])
++AC_SUBST([PCAP_LIBS])
+ OPT_FEATURE([WITH_SOFTFLOAT], [softfloat], [softfloat],
+             [use softfloat library])
+ OPT_FEATURE([WITH_QEMU_CPU], [qemu_cpu], [qemu-cpu],
+diff --git a/src/ethernet.cpp b/src/ethernet.cpp
+index 115aa5a..3edff26 100644
+--- a/src/ethernet.cpp
++++ b/src/ethernet.cpp
+@@ -8,6 +8,9 @@
+ #include "win32_uaenet.h"
+ #endif
+ #endif
++#if defined(FSUAE) && defined(WITH_UAENET_PCAP)
++#include "uaenet_pcap.h"
++#endif
+ #include "threaddep/thread.h"
+ #include "options.h"
+ #include "sana2.h"
+diff --git a/src/include/uaenet_pcap.h b/src/include/uaenet_pcap.h
+new file mode 100644
+index 0000000..662d3d6
+--- /dev/null
++++ b/src/include/uaenet_pcap.h
+@@ -0,0 +1,18 @@
++#ifndef UAE_UAENET_PCAP_H
++#define UAE_UAENET_PCAP_H
++
++/* uaenet.device / A2065 bridged to a host interface through libpcap
++ * (src/uaenet_pcap.cpp); the same entry points as WinUAE's win32_uaenet */
++
++#include "ethernet.h"
++
++struct netdriverdata *uaenet_enumerate(const TCHAR *name);
++void uaenet_enumerate_free(void);
++void uaenet_close_driver(struct netdriverdata *ndd);
++int uaenet_getdatalenght(void);
++int uaenet_open(void *vsd, struct netdriverdata *ndd, void *user, ethernet_gotfunc *gotfunc,
++                ethernet_getfunc *getfunc, int promiscuous);
++void uaenet_close(void *vsd);
++void uaenet_trigger(void *vsd);
++
++#endif
+diff --git a/src/uaenet_pcap.cpp b/src/uaenet_pcap.cpp
+new file mode 100644
+index 0000000..d527916
+--- /dev/null
++++ b/src/uaenet_pcap.cpp
+@@ -0,0 +1,348 @@
++/*
++ * FS-UAE: uaenet.device / A2065 bridged to a host network interface
++ * through libpcap (macOS, Linux, BSD). The emulated Amiga appears on the
++ * host's LAN with its own MAC address: it gets its IPv4 address from the
++ * LAN's DHCP server and its IPv6 addresses from the router, no NAT.
++ *
++ * Interfaces offered: the .fs-uae option uaenet_pcap = en0[,en1...]
++ * (also the environment variable FSUAE_UAENET_PCAP), else every
++ * interface that is up, not loopback and has an address. uaenet.device
++ * units 0 and 1 stay slirp and slirp_inbound; the pcap interfaces follow
++ * as units 2, 3, ... (the log lists them). For the A2065 card: a2065 =
++ * en0 (uae_a2065 = en0).
++ *
++ * The Amiga's MAC address: uaenet_pcap_mac = 02:xx:xx:xx:xx:xx, else the
++ * host interface's address with the locally administered bit set (and
++ * one byte changed if it already was set).
++ *
++ * Capturing and sending raw frames needs privileges: root, or read/write
++ * access to /dev/bpf* on macOS (Wireshark's ChmodBPF), CAP_NET_RAW on
++ * Linux. Wi-Fi usually refuses frames from a second MAC address: use a
++ * wired interface.
++ *
++ * GPL-2.0 (as FS-UAE)
++ */
++
++#include "sysconfig.h"
++#include "sysdeps.h"
++
++#ifdef WITH_UAENET_PCAP
++
++#include "ethernet.h"
++#include "uaenet_pcap.h"
++#include "sana2.h"
++#include "threaddep/thread.h"
++
++#include <pcap.h>
++#include <string.h>
++#include <stdlib.h>
++#include <ifaddrs.h>
++#include <net/if.h>
++#include <sys/socket.h>
++#ifdef __APPLE__
++#include <net/if_dl.h>
++#endif
++#ifdef __linux__
++#include <netpacket/packet.h>
++#endif
++#ifdef FSUAE
++#include <fs/conf.h>
++#endif
++
++#define PCAP_MAX_IFS 8          /* units 2..9 */
++
++struct uaenet_pcap_data {
++	pcap_t *pcap;
++	struct netdriverdata *ndd;
++	ethernet_gotfunc *gotfunc;
++	ethernet_getfunc *getfunc;
++	void *user;
++	volatile int active;
++	uae_thread_id tid;
++	uae_sem_t done;
++	uae_sem_t txlock;
++};
++
++static struct netdriverdata pcapd[MAX_TOTAL_NET_DEVICES];
++static TCHAR pcap_names[MAX_TOTAL_NET_DEVICES][64];
++static TCHAR pcap_descs[MAX_TOTAL_NET_DEVICES][128];
++static int pcap_enumerated;
++
++static const char *option(const char *key, const char *env)
++{
++	const char *v = NULL;
++#ifdef FSUAE
++	v = fs_config_get_const_string(key);
++#endif
++	if (!v || !*v)
++		v = getenv(env);
++	return v && *v ? v : NULL;
++}
++
++static int parse_mac(const char *s, uae_u8 *mac)
++{
++	unsigned int b[6];
++	if (!s || sscanf(s, "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) != 6)
++		return 0;
++	for (int i = 0; i < 6; i++)
++		mac[i] = (uae_u8)b[i];
++	return 1;
++}
++
++/* the host interface's MAC address, 0 if unknown */
++static int host_mac(const char *ifname, uae_u8 *mac)
++{
++	struct ifaddrs *ifa, *p;
++	int found = 0;
++
++	if (getifaddrs(&ifa) != 0)
++		return 0;
++	for (p = ifa; p && !found; p = p->ifa_next) {
++		if (!p->ifa_addr || strcmp(p->ifa_name, ifname))
++			continue;
++#ifdef __APPLE__
++		if (p->ifa_addr->sa_family == AF_LINK) {
++			struct sockaddr_dl *sdl = (struct sockaddr_dl *)p->ifa_addr;
++			if (sdl->sdl_alen == 6) {
++				memcpy(mac, LLADDR(sdl), 6);
++				found = 1;
++			}
++		}
++#endif
++#ifdef __linux__
++		if (p->ifa_addr->sa_family == AF_PACKET) {
++			struct sockaddr_ll *sll = (struct sockaddr_ll *)p->ifa_addr;
++			if (sll->sll_halen == 6) {
++				memcpy(mac, sll->sll_addr, 6);
++				found = 1;
++			}
++		}
++#endif
++	}
++	freeifaddrs(ifa);
++	return found;
++}
++
++static void amiga_mac(const char *ifname, uae_u8 *mac)
++{
++	uae_u8 h[6];
++
++	if (parse_mac(option("uaenet_pcap_mac", "FSUAE_UAENET_PCAP_MAC"), mac))
++		return;
++	if (!host_mac(ifname, h)) {
++		/* no hardware address: one from the name */
++		unsigned int x = 5381;
++		for (const char *c = ifname; *c; c++)
++			x = x * 33 + (unsigned char)*c;
++		h[0] = 0x02; h[1] = 0x55; h[2] = 0x41;
++		h[3] = (uae_u8)(x >> 16); h[4] = (uae_u8)(x >> 8); h[5] = (uae_u8)x;
++	}
++	memcpy(mac, h, 6);
++	mac[0] = (uae_u8)((mac[0] | 0x02) & ~0x01);   /* locally administered, unicast */
++	if (!memcmp(mac, h, 6))
++		mac[3] ^= 0xa5;                            /* was already local: differ */
++}
++
++static int wanted(const char *list, const char *name)
++{
++	char buf[256], *tok, *save = NULL;
++
++	if (!list)
++		return 1;
++	snprintf(buf, sizeof buf, "%s", list);
++	for (tok = strtok_r(buf, ", ", &save); tok; tok = strtok_r(NULL, ", ", &save))
++		if (!strcmp(tok, name))
++			return 1;
++	return 0;
++}
++
++static void enumerate(void)
++{
++	pcap_if_t *all = NULL, *d;
++	char err[PCAP_ERRBUF_SIZE];
++	const char *list = option("uaenet_pcap", "FSUAE_UAENET_PCAP");
++	int n = 0;
++
++	pcap_enumerated = 1;
++	memset(pcapd, 0, sizeof pcapd);
++	if (pcap_findalldevs(&all, err) != 0) {
++		write_log(_T("uaenet pcap: pcap_findalldevs: %s\n"), err);
++		return;
++	}
++	for (d = all; d && n < PCAP_MAX_IFS; d = d->next) {
++		if (d->flags & PCAP_IF_LOOPBACK)
++			continue;
++		if (list) {
++			if (!wanted(list, d->name))
++				continue;
++		} else {
++#ifdef PCAP_IF_UP
++			if (!(d->flags & PCAP_IF_UP))
++				continue;
++#endif
++			if (!d->addresses)
++				continue;
++		}
++		snprintf(pcap_names[n], sizeof pcap_names[n], "%s", d->name);
++		snprintf(pcap_descs[n], sizeof pcap_descs[n], "pcap: %s%s%s", d->name,
++		         d->description ? " " : "", d->description ? d->description : "");
++		pcapd[n].type = UAENET_PCAP;
++		pcapd[n].name = pcap_names[n];
++		pcapd[n].desc = pcap_descs[n];
++		pcapd[n].mtu = 1500;
++		amiga_mac(d->name, pcapd[n].mac);
++		pcapd[n].active = 1;
++		write_log(_T("uaenet pcap: uaenet.device unit %d = %s, Amiga MAC %02x:%02x:%02x:%02x:%02x:%02x\n"),
++		          n + 2, d->name, pcapd[n].mac[0], pcapd[n].mac[1], pcapd[n].mac[2],
++		          pcapd[n].mac[3], pcapd[n].mac[4], pcapd[n].mac[5]);
++		n++;
++	}
++	if (list && n == 0)
++		write_log(_T("uaenet pcap: no interface matches uaenet_pcap = %s\n"), list);
++	pcap_freealldevs(all);
++}
++
++struct netdriverdata *uaenet_enumerate(const TCHAR *name)
++{
++	if (!pcap_enumerated)
++		enumerate();
++	if (!name)
++		return pcapd;
++	for (int i = 0; i < MAX_TOTAL_NET_DEVICES; i++)
++		if (pcapd[i].active && !_tcscmp(pcapd[i].name, name))
++			return &pcapd[i];
++	return NULL;
++}
++
++void uaenet_enumerate_free(void)
++{
++	pcap_enumerated = 0;
++	memset(pcapd, 0, sizeof pcapd);
++}
++
++void uaenet_close_driver(struct netdriverdata *ndd)
++{
++}
++
++int uaenet_getdatalenght(void)
++{
++	return sizeof(struct uaenet_pcap_data);
++}
++
++static void *reader(void *arg)
++{
++	struct uaenet_pcap_data *sd = (struct uaenet_pcap_data *)arg;
++	struct pcap_pkthdr *h;
++	const u_char *data;
++	int r;
++
++	uae_set_thread_priority(NULL, 1);
++	while (sd->active) {
++		r = pcap_next_ex(sd->pcap, &h, &data);
++		if (r == 1) {
++			if (h->caplen < 14 || h->caplen != h->len)
++				continue;
++			/* our own frames (where the direction filter is missing) */
++			if (!memcmp(data + 6, sd->ndd->mac, 6))
++				continue;
++			sd->gotfunc(sd->user, data, (int)h->caplen);
++		} else if (r < 0) {
++			if (sd->active)
++				write_log(_T("uaenet pcap: %s: %s\n"), sd->ndd->name, pcap_geterr(sd->pcap));
++			break;
++		}
++	}
++	uae_sem_post(&sd->done);
++	return NULL;
++}
++
++int uaenet_open(void *vsd, struct netdriverdata *ndd, void *user, ethernet_gotfunc *gotfunc,
++                ethernet_getfunc *getfunc, int promiscuous)
++{
++	struct uaenet_pcap_data *sd = (struct uaenet_pcap_data *)vsd;
++	char err[PCAP_ERRBUF_SIZE], filter[160];
++	struct bpf_program prog;
++	const uae_u8 *m = ndd->mac;
++
++	memset(sd, 0, sizeof *sd);
++	sd->ndd = ndd;
++	sd->gotfunc = gotfunc;
++	sd->getfunc = getfunc;
++	sd->user = user;
++	err[0] = 0;
++	sd->pcap = pcap_create(ndd->name, err);
++	if (!sd->pcap) {
++		write_log(_T("uaenet pcap: %s: %s\n"), ndd->name, err);
++		return 0;
++	}
++	pcap_set_snaplen(sd->pcap, 2048);
++	pcap_set_promisc(sd->pcap, 1);           /* frames for the Amiga's own MAC */
++	pcap_set_timeout(sd->pcap, 20);
++	pcap_set_immediate_mode(sd->pcap, 1);    /* macOS BPF: no batching delay */
++	if (pcap_activate(sd->pcap) < 0) {
++		write_log(_T("uaenet pcap: %s: %s (needs root or access to /dev/bpf*)\n"), ndd->name,
++		          pcap_geterr(sd->pcap));
++		pcap_close(sd->pcap);
++		sd->pcap = NULL;
++		return 0;
++	}
++	if (pcap_datalink(sd->pcap) != DLT_EN10MB) {
++		write_log(_T("uaenet pcap: %s is not Ethernet\n"), ndd->name);
++		pcap_close(sd->pcap);
++		sd->pcap = NULL;
++		return 0;
++	}
++	pcap_setdirection(sd->pcap, PCAP_D_IN);  /* not everywhere; see reader() */
++	/* only what the Amiga would receive: its unicast, broadcast, multicast */
++	if (!promiscuous) {
++		snprintf(filter, sizeof filter, "ether dst %02x:%02x:%02x:%02x:%02x:%02x or ether multicast",
++		         m[0], m[1], m[2], m[3], m[4], m[5]);
++		if (pcap_compile(sd->pcap, &prog, filter, 1, PCAP_NETMASK_UNKNOWN) == 0) {
++			pcap_setfilter(sd->pcap, &prog);
++			pcap_freecode(&prog);
++		}
++	}
++	uae_sem_init(&sd->done, 0, 0);
++	uae_sem_init(&sd->txlock, 0, 1);
++	sd->active = 1;
++	uae_start_thread(_T("uaenet-pcap"), reader, sd, &sd->tid);
++	write_log(_T("uaenet pcap: %s open\n"), ndd->name);
++	return 1;
++}
++
++void uaenet_close(void *vsd)
++{
++	struct uaenet_pcap_data *sd = (struct uaenet_pcap_data *)vsd;
++
++	if (!sd || !sd->pcap)
++		return;
++	sd->active = 0;
++	pcap_breakloop(sd->pcap);
++	uae_sem_wait(&sd->done);
++	pcap_close(sd->pcap);
++	sd->pcap = NULL;
++	uae_sem_destroy(&sd->done);
++	uae_sem_destroy(&sd->txlock);
++}
++
++/* the Amiga queued frames to send */
++void uaenet_trigger(void *vsd)
++{
++	struct uaenet_pcap_data *sd = (struct uaenet_pcap_data *)vsd;
++	uae_u8 pkt[4000];
++	int len;
++
++	if (!sd || !sd->pcap)
++		return;
++	uae_sem_wait(&sd->txlock);
++	for (;;) {
++		len = sizeof pkt;
++		if (!sd->getfunc(sd->user, pkt, &len))
++			break;
++		if (len >= 14 && pcap_inject(sd->pcap, pkt, (size_t)len) < 0)
++			write_log(_T("uaenet pcap: %s: send: %s\n"), sd->ndd->name, pcap_geterr(sd->pcap));
++	}
++	uae_sem_post(&sd->txlock);
++}
++
++#endif /* WITH_UAENET_PCAP */

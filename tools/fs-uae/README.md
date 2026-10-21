@@ -13,6 +13,17 @@ patch also fixes two `uaenet.device` bugs:
 * multicast frames were dropped before the multicast filter, which breaks
   IPv6 neighbour discovery on a real network.
 
+`fs-uae-3.2.35-riptide.patch` is the three of these in one, for building:
+
+* `0001-uaenet-deliver-every-queued-frame.patch`: the frame-drop fix;
+* `0002-uaenet-pass-multicast-to-the-multicast-filter.patch`: the
+  multicast fix;
+* `0003-uaenet-bridge-to-host-interfaces-libpcap.patch`: the libpcap
+  backend (`src/uaenet_pcap.cpp`, configure option `--enable-uaenet-pcap`).
+
+They apply to v3.2.35 in that order. `issue-1-uaenet-frame-drops.md` and
+`issue-2-uaenet-lan-bridge.md` are the reports for FS-UAE's maintainer.
+
 The patch is GPL-2.0 like FS-UAE. It was tested on Linux; the build script
 supports macOS through Homebrew.
 

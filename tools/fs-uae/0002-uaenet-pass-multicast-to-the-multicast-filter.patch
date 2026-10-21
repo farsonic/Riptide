@@ -1,0 +1,17 @@
+diff --git a/src/sana2.cpp b/src/sana2.cpp
+index 36f6dc0..42c52f8 100644
+--- a/src/sana2.cpp
++++ b/src/sana2.cpp
+@@ -820,8 +820,10 @@ static void uaenet_gotdata (void *devv, const uae_u8 *d, int len)
+ 	/* drop if dst == broadcast and src == me */
+ 	if (isbroadcast (d) && !memcmp (d + 6, dev->td->mac, ADDR_SIZE))
+ 		return;
+-	/* drop if not promiscuous and dst != broadcast and dst != me */
+-	if (!dev->promiscuous && !isbroadcast (d) && memcmp (d, dev->td->mac, ADDR_SIZE))
++	/* drop if not promiscuous and dst != broadcast and dst != me; multicast
++	 * goes on to handleread(), which filters by the S2_ADDMULTICASTADDRESS
++	 * ranges (IPv6 neighbour discovery needs it) */
++	if (!dev->promiscuous && !isbroadcast (d) && !ismulticast (d) && memcmp (d, dev->td->mac, ADDR_SIZE))
+ 		return;
+ 	/* drop if multicast with unknown address */
+ 	if (ismulticast (d)) {
