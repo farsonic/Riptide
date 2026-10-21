@@ -142,6 +142,8 @@ void cl_sort_routes(void *dump, const struct rt_ctl_hdr *h);
  * (when print) or left in the static buffer returned by cl_reply().
  * Returns 0 or the errno result; -1 if Riptide is not running. */
 int  cl_command(const char *line, int print);
+/* The same for any RTCMD_* (line may be NULL), e.g. RTCMD_STATUS. */
+int  cl_request(u32 cmd, const char *line, int print);
 const char *cl_reply(void);
 /* Build a command line from printf style pieces (static buffer). */
 const char *cl_line(const char *fmt, ...) RT_PRINTF(1, 2);

@@ -931,6 +931,11 @@ const char *cl_line(const char *fmt, ...)
 
 int cl_command(const char *line, int print)
 {
+	return cl_request(RTCMD_COMMAND, line, print);
+}
+
+int cl_request(u32 cmd, const char *line, int print)
+{
 	struct MsgPort *reply, *port;
 	struct RiptideMsg *m;
 	int r;
@@ -948,10 +953,11 @@ int cl_command(const char *line, int print)
 	m->msg.mn_Node.ln_Type = NT_MESSAGE;
 	m->msg.mn_ReplyPort = reply;
 	m->msg.mn_Length = sizeof(*m);
-	m->cmd = RTCMD_COMMAND;
+	m->cmd = cmd;
 	m->reply = (STRPTR)replybuf;
 	m->replysize = REPLYSIZE;
-	rt_strlcpy(m->text, line, sizeof(m->text));
+	if (line)
+		rt_strlcpy(m->text, line, sizeof(m->text));
 	Forbid();
 	port = FindPort((CONST_STRPTR)RIPTIDE_PORTNAME);
 	if (port)

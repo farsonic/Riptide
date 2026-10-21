@@ -149,7 +149,7 @@ expect() {
 		out "$n" | grep -Eq -- "$re" || { fail "$n: no line matches /$re/"; out "$n" | sed 's/^/  | /'; }
 	done
 }
-for f in Riptide rtcheck $TOOLS; do
+for f in Riptide rtcheck $TOOLS ping6 traceroute6 rtdiag; do
 	cmp -s "$dh0/C/$f" "$BUILD/package/Riptide/C/$f" || fail "C:$f not installed"
 done
 [ ! -e "$dh0/C/ftpd-test" ] || fail "ftpd-test installed at Novice level"

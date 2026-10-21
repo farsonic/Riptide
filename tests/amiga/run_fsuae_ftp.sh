@@ -21,7 +21,7 @@ set -u
 BUILD=${1:-build/amiga}
 TIMEOUT=${2:-900}
 command -v fs-uae >/dev/null 2>&1 || { echo "SKIP: fs-uae not installed"; exit 0; }
-for f in Riptide rtcheck ftp ftpd-test ping; do
+for f in Riptide rtcheck ftp ftpd-test ping rtdiag ip ifconfig netstat sysctl; do
 	[ -f "$BUILD/$f" ] || { echo "SKIP: $BUILD/$f not built"; exit 0; }
 done
 work=$(mktemp -d "${TMPDIR:-/tmp}/riptide-ftp.XXXXXX")
@@ -29,7 +29,7 @@ dh0=$work/dh0
 root=$dh0/ftproot
 loc=$dh0/local
 mkdir -p "$dh0/C" "$dh0/S" "$dh0/out" "$root/sub" "$loc"
-for f in Riptide rtcheck ftp ftpd-test ping; do cp "$BUILD/$f" "$dh0/C/"; done
+for f in Riptide rtcheck ftp ftpd-test ping rtdiag ip ifconfig netstat sysctl; do cp "$BUILD/$f" "$dh0/C/"; done
 
 # test data
 head -c 1048576 /dev/urandom > "$root/big.bin"
@@ -209,6 +209,11 @@ SCRIPT
 	echo 'DH0:C/Riptide DEBUG NONE >DH0:out/debug_none'
 	echo 'DH0:C/Riptide DEBUG BOGUS >DH0:out/debug_bad'
 	echo 'DH0:C/Riptide PROFILE BOGUS >DH0:out/prof_bad'
+	# rtdiag around a 1 MB download (the tools it runs come from the path)
+	echo 'Path DH0:C ADD'
+	echo 'DH0:C/rtdiag -o DH0:out/diag -s 64 ftp -o NIL: ftp://127.0.0.1:2121/big.bin >DH0:out/rtdiag'
+	echo 'DH0:C/rtdiag -h >DH0:out/rtdiag_h'
+	echo 'DH0:C/Riptide DEBUG STATUS >DH0:out/rtdiag_after'
 	echo 'DH0:C/ftp -h >DH0:out/zz_done'
 } > "$dh0/S/Startup-Sequence"
 
@@ -383,6 +388,22 @@ same "$loc/act6.txt" "$root/hello.txt" "IPv6 EPRT get"
 same "$loc/hello46.txt" "$root/hello.txt" "IPv4 client, dual-stack server, PASV"
 same "$loc/act46.txt" "$root/hello.txt" "IPv4 client, dual-stack server, PORT"
 same "$loc/url6.dat" "$root/sub/a.dat" "URL get from [::1]"
+# rtdiag
+expect rtdiag '^rtdiag: running "ftp -o NIL: ftp://127\.0\.0\.1:2121/big\.bin"' \
+	'^1048576 bytes received in' 'rtdiag: DH0:out/diag/capture\.pcap' \
+	'rtdiag: DH0:out/diag/debug\.txt' 'rtdiag: DH0:out/diag/report\.txt'
+expect rtdiag_h '^Usage: rtdiag'
+expect rtdiag_after '^debug: off'
+expect diag/report.txt '^CPU 680[0-9]0, Kickstart [0-9]+' '^command: ftp -o NIL:' \
+	'^==== run$' 'command returned 0' '^==== profile show' '^profile: stopped' '^tcp input +[1-9]' \
+	'^==== ip -s -s link' 'lo0' '^==== netstat -s' '^==== netstat -T -a -n' \
+	'^==== sysctl -a' 'net\.inet\.tcp\.delack_segs' '^==== capture status' '^==== Riptide STATUS \(after\)'
+reject diag/report.txt 'could not run it'
+expect diag/debug.txt ' tcpstat: [0-9]+>2121 st 4 rx [0-9]+ KB/s tx [0-9]+ KB/s rtt '
+if ! head -c 4 "$dh0/out/diag/capture.pcap" 2>/dev/null | od -An -tx1 | grep -q 'a1 b2 c3 d4'; then
+	echo "FAIL rtdiag: capture.pcap is not a pcap file"
+	fails=$((fails + 1))
+fi
 # packet capture of the URL download
 expect cap_bad '^capture: no interface .nope.'
 expect cap_start '^capture: running, 0 frames' 'snaplen 96, stop when full, proto tcp host 127\.0\.0\.1, file DH0:cap\.pcap'

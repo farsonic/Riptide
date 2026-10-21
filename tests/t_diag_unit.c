@@ -3,7 +3,8 @@
  * (exclusive times when sections nest, counters, reset, sections closed by
  * a lock release, the net.riptide.profile table, probes in a real UDP
  * loopback exchange) and the debug log ring (categories, wrapping, show,
- * dump hook, arguments not evaluated when a category is off).
+ * dump hook, arguments not evaluated when a category is off, the periodic
+ * tcpstat lines of a loopback TCP connection).
  * Single threaded, no stack thread.
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -313,6 +314,72 @@ static void test_debug(void)
 	cmd("debug none");
 }
 
+static void poll_ms(u32 ms)
+{
+	u32 t0 = rt_now_ms();
+
+	do {
+		rt_lock();
+		rt_stack_poll();
+		rt_unlock();
+	} while (rt_now_ms() - t0 < ms);
+}
+
+/* tcpstat: periodic per-connection lines over a loopback TCP connection */
+static void test_tcpstat(void)
+{
+	struct rt_sockctx ctx;
+	struct rt_sockaddr_in a;
+	static char buf[20000];
+	int ls, cs, as, r, got = 0;
+
+	CHECK(rt_ctx_init(&ctx, 8, NULL) == 0);
+	ls = rt_api_socket(&ctx, RT_AF_INET, RT_SOCK_STREAM, 0);
+	cs = rt_api_socket(&ctx, RT_AF_INET, RT_SOCK_STREAM, 0);
+	memset(&a, 0, sizeof(a));
+	a.sin_len = sizeof(a);
+	a.sin_family = RT_AF_INET;
+	a.sin_port = rt_htons(5555);
+	a.sin_addr = rt_htonl(0x7f000001);
+	CHECK(rt_api_bind(&ctx, ls, &a, sizeof(a)) == 0);
+	CHECK(rt_api_listen(&ctx, ls, 1) == 0);
+	{
+		int on = 1;
+		CHECK(rt_api_ioctl(&ctx, cs, RT_FIONBIO, &on) == 0);
+	}
+	r = rt_api_connect(&ctx, cs, &a, sizeof(a));
+	CHECK(r == 0 || r == -RT_EINPROGRESS);
+	poll_ms(5);
+	as = rt_api_accept(&ctx, ls, NULL, NULL);
+	CHECK(as >= 0);
+
+	CHECK(cmd("debug tcpstat interval=25") == 0 && strstr(out, "tcpstat every 25 ms"));
+	CHECK(cmd("debug interval=5") < 0 && strstr(out, "20..60000"));
+	CHECK(cmd("debug tcpstat interval=20") == 0);
+	memset(buf, 'y', sizeof(buf));
+	CHECK(rt_api_send(&ctx, as, buf, 8000, 0) == 8000);
+	poll_ms(30);
+	while ((r = rt_api_recv(&ctx, cs, buf, sizeof(buf), RT_MSG_DONTWAIT)) > 0)
+		got += r;
+	CHECK(got == 8000);
+	poll_ms(50);
+	CHECK(cmd("debug show 100") == 0);
+	CHECK(strstr(out, " tcpstat: ") != NULL);
+	CHECK(strstr(out, ">5555 st 4 rx ") != NULL);     /* the client side, ESTABLISHED */
+	CHECK(strstr(out, " rtt ") && strstr(out, " cwnd ") && strstr(out, " unread "));
+	CHECK(cmd("debug none") == 0);
+	rt_dbg_dump_hook = test_dump_hook;
+	CHECK(cmd("debug clear") == 0);
+	poll_ms(50);                                       /* off: no more samples */
+	CHECK(rt_dbg_snapshot(NULL, 0) == 0);
+	rt_dbg_dump_hook = NULL;
+	rt_api_close(&ctx, cs);
+	rt_api_close(&ctx, as);
+	rt_api_close(&ctx, ls);
+	poll_ms(5);
+	rt_ctx_destroy(&ctx);
+}
+
 int main(void)
 {
 	CHECK(rt_init() == 0);
@@ -320,6 +387,7 @@ int main(void)
 	test_profiler();
 	test_probes();
 	test_debug();
+	test_tcpstat();
 	printf("t_diag_unit: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

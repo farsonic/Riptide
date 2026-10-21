@@ -16,7 +16,8 @@
  */
 #include "amiga_priv.h"
 
-#define TEMPLATE "CONFIG/K,DEBUG/K,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,PROFILE/K,CAPTURE/K,ARGS/M"
+/* CAPTURE/F: the rest of the line as it is (ARGS/M would split "iface=x") */
+#define TEMPLATE "CONFIG/K,DEBUG/K,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,PROFILE/K,CAPTURE/K/F,ARGS/M"
 enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_PROFILE, ARG_CAPTURE,
        ARG_ARGS, ARG_COUNT };
 
@@ -128,7 +129,7 @@ static int riptide_main(void)
 	}
 	more = (char **)args[ARG_ARGS];
 	if (args[ARG_CAPTURE]) {
-		rc = send_verb("capture", (char *)args[ARG_CAPTURE], more);
+		rc = send_verb("capture", (char *)args[ARG_CAPTURE], NULL);
 		FreeArgs(rda);
 		return rc;
 	}

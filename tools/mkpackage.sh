@@ -32,6 +32,7 @@ PYTHON=${PYTHON:-python3}
 TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp speedtest"
 top=$(cd "$(dirname "$0")/.." && pwd)
 TOOLS="$TOOLS ping6 traceroute6"      # IPv6 variants of ping and traceroute
+TOOLS="$TOOLS rtdiag"                 # diagnostics for bug reports
 mkicon="$PYTHON $top/tools/mkicon.py"
 
 for f in Riptide rtcheck $TOOLS ftpd-test; do

@@ -24,7 +24,7 @@ LIBS      := bsdsocket riptide usergroup
 HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h \
                src/apps/speedtest/*.h) tests/amiga/rtcheck_body.h
 # network tools (src/amiga/cmd), each linked with cmdlib.o
-NETTOOLS  := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp
+NETTOOLS  := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp rtdiag
 # speedtest: src/amiga/cmd/speedtest.c (shim) + the portable src/apps/speedtest
 TOOLS     := $(NETTOOLS) speedtest
 ST_SRC    := st_main st_xml st_http st_util

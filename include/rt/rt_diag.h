@@ -93,7 +93,8 @@ int rt_prof_report(char *out, u32 outlen);
 #define RT_DBG_DHCP    0x0080   /* DHCP and DHCPv6 */
 #define RT_DBG_ARP     0x0100   /* ARP and IPv6 neighbour discovery */
 #define RT_DBG_LOG     0x0200   /* copies of the log messages (rt_log) */
-#define RT_DBG_ALL     0x03ff
+#define RT_DBG_TCPSTAT 0x0400   /* every interval=MS: one line per TCP connection */
+#define RT_DBG_ALL     0x07ff
 
 #ifndef RT_NO_DIAG
 extern u32 rt_dbg_mask;
@@ -106,7 +107,7 @@ void rt_dbg_printf(u32 cat, const char *fmt, ...) RT_PRINTF(2, 3);
 /* Append one line as category 'cat' (used for RT_DBG_LOG). Lock held. */
 void rt_dbg_line(u32 cat, const char *text);
 
-/* "debug [CATS|all|none] [size=KB] | show [N] | clear | dump FILE" */
+/* "debug [CATS|all|none] [size=KB] [interval=MS] | show [N] | clear | dump FILE" */
 int rt_dbg_command(int argc, char **argv, char *out, u32 outlen);
 /* Copy the ring (oldest complete line first) to buf; returns the length.
  * With buf NULL returns the length needed. */

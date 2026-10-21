@@ -387,7 +387,7 @@ before DNS.
 
 Riptide comes with the usual Linux network commands, written for AmigaOS:
 `ip`, `ifconfig`, `route`, `arp`, `netstat`, `traceroute`, `ping`, `host`,
-`sysctl`, `hostname`, `nc`, `ftp` and `speedtest`. Copy them to `C:`. They take Linux style
+`sysctl`, `hostname`, `nc`, `ftp`, `speedtest` and `rtdiag`. Copy them to `C:`. They take Linux style
 arguments (`-n`, `-c 3`, ...), print what their Linux counterparts print,
 stop on Ctrl-C and return 0 (ok), 5 (warning, e.g. no ping reply), 10
 (error) or 20 (failure, e.g. no stack). Each has `-h` / `--help`. They
@@ -933,10 +933,51 @@ network.
 | `dhcp` | DHCP state changes and messages sent |
 | `arp` (`nd`) | ARP requests and replies, failed resolutions, IPv6 neighbour states |
 | `log` | a copy of the log messages, at every level |
+| `tcpstat` | every `interval=MS` (default 500, 20..60000): one line per TCP connection with the receive and send rate over the interval, RTT and variance, RTO, cwnd, ssthresh, both windows, unread and out-of-order bytes, segments in flight, retransmissions, RTOs, ACKs sent (of them delayed) and zero windows sent/received |
+
+A `tcpstat` line from a loopback ftp download on an emulated A1200:
+
+```
+   3.328938 tcpstat: 64855>63152 st 4 rx 219 KB/s tx 0 KB/s rtt 20/10 ms rto 221 cwnd 10 ssth 65535 swnd 32664 rwnd 33184 unread 65016 ofo 0 infl 0 retr 0 rtos 0 acks 15/3 zw 2/0
+```
+
+`st` is the TCP state (4 = ESTABLISHED); `rx` and `tx` are the bytes
+received and acknowledged per second since the last line. The time series
+shows when a download stalls and why: the window (`rwnd`, `unread`, `zw`),
+losses (`retr`, `rtos`) or the ACK clock (`acks`). Here 65016 bytes wait
+unread and two zero windows were sent: the program reading the data, not
+the network, sets the pace.
 
 The ring takes memory (`SIZE=1..1024` KB): on a machine with Chip RAM
 only, keep it small, or the Shell may not be able to load the `Riptide`
 command again to read it.
+
+### rtdiag: one command for a bug report
+
+```
+rtdiag ftp -o NIL: ftp://ftp.example.org/pub/big.lha   ; wrap one download
+rtdiag -t 60                                           ; or record 60 s (Ctrl-C stops)
+                                                       ;   while you download in another Shell
+```
+
+`rtdiag [-o DIR] [-t SECONDS] [-i IF] [-s KB] [-v] [COMMAND ...]` zeroes the
+interface and driver counters and starts the profiler, the debug log
+(`log,tcpstat` at 500 ms; `-v` adds `tcp,driver`, which logs every ACK
+decision and frame and slows the stack down) and a packet capture
+(`snaplen=128`, a `-s` KB ring, default 512; `-i` limits it to one
+interface). Then it runs COMMAND, or waits. Afterwards it switches the
+diagnostics off and writes to DIR (default `RAM:rtdiag`):
+
+| File | Contents |
+|---|---|
+| `report.txt` | CPU, Kickstart and free memory, `Riptide STATUS` before and after, `sysctl -a`, the run time and the command's return code, `profile show`, `capture status`, `ip -s -s link`, `ifconfig -v`, addresses and routes, `netstat -s`, `netstat -T -a -n` |
+| `debug.txt` | the debug log, with a `tcpstat` line per connection every 500 ms |
+| `capture.pcap` | the packet capture, for Wireshark or tcpdump |
+
+`report.txt` runs the tools (`ip`, `ifconfig`, `netstat`, `sysctl`) from
+the path, so install them too. Memory: the capture ring (512 KB) and the
+debug ring (64 KB, 256 KB with `-v`); on a machine with Chip RAM only use
+`-s 64`.
 
 ## Interfaces for tools
 

@@ -37,6 +37,7 @@ void rt_dbg_line(u32 cat, const char *text)
 }
 void rt_diag_init(void)
 {
+	rt_timer_init(&dbg_sample_timer, dbg_sample, NULL);
 }
 #else
 
@@ -383,6 +384,8 @@ static u32 dbg_used;        /* <= dbg_size */
 static u32 dbg_lost;        /* bytes overwritten */
 static u32 dbg_lines;
 static u64 dbg_t0;          /* time stamps count from here */
+static u32 dbg_interval = 500;  /* tcpstat period, ms */
+static struct rt_timer dbg_sample_timer;
 
 static const struct {
 	const char *name;
@@ -391,12 +394,13 @@ static const struct {
 	{ "tcp", RT_DBG_TCP }, { "ip", RT_DBG_IP }, { "ip6", RT_DBG_IP6 },
 	{ "driver", RT_DBG_DRIVER }, { "timer", RT_DBG_TIMER }, { "socket", RT_DBG_SOCKET },
 	{ "dns", RT_DBG_DNS }, { "dhcp", RT_DBG_DHCP }, { "arp", RT_DBG_ARP }, { "log", RT_DBG_LOG },
+	{ "tcpstat", RT_DBG_TCPSTAT },
 	/* aliases */
 	{ "sana2", RT_DBG_DRIVER }, { "mni", RT_DBG_DRIVER }, { "timers", RT_DBG_TIMER },
 	{ "sock", RT_DBG_SOCKET }, { "udp", RT_DBG_SOCKET }, { "icmp", RT_DBG_IP },
 	{ "icmp6", RT_DBG_IP6 }, { "dhcp6", RT_DBG_DHCP }, { "nd", RT_DBG_ARP }, { "nd6", RT_DBG_ARP },
 };
-#define DBG_NCATS 10        /* the first DBG_NCATS entries are the real names */
+#define DBG_NCATS 11        /* the first DBG_NCATS entries are the real names */
 
 static const char *dbg_cat_name(u32 cat)
 {
@@ -543,6 +547,8 @@ static void dbg_status(char *out, u32 outlen)
 		}
 	if (o < outlen && !any)
 		o += (u32)rt_snprintf(out + o, outlen - o, "off");
+	if (o < outlen && (rt_dbg_mask & RT_DBG_TCPSTAT))
+		o += (u32)rt_snprintf(out + o, outlen - o, " (tcpstat every %lu ms)", (unsigned long)dbg_interval);
 	if (o < outlen)
 		rt_snprintf(out + o, outlen - o, "; ring %lu KB, %lu bytes in %lu lines, %lu bytes overwritten\n",
 		            (unsigned long)(dbg_size / 1024u), (unsigned long)dbg_used,
@@ -581,6 +587,70 @@ static int dbg_show(u32 nlines, char *out, u32 outlen)
 	return 0;
 }
 
+/* ---- tcpstat: periodic one-line samples of every TCP connection ---- */
+
+#define SAMPLE_MAX 8
+static struct {
+	u16 lport, fport;
+	u32 rx, tx, t;          /* bytes received / acked, rt_now_ms() */
+} sample_prev[SAMPLE_MAX];
+
+static u32 sample_rate(u32 bytes, u32 ms)
+{
+	/* KB/s = bytes * 1000 / 1024 / ms in 32 bits (no 64-bit divide) */
+	return ms ? ((bytes >> 10) * 1000u + ((bytes & 1023u) * 1000u >> 10)) / ms : 0;
+}
+
+static void dbg_sample(void *arg)
+{
+	static struct rt_ctl_tcpinfo ti[SAMPLE_MAX];
+	u32 now = rt_now_ms();
+	int n, i, j;
+
+	if (!(rt_dbg_mask & RT_DBG_TCPSTAT))
+		return;
+	n = rt_tcp_info_list(ti, SAMPLE_MAX);
+	if (n > SAMPLE_MAX)
+		n = SAMPLE_MAX;
+	for (i = 0; i < n; i++) {
+		const struct rt_ctl_tcpinfo *t = &ti[i];
+		u32 rx = t->bytes_received_lo, tx = t->bytes_acked_lo, drx = 0, dtx = 0, dt = 0;
+		if (t->state == RT_TCPS_LISTEN)
+			continue;
+		for (j = 0; j < SAMPLE_MAX; j++)
+			if (sample_prev[j].lport == t->lport && sample_prev[j].fport == t->fport)
+				break;
+		if (j < SAMPLE_MAX) {
+			drx = rx - sample_prev[j].rx;
+			dtx = tx - sample_prev[j].tx;
+			dt = now - sample_prev[j].t;
+		} else {
+			j = 0;
+			while (j < SAMPLE_MAX - 1 && sample_prev[j].lport)
+				j++;
+		}
+		sample_prev[j].lport = t->lport;
+		sample_prev[j].fport = t->fport;
+		sample_prev[j].rx = rx;
+		sample_prev[j].tx = tx;
+		sample_prev[j].t = now;
+		rt_dbg_printf(RT_DBG_TCPSTAT,
+		              "%u>%u st %u rx %lu KB/s tx %lu KB/s rtt %lu/%lu ms rto %lu cwnd %lu ssth %lu "
+		              "swnd %lu rwnd %lu unread %lu ofo %lu infl %lu retr %lu rtos %lu acks %lu/%lu zw %lu/%lu",
+		              (unsigned)t->lport, (unsigned)t->fport, (unsigned)t->state,
+		              (unsigned long)sample_rate(drx, dt), (unsigned long)sample_rate(dtx, dt),
+		              (unsigned long)(t->srtt_us / 1000u), (unsigned long)(t->rttvar_us / 1000u),
+		              (unsigned long)(t->rto_us / 1000u), (unsigned long)t->cwnd,
+		              (unsigned long)(t->ssthresh > 0xffff ? 0xffff : t->ssthresh),
+		              (unsigned long)t->snd_wnd, (unsigned long)t->rcv_wnd, (unsigned long)t->recvq,
+		              (unsigned long)t->ofo_bytes, (unsigned long)t->packets_out,
+		              (unsigned long)t->total_retrans, (unsigned long)t->rto_timeouts,
+		              (unsigned long)t->acks_out, (unsigned long)t->delayed_acks_out,
+		              (unsigned long)t->zwin_out, (unsigned long)t->zwin_in);
+	}
+	rt_timer_after(&dbg_sample_timer, dbg_interval);
+}
+
 static int dbg_lookup(const char *name, u32 *bit)
 {
 	u32 i;
@@ -601,8 +671,8 @@ int rt_dbg_command(int argc, char **argv, char *out, u32 outlen)
 {
 	static const char usage[] = "usage: debug [CATEGORY[,...]|all|none] [size=KB] | debug show [N] | "
 	                            "debug clear | debug dump FILE\n"
-	                            "categories: tcp ip ip6 driver timer socket dns dhcp arp log; "
-	                            "+CAT adds, -CAT removes";
+	                            "categories: tcp ip ip6 driver timer socket dns dhcp arp log tcpstat; "
+	                            "+CAT adds, -CAT removes; interval=MS: tcpstat period";
 	u32 mask = rt_dbg_mask, kb = 0;
 	int i, plain = 0, r;
 
@@ -632,6 +702,16 @@ int rt_dbg_command(int argc, char **argv, char *out, u32 outlen)
 	}
 	for (i = 1; i < argc; i++) {
 		char tok[24], *p = argv[i], *c;
+		if (!rt_strncasecmp(p, "interval=", 9)) {
+			const char *e;
+			u32 ms = (u32)rt_strtoul(p + 9, &e, 0);
+			if (!p[9] || *e || ms < 20 || ms > 60000) {
+				rt_snprintf(out, outlen, "debug: interval must be 20..60000 ms");
+				return -RT_EINVAL;
+			}
+			dbg_interval = ms;
+			continue;
+		}
 		/* size=KB, also "size KB" / "size = KB" (AmigaDOS ReadArgs
 		 * hands "SIZE=64" over as two words) */
 		if (!rt_strncasecmp(p, "size=", 5) || !rt_strcasecmp(p, "size")) {
@@ -700,6 +780,12 @@ int rt_dbg_command(int argc, char **argv, char *out, u32 outlen)
 		}
 	}
 	rt_dbg_mask = mask;
+	if (mask & RT_DBG_TCPSTAT) {
+		if (!rt_timer_pending(&dbg_sample_timer))
+			rt_timer_after(&dbg_sample_timer, dbg_interval);
+	} else {
+		rt_timer_del(&dbg_sample_timer);
+	}
 	dbg_status(out, outlen);
 	return 0;
 }
@@ -713,6 +799,7 @@ static const struct rt_sysctl diag_sysctls[] = {
 
 void rt_diag_init(void)
 {
+	rt_timer_init(&dbg_sample_timer, dbg_sample, NULL);
 	rt_sysctl_register(diag_sysctls, (int)RT_ARRAY_SIZE(diag_sysctls));
 }
 #endif /* RT_NO_DIAG */

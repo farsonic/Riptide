@@ -274,7 +274,9 @@ if [ -z "$pk" ] || [ -z "$fr" ] || [ "$pk" -gt "$fr" ] || [ $((fr - pk)) -gt 3 ]
 	echo "FAIL ip_s_link: interface TX packets '$pk' vs driver TX frames '$fr'"
 	fails=$((fails + 1))
 fi
-expect ifconfig_v '^        RX reads 48/48  lowest [0-9]+  ran out 0  nobuf 0' \
+# (queued can exceed 48 here: reads retired by "ip link set eth0 reads" leave
+# service only when a frame completes them, and none arrive in this setup)
+expect ifconfig_v '^        RX reads [0-9]+/48  lowest [0-9]+  ran out 0  nobuf 0' \
 	'^        RX wakeups [0-9]+  most frames per wakeup [0-9]+  TX in flight [0-9]+ \(most [0-9]+\)  queue full 0' \
 	'RX errors 0  dropped [0-9]+  overruns [0-9]+  frame 0'
 reject ifconfig 'RX reads'

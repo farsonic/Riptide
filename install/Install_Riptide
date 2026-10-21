@@ -196,6 +196,7 @@
   (P_DEL (tackon #rm-bin "ftpd-test"))
   (P_DEL (tackon #rm-bin "ping6"))
   (P_DEL (tackon #rm-bin "traceroute6"))
+  (P_DEL (tackon #rm-bin "rtdiag"))
   (complete 40)
 
   (if (NOT (= #old-doc ""))
@@ -393,7 +394,8 @@
       (prompt "Which parts of Riptide should be installed?")
       (help (cat "Riptide and rtcheck are always installed.\n\n"
                  "Network tools: ip, ifconfig, route, arp, netstat, ping, "
-                 "traceroute, host, sysctl, hostname, nc, ftp and speedtest.\n\n"
+                 "traceroute, host, sysctl, hostname, nc, ftp, speedtest "
+                 "and rtdiag (diagnostics for bug reports).\n\n"
                  "Documentation: AMIGA.md (the manual), COMPARISON.md, "
                  "README.md and the licence.\n\n"
                  "SDK: C headers and the FD file for programs that use "
@@ -450,6 +452,16 @@
     (source (tackon #pkg "C"))
     (dest #bindir)
     (choices "ping6" "traceroute6")
+    (optional "force")))
+
+; rtdiag: diagnostics for bug reports
+(if (IN #opts 0)
+  (copyfiles
+    (prompt "Copying rtdiag")
+    (help @copyfiles-help)
+    (source (tackon #pkg "C"))
+    (dest #bindir)
+    (choices "rtdiag")
     (optional "force")))
 
 (if (IN #opts 3)

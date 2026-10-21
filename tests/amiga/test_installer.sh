@@ -69,6 +69,7 @@ run() {
 }
 
 TOOLS6="ping6 traceroute6"           # installed with the network tools
+TOOLS6="$TOOLS6 rtdiag"
 has() { [ -f "$1" ] || fail "$name: missing $1"; }
 hasnt() { [ ! -e "$1" ] || fail "$name: unexpected $1"; }
 grepf() { grep -q -- "$2" "$1" 2>/dev/null || fail "$name: $1 lacks /$2/"; }
