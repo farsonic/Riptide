@@ -214,13 +214,26 @@ static int tx_all(int fd, u32 total)
 	return 0;
 }
 
+static int use_v4;   /* test_tcp over IPv4 to 192.0.2.1, for comparison */
+
 static int tcp_connect(u16 port)
 {
 	struct rt_sockaddr_in6 a = sa6("2001:db8:1::1", port, 0);
-	int fd = rt_api_socket(&C, RT_AF_INET6, RT_SOCK_STREAM, 0);
+	struct rt_sockaddr_in a4;
+	int fd = rt_api_socket(&C, use_v4 ? RT_AF_INET : RT_AF_INET6, RT_SOCK_STREAM, 0), r;
 
 	set_timeout(fd, 20000);
-	if (rt_api_connect(&C, fd, &a, sizeof(a)) < 0) {
+	if (use_v4) {
+		memset(&a4, 0, sizeof(a4));
+		a4.sin_len = sizeof(a4);
+		a4.sin_family = RT_AF_INET;
+		a4.sin_port = rt_htons(port);
+		a4.sin_addr = rt_htonl(0xc0000201);
+		r = rt_api_connect(&C, fd, &a4, sizeof(a4));
+	} else {
+		r = rt_api_connect(&C, fd, &a, sizeof(a));
+	}
+	if (r < 0) {
 		rt_api_close(&C, fd);
 		return -1;
 	}
@@ -261,7 +274,8 @@ static void test_tcp(u32 total, const char *what)
 	rx_thread(&x);
 	t1 = now_s();
 	CHECK(x.ok && x.got == total);
-	printf("%s: TCP over IPv6 gvisor->riptide %u bytes in %.2f s: %.1f Mbit/s\n", what, total, t1 - t0,
+	printf("%s: TCP over IPv%c gvisor->riptide %u bytes in %.2f s: %.1f Mbit/s\n", what,
+	       use_v4 ? '4' : '6', total, t1 - t0,
 	       total * 8 / (t1 - t0) / 1e6);
 	rt_api_close(&C, fd);
 	/* discard: us -> peer */
@@ -277,7 +291,8 @@ static void test_tcp(u32 total, const char *what)
 		CHECK(rt_api_recv(&C, fd, &b, 1, 0) == 0);    /* their FIN after all data */
 	}
 	t1 = now_s();
-	printf("%s: TCP over IPv6 riptide->gvisor %u bytes in %.2f s: %.1f Mbit/s\n", what, total, t1 - t0,
+	printf("%s: TCP over IPv%c riptide->gvisor %u bytes in %.2f s: %.1f Mbit/s\n", what,
+	       use_v4 ? '4' : '6', total, t1 - t0,
 	       total * 8 / (t1 - t0) / 1e6);
 	rt_api_close(&C, fd);
 }
@@ -479,6 +494,7 @@ int main(int argc, char **argv)
 	if (!eth)
 		return 1;
 	rt_lock();
+	rt_netif_set_addr(eth, rt_htonl(0xc0000202), rt_htonl(0xffffff00), 0);
 	rt_netif_up(eth);
 	rt_unlock();
 	if (start_peer(gv, me, peer) < 0) {
@@ -511,6 +527,10 @@ int main(int argc, char **argv)
 		CHECK(ok);
 	}
 	test_tcp(4u << 20, "MTU 1500");
+	/* the same transfers over IPv4 on the same link, for comparison */
+	use_v4 = 1;
+	test_tcp(4u << 20, "MTU 1500");
+	use_v4 = 0;
 	test_udp();
 	test_peer_client();
 	test_dns_dhcp6();

@@ -10,7 +10,9 @@
 // a DNS server on [2001:db8:1::53]:53 (UDP) with a few fixed records
 // (v6.test AAAA, v4.test A, both.test A+AAAA, PTR of 2001:db8:1::1); a
 // stateless DHCPv6 server (Reply to Information-request: DNS server
-// 2001:db8:1::5353, domain dhcp.example).
+// 2001:db8:1::5353, domain dhcp.example). It also owns 192.0.2.1/24 (with
+// ARP) so the same services can be reached over IPv4, for comparisons; the
+// TCP and UDP endpoints are dual-stack.
 //
 // Commands on stdin (one per line), answers on stdout:
 //   ra [mtu N] [lifetime S] [noprefix] [other]
@@ -46,6 +48,8 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/fdbased"
+	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
@@ -65,8 +69,18 @@ var (
 )
 
 func netip(s string) tcpip.Address {
-	ip := net.ParseIP(s).To16()
-	return tcpip.AddrFrom16Slice(ip)
+	ip := net.ParseIP(s)
+	if v4 := ip.To4(); v4 != nil && !strings.Contains(s, ":") {
+		return tcpip.AddrFrom4Slice(v4)
+	}
+	return tcpip.AddrFrom16Slice(ip.To16())
+}
+
+func protoOf(a tcpip.Address) tcpip.NetworkProtocolNumber {
+	if a.Len() == 4 {
+		return ipv4.ProtocolNumber
+	}
+	return ipv6.ProtocolNumber
 }
 
 func say(f string, a ...interface{}) {
@@ -228,7 +242,8 @@ func parseFull(addr string, port uint16) tcpip.FullAddress {
 }
 
 func cmdConnect(addr string, port uint16, n uint32) {
-	c, err := gonet.DialTCP(st, parseFull(addr, port), ipv6.ProtocolNumber)
+	fa := parseFull(addr, port)
+	c, err := gonet.DialTCP(st, fa, protoOf(fa.Addr))
 	if err != nil {
 		say("fail connect %v", err)
 		return
@@ -532,7 +547,7 @@ func main() {
 	st = stack.New(stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{ipv6.NewProtocolWithOptions(ipv6.Options{
 			DADConfigs: stack.DADConfigurations{DupAddrDetectTransmits: 0},
-		})},
+		}), ipv4.NewProtocol, arp.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol6},
 	})
 	{
@@ -565,7 +580,16 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	{
+		pa := tcpip.ProtocolAddress{Protocol: ipv4.ProtocolNumber,
+			AddressWithPrefix: tcpip.AddressWithPrefix{Address: netip("192.0.2.1"), PrefixLen: 24}}
+		if terr := st.AddProtocolAddress(1, pa, stack.AddressProperties{}); terr != nil {
+			fmt.Fprintln(os.Stderr, "addr4", terr)
+			os.Exit(1)
+		}
+	}
 	st.SetRouteTable([]tcpip.Route{
+		{Destination: tcpip.AddressWithPrefix{Address: netip("192.0.2.0"), PrefixLen: 24}.Subnet(), NIC: 1},
 		{Destination: tcpip.AddressWithPrefix{Address: netip("fe80::"), PrefixLen: 64}.Subnet(), NIC: 1},
 		{Destination: tcpip.AddressWithPrefix{Address: netip("2001:db8:1::"), PrefixLen: 64}.Subnet(), NIC: 1},
 	})
