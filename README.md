@@ -1,9 +1,11 @@
 # Riptide
 
 Riptide is a new TCP/IP stack for AmigaOS 3.x (68020+). It is a drop-in
-replacement for MiamiDx 1.0c: we reverse engineered MiamiDx's binary
-interfaces and reimplemented them on a new protocol core whose TCP follows
-the modern Linux TCP stack.
+replacement for MiamiDx 1.0c: we reverse engineered MiamiDx's external
+interface API and reimplemented them on a new protocol core whose TCP follows
+the modern Linux TCP stack. This is simply providing an external experience 
+of the interfaces used (bsdsocket.library etc) and not reusing any existing 
+Amiga based code. 
 
 <a href="https://buymeacoffee.com/farsonic" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60"></a>
 
