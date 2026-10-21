@@ -27,6 +27,8 @@ int rt_init(void)
 	rt_route_init();
 	rt_arp_init();
 	rt_ip_init();
+	rt_ip6_init();
+	rt_inet_init();
 	rt_icmp_init();
 	rt_udp_init();
 	rt_raw_init();

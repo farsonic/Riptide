@@ -16,6 +16,7 @@
  * Not implemented: INIT-REBOOT, ARP probe/DECLINE, option overload (52).
  */
 #include "sock_internal.h"
+#include "infra.h"
 
 #define DHCP_SERVER_PORT 67
 #define DHCP_CLIENT_PORT 68
@@ -561,7 +562,7 @@ static void dhcp_input(const u8 *m, u32 len, u32 from)
 
 static void dhcp_rx(void *arg)
 {
-	struct rt_sockaddr_in from;
+	struct rt_sockaddr_in6 from;
 	struct rt_iov v;
 	int r, mf;
 
@@ -573,9 +574,9 @@ static void dhcp_rx(void *arg)
 		r = dhcp_so->ops->recv(dhcp_so, &v, 1, RT_MSG_DONTWAIT, &from, &mf);
 		if (r < 0)
 			break;
-		if (from.sin_port != rt_htons(DHCP_SERVER_PORT))
+		if (from.sin6_port != rt_htons(DHCP_SERVER_PORT))
 			continue;
-		dhcp_input(dhcp_rxbuf, (u32)r, from.sin_addr);
+		dhcp_input(dhcp_rxbuf, (u32)r, rt_in6_v4(&from.sin6_addr));
 	}
 }
 
@@ -590,7 +591,7 @@ static void dhcp_upcall_fn(struct rt_socket *so, u32 events, void *arg)
 
 static int socket_open(void)
 {
-	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin;
 	int r;
 
 	if (dhcp_so)
@@ -605,10 +606,7 @@ static int socket_open(void)
 	if (r < 0)
 		goto fail;
 	dhcp_so->options |= RT_SO_BROADCAST | RT_SO_REUSEADDR;
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_len = sizeof(sin);
-	sin.sin_family = RT_AF_INET;
-	sin.sin_port = rt_htons(DHCP_CLIENT_PORT);
+	rt_sin_fill(dhcp_so, &sin, NULL, rt_htons(DHCP_CLIENT_PORT), 0);
 	r = dhcp_so->ops->bind(dhcp_so, &sin);
 	if (r < 0) {
 		sock_kernel_close(dhcp_so);

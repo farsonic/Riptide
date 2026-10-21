@@ -289,6 +289,7 @@ arguments (`-n`, `-c 3`, ...), print what their Linux counterparts print,
 stop on Ctrl-C and return 0 (ok), 5 (warning, e.g. no ping reply), 10
 (error) or 20 (failure, e.g. no stack). Each has `-h` / `--help`. They
 need little stack (buffers come from AllocVec()).
+`ping6` and `traceroute6` are `ping -6` and `traceroute -6` (see "IPv6").
 
 Where the data comes from:
 
@@ -532,8 +533,8 @@ Commands can be abbreviated. Notes:
   quit. When input is a script, Ctrl-C between commands ends it.
 * Transfers use a 32 KB buffer (AllocVec) and AmigaDOS Read/Write; write
   errors (disk full) abort the transfer. Timing comes from timer.device.
-* There is no `.netrc`, proxy, FXP, IPv6 (EPRT/LPSV), TLS or `!` shell
-  escape; offsets are limited to 2 GB.
+* IPv6 servers work with EPSV and EPRT (RFC 2428). There is no
+  `.netrc`, proxy, FXP, LPSV, TLS or `!` shell escape; offsets are limited to 2 GB.
 
 **Testing transfers against your computer.** Under FS-UAE with slirp NAT
 (Amiga 10.0.2.15, host 10.0.2.2) run an FTP server on the host, for
@@ -710,6 +711,99 @@ driver opens. Messages still queued at shutdown are replied with
 `ESHUTDOWN`. Version 1 messages (`mn_Length` without the reply buffer
 fields, as sent by Riptide 0.9) are still understood.
 
+## IPv6
+
+Riptide is a dual-stack host: IPv6 runs next to IPv4 on every interface
+without configuration, and IPv4 behaves exactly as before.
+
+**What happens on its own.** When an interface comes up Riptide gives it
+a link-local address (`fe80::/64`, interface identifier per RFC 7217:
+stable for the network but not derived from the MAC, unless
+`net.inet6.ip6.addr_gen_mode=0` asks for EUI-64), joins the all-nodes
+and solicited-node groups (MLDv2, MLDv1 with old routers), runs duplicate
+address detection and sends router solicitations. Router advertisements
+bring global addresses (SLAAC), the default router and more specific
+routes (RFC 4191), the link MTU, hop limit and DNS servers and search
+domain (RDNSS/DNSSL, RFC 8106). When the router sets the O (or M) flag
+Riptide also asks a DHCPv6 server for DNS servers and the search domain
+(stateless DHCPv6, RFC 8415). `lo0` has `::1`.
+
+**Configuration** (riptide.conf or `ip`/`ifconfig`/`route` at run time):
+
+```
+ipv6 off                           # no IPv6 on interfaces that come up later
+ipv6 eth0 on|off                   # one interface, now
+ifconfig eth0 inet6 2001:db8::5/64 [nodad]     # static address (+ prefix route)
+ifconfig eth0 inet6 2001:db8::5 delete
+route add -inet6 default via fe80::1%eth0      # or: route add default via fe80::1 dev eth0
+route add -inet6 2001:db8:99::/48 via 2001:db8::1
+nameserver 2001:db8::53            # IPv6 name servers (link-local: fe80::1%eth0)
+host myhost 2001:db8::7            # static host table, AAAA
+arp add 2001:db8::9 02:00:00:00:00:09 dev eth0 # static neighbour
+sysctl net.inet6.ip6.use_tempaddr=2            # RFC 8981 temporary addresses
+```
+
+IPv6 sysctls: `net.inet6.ip6.enable` (1), `accept_rtadv` (1),
+`use_tempaddr` (0; 1 create, 2 also prefer temporary addresses),
+`addr_gen_mode` (1), `stable_secret` (empty: derived from the MAC),
+`dad_count` (1), `hlim` (64), `forwarding` (0), `mtu_expires` (600 s),
+`v6only` (0), and `net.inet6.icmp6.ratelimit` (1000 ms per destination),
+`errppslimit` (100/s), `echo_ignore_multicast` (0).
+
+**Tools.** `ip a` and `ifconfig` show `inet6` lines; `ip -6 addr|route|neigh`
+(with `add`, `del`, `flush`, `get`), `ping -6` / `ping6`, `traceroute -6`
+/ `traceroute6`, `netstat` (`tcp6`/`udp6`/`raw6` rows, `-6`, `-s -6`),
+`host` (AAAA, `ip6.arpa` reverse lookups, IPv6 name servers), `nc -6` and
+`ftp` (EPSV/EPRT, `ftp://[2001:db8::1]/`) work over IPv6. Without `-6`,
+`ping`, `traceroute`, `nc` and `ftp` use IPv6 for IPv6 literals and IPv4
+for host names. `ip dns` lists every name server with where it came from.
+`Riptide STATUS` lists the IPv6 addresses and name servers.
+
+**Programming.** The ABI is the BSD (KAME) one that the Miami SDK also
+used:
+
+| | |
+|---|---|
+| `AF_INET6` / `PF_INET6` | 28 |
+| `struct sockaddr_in6` | 28 bytes: len, family, port, flowinfo, addr[16], scope_id (RFC 3493). 24-byte RFC 2133 addresses (no scope_id, as in the Miami SDK) are accepted, and a 24-byte buffer gets 24 bytes back |
+| `IPPROTO_IPV6` / `IPPROTO_ICMPV6` | 41 / 58 |
+| `IPV6_UNICAST_HOPS` 4, `IPV6_MULTICAST_IF` 9, `_HOPS` 10, `_LOOP` 11, `IPV6_JOIN_GROUP` 12, `IPV6_LEAVE_GROUP` 13, `IPV6_CHECKSUM` 26, `IPV6_V6ONLY` 27, `IPV6_TCLASS` 61, `IPV6_DONTFRAG` 62 | KAME values |
+| `ICMP6_FILTER` | 18 at level `IPPROTO_ICMPV6`, KAME semantics (a set bit passes the type) |
+| `AI_NUMERICSERV` 8, `AI_ALL` 0x100, `AI_V4MAPPED_CFG` 0x200, `AI_ADDRCONFIG` 0x400, `AI_V4MAPPED` 0x800 | KAME values |
+
+* An `AF_INET6` socket bound to `::` also takes IPv4 peers, which appear
+  as `::ffff:a.b.c.d` (RFC 3493; `IPV6_V6ONLY` or the `v6only` sysctl
+  turn this off). `AF_INET` sockets are unchanged.
+* `RiptideSupportsIPV6()` (and the compat alias) returns TRUE.
+  `inet_pton()`/`inet_ntop()` take `AF_INET6` (RFC 5952 output),
+  `gethostbyname2(name, AF_INET6)` returns AAAA records,
+  `getaddrinfo()` takes `AF_INET6` and `AF_UNSPEC` (sorted by RFC 6724
+  destination selection, so IPv4 comes first when there is no usable
+  IPv6 route), `AI_V4MAPPED`, `AI_ALL`, `AI_ADDRCONFIG` and zone ids
+  (`fe80::1%eth0`), and `getnameinfo()` takes `sockaddr_in6`.
+  bsdsocket.library's `gethostbyaddr()` resolves IPv6 addresses
+  (`type` 28, `len` 16); `gethostbyname()` stays IPv4.
+* Raw `AF_INET6` sockets receive the payload without the IPv6 header
+  (RFC 3542); for ICMPv6 the stack computes the checksum.
+* Table readers: `net.riptide.addrs6`, `routes6`, `neigh6`, `sockets6`,
+  `dns6`, `ip6stat`, `icmp6stat` and `ifaces6` (numbers 10 to 17,
+  records in `include/rt/rt_ctl.h`). The IPv4 tables are unchanged and
+  do not list IPv6 sockets.
+
+**Drivers.** SANA-II devices get CMD_READs for type 0x86DD, and the
+multicast groups IPv6 needs are programmed with
+`S2_ADDMULTICASTADDRESS`/`S2_DELMULTICASTADDRESS`. A driver without a
+multicast filter (it answers `S2ERR_NOT_SUPPORTED`, logged once) may not
+deliver neighbour solicitations, and then IPv6 cannot resolve neighbours
+on that link. MNI drivers get packet type 0x86DD and `AddMulticast()`.
+On point-to-point (PPP/SLIP) devices Riptide reads 0x86DD too, but there
+is no IPV6CP, so IPv6 over PPP depends on the driver.
+
+**Not implemented:** stateful DHCPv6 (address and prefix leases),
+ancillary data (`IPV6_PKTINFO`, `IPV6_RECVHOPLIMIT`: `ping6` cannot show
+the reply's hop limit), routing headers (a host: one with segments left
+is refused with a parameter problem), mobility, IPsec, SEND, and IPv6 over PPP (IPV6CP).
+
 ## Compatibility notes
 
 **Per-opener library bases.** As in the historical stack, every task that
@@ -757,13 +851,13 @@ own library base.
   interface name; "mi0" or NULL means any interface),
   `RiptideGetHardwareLen()`, `RiptideResGetOptions()`/`RiptideResSetOptions()`,
   `RiptideSupportedCPUs()`, `inet_ntop()`, `inet_pton()`, `inet_aton()`,
-  `gethostbyname2()` (AF_INET only), `getaddrinfo()`, `freeaddrinfo()`,
+  `gethostbyname2()`, `getaddrinfo()`, `freeaddrinfo()`,
   `getnameinfo()`, `gai_strerror()`, the `if_*` functions, `sockatmark()`,
   `RiptideGetFdCallback()` and `RiptideSetFdCallback()`.
 * Fd callbacks must be 68k register callbacks (`RIPTIDECPU_M68KREG`); PPC
   callbacks are refused.
 * Return fixed values:
-  * `RiptideSupportsIPV6()` returns 0.
+  * `RiptideSupportsIPV6()` returns TRUE (see "IPv6").
   * `RiptideOpenSSL()` returns NULL (there is no SSL).
   * `RiptidePFAddHook()` returns NULL (no packet monitoring).
   * `RiptideSetSocksConn()` returns FALSE (no SOCKS).
@@ -820,7 +914,7 @@ inlines from the FD file with their usual tools.
 * `getpass()` reads from the caller's console.
 * There is no utmp or lastlog: `getutent()` and `getlastlog()` return NULL.
 
-**Not supported:** IPv6, `socketpair()`, ancillary data in `recvmsg()`
+**Not supported:** `socketpair()`, ancillary data in `recvmsg()`
 (`msg_controllen` is always 0), and ARexx.
 
 ## CPU support
@@ -946,9 +1040,9 @@ Both builds generate their library glue from the LVO tables
 |---|---|
 | `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the SDK 2.11 of the historical API (`COMPAT_SDK`): the compat alias must keep its vector layout (riptide.library's names are mapped to the historical ones), and `sdk/fd/riptide_lib.fd` must match the table. Set `NDK=`, `COMPAT_SDK=` and `AMITCP_SDK=` to the unpacked archives. |
 | `tests/amiga/test_hunk.py FILES` | Loads the executables with amitools and checks their relocations. It also has elf2hunk unit tests: absolute, PC-relative and absolute-symbol relocations, rejecting 16-bit relocations, bss in the hunk size, and a run under vamos. |
-| `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
-| `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. |
-| `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
+| `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback (127.0.0.1 and ::1, 24- and 28-byte `sockaddr_in6`, a dual-stack listener, the IPv6 resolver calls) with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
+| `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. IPv6: `ip -6` addr/route/neigh changes and listings, `ifconfig inet6`, `ping6`/`ping -6`, `traceroute6`, `host` AAAA and `ip6.arpa`, `nc -6` (also an IPv4 client of a dual-stack listener), `netstat -6`. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. |
+| `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms; then IPv6 sessions with a dual-stack `ftpd-test -6` (EPSV, EPRT, `ftp://[::1]:2122/`) and an IPv4 client of the same server. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
 | `tests/t_arch_m68k.c` (host, `make CROSS=m68k-linux-gnu-`) | Every assembly routine against the C versions: all lengths 0..160 with every source/destination alignment 0..15, 3000 random lengths up to 4096, 64-128 KB and 4 MB buffers, initial sums 0, 0xffffffff and others, random/all-ones/zero data, guard bytes around every copy; odd-offset chaining, the TCP `rt_buf` copy + checksum, routine selection and the sysctls. Run it on each CPU: `RT_CPU=68040 qemu-m68k -cpu m68040 build/m68k-linux-gnu/tests/t_arch_m68k` (also `m68020`, `m68030`, `m68060`). qemu's 68060 model lacks MOVE16, so there the test turns MOVE16 off through the kill switch. It skips in other builds. |
 | `tests/amiga/run_fsuae_speedtest.sh build/amiga` | speedtest against three `httpd-test` servers on FS-UAE (plain, chunked with redirects, redirecting to https://): `--server-url`, `--mirror`, all output formats, byte counts against the servers' counters, errors and Ctrl-C. |
 | `tests/t_speedtest_*.c` (host) | speedtest's XML, URL and HTTP parsers (every split point, random input), distances; end to end against `tools/speedtest_mock.py` over Linux sockets and over Riptide through TUN. |

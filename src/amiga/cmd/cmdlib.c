@@ -588,6 +588,206 @@ char *cl_hostname(u32 addr, int numeric, char *buf, u32 len)
 	return buf;
 }
 
+/* ------------------------------------------------------------ either family */
+
+char *cl_ip6(const u8 *a16, char *buf)
+{
+	rt_in6_addr a;
+
+	memcpy(a.b, a16, 16);
+	return rt_inet6_ntop(&a, buf, RT_INET6_ADDRSTRLEN);
+}
+
+const char *cl_ifname(u32 index)
+{
+	static char name[RT_IFNAMSIZ + 1];
+
+	name[0] = 0;
+	if (index && cl_need_riptide() == 0 && !if_indextoname(index, (STRPTR)name))
+		name[0] = 0;
+	return name;
+}
+
+int cl_parse_addr(const char *s, struct cl_addr *out)
+{
+	char zone[RT_IFNAMSIZ + 1];
+	u32 v4;
+	int plen;
+
+	memset(out, 0, sizeof(*out));
+	if (cl_parse_ip(s, &v4) == 0) {
+		out->family = RT_AF_INET;
+		rt_in6_set_v4mapped(&out->a, v4);
+		return 0;
+	}
+	zone[0] = 0;
+	if (rt_inet6_parse_prefix(s, &out->a, &plen, zone, sizeof(zone)) < 0 || plen >= 0)
+		return -1;
+	out->family = RT_AF_INET6;
+	if (zone[0]) {
+		u32 n;
+		if (cl_parse_uint(zone, 0xffffffffUL, &n) == 0)
+			out->scope = n;
+		else if (cl_need_riptide() == 0)
+			out->scope = (u32)if_nametoindex((CONST_STRPTR)zone);
+		if (!out->scope)
+			return -1;
+	}
+	return 0;
+}
+
+int cl_resolve_af(const char *name, int family, struct cl_addr *out)
+{
+	if (cl_parse_addr(name, out) == 0) {
+		if ((family == 4 && out->family != RT_AF_INET) || (family == 6 && out->family != RT_AF_INET6)) {
+			cl_error("%s: Address family for hostname not supported", name);
+			return -1;
+		}
+		return 0;
+	}
+	if (strchr(name, ':') || strchr(name, '%')) {
+		cl_error("%s: Name or service not known", name);
+		return -1;
+	}
+	if (family == 4) {
+		u32 a;
+		if (cl_resolve(name, &a) < 0)
+			return -1;
+		out->family = RT_AF_INET;
+		rt_in6_set_v4mapped(&out->a, a);
+		return 0;
+	}
+	if (cl_need_riptide() < 0)
+		return -1;
+	if (family == 6) {
+		struct hostent *h = (struct hostent *)gethostbyname2((CONST_STRPTR)name, RT_AF_INET6);
+		if (!h || h->h_length != 16 || !h->h_addr_list || !h->h_addr_list[0]) {
+			cl_error("%s: %s", name, h ? "No address associated with hostname" :
+			         "Name or service not known");
+			return -1;
+		}
+		out->family = RT_AF_INET6;
+		memcpy(out->a.b, h->h_addr_list[0], 16);
+		return 0;
+	} else {
+		struct addrinfo hints, *res = NULL;
+		LONG e;
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_socktype = RT_SOCK_STREAM;
+		e = getaddrinfo((CONST_STRPTR)name, NULL, &hints, (APTR *)&res);
+		if (e || !res) {
+			cl_error("%s: %s", name, (const char *)gai_strerror(e));
+			return -1;
+		}
+		cl_from_sockaddr(res->ai_addr, out, NULL);
+		freeaddrinfo(res);
+		return 0;
+	}
+}
+
+char *cl_addr_str(const struct cl_addr *a, char *buf)
+{
+	if (a->family == RT_AF_INET)
+		return cl_ip(rt_in6_v4(&a->a), buf);
+	rt_inet6_ntop(&a->a, buf, RT_INET6_ADDRSTRLEN);
+	if (a->scope) {
+		const char *n = cl_ifname(a->scope);
+		u32 l = (u32)strlen(buf);
+		if (n[0])
+			rt_snprintf(buf + l, CL_ADDRSTRLEN - l, "%%%s", n);
+		else
+			rt_snprintf(buf + l, CL_ADDRSTRLEN - l, "%%%lu", (unsigned long)a->scope);
+	}
+	return buf;
+}
+
+char *cl_addr_name(const struct cl_addr *a, int numeric, char *buf, u32 len)
+{
+	char tmp[CL_ADDRSTRLEN];
+
+	if (a->family == RT_AF_INET)
+		return cl_hostname(rt_in6_v4(&a->a), numeric, buf, len);
+	if (!numeric && !rt_in6_is_unspec(&a->a) && cl_need_socket() == 0) {
+		struct hostent *h = (struct hostent *)gethostbyaddr((APTR)a->a.b, 16, RT_AF_INET6);
+		if (h && h->h_name && h->h_name[0]) {
+			rt_strlcpy(buf, h->h_name, len);
+			return buf;
+		}
+	}
+	rt_strlcpy(buf, cl_addr_str(a, tmp), len);
+	return buf;
+}
+
+u32 cl_sockaddr(const struct cl_addr *a, u16 port, void *sa)
+{
+	if (a->family == RT_AF_INET) {
+		struct rt_sockaddr_in *s = sa;
+		memset(s, 0, sizeof(*s));
+		s->sin_len = sizeof(*s);
+		s->sin_family = RT_AF_INET;
+		s->sin_port = rt_htons(port);
+		s->sin_addr = rt_in6_v4(&a->a);
+		return sizeof(*s);
+	} else {
+		struct rt_sockaddr_in6 *s = sa;
+		memset(s, 0, sizeof(*s));
+		s->sin6_len = sizeof(*s);
+		s->sin6_family = RT_AF_INET6;
+		s->sin6_port = rt_htons(port);
+		s->sin6_addr = a->a;
+		s->sin6_scope_id = a->scope;
+		return sizeof(*s);
+	}
+}
+
+void cl_from_sockaddr(const void *sa, struct cl_addr *out, u16 *port)
+{
+	const struct rt_sockaddr_in *s4 = sa;
+	const struct rt_sockaddr_in6 *s6 = sa;
+
+	memset(out, 0, sizeof(*out));
+	if (s4->sin_family == RT_AF_INET6) {
+		out->family = RT_AF_INET6;
+		memcpy(out->a.b, s6->sin6_addr.b, 16);
+		out->scope = s6->sin6_len >= RT_SIN6_LEN ? s6->sin6_scope_id : 0;
+		if (port)
+			*port = rt_ntohs(s6->sin6_port);
+	} else {
+		out->family = RT_AF_INET;
+		rt_in6_set_v4mapped(&out->a, s4->sin_addr);
+		if (port)
+			*port = rt_ntohs(s4->sin_port);
+	}
+}
+
+int cl_connect_addr(int fd, const struct cl_addr *a, u16 port, u32 ms)
+{
+	struct rt_sockaddr_in6 sa;
+	LONG on = 1, off = 0, err = 0, len;
+	u32 sl = cl_sockaddr(a, port, &sa);
+	int nb, r;
+
+	nb = IoctlSocket(fd, RT_FIONBIO, &on) == 0;
+	if (connect(fd, &sa, (LONG)sl) == 0)
+		goto done;
+	err = Errno();
+	if (!nb || (err != RT_EINPROGRESS && err != RT_EALREADY && err != RT_EWOULDBLOCK))
+		goto done;
+	r = cl_wait_fd(fd, 1, ms);
+	if (r == 1) {
+		err = 0;
+		len = sizeof(err);
+		if (getsockopt(fd, RT_SOL_SOCKET, RT_SO_ERROR, &err, &len) < 0)
+			err = Errno();
+	} else {
+		err = r == 0 ? RT_ETIMEDOUT : r == -1 ? RT_EINTR : Errno();
+	}
+done:
+	if (nb)
+		IoctlSocket(fd, RT_FIONBIO, &off);
+	return (int)err;
+}
+
 const char *cl_strerror(int err)
 {
 	switch (err) {

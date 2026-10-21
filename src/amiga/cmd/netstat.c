@@ -13,6 +13,7 @@
 #include "gen/riptide_calls.h"
 
 static int opt_n, opt_all, opt_listen, opt_t, opt_u, opt_w, opt_e;
+static int opt_family;           /* 0 both, 4 (-4 / -A inet), 6 (-6 / -A inet6) */
 
 static void usage(void)
 {
@@ -28,7 +29,8 @@ static void usage(void)
 	        "        -c, --continuous         continuous listing (Ctrl-C stops)\n"
 	        "        -l, --listening          display listening server sockets\n"
 	        "        -a, --all                display all sockets (default: connected)\n"
-	        "  <Socket>={-t|--tcp} {-u|--udp} {-w|--raw}\n");
+	        "  <Socket>={-t|--tcp} {-u|--udp} {-w|--raw}\n"
+	        "  <Af>={-4|--inet} {-6|--inet6}\n");
 }
 
 static void endpoint(char *b, u32 len, u32 addr, u32 port, const char *proto, int raw)
@@ -67,6 +69,91 @@ static void endpoint(char *b, u32 len, u32 addr, u32 port, const char *proto, in
 	}
 }
 
+/* IPv6 endpoint: "addr:port" (net-tools prints IPv6 without brackets) */
+static void endpoint6(char *b, u32 len, const u8 *addr, u32 port, const char *proto, int raw)
+{
+	struct cl_addr a;
+	char h[CL_ADDRSTRLEN], p[24];
+	const char *svc = NULL;
+	struct servent *se;
+	u32 hl, pl;
+	static const u8 zero[16];
+
+	memset(&a, 0, sizeof(a));
+	a.family = RT_AF_INET6;
+	memcpy(a.a.b, addr, 16);
+	if (!memcmp(addr, zero, 16))
+		rt_strlcpy(h, "::", sizeof(h));
+	else
+		cl_addr_name(&a, opt_n, h, sizeof(h));
+	if (raw) {
+		struct protoent *pe = opt_n ? NULL : (struct protoent *)getprotobynumber((LONG)port);
+		if (pe && pe->p_name)
+			svc = pe->p_name;
+	} else if (!port) {
+		svc = "*";
+	} else if (!opt_n && (se = (struct servent *)getservbyport((LONG)rt_htons((u16)port),
+	                                                           (CONST_STRPTR)proto)) != NULL) {
+		svc = se->s_name;
+	}
+	if (svc)
+		rt_strlcpy(p, svc, sizeof(p));
+	else
+		rt_snprintf(p, sizeof(p), "%lu", (unsigned long)port);
+	hl = (u32)strlen(h);
+	pl = (u32)strlen(p);
+	if (hl + 1 + pl > 23 && pl < 22)
+		h[22 - pl] = 0;
+	rt_snprintf(b, len, "%s:%s", h, p);
+}
+
+static int want_kind(u8 kind)
+{
+	if (!opt_t && !opt_u && !opt_w)
+		return 1;
+	return kind == RT_CTL_SOCK_TCP ? opt_t : kind == RT_CTL_SOCK_UDP ? opt_u : opt_w;
+}
+
+static void show_sockets6(void)
+{
+	struct rt_ctl_hdr h;
+	void *d = cl_dump(RT_CTL_SOCKETS6, &h);
+	u32 k;
+	char l[64], f[64];
+	static const u8 zero[16];
+
+	for (k = 0; d && k < h.count && !cl_break(); k++) {
+		struct rt_ctl_sock6 *s = cl_rec(d, &h, k);
+		int listening, connected = memcmp(s->faddr, zero, 16) != 0;
+		const char *pn;
+		if (!want_kind(s->kind))
+			continue;
+		if (s->kind == RT_CTL_SOCK_TCP) {
+			listening = s->state == RT_TCPS_LISTEN;
+			pn = "tcp6";
+		} else {
+			listening = !connected;
+			pn = s->kind == RT_CTL_SOCK_UDP ? "udp6" : "raw6";
+		}
+		if (opt_listen ? !listening : (!opt_all && listening))
+			continue;
+		endpoint6(l, sizeof(l), s->laddr, s->kind == RT_CTL_SOCK_RAW ? s->proto : s->lport, pn,
+		          s->kind == RT_CTL_SOCK_RAW);
+		endpoint6(f, sizeof(f), s->faddr, s->fport, pn, 0);
+		cl_printf("%-4s  %6lu %6lu %-23s %-23s %-11s", pn, (unsigned long)s->recvq,
+		          (unsigned long)s->sendq, l, f,
+		          s->kind == RT_CTL_SOCK_TCP ? rt_ctl_tcp_state_name(s->state) :
+		          s->kind == RT_CTL_SOCK_UDP && connected ? "ESTABLISHED" : "");
+		if (opt_e && s->kind == RT_CTL_SOCK_TCP)
+			cl_printf(" %7lu.%01lu %4lu %7lu", (unsigned long)(s->rtt_us / 1000),
+			          (unsigned long)(s->rtt_us % 1000 / 100), (unsigned long)s->cwnd,
+			          (unsigned long)s->retrans);
+		cl_puts("\n");
+	}
+	if (d)
+		FreeVec(d);
+}
+
 static int show_sockets(void)
 {
 	struct rt_ctl_hdr h;
@@ -80,7 +167,7 @@ static int show_sockets(void)
 	          opt_listen ? "(only servers)" : opt_all ? "(servers and established)" : "(w/o servers)");
 	cl_puts("Proto Recv-Q Send-Q Local Address           Foreign Address         State      ");
 	cl_puts(opt_e ? " RTT(ms) Cwnd Retrans\n" : "\n");
-	for (k = 0; k < h.count && !cl_break(); k++) {
+	for (k = 0; opt_family != 6 && k < h.count && !cl_break(); k++) {
 		struct rt_ctl_sock *s = cl_rec(d, &h, k);
 		int listening;
 		const char *pn;
@@ -116,6 +203,8 @@ static int show_sockets(void)
 		cl_puts("\n");
 	}
 	FreeVec(d);
+	if (opt_family != 4)
+		show_sockets6();
 	return CL_OK;
 }
 
@@ -204,6 +293,64 @@ static void *stat_dump(int what, u32 size)
 
 #define P(fmt, v) cl_printf("    " fmt "\n", (unsigned long)(v))
 
+static void show_stats6(void)
+{
+	struct rt_ip6_stats *s;
+	struct rt_icmp6_stats *c;
+	void *d;
+
+	if ((d = stat_dump(RT_CTL_IP6STAT, sizeof(*s))) != NULL) {
+		s = (struct rt_ip6_stats *)((u8 *)d + sizeof(struct rt_ctl_hdr));
+		cl_puts("Ip6:\n");
+		P("%lu total packets received", s->InReceives);
+		P("%lu with invalid headers", s->InHdrErrors);
+		P("%lu with packets too big", s->InTooBigErrors);
+		P("%lu with no route", s->InNoRoutes);
+		P("%lu with invalid addresses", s->InAddrErrors);
+		P("%lu with unknown protocol", s->InUnknownProtos);
+		P("%lu truncated packets", s->InTruncatedPkts);
+		P("%lu incoming packets discarded", s->InDiscards);
+		P("%lu incoming packets delivered", s->InDelivers);
+		P("%lu forwarded", s->OutForwDatagrams);
+		P("%lu requests sent out", s->OutRequests);
+		P("%lu outgoing packets dropped", s->OutDiscards);
+		P("%lu dropped because of missing route", s->OutNoRoutes);
+		P("%lu reassemblies required", s->ReasmReqds);
+		P("%lu packets reassembled ok", s->ReasmOKs);
+		P("%lu packet reassemblies failed", s->ReasmFails);
+		P("%lu fragments created", s->FragCreates);
+		P("%lu incoming multicast packets", s->InMcastPkts);
+		P("%lu outgoing multicast packets", s->OutMcastPkts);
+		FreeVec(d);
+	}
+	if ((d = stat_dump(RT_CTL_ICMP6STAT, sizeof(*c))) != NULL) {
+		c = (struct rt_icmp6_stats *)((u8 *)d + sizeof(struct rt_ctl_hdr));
+		cl_puts("Icmp6:\n");
+		P("%lu ICMPv6 messages received", c->InMsgs);
+		P("%lu input ICMPv6 message failed", c->InErrors);
+		P("%lu ICMPv6 messages sent", c->OutMsgs);
+		P("%lu ICMPv6 messages failed", c->OutErrors);
+		P("%lu ICMPv6 messages rate limited", c->OutRateLimited);
+		cl_puts("    ICMPv6 input histogram:\n");
+		if (c->InDestUnreachs) P("    destination unreachable: %lu", c->InDestUnreachs);
+		if (c->InPktTooBigs) P("    packets too big: %lu", c->InPktTooBigs);
+		if (c->InTimeExcds) P("    received time exceeded: %lu", c->InTimeExcds);
+		if (c->InEchos) P("    echo requests: %lu", c->InEchos);
+		if (c->InEchoReplies) P("    echo replies: %lu", c->InEchoReplies);
+		if (c->InRouterAdvertisements) P("    router advertisements: %lu", c->InRouterAdvertisements);
+		if (c->InNeighborSolicits) P("    neighbour solicits: %lu", c->InNeighborSolicits);
+		if (c->InNeighborAdvertisements) P("    neighbour advertisements: %lu", c->InNeighborAdvertisements);
+		cl_puts("    ICMPv6 output histogram:\n");
+		if (c->OutDestUnreachs) P("    destination unreachable: %lu", c->OutDestUnreachs);
+		if (c->OutEchoReplies) P("    echo replies: %lu", c->OutEchoReplies);
+		if (c->OutRouterSolicits) P("    router solicits: %lu", c->OutRouterSolicits);
+		if (c->OutNeighborSolicits) P("    neighbour solicits: %lu", c->OutNeighborSolicits);
+		if (c->OutNeighborAdvertisements) P("    neighbour advertisements: %lu", c->OutNeighborAdvertisements);
+		if (c->OutMLDv2Reports) P("    MLDv2 reports: %lu", c->OutMLDv2Reports);
+		FreeVec(d);
+	}
+}
+
 static int show_stats(void)
 {
 	void *d;
@@ -211,6 +358,10 @@ static int show_stats(void)
 	u32 fwd = 0;
 	LONG mib[4] = { 4, 2, 0, 1 }, len = 4;
 
+	if (opt_family == 6) {
+		show_stats6();
+		return CL_OK;
+	}
 	if (all) {
 		struct rt_ip_stats *s;
 		struct rt_icmp_stats *c;
@@ -258,6 +409,8 @@ static int show_stats(void)
 		if (c->OutDestUnreachs) P("    destination unreachable: %lu", c->OutDestUnreachs);
 		if (c->OutEchoReps) P("    echo replies: %lu", c->OutEchoReps);
 		FreeVec(d);
+		if (opt_family == 0)
+			show_stats6();
 	}
 	if (all || opt_t) {
 		struct rt_tcp_stats *t;
@@ -341,9 +494,11 @@ static int netstat_main(int argc, char **argv)
 		else if (!strcmp(a, "--raw")) argv[i] = "-w";
 		else if (!strcmp(a, "--continuous")) argv[i] = "-c";
 		else if (!strcmp(a, "--extend")) argv[i] = "-e";
+		else if (!strcmp(a, "--inet")) argv[i] = "-4";
+		else if (!strcmp(a, "--inet6")) argv[i] = "-6";
 	}
 	memset(&g, 0, sizeof(g));
-	while ((c = cl_getopt(argc, argv, "anNtuwlrisceveopF4CV", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "anNtuwlrisceveopF46CVA:", &g)) != -1) {
 		switch (c) {
 		case 'a': opt_all = 1; break;
 		case 'n': case 'N': opt_n = 1; break;
@@ -353,6 +508,9 @@ static int netstat_main(int argc, char **argv)
 		case 'l': opt_listen = 1; break;
 		case 'e': opt_e = 1; break;
 		case 'c': cont = 1; break;
+		case '4': opt_family = 4; break;
+		case '6': opt_family = 6; break;
+		case 'A': opt_family = !strcmp(g.arg, "inet6") ? 6 : !strcmp(g.arg, "inet") ? 4 : 0; break;
 		case 'r': case 'i': case 's': mode = c; break;
 		case 'V': cl_puts("netstat (Riptide) 0.10\n"); return CL_OK;
 		case '?': usage(); return CL_ERROR;

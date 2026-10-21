@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "tcp.h"
+#include "infra.h"
 
 #define OPTION_SACK_ADVERTISE 0x01
 #define OPTION_TS             0x02
@@ -221,7 +222,7 @@ void tcp_select_initial_window(u32 space, u32 mss, u32 *rcv_wnd, u32 *window_cla
 /* ---- MSS ---- */
 static u32 tcp_mtu_to_mss(const struct tcp_sock *tp, u32 pmtu)
 {
-	s32 mss = (s32)pmtu - 20 - TCP_HDR_LEN;
+	s32 mss = (s32)pmtu - tp->net_hlen - TCP_HDR_LEN;
 
 	if (mss > (s32)tp->rx_opt.mss_clamp)
 		mss = tp->rx_opt.mss_clamp;
@@ -233,7 +234,7 @@ static u32 tcp_mtu_to_mss(const struct tcp_sock *tp, u32 pmtu)
 
 u32 tcp_mss_to_mtu(const struct tcp_sock *tp, u32 mss)
 {
-	return mss + tp->tcp_header_len + 20;
+	return mss + tp->tcp_header_len + tp->net_hlen;
 }
 
 static u32 tcp_bound_to_half_wnd(const struct tcp_sock *tp, u32 pktsize)
@@ -251,6 +252,8 @@ u32 tcp_sync_mss(struct tcp_sock *tp, u32 pmtu)
 
 	if (pmtu < 68)
 		pmtu = 68;
+	if (tp->net_hlen == 40 && pmtu < RT_IP6_MIN_MTU)
+		pmtu = RT_IP6_MIN_MTU;
 	mss = tcp_mtu_to_mss(tp, pmtu);
 	mss = tcp_bound_to_half_wnd(tp, mss);
 	tp->pmtu_cookie = (u16)pmtu;
@@ -323,22 +326,23 @@ static void tcp_event_data_sent(struct tcp_sock *tp)
 /* ---- segment transmission (Linux __tcp_transmit_skb) ---- */
 static int tcp_ip_send(struct tcp_sock *tp, struct rt_buf *b, u8 tos)
 {
-	struct rt_ip_out o;
+	struct rt_inet_out o;
 
 	memset(&o, 0, sizeof(o));
-	o.saddr = tp->saddr;
-	o.daddr = tp->daddr;
+	o.src = tp->saddr;
+	o.dst = tp->daddr;
 	o.proto = RT_IPPROTO_TCP;
 	o.ttl = tp->ttl;
 	o.tos = tos;
 	o.df = 1;
 	o.dontroute = tp->so && (tp->so->options & RT_SO_DONTROUTE);
-	return rt_ip_output(b, &o);
+	o.scope = tp->scope;
+	return rt_inet_output(b, &o);
 }
 
-static void tcp_fill_csum(struct rt_buf *b, u32 saddr, u32 daddr)
+static void tcp_fill_csum(struct rt_buf *b, const rt_in6_addr *saddr, const rt_in6_addr *daddr)
 {
-	u32 sum = rt_csum_pseudo(saddr, daddr, RT_IPPROTO_TCP, (u16)b->len);
+	u32 sum = rt_inet_pseudo(saddr, daddr, RT_IPPROTO_TCP, b->len);
 	u16 c;
 
 	b->data[16] = b->data[17] = 0;
@@ -348,9 +352,10 @@ static void tcp_fill_csum(struct rt_buf *b, u32 saddr, u32 daddr)
 
 /* As tcp_fill_csum(), with the payload behind the hdr_len (even) header
  * bytes already summed into dsum. */
-static void tcp_fill_csum_hdr(struct rt_buf *b, u32 saddr, u32 daddr, u32 hdr_len, u32 dsum)
+static void tcp_fill_csum_hdr(struct rt_buf *b, const rt_in6_addr *saddr, const rt_in6_addr *daddr,
+                              u32 hdr_len, u32 dsum)
 {
-	u32 sum = rt_csum_pseudo(saddr, daddr, RT_IPPROTO_TCP, (u16)b->len);
+	u32 sum = rt_inet_pseudo(saddr, daddr, RT_IPPROTO_TCP, b->len);
 	u16 c;
 
 	b->data[16] = b->data[17] = 0;
@@ -428,7 +433,7 @@ int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 			flags |= TCPHDR_ECE;
 	}
 	th[13] = flags;
-	tcp_fill_csum_hdr(b, tp->saddr, tp->daddr, hdr_len, dsum);
+	tcp_fill_csum_hdr(b, &tp->saddr, &tp->daddr, hdr_len, dsum);
 
 	if (flags & TCPHDR_ACK)
 		tcp_event_ack_sent(tp);
@@ -447,11 +452,12 @@ int tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *skb, int clone_it)
 }
 
 /* ---- stateless segments (RST, time-wait ACKs, SYN-ACKs of requests) ---- */
-static int tcp_send_built(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 seq, u32 ack,
-                          u8 flags, u16 win, const struct tcp_out_options *o, u8 tos, u8 ttl)
+static int tcp_send_built(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport,
+                          u32 seq, u32 ack, u8 flags, u16 win, const struct tcp_out_options *o,
+                          u8 tos, u8 ttl, u32 scope)
 {
 	struct rt_buf *b = rt_buf_alloc(RT_BUF_HEADROOM, 0);
-	struct rt_ip_out io;
+	struct rt_inet_out io;
 	u32 hdr_len;
 	u8 opt[TCP_MAX_OPT_LEN];
 	u32 olen = 0;
@@ -475,20 +481,21 @@ static int tcp_send_built(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 seq, u
 		memcpy(th + TCP_HDR_LEN, opt, olen);
 	tcp_fill_csum(b, saddr, daddr);
 	memset(&io, 0, sizeof(io));
-	io.saddr = saddr;
-	io.daddr = daddr;
+	io.src = *saddr;
+	io.dst = *daddr;
 	io.proto = RT_IPPROTO_TCP;
 	io.tos = tos;
 	io.ttl = ttl;
 	io.df = 1;
+	io.scope = scope;
 	rt_tcpstat.OutSegs++;
 	if (flags & TCPHDR_RST)
 		rt_tcpstat.OutRsts++;
-	return rt_ip_output(b, &io);
+	return rt_inet_output(b, &io);
 }
 
-int tcp_send_ctl(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 seq, u32 ack,
-                 u8 flags, u16 win, int ts, u32 tsval, u32 tsecr, u8 tos, u8 ttl)
+int tcp_send_ctl(const rt_in6_addr *saddr, const rt_in6_addr *daddr, u16 sport, u16 dport, u32 seq,
+                 u32 ack, u8 flags, u16 win, int ts, u32 tsval, u32 tsecr, u8 tos, u8 ttl, u32 scope)
 {
 	struct tcp_out_options o;
 
@@ -498,12 +505,14 @@ int tcp_send_ctl(u32 saddr, u32 daddr, u16 sport, u16 dport, u32 seq, u32 ack,
 		o.tsval = tsval;
 		o.tsecr = tsecr;
 	}
-	return tcp_send_built(saddr, daddr, sport, dport, seq, ack, flags, win, ts ? &o : NULL, tos, ttl);
+	return tcp_send_built(saddr, daddr, sport, dport, seq, ack, flags, win, ts ? &o : NULL, tos, ttl,
+	                      scope);
 }
 
 /* Linux tcp_v4_send_reset(): RST for a segment that has no connection.
  * 'in' still has data at the TCP header and a filled cb. */
-void tcp_send_reset_raw(const struct rt_buf *in, u32 saddr, u32 daddr)
+void tcp_send_reset_raw(const struct rt_buf *in, const rt_in6_addr *saddr, const rt_in6_addr *daddr,
+                        u32 scope)
 {
 	const struct tcp_skb_cb *cb = TCP_SKB_CB(in);
 	u16 sport, dport;
@@ -513,10 +522,10 @@ void tcp_send_reset_raw(const struct rt_buf *in, u32 saddr, u32 daddr)
 	memcpy(&sport, in->data, 2);
 	memcpy(&dport, in->data + 2, 2);
 	if (cb->tcp_flags & TCPHDR_ACK)
-		tcp_send_ctl(daddr, saddr, dport, sport, cb->ack_seq, 0, TCPHDR_RST, 0, 0, 0, 0, 0, 0);
+		tcp_send_ctl(daddr, saddr, dport, sport, cb->ack_seq, 0, TCPHDR_RST, 0, 0, 0, 0, 0, 0, scope);
 	else
 		tcp_send_ctl(daddr, saddr, dport, sport, 0, cb->end_seq, TCPHDR_RST | TCPHDR_ACK,
-		             0, 0, 0, 0, 0, 0);
+		             0, 0, 0, 0, 0, 0, scope);
 }
 
 /* SYN-ACK for a request sock (Linux tcp_make_synack) */
@@ -543,9 +552,9 @@ int tcp_send_synack_req(struct tcp_request_sock *req, u32 tsval)
 		flags |= TCPHDR_ECE;
 	req->snt_synack_us = rt_now_us();
 	req->snt_synack_ms = rt_now_ms();
-	return tcp_send_built(req->loc_addr, req->rmt_addr, req->loc_port, req->rmt_port,
+	return tcp_send_built(&req->loc_addr, &req->rmt_addr, req->loc_port, req->rmt_port,
 	                      req->snt_isn, req->rcv_isn + 1, flags,
-	                      (u16)RT_MIN(req->rcv_wnd, TCP_MAX_WINDOW), &o, req->tos, 0);
+	                      (u16)RT_MIN(req->rcv_wnd, TCP_MAX_WINDOW), &o, req->tos, 0, req->scope);
 }
 
 /* ---- ACKs ---- */
@@ -680,7 +689,7 @@ int tcp_connect(struct tcp_sock *tp)
 	tp->rx_opt.mss_clamp = tp->rx_opt.user_mss ? tp->rx_opt.user_mss : TCP_MSS_DEFAULT;
 	tp->max_window = 0;
 	tcp_sync_mss(tp, tp->pmtu_cookie);
-	tp->advmss = (u16)(tp->pmtu_cookie - 40);
+	tp->advmss = (u16)(tp->pmtu_cookie - tp->net_hlen - TCP_HDR_LEN);
 	if (tp->rx_opt.user_mss && tp->advmss > tp->rx_opt.user_mss)
 		tp->advmss = tp->rx_opt.user_mss;
 	if (tp->rcvbuf_locked || !sysctl_tcp_moderate_rcvbuf)

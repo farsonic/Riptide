@@ -44,6 +44,14 @@ int rt_lock_held(void)
 
 /* ---- clocks ---- */
 
+/* rt_host_advance_clock(): unit tests jump ahead in time */
+static volatile u32 clock_skew_ms;
+
+void rt_host_advance_clock(u32 ms)
+{
+	clock_skew_ms += ms;
+}
+
 u64 rt_now_us(void)
 {
 	struct timespec ts;
@@ -51,7 +59,8 @@ u64 rt_now_us(void)
 	/* 32-bit arithmetic plus rt_mul32x32(), so the m68k test build runs
 	 * under qemu-m68k -cpu m68060 (no 64-bit mulu.l/divu.l there) */
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return rt_mul32x32((u32)ts.tv_sec, 1000000u) + (u32)ts.tv_nsec / 1000u;
+	return rt_mul32x32((u32)ts.tv_sec + clock_skew_ms / 1000u, 1000000u) +
+	       (u32)ts.tv_nsec / 1000u + (clock_skew_ms % 1000u) * 1000u;
 }
 
 u32 rt_now_ms(void)
@@ -59,7 +68,7 @@ u32 rt_now_ms(void)
 	struct timespec ts;
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (u32)ts.tv_sec * 1000u + (u32)ts.tv_nsec / 1000000u;
+	return (u32)ts.tv_sec * 1000u + (u32)ts.tv_nsec / 1000000u + clock_skew_ms;
 }
 
 u32 rt_wallclock(void)

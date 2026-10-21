@@ -15,7 +15,7 @@
 set -u
 BUILD=${1:-build/amiga}
 TIMEOUT=${2:-300}
-TOOLS="ip ifconfig route arp netstat traceroute ping host sysctl hostname nc"
+TOOLS="ip ifconfig route arp netstat traceroute ping host sysctl hostname nc ping6 traceroute6"
 command -v fs-uae >/dev/null 2>&1 || { echo "SKIP: fs-uae not installed"; exit 0; }
 for f in Riptide rtcheck $TOOLS; do
 	[ -f "$BUILD/$f" ] || { echo "SKIP: $BUILD/$f not built"; exit 0; }
@@ -33,6 +33,7 @@ domain test.lan
 loglevel 2
 host testhost 127.0.0.5
 host localhost 127.0.0.1
+host testhost6 2001:db8:5::5
 interface eth0 device=uaenet.device unit=0
 ifconfig eth0 10.0.2.15/24 up
 route add default 10.0.2.2
@@ -119,6 +120,34 @@ ip_r_down|ip r
 ip_link_up|ip link set eth0 up
 ip_help|ip help
 ifconfig_bad|ifconfig nosuch0 up
+ip6_addr_add|ip -6 addr add 2001:db8:5::15/64 dev eth0 nodad
+ip6_a|ip -6 addr
+ip6_a_lo|ip a show dev lo0
+ip6_r|ip -6 route
+ip6_route_add|ip -6 route add 2001:db8:99::/48 via fe80::1 dev eth0
+ip6_r2|ip -6 route show
+ip6_route_get|ip -6 route get 2001:db8:99::1
+ip6_route_get_lo|ip route get ::1
+ip6_n|ip -6 neigh
+ip6_br|ip -br a
+ifconfig6|ifconfig lo0
+ifconfig6_add|ifconfig eth0 inet6 add 2001:db8:6::16/64
+ifconfig6_del|ifconfig eth0 inet6 del 2001:db8:6::16
+ifconfig6_eth0|ifconfig eth0
+ping6_lo|ping6 -c 2 -i 0.2 ::1
+ping_6|ping -6 -c 1 ::1
+ping6_eth|ping -c 1 2001:db8:5::15
+traceroute6|traceroute6 -n -q 1 ::1
+traceroute_6I|traceroute -6 -n -I -q 1 ::1
+host6|host testhost6
+host6_rev|host ::1
+nc6_out|nc -6 -d -w 3 ::1 7779
+nc6_dual|nc -d -w 3 127.0.0.1 7781
+netstat6|netstat -6 -an
+netstat6_s|netstat -s -6
+ip6_dns|ip dns
+ip6_addr_del|ip -6 addr del 2001:db8:5::15/64 dev eth0
+ip6_a3|ip -6 addr show dev eth0
 CMDS
 [ -n "$SDKTEST" ] && echo "sdk_test|sdk_test" >> "$work/cmds"
 {
@@ -127,6 +156,10 @@ CMDS
 	# background sockets for netstat: a TCP listener, a TCP connection to it, and a server for nc
 	echo 'DH0:C/rtcheck START="DH0:C/nc -d -l 7777" NOCHECK >NIL:'
 	echo 'DH0:C/rtcheck START="DH0:C/nc -l -p 7778 <DH0:S/riptide.conf" NOCHECK >NIL:'
+	# IPv6: a server for nc -6, a dual-stack one reached over IPv4, an idle listener
+	echo 'DH0:C/rtcheck START="DH0:C/nc -6 -l -p 7779 <DH0:S/riptide.conf" NOCHECK >NIL:'
+	echo 'DH0:C/rtcheck START="DH0:C/nc -6 -l -p 7781 <DH0:S/riptide.conf" NOCHECK >NIL:'
+	echo 'DH0:C/rtcheck START="DH0:C/nc -6 -d -l 7780" NOCHECK >NIL:'
 	while IFS='|' read -r name cmd; do
 		[ -n "$name" ] || continue
 		if [ "$name" = BG ]; then
@@ -142,6 +175,8 @@ CMDS
 cat > "$work/test.fs-uae" <<CFG
 [fs-uae]
 amiga_model = A1200
+# 2 MB chip RAM alone is too tight for two copies of Riptide (resident + STATUS)
+fast_memory = 8192
 hard_drive_0 = $dh0
 hard_drive_0_label = DH0
 sound_card = none
@@ -272,6 +307,34 @@ expect ip_help 'Usage: ip'
 expect ifconfig_bad 'No such device'
 expect status 'Routes:' 'default via 10\.0\.2\.2 dev eth0 proto static' 'DNS: 10\.0\.2\.3' \
 	'^Libraries: bsdsocket\.library 4, riptide\.library 1, usergroup\.library 4; compat alias: miami\.library 21$'
+# IPv6
+expect ip6_a '^1: lo0: ' 'inet6 ::1/128 scope host' '^2: eth0: ' 'inet6 fe80::[0-9a-f:]+/64 scope link' \
+	'inet6 2001:db8:5::15/64 scope global nodad' 'valid_lft forever preferred_lft forever'
+reject ip6_a 'inet 127\.0\.0\.1'
+expect ip6_a_lo 'inet 127\.0\.0\.1/8 scope host lo0' 'inet6 ::1/128 scope host'
+expect ip6_r '^2001:db8:5::/64 dev eth0 proto kernel metric [0-9]+ pref medium' '^fe80::/64 dev eth0 proto kernel'
+expect ip6_r2 '^2001:db8:99::/48 via fe80::1 dev eth0 proto static metric [0-9]+'
+expect ip6_route_get '^2001:db8:99::1 via fe80::1 dev eth0 proto static src 2001:db8:5::15 metric'
+expect ip6_route_get_lo '^local ::1 dev lo0'
+expect ip6_br '^lo0 +UNKNOWN +127\.0\.0\.1/8 ::1/128' '^eth0 +(UP|DOWN) +10\.0\.2\.15/24 fe80::'
+expect ifconfig6 'inet6 ::1  prefixlen 128  scopeid 0x10<host>'
+expect ifconfig6_eth0 'inet6 fe80::[0-9a-f:]+  prefixlen 64  scopeid 0x20<link>' \
+	'inet6 2001:db8:5::15  prefixlen 64  scopeid 0x0<global>'
+reject ifconfig6_eth0 '2001:db8:6::16'
+expect ping6_lo '^PING ::1\(::1\) 56 data bytes' '^64 bytes from ::1: icmp_seq=1 time=' \
+	'^2 packets transmitted, 2 received, 0% packet loss'
+expect ping_6 '^64 bytes from ::1: icmp_seq=1' '^1 packets transmitted, 1 received'
+expect ping6_eth '^64 bytes from 2001:db8:5::15: icmp_seq=1'
+expect traceroute6 '^traceroute6 to ::1 \(::1\), 30 hops max, 80 byte packets' '^ 1 +::1 +[0-9.]+ ms$'
+expect traceroute_6I '^ 1 +::1 +[0-9.]+ ms$'
+expect host6 '^testhost6 has IPv6 address 2001:db8:5::5'
+expect host6_rev '^1(\.0){31}\.ip6\.arpa domain name pointer localhost'
+expect nc6_out '^hostname aros-test'
+expect nc6_dual '^hostname aros-test'
+expect netstat6 '^tcp6 +0 +0 :::7780 +:::\* +LISTEN'
+expect netstat6_s '^Ip6:' 'total packets received' '^Icmp6:' 'echo replies'
+reject ip6_a3 '2001:db8:5::15'
+expect status 'inet6 ::1/128'
 [ -n "$SDKTEST" ] && expect sdk_test '^sdk_test: ok$'
 if ! tr -d '\r' < "$dh0/riptide.log" 2>/dev/null | grep -Eq 'running: bsdsocket\.library 4, riptide\.library 1, usergroup\.library 4; compat alias: miami\.library 21'; then
 	echo "FAIL riptide.log: no startup line naming the libraries"; fails=$((fails + 1))

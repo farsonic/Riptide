@@ -33,5 +33,50 @@
 #define RIPTIDE_CTL_ICMPSTAT  7
 #define RIPTIDE_CTL_UDPSTAT   8
 #define RIPTIDE_CTL_TCPSTAT   9
+/* IPv6 tables (new record types; the IPv4 tables above are unchanged) */
+#define RIPTIDE_CTL_ADDRS6    10
+#define RIPTIDE_CTL_ROUTES6   11
+#define RIPTIDE_CTL_NEIGH6    12
+#define RIPTIDE_CTL_SOCKETS6  13
+#define RIPTIDE_CTL_DNS6      14
+#define RIPTIDE_CTL_IP6STAT   15
+#define RIPTIDE_CTL_ICMP6STAT 16
+#define RIPTIDE_CTL_IFACES6   17
+
+/* IPv6 (RiptideSupportsIPV6() returns TRUE). BSD/KAME numbers, as in the
+ * Miami SDK; sockaddr_in6 is the 28-byte RFC 3493 layout (24-byte RFC 2133
+ * callers are accepted). Defined here only if the network headers in use
+ * do not have them. */
+#ifndef AF_INET6
+#define AF_INET6 28
+#endif
+#ifndef PF_INET6
+#define PF_INET6 AF_INET6
+#endif
+#ifndef IPPROTO_IPV6
+#define IPPROTO_IPV6 41
+#endif
+#ifndef IPPROTO_ICMPV6
+#define IPPROTO_ICMPV6 58
+#endif
+#ifndef IPV6_V6ONLY
+#define IPV6_UNICAST_HOPS   4
+#define IPV6_MULTICAST_IF   9
+#define IPV6_MULTICAST_HOPS 10
+#define IPV6_MULTICAST_LOOP 11
+#define IPV6_JOIN_GROUP     12
+#define IPV6_LEAVE_GROUP    13
+#define IPV6_CHECKSUM       26
+#define IPV6_V6ONLY         27
+#define IPV6_TCLASS         61
+#define IPV6_DONTFRAG       62
+#endif
+#ifndef AI_V4MAPPED
+#define AI_NUMERICSERV  0x0008
+#define AI_ALL          0x0100
+#define AI_V4MAPPED_CFG 0x0200
+#define AI_ADDRCONFIG   0x0400
+#define AI_V4MAPPED     0x0800
+#endif
 
 #endif /* LIBRARIES_RIPTIDE_H */

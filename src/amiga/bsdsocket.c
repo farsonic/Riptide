@@ -454,6 +454,23 @@ struct hostent *bsd_make_hostent(struct TaskCtx *c, const char *name, const u32 
 	return &c->host.he;
 }
 
+struct hostent *bsd_make_hostent6(struct TaskCtx *c, const char *name, const rt_in6_addr *addrs, int n)
+{
+	int i;
+
+	if (n > 8)
+		n = 8;
+	bsd_make_hostent(c, name, NULL, 0);
+	for (i = 0; i < n; i++) {
+		memcpy(&c->host.addr[i * 4], addrs[i].b, 16);
+		c->host.addrs[i] = (char *)&c->host.addr[i * 4];
+	}
+	c->host.addrs[n] = NULL;
+	c->host.he.h_addrtype = RT_AF_INET6;
+	c->host.he.h_length = 16;
+	return &c->host.he;
+}
+
 static LONG h_from_res(int r)
 {
 	switch (-r) {
@@ -494,6 +511,17 @@ ULONG bsd_gethostbyaddr(RTREG(a6) struct Library *base, RTREG(a0) const APTR add
 	u32 a;
 	int r;
 
+	if (addr && type == RT_AF_INET6 && len == 16) {
+		rt_in6_addr a6;
+		memcpy(a6.b, addr, 16);
+		r = rt_resolve_addr6(&a6, name, sizeof(name));
+		if (r < 0) {
+			set_herrno(c, h_from_res(r));
+			return 0;
+		}
+		set_herrno(c, 0);
+		return (ULONG)bsd_make_hostent6(c, name, &a6, 1);
+	}
 	if (!addr || type != RT_AF_INET || len != 4) {
 		set_herrno(c, HOST_NOT_FOUND);
 		return 0;

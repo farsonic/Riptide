@@ -76,6 +76,16 @@ $(BUILD)/tests/%: tests/%.c $(BUILD)/libriptide.a $(BUILD)/libspeedtest.a $(ST_H
 check: all
 	./tests/run_tests.sh $(BUILD)
 
+# IPv6 interop peer (gVisor netstack) for tests/t_ip6_gvisor.c: needs Go
+# and downloads gvisor.dev/gvisor, so it is not part of "all". A host
+# binary also for the m68k build directory (qemu-m68k execs it natively).
+GO ?= go
+gvpeer: $(BUILD)/gvpeer
+$(BUILD)/gvpeer: $(wildcard tests/interop/gvpeer/*.go) tests/interop/gvpeer/go.mod
+	@mkdir -p $(dir $@)
+	cd tests/interop/gvpeer && $(GO) build -o $(CURDIR)/$@ .
+.PHONY: gvpeer
+
 clean:
 	rm -rf build
 

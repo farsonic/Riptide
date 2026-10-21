@@ -1765,7 +1765,7 @@ discard:
 	rt_buf_free(b);
 }
 
-/* ---- ICMP errors (Linux tcp_v4_err) ---- */
+/* ---- ICMP errors (Linux tcp_v4_err / tcp_v6_err) ---- */
 static const u8 icmp_unreach_fatal[16] = {
 	0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1
 };
@@ -1776,72 +1776,46 @@ static const u8 icmp_unreach_errno[16] = {
 	RT_EHOSTUNREACH, RT_EHOSTUNREACH, RT_EHOSTUNREACH, RT_EHOSTUNREACH
 };
 
-void rt_tcp_icmp_error(u8 type, u8 code, u32 info, const struct rt_iphdr *inner, u32 inner_len)
+/* A smaller path MTU for tp (RFC 1191 / RFC 8201). */
+static void tcp_mtu_reduced(struct tcp_sock *tp, u32 mtu)
 {
-	const u8 *th;
-	u32 ihl, seq, saddr, daddr;
-	u16 sport, dport;
-	struct tcp_sock *tp;
-	int err, fatal = 0;
+	u32 floor = tp->net_hlen == 40 ? RT_IP6_MIN_MTU : 552;
 
-	if (!inner || inner_len < 20)
+	if (mtu < (tp->net_hlen == 40 ? RT_IP6_MIN_MTU : 68u) || mtu >= tp->pmtu_cookie)
 		return;
-	ihl = rt_ip_hlen(inner);
-	if (ihl < 20 || inner_len < ihl + 8)
-		return;
-	th = (const u8 *)inner + ihl;
-	memcpy(&saddr, &inner->saddr, 4);
-	memcpy(&daddr, &inner->daddr, 4);
-	memcpy(&sport, th, 2);
-	memcpy(&dport, th + 2, 2);
-	seq = rt_get_be32(th + 4);
+	if (mtu < floor)
+		mtu = floor > tp->pmtu_cookie ? tp->pmtu_cookie : floor;
+	rt_inet_pmtu_update(&tp->daddr, mtu);
+	tp->err_soft = RT_EMSGSIZE;
+	if (tp->pmtu_cookie > mtu) {
+		tcp_sync_mss(tp, mtu);
+		tcp_simple_retransmit(tp);
+	}
+}
+
+/* Common part: the quoted segment was (saddr:sport -> daddr:dport), seq. */
+static void tcp_err(const rt_in6_addr *saddr, u16 sport, const rt_in6_addr *daddr, u16 dport,
+                    u32 seq, int err, int fatal, int req_abort, u32 mtu)
+{
+	struct tcp_sock *tp;
 
 	tcp_api_enter();
 	tp = tcp_lookup_established(saddr, sport, daddr, dport);
 	if (!tp) {
 		struct tcp_sock *lp = tcp_lookup_listener(saddr, sport);
-		if (lp && type == RT_ICMP_UNREACH && code < 16)
-			tcp_req_err(lp, daddr, dport, seq, icmp_unreach_fatal[code]);
+		if (lp && req_abort >= 0)
+			tcp_req_err(lp, daddr, dport, seq, req_abort);
 		goto out;
 	}
 	/* RFC 5927: the quoted sequence number must be in flight */
 	if (!rt_seq_between(seq, tp->snd_una, tp->snd_nxt))
 		goto out;
-	switch (type) {
-	case RT_ICMP_SOURCEQUENCH:
-	case RT_ICMP_REDIRECT:
-		goto out;
-	case RT_ICMP_PARAMPROB:
-		err = RT_ENOPROTOOPT;
-		fatal = 1;
-		break;
-	case RT_ICMP_UNREACH:
-		if (code >= 16)
-			goto out;
-		if (code == RT_ICMP_UNREACH_NEEDFRAG) {
-			/* RFC 1191 PMTU discovery */
-			u32 mtu = info;
-			if (mtu < 68 || mtu >= tp->pmtu_cookie)
-				goto out;
-			if (mtu < 552)
-				mtu = 552 > tp->pmtu_cookie ? tp->pmtu_cookie : 552;
-			rt_ip_pmtu_update(tp->daddr, mtu);
-			tp->err_soft = RT_EMSGSIZE;
-			if (tp->pmtu_cookie > mtu) {
-				tcp_sync_mss(tp, mtu);
-				tcp_simple_retransmit(tp);
-			}
-			goto out;
-		}
-		err = icmp_unreach_errno[code];
-		fatal = icmp_unreach_fatal[code];
-		break;
-	case RT_ICMP_TIMXCEED:
-		err = RT_EHOSTUNREACH;
-		break;
-	default:
+	if (mtu) {
+		tcp_mtu_reduced(tp, mtu);
 		goto out;
 	}
+	if (!err)
+		goto out;
 	if ((tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED) && fatal) {
 		/* hard error while connecting: abort */
 		tcp_done(tp);
@@ -1854,15 +1828,208 @@ out:
 	tcp_api_exit();
 }
 
-/* ---- demultiplexing (Linux tcp_v4_rcv) ---- */
-void rt_tcp_input(struct rt_buf *b, const struct rt_iphdr *ip)
+void rt_tcp_icmp_error(u8 type, u8 code, u32 info, const struct rt_iphdr *inner, u32 inner_len)
+{
+	const u8 *th;
+	u32 ihl, seq, a;
+	rt_in6_addr saddr, daddr;
+	u16 sport, dport;
+	int err = 0, fatal = 0, req_abort = -1;
+	u32 mtu = 0;
+
+	if (!inner || inner_len < 20)
+		return;
+	ihl = rt_ip_hlen(inner);
+	if (ihl < 20 || inner_len < ihl + 8)
+		return;
+	th = (const u8 *)inner + ihl;
+	memcpy(&a, &inner->saddr, 4);
+	rt_in6_set_v4mapped(&saddr, a);
+	memcpy(&a, &inner->daddr, 4);
+	rt_in6_set_v4mapped(&daddr, a);
+	memcpy(&sport, th, 2);
+	memcpy(&dport, th + 2, 2);
+	seq = rt_get_be32(th + 4);
+
+	switch (type) {
+	case RT_ICMP_SOURCEQUENCH:
+	case RT_ICMP_REDIRECT:
+		return;
+	case RT_ICMP_PARAMPROB:
+		err = RT_ENOPROTOOPT;
+		fatal = 1;
+		break;
+	case RT_ICMP_UNREACH:
+		if (code >= 16)
+			return;
+		req_abort = icmp_unreach_fatal[code];
+		if (code == RT_ICMP_UNREACH_NEEDFRAG) {
+			if (info == 0)
+				return;
+			mtu = info;
+			req_abort = -1;
+			break;
+		}
+		err = icmp_unreach_errno[code];
+		fatal = icmp_unreach_fatal[code];
+		break;
+	case RT_ICMP_TIMXCEED:
+		err = RT_EHOSTUNREACH;
+		break;
+	default:
+		return;
+	}
+	if (type == RT_ICMP_UNREACH && code == RT_ICMP_UNREACH_NEEDFRAG && mtu < 68)
+		return;
+	tcp_err(&saddr, sport, &daddr, dport, seq, err, fatal, req_abort, mtu);
+}
+
+void rt_tcp_icmp6_error(u8 type, u8 code, u32 info, const struct rt_ip6hdr *inner,
+                        const u8 *th, u32 thlen)
+{
+	u16 sport, dport;
+	u32 seq, mtu = 0;
+	int err = 0, fatal = 0, req_abort = -1;
+
+	if (thlen < 8)
+		return;
+	memcpy(&sport, th, 2);
+	memcpy(&dport, th + 2, 2);
+	seq = rt_get_be32(th + 4);
+	switch (type) {
+	case RT_ICMP6_PACKET_TOO_BIG:
+		if (info < RT_IP6_MIN_MTU)
+			info = RT_IP6_MIN_MTU;
+		mtu = info;
+		break;
+	case RT_ICMP6_DST_UNREACH:
+		/* Linux icmpv6_err_convert() */
+		switch (code) {
+		case RT_ICMP6_DST_UNREACH_NOROUTE:
+			err = RT_ENETUNREACH;
+			break;
+		case RT_ICMP6_DST_UNREACH_ADMIN:
+			err = RT_EACCES;
+			fatal = 1;
+			break;
+		case RT_ICMP6_DST_UNREACH_NOPORT:
+			err = RT_ECONNREFUSED;
+			fatal = 1;
+			break;
+		default:
+			err = RT_EHOSTUNREACH;
+			break;
+		}
+		req_abort = fatal;
+		break;
+	case RT_ICMP6_PARAM_PROB:
+		err = RT_ENOPROTOOPT;
+		fatal = 1;
+		req_abort = 1;
+		break;
+	case RT_ICMP6_TIME_EXCEEDED:
+		err = RT_EHOSTUNREACH;
+		break;
+	default:
+		return;
+	}
+	tcp_err(&inner->src, sport, &inner->dst, dport, seq, err, fatal, req_abort, mtu);
+}
+
+/* ---- demultiplexing (Linux tcp_v4_rcv / tcp_v6_rcv) ----
+ * saddr/daddr: IPv4-mapped for IPv4; 'scope' is the arrival interface
+ * for link-local peers (replies must leave there). */
+static void tcp_rcv(struct rt_buf *b, const rt_in6_addr *saddr, const rt_in6_addr *daddr, u8 tos,
+                    u32 scope)
 {
 	struct tcp_skb_cb *cb;
 	struct tcp_sock *tp;
 	struct tcp_tw *tw;
-	const u8 *th;
-	u32 saddr, daddr, doff, tw_isn = 0;
+	const u8 *th = b->data;
+	u32 doff = (u32)(th[12] >> 4) << 2, tw_isn = 0;
 	u16 sport, dport;
+
+	memcpy(&sport, th, 2);
+	memcpy(&dport, th + 2, 2);
+	if (dport == 0)
+		goto drop;
+	cb = TCP_SKB_CB(b);
+	memset(cb, 0, sizeof(*cb));
+	cb->seq = rt_get_be32(th + 4);
+	cb->ack_seq = rt_get_be32(th + 8);
+	cb->tcp_flags = th[13];
+	cb->window = rt_get_be16(th + 14);
+	cb->urg_ptr = rt_get_be16(th + 18);
+	cb->hdr_len = (u8)doff;
+	cb->ip_tos = tos;
+	cb->end_seq = cb->seq + (b->len - doff) +
+	              ((cb->tcp_flags & TCPHDR_SYN) ? 1 : 0) + ((cb->tcp_flags & TCPHDR_FIN) ? 1 : 0);
+
+	tp = tcp_lookup_established(daddr, dport, saddr, sport);
+	if (tp)
+		goto process;
+	tw = tcp_tw_lookup(daddr, dport, saddr, sport);
+	if (tw) {
+		switch (tcp_timewait_state_process(tw, b, &tw_isn)) {
+		case TCP_TW_SYN: {
+			struct tcp_sock *lp = tcp_lookup_listener(daddr, dport);
+			if (lp) {
+				tcp_tw_kill(tw);
+				if (tcp_listen_input(lp, b, saddr, daddr, tw_isn)) {
+					tcp_send_reset_raw(b, saddr, daddr, scope);
+					goto drop;
+				}
+				goto out;
+			}
+			tcp_tw_ack(tw);
+			goto drop;
+		}
+		case TCP_TW_ACK:
+			tcp_tw_ack(tw);
+			goto drop;
+		case TCP_TW_RST:
+			tcp_send_reset_raw(b, saddr, daddr, scope);
+			tcp_tw_kill(tw);
+			goto drop;
+		default:
+			goto drop;
+		}
+	}
+	tp = tcp_lookup_listener(daddr, dport);
+	if (tp) {
+		if (tcp_listen_input(tp, b, saddr, daddr, 0)) {
+			tcp_send_reset_raw(b, saddr, daddr, scope);
+			goto drop;
+		}
+		goto out;
+	}
+	/* no socket: RFC 9293 3.10.7.1 */
+	if (!(cb->tcp_flags & TCPHDR_RST))
+		tcp_send_reset_raw(b, saddr, daddr, scope);
+	goto drop;
+
+process:
+	tp->segs_in++;
+	if (tp->state == RT_TCPS_ESTABLISHED) {
+		tcp_rcv_established(tp, b);
+		goto out;
+	}
+	if (tcp_rcv_state_process(tp, b)) {
+		tcp_send_reset_raw(b, saddr, daddr, scope);
+		goto drop;
+	}
+	goto out;
+drop:
+	rt_buf_free(b);
+out:
+	return;
+}
+
+void rt_tcp_input(struct rt_buf *b, const struct rt_iphdr *ip)
+{
+	const u8 *th;
+	u32 saddr, daddr, doff;
+	rt_in6_addr sa, da;
 
 	tcp_api_enter();
 	rt_tcpstat.InSegs++;
@@ -1886,80 +2053,48 @@ void rt_tcp_input(struct rt_buf *b, const struct rt_iphdr *ip)
 			goto bad;
 		}
 	}
-	memcpy(&sport, th, 2);
-	memcpy(&dport, th + 2, 2);
-	if (dport == 0)
-		goto drop;
-	cb = TCP_SKB_CB(b);
-	memset(cb, 0, sizeof(*cb));
-	cb->seq = rt_get_be32(th + 4);
-	cb->ack_seq = rt_get_be32(th + 8);
-	cb->tcp_flags = th[13];
-	cb->window = rt_get_be16(th + 14);
-	cb->urg_ptr = rt_get_be16(th + 18);
-	cb->hdr_len = (u8)doff;
-	cb->ip_tos = ip->tos;
-	cb->end_seq = cb->seq + (b->len - doff) +
-	              ((cb->tcp_flags & TCPHDR_SYN) ? 1 : 0) + ((cb->tcp_flags & TCPHDR_FIN) ? 1 : 0);
-
-	tp = tcp_lookup_established(daddr, dport, saddr, sport);
-	if (tp)
-		goto process;
-	tw = tcp_tw_lookup(daddr, dport, saddr, sport);
-	if (tw) {
-		switch (tcp_timewait_state_process(tw, b, &tw_isn)) {
-		case TCP_TW_SYN: {
-			struct tcp_sock *lp = tcp_lookup_listener(daddr, dport);
-			if (lp) {
-				tcp_tw_kill(tw);
-				if (tcp_listen_input(lp, b, ip, tw_isn)) {
-					tcp_send_reset_raw(b, saddr, daddr);
-					goto drop;
-				}
-				goto out;
-			}
-			tcp_tw_ack(tw);
-			goto drop;
-		}
-		case TCP_TW_ACK:
-			tcp_tw_ack(tw);
-			goto drop;
-		case TCP_TW_RST:
-			tcp_send_reset_raw(b, saddr, daddr);
-			tcp_tw_kill(tw);
-			goto drop;
-		default:
-			goto drop;
-		}
-	}
-	tp = tcp_lookup_listener(daddr, dport);
-	if (tp) {
-		if (tcp_listen_input(tp, b, ip, 0)) {
-			tcp_send_reset_raw(b, saddr, daddr);
-			goto drop;
-		}
-		goto out;
-	}
-	/* no socket: RFC 9293 3.10.7.1 */
-	if (!(cb->tcp_flags & TCPHDR_RST))
-		tcp_send_reset_raw(b, saddr, daddr);
-	goto drop;
-
-process:
-	tp->segs_in++;
-	if (tp->state == RT_TCPS_ESTABLISHED) {
-		tcp_rcv_established(tp, b);
-		goto out;
-	}
-	if (tcp_rcv_state_process(tp, b)) {
-		tcp_send_reset_raw(b, saddr, daddr);
-		goto drop;
-	}
-	goto out;
+	rt_in6_set_v4mapped(&sa, saddr);
+	rt_in6_set_v4mapped(&da, daddr);
+	tcp_rcv(b, &sa, &da, ip->tos, 0);
+	tcp_api_exit();
+	return;
 bad:
 	rt_tcpstat.InErrs++;
 drop:
 	rt_buf_free(b);
-out:
+	tcp_api_exit();
+}
+
+void rt_tcp_input6(struct rt_buf *b, const struct rt_ip6hdr *ip6)
+{
+	const u8 *th;
+	u32 doff, scope = 0;
+
+	tcp_api_enter();
+	rt_tcpstat.InSegs++;
+	if (b->len < TCP_HDR_LEN)
+		goto bad;
+	th = b->data;
+	doff = (u32)(th[12] >> 4) << 2;
+	if (doff < TCP_HDR_LEN || doff > b->len)
+		goto bad;
+	if (rt_in6_is_mcast(&ip6->dst) || (b->flags & (RT_BUFF_BCAST | RT_BUFF_MCAST)))
+		goto drop;
+	if (!(b->flags & (RT_BUFF_CSUM_OK | RT_BUFF_LOOP))) {
+		u32 sum = rt_csum_pseudo6(&ip6->src, &ip6->dst, RT_IPPROTO_TCP, b->len);
+		if (rt_csum_fold(rt_csum_partial(th, b->len, sum)) != 0) {
+			rt_tcpstat.InCsumErrors++;
+			goto bad;
+		}
+	}
+	if (rt_in6_is_linklocal(&ip6->src) && b->netif && b->netif != rt_loopback_if)
+		scope = b->netif->index;
+	tcp_rcv(b, &ip6->src, &ip6->dst, (u8)(rt_ntohl(ip6->vtcfl) >> 20), scope);
+	tcp_api_exit();
+	return;
+bad:
+	rt_tcpstat.InErrs++;
+drop:
+	rt_buf_free(b);
 	tcp_api_exit();
 }

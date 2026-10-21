@@ -40,6 +40,16 @@
 #define RT_CTL_ICMPSTAT  7        /* net.riptide.icmpstat  one struct rt_icmp_stats */
 #define RT_CTL_UDPSTAT   8        /* net.riptide.udpstat   one struct rt_udp_stats  */
 #define RT_CTL_TCPSTAT   9        /* net.riptide.tcpstat   one struct rt_tcp_stats  */
+/* IPv6 (new record types; the IPv4 tables above are unchanged and list
+ * AF_INET sockets only) */
+#define RT_CTL_ADDRS6    10       /* net.riptide.addrs6    struct rt_ctl_addr6[]  */
+#define RT_CTL_ROUTES6   11       /* net.riptide.routes6   struct rt_ctl_route6[] */
+#define RT_CTL_NEIGH6    12       /* net.riptide.neigh6    struct rt_ctl_neigh6[] */
+#define RT_CTL_SOCKETS6  13       /* net.riptide.sockets6  struct rt_ctl_sock6[] (AF_INET6 sockets) */
+#define RT_CTL_DNS6      14       /* net.riptide.dns6      one struct rt_ctl_dns6 */
+#define RT_CTL_IP6STAT   15       /* net.riptide.ip6stat   one struct rt_ip6_stats   */
+#define RT_CTL_ICMP6STAT 16       /* net.riptide.icmp6stat one struct rt_icmp6_stats */
+#define RT_CTL_IFACES6   17       /* net.riptide.ifaces6   struct rt_ctl_iface6[] */
 
 struct rt_ctl_hdr {
 	u16 version;              /* RT_CTL_VERSION */
@@ -109,6 +119,10 @@ struct rt_ctl_route {
 #define RT_NUD_REACHABLE  1
 #define RT_NUD_STALE      2
 #define RT_NUD_PERMANENT  3
+/* IPv6 neighbour cache only (rt_ctl_neigh6) */
+#define RT_NUD_DELAY      4
+#define RT_NUD_PROBE      5
+#define RT_NUD_FAILED     6
 
 struct rt_ctl_neigh {
 	u32  addr;                /* network order */
@@ -144,6 +158,95 @@ struct rt_ctl_dns {
 	u32  servers[RT_CTL_MAXNS];  /* network order */
 	char domain[64];             /* search domain */
 	char hostname[64];
+};
+
+/* ---- IPv6 records (addresses as 16 network order bytes) ---- */
+
+/* rt_ctl_addr6.flags: RT_IN6_IFF_* of rt_ip6.h */
+#define RT_CTL_IN6_TENTATIVE  0x0001
+#define RT_CTL_IN6_DEPRECATED 0x0002
+#define RT_CTL_IN6_AUTOCONF   0x0004
+#define RT_CTL_IN6_DUPLICATED 0x0008
+#define RT_CTL_IN6_NODAD      0x0010
+#define RT_CTL_IN6_PERMANENT  0x0020
+#define RT_CTL_IN6_TEMPORARY  0x0040
+
+struct rt_ctl_addr6 {
+	u8   addr[16];
+	u32  ifindex;
+	u32  valid_s, pref_s;     /* seconds left, 0xffffffff = forever */
+	u16  flags;               /* RT_CTL_IN6_* */
+	u8   plen;
+	u8   scope;               /* 1 interface (::1 uses 2), 2 link, 5 site, 14 global */
+	char ifname[16];
+};
+
+/* per interface IPv6 state */
+struct rt_ctl_iface6 {
+	char name[16];
+	u32  index;
+	u8   enabled;             /* IPv6 on this interface */
+	u8   nd;                  /* uses neighbour discovery (Ethernet) */
+	u8   cur_hlim;            /* hop limit (router advertisement or sysctl) */
+	u8   ra_flags;            /* M (0x80) / O (0x40) of the last RA */
+	u32  mtu;                 /* IPv6 link MTU */
+	u32  reachable_ms, retrans_ms;
+};
+
+/* rt_ctl_route6.proto: RT_PROTO_* plus */
+#define RT_PROTO_RA       9       /* Linux RTPROT_RA */
+
+struct rt_ctl_route6 {
+	u8   dst[16];
+	u8   gateway[16];         /* all zero: on-link */
+	u32  ifindex;
+	u32  flags;               /* RT_RTF_* (RT_RTF_RA = 0x80000) */
+	u32  metric;
+	u32  mtu;
+	u32  use;
+	u32  expire_s;            /* seconds left, 0 = never */
+	u8   plen;
+	u8   proto;               /* RT_PROTO_* */
+	u8   linkdown;
+	s8   pref;                /* RFC 4191 router preference: -1 low, 0, 1 high */
+	char ifname[16];
+};
+
+struct rt_ctl_neigh6 {
+	u8   addr[16];
+	u32  ifindex;
+	u32  age_s;
+	u8   hwaddr[6];
+	u8   state;               /* RT_NUD_* including DELAY/PROBE/FAILED */
+	u8   router;
+	char ifname[16];
+};
+
+struct rt_ctl_sock6 {
+	u8   kind;                /* RT_CTL_SOCK_* */
+	u8   proto;
+	u8   state;               /* TCP: RT_TCPS_* */
+	u8   v6only;
+	u16  lport, fport;        /* host order */
+	u8   laddr[16], faddr[16];/* IPv4 peers of dual-stack sockets as ::ffff:a.b.c.d */
+	u32  sendq, recvq;
+	u32  rtt_us, cwnd;
+	u32  retrans;
+};
+
+/* every resolver server, IPv4 ones IPv4-mapped (rt_ctl_dns keeps the IPv4 list) */
+#define RT_CTL_DNS_STATIC 0
+#define RT_CTL_DNS_RA     1
+#define RT_CTL_DNS_DHCP6  2
+struct rt_ctl_dns6 {
+	u32  nservers;
+	struct {
+		u8  addr[16];
+		u32 ifindex;      /* zone of a link-local server */
+		u8  source;       /* RT_CTL_DNS_* */
+		u8  pad[3];
+	} servers[RT_CTL_MAXNS];
+	char domain[64];
 };
 
 /* ---- core entry points (src/core/ctl.c), lock held ---- */
@@ -183,8 +286,9 @@ static inline const char *rt_ctl_tcp_state_name(int st)
 }
 static inline const char *rt_ctl_nud_name(int st)
 {
-	static const char *const n[] = { "INCOMPLETE", "REACHABLE", "STALE", "PERMANENT" };
-	return st >= 0 && st <= 3 ? n[st] : "NONE";
+	static const char *const n[] = { "INCOMPLETE", "REACHABLE", "STALE", "PERMANENT",
+	                                 "DELAY", "PROBE", "FAILED" };
+	return st >= 0 && st <= 6 ? n[st] : "NONE";
 }
 static inline const char *rt_ctl_dhcp_state_name(int st)
 {

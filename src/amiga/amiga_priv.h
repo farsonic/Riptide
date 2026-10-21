@@ -75,7 +75,7 @@ struct TaskCtx {
 		struct hostent he;
 		char  *aliases[2];
 		char  *addrs[9];
-		ULONG  addr[8];
+		ULONG  addr[8 * 4];      /* 8 IPv4 or 8 IPv6 addresses */
 		char   name[256];
 	} host;
 	struct {
@@ -156,6 +156,7 @@ const char *amiga_s2werr_str(LONG e);
 const char *amiga_ioerr_str(LONG e);
 /* Fill the per-task hostent from a name lookup result. */
 struct hostent *bsd_make_hostent(struct TaskCtx *c, const char *name, const u32 *addrs, int n);
+struct hostent *bsd_make_hostent6(struct TaskCtx *c, const char *name, const rt_in6_addr *addrs, int n);
 
 /* Call an application callback taking d0/d1 (fd callback). */
 LONG amiga_call_d0d1(APTR fn, LONG d0, LONG d1);

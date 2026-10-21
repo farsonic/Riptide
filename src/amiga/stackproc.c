@@ -342,6 +342,18 @@ int amiga_status_text(char *buf, u32 len)
 				    (unsigned long)di.left_s);
 			ADD("\n");
 		}
+		{
+			struct rt_in6_ifaddr_info ia[6];
+			char a6[RT_INET6_ADDRSTRLEN];
+			int k, na = rt_in6_addr_list(n, ia, 6);
+			for (k = 0; k < na && k < 6; k++) {
+				rt_inet6_ntop(&ia[k].addr, a6, sizeof(a6));
+				ADD("       inet6 %s/%u%s%s%s\n", a6, (unsigned)ia[k].plen,
+				    (ia[k].flags & RT_IN6_IFF_TENTATIVE) ? " tentative" : "",
+				    (ia[k].flags & RT_IN6_IFF_DUPLICATED) ? " duplicated" : "",
+				    (ia[k].flags & RT_IN6_IFF_TEMPORARY) ? " temporary" : "");
+			}
+		}
 	}
 	ADD("Routes:\n");
 	for (r = rt_route_list(); r; r = r->next) {
@@ -368,6 +380,17 @@ int amiga_status_text(char *buf, u32 len)
 	ADD("DNS:");
 	for (i = 0; i < nns && i < RT_CTL_MAXNS; i++)
 		ADD(" %s", rt_format_ipv4(ns[i], a));
+	{
+		rt_in6_addr ns6[6];
+		char a6[RT_INET6_ADDRSTRLEN];
+		int n6 = rt_dns_get_servers6(ns6, NULL, NULL, 6);
+		for (i = 0; i < n6 && i < 6; i++) {
+			if (rt_in6_is_v4mapped(&ns6[i]))
+				continue;
+			ADD(" %s", rt_inet6_ntop(&ns6[i], a6, sizeof(a6)));
+			nns++;
+		}
+	}
 	if (!nns)
 		ADD(" (no servers)");
 	if (rt_domainname[0])

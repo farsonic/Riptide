@@ -7,7 +7,7 @@
  * interfaces, routes and the resolver configuration).
  */
 #include "sock_internal.h"
-#include "infra.h"
+#include "ip6_internal.h"
 
 #define CFG_MAXARGS 24
 #define CFG_MAXLINE 1024
@@ -126,6 +126,11 @@ static u32 classful(u32 addr)
 	return prefix_mask(24);
 }
 
+static int cfg_route6(int argc, char **argv, char *err, u32 errlen);
+static int cfg_ifconfig6(int argc, char **argv, char *err, u32 errlen);
+static int cfg_nd6(int argc, char **argv, char *err, u32 errlen);
+static int has_colon(const char *s);
+
 static int cfg_err(char *err, u32 errlen, int r, const char *fmt, const char *arg)
 {
 	if (err && errlen)
@@ -219,6 +224,11 @@ static int cfg_route(int argc, char **argv, char *err, u32 errlen)
 
 	if (need_args(argc, 2, err, errlen, usage))
 		return -RT_EINVAL;
+	/* IPv6: "-inet6"/"-6", or an IPv6 destination or gateway */
+	for (i = 2; i < argc; i++)
+		if (!strcmp(argv[i], "-inet6") || !strcmp(argv[i], "-6") || has_colon(argv[i]))
+			return cfg_route6(argc, argv, err, errlen);
+	i = 2;
 	if (!strcmp(argv[1], "flush")) {
 		if (argc >= 3 && !strcmp(argv[2], "cache"))
 			return route_flush(NULL, 1) < 0 ? -RT_EINVAL : 0;
@@ -355,6 +365,9 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 	nif = rt_netif_find(argv[1]);
 	if (!nif)
 		return cfg_err(err, errlen, -RT_ENXIO, "ifconfig: no interface '%s'", argv[1]);
+	for (i = 2; i < argc; i++)
+		if (!strcmp(argv[i], "inet6"))
+			return cfg_ifconfig6(argc, argv, err, errlen);
 	for (i = 2; i < argc; i++) {
 		const char *k = argv[i];
 		if (!strcmp(k, "up")) {
@@ -494,6 +507,27 @@ static int cfg_arp(int argc, char **argv, char *err, u32 errlen)
 
 	if (need_args(argc, 2, err, errlen, usage))
 		return -RT_EINVAL;
+	if (!strcmp(argv[1], "flush")) {
+		/* arp flush [dev IF] [-inet6]: -inet6 flushes the IPv6 neighbours */
+		for (i = 2; i < argc; i++) {
+			if (!strcmp(argv[i], "dev") && i + 1 < argc && !(nif = rt_netif_find(argv[++i])))
+				return cfg_err(err, errlen, -RT_ENODEV, "arp: no interface '%s'", argv[i]);
+			if (!strcmp(argv[i], "-inet6") || !strcmp(argv[i], "-6")) {
+				struct rt_netif *n;
+				for (n = rt_netif_list(); n; n = n->next)
+					if (!nif || n == nif)
+						rt_nd6_flush(n, 0);
+				return 0;
+			}
+		}
+		nif = NULL;
+	} else if (argc >= 3) {
+		rt_in6_addr a6;
+		char z[RT_IFNAMSIZ + 1];
+		int pl;
+		if (rt_inet6_parse_prefix(argv[2], &a6, &pl, z, sizeof(z)) == 0 && pl < 0)
+			return cfg_nd6(argc, argv, err, errlen);
+	}
 	for (i = 2; i < argc; i++) {
 		if (!strcmp(argv[i], "dev")) {
 			if (i + 1 >= argc || !(nif = rt_netif_find(argv[i + 1])))
@@ -555,6 +589,340 @@ static int cfg_arp(int argc, char **argv, char *err, u32 errlen)
 	return 0;
 }
 
+/* ======================================================================
+ * IPv6 configuration
+ * ====================================================================== */
+
+static int has_colon(const char *s)
+{
+	return s && strchr(s, ':') != NULL;
+}
+
+/* "ADDR[%IF][/PLEN]": the zone names an interface. */
+static int parse6(const char *s, rt_in6_addr *a, int *plen, struct rt_netif **zone)
+{
+	char z[RT_IFNAMSIZ + 1];
+	int p;
+
+	if (rt_inet6_parse_prefix(s, a, &p, z, sizeof(z)) < 0)
+		return -RT_EINVAL;
+	if (plen)
+		*plen = p;
+	else if (p >= 0)
+		return -RT_EINVAL;
+	if (zone) {
+		*zone = NULL;
+		if (z[0] && !(*zone = rt_netif_find(z)))
+			return -RT_ENODEV;
+	} else if (z[0]) {
+		return -RT_EINVAL;
+	}
+	return 0;
+}
+
+/* ifconfig IF inet6 ADDR[/PLEN] [prefixlen N] [nodad] [delete|-alias] [up|down]
+ * ifconfig IF inet6 -ifdisabled | ifdisabled  (IPv6 on / off, as FreeBSD) */
+static int cfg_ifconfig6(int argc, char **argv, char *err, u32 errlen)
+{
+	struct rt_netif *nif = rt_netif_find(argv[1]);
+	rt_in6_addr a;
+	int i, plen = -1, have = 0, del = 0, up = -1, r;
+	u32 flags = 0;
+
+	if (!nif)
+		return cfg_err(err, errlen, -RT_ENXIO, "ifconfig: no interface '%s'", argv[1]);
+	for (i = 2; i < argc; i++) {
+		const char *k = argv[i];
+		if (!strcmp(k, "inet6"))
+			continue;
+		if (!strcmp(k, "up")) {
+			up = 1;
+		} else if (!strcmp(k, "down")) {
+			up = 0;
+		} else if (!strcmp(k, "nodad") || !strcmp(k, "-dad")) {
+			flags |= RT_IN6_IFF_NODAD;
+		} else if (!strcmp(k, "delete") || !strcmp(k, "del") || !strcmp(k, "-alias")) {
+			del = 1;
+		} else if (!strcmp(k, "alias") || !strcmp(k, "add")) {
+			;
+		} else if (!strcmp(k, "-ifdisabled") || !strcmp(k, "ifdisabled")) {
+			r = rt_ip6_ifenable(nif, k[0] == '-');
+			if (r < 0)
+				return cfg_err(err, errlen, r, "ifconfig: %s", rt_strerror(-r));
+		} else if (!strcmp(k, "prefixlen")) {
+			u32 v;
+			if (++i >= argc || parse_uint(argv[i], 128, &v) < 0)
+				return cfg_err(err, errlen, -RT_EINVAL, "ifconfig: bad prefixlen", NULL);
+			plen = (int)v;
+		} else if (!have) {
+			int p;
+			if (parse6(k, &a, &p, NULL) < 0)
+				return cfg_err(err, errlen, -RT_EINVAL, "ifconfig: bad IPv6 address '%s'", k);
+			if (p >= 0)
+				plen = p;
+			have = 1;
+		} else {
+			return cfg_err(err, errlen, -RT_EINVAL, "ifconfig: unexpected '%s'", k);
+		}
+	}
+	if (have) {
+		if (del) {
+			r = rt_in6_addr_del(nif, &a);
+			if (r < 0)
+				return cfg_err(err, errlen, r, "ifconfig: %s has no such address", argv[1]);
+		} else {
+			if (!rt_ip6_ifenabled(nif)) {
+				r = rt_ip6_ifenable(nif, 1);
+				if (r < 0)
+					return cfg_err(err, errlen, r, "ifconfig: cannot enable IPv6: %s", rt_strerror(-r));
+			}
+			if (plen < 0)
+				plen = 64;
+			r = rt_in6_addr_add(nif, &a, plen, flags, RT_IN6_INFINITE, RT_IN6_INFINITE);
+			if (r < 0 && r != -RT_EEXIST)
+				return cfg_err(err, errlen, r, "ifconfig: cannot add address: %s", rt_strerror(-r));
+			if (up < 0)
+				up = 1;
+		}
+	}
+	if (up == 1)
+		rt_netif_up(nif);
+	else if (up == 0)
+		rt_netif_down(nif);
+	return 0;
+}
+
+/* route add|del|replace [-inet6|-6] DEST[/PLEN]|default [via|gw] GW [dev IF] [metric N] [mtu N] [reject]
+ * route flush -inet6 [dev IF] */
+static int cfg_route6(int argc, char **argv, char *err, u32 errlen)
+{
+	static const char usage[] = "route add|del|replace -inet6 DEST[/PLEN]|default [via] GATEWAY [dev IF] "
+	                            "[metric N] [mtu N] [reject] | route flush -inet6 [dev IF]";
+	struct rt_netif *nif = NULL, *zone = NULL;
+	struct rt_route6 *rt;
+	rt_in6_addr dst, gw;
+	u32 metric = 0, mtu = 0, flags = RT_RTF_STATIC;
+	int i = 2, plen = 0, have_gw = 0, have_metric = 0, op, r;
+
+	memset(&dst, 0, sizeof(dst));
+	memset(&gw, 0, sizeof(gw));
+	if (!strcmp(argv[1], "flush")) {
+		for (; i < argc; i++)
+			if (!strcmp(argv[i], "dev") && i + 1 < argc && !(nif = rt_netif_find(argv[++i])))
+				return cfg_err(err, errlen, -RT_ENODEV, "route: no interface '%s'", argv[i]);
+		for (;;) {
+			for (rt = rt_route6_list(); rt; rt = rt->next)
+				if ((!nif || rt->netif == nif) && !(rt->flags & RT_RTF_CONNECTED))
+					break;
+			if (!rt)
+				return 0;
+			if (rt->flags & RT_RTF_PMTU) {
+				rt_route6_flush_learned(rt->netif);
+				continue;
+			}
+			if (rt_route6_delete(&rt->dst, rt->plen, &rt->gateway, rt->netif, 0) < 0)
+				return 0;
+		}
+	}
+	if (!strcmp(argv[1], "add") || !strcmp(argv[1], "append"))
+		op = 'a';
+	else if (!strcmp(argv[1], "del") || !strcmp(argv[1], "delete"))
+		op = 'd';
+	else if (!strcmp(argv[1], "replace") || !strcmp(argv[1], "change"))
+		op = 'r';
+	else
+		return cfg_err(err, errlen, -RT_EINVAL, "route: unknown command '%s'", argv[1]);
+	while (i < argc && (!strcmp(argv[i], "-inet6") || !strcmp(argv[i], "-6") || !strcmp(argv[i], "-net") ||
+	                    !strcmp(argv[i], "-host")))
+		i++;
+	if (i >= argc)
+		return cfg_err(err, errlen, -RT_EINVAL, "usage: %s", usage);
+	if (!strcmp(argv[i], "default") || !strcmp(argv[i], "::/0")) {
+		plen = 0;
+	} else if (parse6(argv[i], &dst, &plen, NULL) < 0) {
+		return cfg_err(err, errlen, -RT_EINVAL, "route: bad destination '%s'", argv[i]);
+	} else if (plen < 0) {
+		plen = 128;
+	}
+	for (i++; i < argc; i++) {
+		const char *k = argv[i];
+		if (!strcmp(k, "via") || !strcmp(k, "gw") || !strcmp(k, "gateway")) {
+			if (i + 1 >= argc || parse6(argv[i + 1], &gw, NULL, &zone) < 0)
+				return cfg_err(err, errlen, -RT_EINVAL, "route: bad gateway after '%s'", k);
+			have_gw = 1;
+			i++;
+		} else if (!strcmp(k, "dev") || !strcmp(k, "-interface") || !strcmp(k, "-iface")) {
+			if (i + 1 >= argc || !(nif = rt_netif_find(argv[i + 1])))
+				return cfg_err(err, errlen, -RT_ENODEV, "route: no interface '%s'",
+				               i + 1 < argc ? argv[i + 1] : "");
+			i++;
+		} else if (!strcmp(k, "metric") || !strcmp(k, "preference") || !strcmp(k, "priority")) {
+			if (i + 1 >= argc || parse_uint(argv[i + 1], 0x7fffffff, &metric) < 0)
+				return cfg_err(err, errlen, -RT_EINVAL, "route: bad metric", NULL);
+			have_metric = 1;
+			i++;
+		} else if (!strcmp(k, "mtu")) {
+			if (i + 1 >= argc || parse_uint(argv[i + 1], 65535, &mtu) < 0 || mtu < RT_IP6_MIN_MTU)
+				return cfg_err(err, errlen, -RT_EINVAL, "route: bad mtu", NULL);
+			i++;
+		} else if (!strcmp(k, "reject") || !strcmp(k, "unreachable") || !strcmp(k, "blackhole") ||
+		           !strcmp(k, "prohibit")) {
+			flags |= RT_RTF_REJECT;
+		} else if (!strcmp(k, "proto") || !strcmp(k, "scope") || !strcmp(k, "table") ||
+		           !strcmp(k, "src") || !strcmp(k, "prefixlen")) {
+			if (!strcmp(k, "prefixlen")) {
+				u32 v;
+				if (i + 1 >= argc || parse_uint(argv[i + 1], 128, &v) < 0)
+					return cfg_err(err, errlen, -RT_EINVAL, "route: bad prefixlen", NULL);
+				plen = (int)v;
+			}
+			i++;
+		} else if (!have_gw && parse6(k, &gw, NULL, &zone) == 0) {
+			have_gw = 1;
+		} else {
+			return cfg_err(err, errlen, -RT_EINVAL, "route: unexpected '%s'", k);
+		}
+	}
+	if (zone && !nif)
+		nif = zone;
+	if (op == 'd') {
+		for (rt = rt_route6_list(); rt; rt = rt->next) {
+			rt_in6_addr d;
+			rt_in6_mask(&d, &dst, plen);
+			if (rt->plen == plen && rt_in6_eq(&rt->dst, &d) && !(rt->flags & RT_RTF_PMTU) &&
+			    (!have_gw || rt_in6_eq(&rt->gateway, &gw)) && (!nif || rt->netif == nif) &&
+			    (!have_metric || rt->metric == metric))
+				break;
+		}
+		if (!rt || rt_route6_delete(&rt->dst, rt->plen, &rt->gateway, rt->netif, 0) < 0)
+			return cfg_err(err, errlen, -RT_ESRCH, "route: no such route", NULL);
+		return 0;
+	}
+	if (!have_gw && !nif && !(flags & RT_RTF_REJECT))
+		return cfg_err(err, errlen, -RT_EINVAL, "route: gateway missing (%s)", usage);
+	if (op == 'r')
+		rt_route6_delete(&dst, plen, NULL, NULL, RT_RTF_STATIC);
+	r = rt_route6_add(&dst, plen, have_gw ? &gw : NULL, nif, flags, metric);
+	if (r == -RT_ENETUNREACH)
+		return cfg_err(err, errlen, r, "route: gateway is not on a connected network", NULL);
+	if (r == -RT_EINVAL && have_gw && rt_in6_is_linklocal(&gw) && !nif)
+		return cfg_err(err, errlen, r, "route: a link-local gateway needs 'dev IF'", NULL);
+	if (r == -RT_EEXIST)
+		return cfg_err(err, errlen, r, "route: route exists", NULL);
+	if (r < 0)
+		return cfg_err(err, errlen, r, "route: %s", rt_strerror(-r));
+	if (mtu) {
+		rt = route6_find(&dst, plen, have_gw ? &gw : NULL, nif);
+		if (rt)
+			rt->mtu = mtu;
+	}
+	return 0;
+}
+
+/* ipv6 on|off: default for interfaces that come up later;
+ * ipv6 IF on|off: that interface now */
+static int cfg_ipv6(int argc, char **argv, char *err, u32 errlen)
+{
+	static const char usage[] = "ipv6 [IF] on|off";
+	const char *v = argc == 2 ? argv[1] : argc == 3 ? argv[2] : NULL;
+	int on, r;
+
+	if (!v || (strcmp(v, "on") && strcmp(v, "off") && strcmp(v, "1") && strcmp(v, "0")))
+		return cfg_err(err, errlen, -RT_EINVAL, "usage: %s", usage);
+	on = !strcmp(v, "on") || !strcmp(v, "1");
+	if (argc == 2) {
+		rt_ip6_auto_enable = on;
+		return 0;
+	}
+	if (!rt_netif_find(argv[1]))
+		return cfg_err(err, errlen, -RT_ENXIO, "ipv6: no interface '%s'", argv[1]);
+	r = rt_ip6_ifenable(rt_netif_find(argv[1]), on);
+	if (r < 0)
+		return cfg_err(err, errlen, r, "ipv6: %s", rt_strerror(-r));
+	return 0;
+}
+
+static int cfg_nameserver6(const char *s, int del, char *err, u32 errlen)
+{
+	struct rt_netif *zone = NULL;
+	rt_in6_addr a;
+	int r;
+
+	if (parse6(s, &a, NULL, &zone) < 0 || rt_in6_is_unspec(&a) || rt_in6_is_mcast(&a))
+		return cfg_err(err, errlen, -RT_EINVAL, "nameserver: bad address '%s'", s);
+	if (del) {
+		rt_in6_addr sv[RT_CTL_MAXNS];
+		int n = rt_dns_get_servers6(sv, NULL, NULL, RT_CTL_MAXNS), j;
+		for (j = 0; j < n && j < RT_CTL_MAXNS; j++)
+			if (rt_in6_eq(&sv[j], &a))
+				break;
+		if (j >= n || j >= RT_CTL_MAXNS)
+			return cfg_err(err, errlen, -RT_ESRCH, "nameserver: %s is not configured", s);
+		rt_dns_remove_server6(&a);
+		return 0;
+	}
+	if (rt_in6_is_linklocal(&a) && !zone)
+		return cfg_err(err, errlen, -RT_EINVAL, "nameserver: a link-local address needs %%IF ('%s')", s);
+	r = rt_dns_add_server6(&a, zone ? zone->index : 0, RT_IN6_INFINITE, RT_DNS_SRC_STATIC);
+	if (r < 0)
+		return cfg_err(err, errlen, r, "nameserver: %s", rt_strerror(-r));
+	return 0;
+}
+
+/* arp add|del ADDR6 [MAC] dev IF | the neighbour cache side of "arp" */
+static int cfg_nd6(int argc, char **argv, char *err, u32 errlen)
+{
+	struct rt_netif *nif = NULL, *zone = NULL;
+	rt_in6_addr a;
+	u8 mac[6];
+	int i, have_a = 0, have_mac = 0, r;
+
+	for (i = 2; i < argc; i++) {
+		if (!strcmp(argv[i], "dev")) {
+			if (i + 1 >= argc || !(nif = rt_netif_find(argv[i + 1])))
+				return cfg_err(err, errlen, -RT_ENODEV, "arp: no interface '%s'",
+				               i + 1 < argc ? argv[i + 1] : "");
+			i++;
+		} else if (!strcmp(argv[i], "lladdr")) {
+			if (i + 1 >= argc || parse_mac(argv[i + 1], mac) < 0)
+				return cfg_err(err, errlen, -RT_EINVAL, "arp: bad hardware address", NULL);
+			have_mac = 1;
+			i++;
+		} else if (!strcmp(argv[i], "nud")) {
+			i++;
+		} else if (!strcmp(argv[i], "permanent") || !strcmp(argv[i], "temp")) {
+			;
+		} else if (!have_a && parse6(argv[i], &a, NULL, &zone) == 0) {
+			have_a = 1;
+		} else if (!have_mac && parse_mac(argv[i], mac) == 0) {
+			have_mac = 1;
+		} else {
+			return cfg_err(err, errlen, -RT_EINVAL, "arp: unexpected '%s'", argv[i]);
+		}
+	}
+	if (!nif)
+		nif = zone;
+	if (!have_a)
+		return cfg_err(err, errlen, -RT_EINVAL, "arp: address missing", NULL);
+	if (!nif) {
+		if (!rt_in6_is_linklocal(&a))
+			nif = route6_onlink(&a);
+		if (!nif)
+			return cfg_err(err, errlen, -RT_ENETUNREACH, "arp: give 'dev IF' for %s", argv[2]);
+	}
+	if (!strcmp(argv[1], "del") || !strcmp(argv[1], "delete")) {
+		if (rt_nd6_delete(nif, &a) < 0)
+			return cfg_err(err, errlen, -RT_ENXIO, "arp: no entry for %s", argv[2]);
+		return 0;
+	}
+	if (!have_mac)
+		return cfg_err(err, errlen, -RT_EINVAL, "arp: hardware address missing", NULL);
+	r = rt_nd6_add_static(nif, &a, mac);
+	if (r < 0)
+		return cfg_err(err, errlen, r, "arp: %s", rt_strerror(-r));
+	return 0;
+}
+
 static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
                         int (*unknown)(int, char **, char *, u32))
 {
@@ -581,7 +949,7 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 	}
 	if (!strcmp(k, "nameserver")) {
 		/* nameserver [add] A.B.C.D | nameserver del A.B.C.D | nameserver flush */
-		static const char usage[] = "nameserver [add|del] A.B.C.D | nameserver flush";
+		static const char usage[] = "nameserver [add|del] A.B.C.D|IPV6[%IF] | nameserver flush";
 		int i = 1, del = 0;
 		if (need_args(argc, 2, err, errlen, usage))
 			return -RT_EINVAL;
@@ -595,6 +963,8 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		}
 		if (need_args(argc, i + 1, err, errlen, usage))
 			return -RT_EINVAL;
+		if (has_colon(argv[i]))
+			return cfg_nameserver6(argv[i], del, err, errlen);
 		if (rt_parse_ipv4(argv[i], &a) < 0 || a == 0)
 			return cfg_err(err, errlen, -RT_EINVAL, "nameserver: bad address '%s'", argv[i]);
 		if (del) {
@@ -616,8 +986,17 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 	if (!strcmp(k, "arp"))
 		return cfg_arp(argc, argv, err, errlen);
 	if (!strcmp(k, "host")) {
-		if (need_args(argc, 3, err, errlen, "host NAME A.B.C.D"))
+		if (need_args(argc, 3, err, errlen, "host NAME A.B.C.D|IPV6"))
 			return -RT_EINVAL;
+		if (has_colon(argv[2])) {
+			rt_in6_addr a6;
+			if (parse6(argv[2], &a6, NULL, NULL) < 0)
+				return cfg_err(err, errlen, -RT_EINVAL, "host: bad address '%s'", argv[2]);
+			r = rt_hosts_add6(argv[1], &a6);
+			if (r < 0)
+				return cfg_err(err, errlen, r, "host: %s", rt_strerror(-r));
+			return 0;
+		}
 		if (rt_parse_ipv4(argv[2], &a) < 0)
 			return cfg_err(err, errlen, -RT_EINVAL, "host: bad address '%s'", argv[2]);
 		r = rt_hosts_add(argv[1], a);
@@ -652,6 +1031,8 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 	}
 	if (!strcmp(k, "ifconfig"))
 		return cfg_ifconfig(argc, argv, err, errlen);
+	if (!strcmp(k, "ipv6"))
+		return cfg_ipv6(argc, argv, err, errlen);
 	if (!strcmp(k, "dhcp")) {
 		/* dhcp IFNAME [start|stop|release|renew] */
 		struct rt_netif *nif;

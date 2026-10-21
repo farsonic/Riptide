@@ -4,10 +4,12 @@
  * a time, any user name and password are accepted (except "baduser"), no
  * access control beyond staying below the root directory.
  *
- *   ftpd-test [-p port] [-1] [-v] ROOT
+ *   ftpd-test [-6] [-p port] [-1] [-v] ROOT
  *
+ * -6 listens on [::] (dual-stack: IPv4 clients too); IPv6 sessions use
+ * EPSV and EPRT (RFC 2428).
  * ROOT is an AmigaDOS directory (RAM:ftp, DH0:ftproot). Commands: USER
- * PASS SYST TYPE PWD CWD CDUP PASV EPSV PORT LIST NLST RETR STOR APPE SIZE
+ * PASS SYST TYPE PWD CWD CDUP PASV EPSV PORT EPRT LIST NLST RETR STOR APPE SIZE
  * MDTM DELE MKD RMD RNFR RNTO REST NOOP FEAT HELP ABOR QUIT, and for tests
  * "SITE NOEPSV" (EPSV is refused from now on) and "SITE PASVIP a.b.c.d"
  * (PASV advertises that address). -1 exits after one session; Ctrl-C stops.
@@ -20,7 +22,8 @@
 #define PATHSZ 512
 
 static int ctl = -1, pasv_fd = -1, verbose;
-static u32 port_addr, pasv_ip, local_addr;
+static u32 pasv_ip;
+static struct cl_addr port_a, local;   /* PORT/EPRT target, control's local address */
 static u16 port_port;
 static int ascii, noepsv, loggedin, last_aborted;
 static u32 rest;
@@ -215,7 +218,7 @@ static int open_data(void)
 	int s;
 
 	if (pasv_fd >= 0) {
-		struct rt_sockaddr_in sa;
+		struct rt_sockaddr_in6 sa;
 		LONG len = sizeof(sa);
 		int w = cl_wait_fd(pasv_fd, 0, 30000);
 		s = w == 1 ? accept(pasv_fd, &sa, &len) : -1;
@@ -225,8 +228,8 @@ static int open_data(void)
 	}
 	if (!port_port)
 		return -1;
-	s = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
-	if (s >= 0 && cl_connect(s, port_addr, port_port, 30000)) {
+	s = socket(port_a.family, RT_SOCK_STREAM, 0);
+	if (s >= 0 && cl_connect_addr(s, &port_a, port_port, 30000)) {
 		CloseSocket(s);
 		s = -1;
 	}
@@ -481,19 +484,20 @@ static void do_stor(const char *arg, int append)
 
 static void do_pasv(int ext)
 {
-	struct rt_sockaddr_in sa;
+	struct rt_sockaddr_in6 sa;
+	struct cl_addr x;
 	LONG len = sizeof(sa);
 	u32 h;
 	u16 p;
 
+	if (!ext && local.family == RT_AF_INET6 && !rt_in6_is_v4mapped(&local.a)) {
+		reply("500 PASV cannot carry an IPv6 address, use EPSV.");
+		return;
+	}
 	if (pasv_fd >= 0)
 		CloseSocket(pasv_fd);
-	pasv_fd = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_len = sizeof(sa);
-	sa.sin_family = RT_AF_INET;
-	sa.sin_addr = local_addr;
-	if (pasv_fd < 0 || bind(pasv_fd, &sa, sizeof(sa)) < 0 || listen(pasv_fd, 1) < 0 ||
+	pasv_fd = socket(local.family, RT_SOCK_STREAM, 0);
+	if (pasv_fd < 0 || bind(pasv_fd, &sa, (LONG)cl_sockaddr(&local, 0, &sa)) < 0 || listen(pasv_fd, 1) < 0 ||
 	    getsockname(pasv_fd, &sa, &len) < 0) {
 		if (pasv_fd >= 0)
 			CloseSocket(pasv_fd);
@@ -501,12 +505,12 @@ static void do_pasv(int ext)
 		reply("425 Can't open passive connection.");
 		return;
 	}
-	p = rt_ntohs(sa.sin_port);
+	cl_from_sockaddr(&sa, &x, &p);
 	if (ext) {
 		reply("229 Entering Extended Passive Mode (|||%u|)", (unsigned)p);
 		return;
 	}
-	h = rt_ntohl(pasv_ip ? pasv_ip : local_addr);
+	h = rt_ntohl(pasv_ip ? pasv_ip : rt_in6_v4(&local.a));
 	reply("227 Entering Passive Mode (%lu,%lu,%lu,%lu,%u,%u).", (unsigned long)(h >> 24),
 	      (unsigned long)((h >> 16) & 255), (unsigned long)((h >> 8) & 255), (unsigned long)(h & 255),
 	      (unsigned)(p >> 8), (unsigned)(p & 255));
@@ -528,7 +532,9 @@ static void do_port(const char *arg)
 		reply("501 Illegal PORT command.");
 		return;
 	}
-	port_addr = rt_htonl((u32)((v[0] << 24) | (v[1] << 16) | (v[2] << 8) | v[3]));
+	memset(&port_a, 0, sizeof(port_a));
+	port_a.family = local.family;      /* IPv4-mapped on a dual-stack session */
+	rt_in6_set_v4mapped(&port_a.a, rt_htonl((u32)((v[0] << 24) | (v[1] << 16) | (v[2] << 8) | v[3])));
 	port_port = (u16)((v[4] << 8) | v[5]);
 	if (pasv_fd >= 0)
 		CloseSocket(pasv_fd);
@@ -536,10 +542,59 @@ static void do_port(const char *arg)
 	reply("200 PORT command successful.");
 }
 
+/* EPRT |af|address|port| (RFC 2428 2) */
+static void do_eprt(const char *arg)
+{
+	char d, t[64];
+	const char *p = arg, *q;
+	struct cl_addr x;
+	u32 port, n;
+
+	d = *p++;
+	if (!d || (p[0] != '1' && p[0] != '2') || p[1] != d) {
+		reply("522 Network protocol not supported, use (1,2)");
+		return;
+	}
+	p += 2;
+	q = strchr(p, d);
+	n = q ? (u32)(q - p) : 0;
+	if (!q || n >= sizeof(t)) {
+		reply("501 Illegal EPRT command.");
+		return;
+	}
+	memcpy(t, p, n);
+	t[n] = 0;
+	p = q + 1;
+	q = strchr(p, d);
+	if (!q || cl_parse_addr(t, &x) < 0) {
+		reply("501 Illegal EPRT command.");
+		return;
+	}
+	n = (u32)(q - p);
+	if (n >= sizeof(t)) {
+		reply("501 Illegal EPRT command.");
+		return;
+	}
+	memcpy(t, p, n);
+	t[n] = 0;
+	if (cl_parse_uint(t, 65535, &port) < 0 || !port) {
+		reply("501 Illegal EPRT command.");
+		return;
+	}
+	if (x.family == RT_AF_INET && local.family == RT_AF_INET6)
+		x.family = RT_AF_INET6;        /* IPv4-mapped on a dual-stack session */
+	port_a = x;
+	port_port = (u16)port;
+	if (pasv_fd >= 0)
+		CloseSocket(pasv_fd);
+	pasv_fd = -1;
+	reply("200 EPRT command successful.");
+}
+
 static void session(void)
 {
 	char v[PATHSZ], a[PATHSZ], user[64];
-	struct rt_sockaddr_in sa;
+	struct rt_sockaddr_in6 sa;
 	LONG len = sizeof(sa);
 
 	rt_strlcpy(cwd, "", sizeof(cwd));
@@ -549,7 +604,10 @@ static void session(void)
 	port_port = 0;
 	ctlpos = ctllen = 0;
 	user[0] = 0;
-	local_addr = getsockname(ctl, &sa, &len) == 0 ? sa.sin_addr : 0;
+	memset(&local, 0, sizeof(local));
+	local.family = RT_AF_INET;
+	if (getsockname(ctl, &sa, &len) == 0)
+		cl_from_sockaddr(&sa, &local, NULL);
 	reply("220-Riptide ftpd-test: a minimal FTP server for testing.");
 	reply("220-Not for production use.");
 	reply("220 Ready.");
@@ -596,7 +654,7 @@ static void session(void)
 			reply("211 End");
 		} else if (!strcmp(line, "HELP")) {
 			reply("214-The following commands are recognized:");
-			reply(" USER PASS SYST TYPE PWD CWD CDUP PASV EPSV PORT LIST NLST RETR STOR");
+			reply(" USER PASS SYST TYPE PWD CWD CDUP PASV EPSV PORT EPRT LIST NLST RETR STOR");
 			reply(" APPE SIZE MDTM DELE MKD RMD RNFR RNTO REST NOOP FEAT HELP ABOR QUIT SITE");
 			reply("214 Direct comments to nobody.");
 		} else if (!loggedin) {
@@ -634,6 +692,8 @@ static void session(void)
 				do_pasv(1);
 		} else if (!strcmp(line, "PORT")) {
 			do_port(arg);
+		} else if (!strcmp(line, "EPRT")) {
+			do_eprt(arg);
 		} else if (!strcmp(line, "LIST") || !strcmp(line, "NLST")) {
 			do_list(arg, line[0] == 'N');
 		} else if (!strcmp(line, "RETR")) {
@@ -732,14 +792,16 @@ static void session(void)
 static int ftpd_main(int argc, char **argv)
 {
 	struct cl_getopt g;
-	struct rt_sockaddr_in sa;
+	struct rt_sockaddr_in6 sa;
+	struct cl_addr any;
 	u32 port = 2121;
-	int c, s, once = 0, rc = CL_OK;
+	int c, s, once = 0, rc = CL_OK, v6 = 0;
 	LONG one = 1;
 
 	memset(&g, 0, sizeof(g));
-	while ((c = cl_getopt(argc, argv, "p:1vh", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "p:1vh6", &g)) != -1) {
 		switch (c) {
+		case '6': v6 = 1; break;
 		case 'p':
 			if (cl_parse_uint(g.arg, 65535, &port) < 0 || !port)
 				return CL_ERROR;
@@ -747,12 +809,12 @@ static int ftpd_main(int argc, char **argv)
 		case '1': once = 1; break;
 		case 'v': verbose = 1; break;
 		default:
-			cl_puts("usage: ftpd-test [-p port] [-1] [-v] ROOT\n");
+			cl_puts("usage: ftpd-test [-6] [-p port] [-1] [-v] ROOT\n");
 			return c == 'h' ? CL_OK : CL_ERROR;
 		}
 	}
 	if (g.ind >= argc) {
-		cl_puts("usage: ftpd-test [-p port] [-1] [-v] ROOT\n");
+		cl_puts("usage: ftpd-test [-6] [-p port] [-1] [-v] ROOT\n");
 		return CL_ERROR;
 	}
 	root = argv[g.ind];
@@ -770,14 +832,14 @@ static int ftpd_main(int argc, char **argv)
 		rc = CL_ERROR;
 		goto out;
 	}
-	s = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_len = sizeof(sa);
-	sa.sin_family = RT_AF_INET;
-	sa.sin_port = rt_htons((u16)port);
+	memset(&any, 0, sizeof(any));
+	any.family = v6 ? RT_AF_INET6 : RT_AF_INET;
+	if (!v6)
+		rt_in6_set_v4mapped(&any.a, 0);
+	s = socket(any.family, RT_SOCK_STREAM, 0);
 	if (s >= 0)
 		setsockopt(s, RT_SOL_SOCKET, RT_SO_REUSEADDR, &one, sizeof(one));
-	if (s < 0 || bind(s, &sa, sizeof(sa)) < 0 || listen(s, 4) < 0) {
+	if (s < 0 || bind(s, &sa, (LONG)cl_sockaddr(&any, (u16)port, &sa)) < 0 || listen(s, 4) < 0) {
 		cl_error("cannot listen on port %lu: %s", (unsigned long)port, cl_strerror((int)Errno()));
 		if (s >= 0)
 			CloseSocket(s);
@@ -794,8 +856,10 @@ static int ftpd_main(int argc, char **argv)
 		if (ctl < 0)
 			continue;
 		{
-			char a[16];
-			dlog("connection from %s", cl_ip(sa.sin_addr, a));
+			char a[CL_ADDRSTRLEN];
+			struct cl_addr from;
+			cl_from_sockaddr(&sa, &from, NULL);
+			dlog("connection from %s", cl_addr_str(&from, a));
 		}
 		session();
 		CloseSocket(ctl);

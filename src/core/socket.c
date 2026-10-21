@@ -32,17 +32,17 @@ s32 sock_somaxconn = RT_SOMAXCONN;
 #define SOCK_DGRAM_OVERHEAD 256u
 
 /* ---- dead ops: what a closed socket answers while waiters drain ---- */
-static int dead_bind(struct rt_socket *so, const struct rt_sockaddr_in *sin) { return -RT_EBADF; }
+static int dead_bind(struct rt_socket *so, const struct rt_sockaddr_in6 *sin) { return -RT_EBADF; }
 static int dead_listen(struct rt_socket *so, int backlog) { return -RT_EBADF; }
 static int dead_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
-                     int flags, const struct rt_sockaddr_in *to) { return -RT_EBADF; }
+                     int flags, const struct rt_sockaddr_in6 *to) { return -RT_EBADF; }
 static int dead_recv(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
-                     int flags, struct rt_sockaddr_in *from, int *msgflags) { return -RT_EBADF; }
+                     int flags, struct rt_sockaddr_in6 *from, int *msgflags) { return -RT_EBADF; }
 static int dead_shutdown(struct rt_socket *so, int how) { return -RT_EBADF; }
 static int dead_setsockopt(struct rt_socket *so, int l, int n, const void *v, u32 len) { return -RT_EBADF; }
 static int dead_getsockopt(struct rt_socket *so, int l, int n, void *v, u32 *len) { return -RT_EBADF; }
 static u32 dead_poll(struct rt_socket *so) { return RT_POLLIN | RT_POLLOUT | RT_POLLERR | RT_POLLHUP; }
-static int dead_getname(struct rt_socket *so, struct rt_sockaddr_in *sin, int peer) { return -RT_EBADF; }
+static int dead_getname(struct rt_socket *so, struct rt_sockaddr_in6 *sin, int peer) { return -RT_EBADF; }
 static int dead_ioctl(struct rt_socket *so, u32 req, void *arg) { return -RT_EBADF; }
 static void dead_close(struct rt_socket *so) { }
 
@@ -88,6 +88,7 @@ struct rt_socket *sock_alloc(int type, int protocol, const struct rt_proto_ops *
 		return NULL;
 	so->type = (u16)type;
 	so->protocol = (u16)protocol;
+	so->domain = RT_AF_INET;
 	so->ops = ops;
 	so->release_id = -1;
 	so->sndtimeo_ms = -1;
@@ -199,6 +200,12 @@ void sock_close(struct rt_socket *so)
 int sock_kernel_create(int type, int protocol, struct sock_upcall *up,
                        struct rt_socket **out)
 {
+	return sock_kernel_create_af(RT_AF_INET, type, protocol, up, out);
+}
+
+int sock_kernel_create_af(int domain, int type, int protocol, struct sock_upcall *up,
+                          struct rt_socket **out)
+{
 	const struct rt_proto_ops *ops = sock_proto_lookup(type, &protocol);
 	struct rt_socket *so;
 	int r;
@@ -208,6 +215,7 @@ int sock_kernel_create(int type, int protocol, struct sock_upcall *up,
 	so = sock_alloc(type, protocol, ops);
 	if (!so)
 		return -RT_ENOMEM;
+	so->domain = (u16)domain;
 	so->state |= RT_SS_NBIO;
 	if (up) {
 		so->state |= SOCK_SS_UPCALL;
@@ -294,6 +302,7 @@ struct rt_socket *rt_sock_new_child(struct rt_socket *l)
 	ch = sock_alloc(l->type, l->protocol, l->ops);
 	if (!ch)
 		return NULL;
+	ch->domain = l->domain;
 	ch->state = RT_SS_NOFDREF | (l->state & (RT_SS_NBIO | RT_SS_ASYNC));
 	ch->options = l->options & ~RT_SO_ACCEPTCONN;
 	ch->linger_on = l->linger_on;

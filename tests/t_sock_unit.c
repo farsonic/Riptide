@@ -74,9 +74,9 @@ static void fk_close(struct rt_socket *so)
 	free(p);
 	so->pcb = NULL;
 }
-static int fk_bind(struct rt_socket *so, const struct rt_sockaddr_in *sin)
+static int fk_bind(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 {
-	((struct fk_pcb *)so->pcb)->port = rt_ntohs(sin->sin_port);
+	((struct fk_pcb *)so->pcb)->port = rt_ntohs(sin->sin6_port);
 	return 0;
 }
 static int fk_listen(struct rt_socket *so, int backlog)
@@ -98,10 +98,10 @@ static void fk_link(struct rt_socket *so)
 	rt_sock_child_ready(p->pending_listener, ch);
 	rt_sock_wakeup(so, RT_SEV_CONNECT);
 }
-static int fk_connect(struct rt_socket *so, const struct rt_sockaddr_in *sin)
+static int fk_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 {
 	struct fk_pcb *p = so->pcb;
-	struct rt_socket *l = fk_listeners[rt_ntohs(sin->sin_port) % 64], *ch;
+	struct rt_socket *l = fk_listeners[rt_ntohs(sin->sin6_port) % 64], *ch;
 	struct fk_pcb *cp;
 	if (!l)
 		return -RT_ECONNREFUSED;
@@ -110,7 +110,7 @@ static int fk_connect(struct rt_socket *so, const struct rt_sockaddr_in *sin)
 		return -RT_ECONNREFUSED;
 	cp = calloc(1, sizeof(*cp));
 	cp->so = ch;
-	cp->port = rt_ntohs(sin->sin_port);
+	cp->port = rt_ntohs(sin->sin6_port);
 	ch->pcb = cp;
 	p->pending_child = ch;
 	p->pending_listener = l;
@@ -129,7 +129,7 @@ static void fk_fail(struct rt_socket *so, int err)
 	rt_sock_set_error(so, err);
 }
 static int fk_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt, int flags,
-                   const struct rt_sockaddr_in *to)
+                   const struct rt_sockaddr_in6 *to)
 {
 	struct fk_pcb *p = so->pcb, *q = p->peer;
 	u32 n, total = rt_iov_total(iov, iovcnt);
@@ -144,7 +144,7 @@ static int fk_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt, i
 	return (int)n;
 }
 static int fk_recv(struct rt_socket *so, const struct rt_iov *iov, int iovcnt, int flags,
-                   struct rt_sockaddr_in *from, int *mf)
+                   struct rt_sockaddr_in6 *from, int *mf)
 {
 	struct fk_pcb *p = so->pcb;
 	u32 n;
@@ -191,13 +191,13 @@ static u32 fk_poll(struct rt_socket *so)
 		m |= RT_POLLOUT;
 	return m;
 }
-static int fk_getname(struct rt_socket *so, struct rt_sockaddr_in *sin, int peer)
+static int fk_getname(struct rt_socket *so, struct rt_sockaddr_in6 *sin, int peer)
 {
 	struct fk_pcb *p = so->pcb;
 	if (peer && !p->peer)
 		return -RT_ENOTCONN;
-	sin->sin_port = rt_htons(peer ? p->peer->port : p->port);
-	sin->sin_addr = rt_htonl(0x7f000001);
+	sin->sin6_port = rt_htons(peer ? p->peer->port : p->port);
+	rt_in6_set_v4mapped(&sin->sin6_addr, rt_htonl(0x7f000001));
 	return 0;
 }
 static int fk_ioctl(struct rt_socket *so, u32 req, void *arg)

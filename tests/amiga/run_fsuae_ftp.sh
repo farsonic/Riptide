@@ -122,6 +122,30 @@ ls
 quit
 SCRIPT
 
+# IPv6 (ftp -v -n ::1 2122): EPSV, then active mode with EPRT
+cat > "$dh0/S/ftp6" <<'SCRIPT'
+user test secret
+lcd DH0:local
+debug
+get hello.txt hello6.txt
+get big.bin big6.bin
+passive
+put up.bin up6.bin
+get hello.txt act6.txt
+bye
+SCRIPT
+# an IPv4 client of the dual-stack server on [::]:2122 (PASV/PORT still work)
+cat > "$dh0/S/ftp46" <<'SCRIPT'
+user test secret
+lcd DH0:local
+debug
+site noepsv
+get hello.txt hello46.txt
+passive
+get hello.txt act46.txt
+bye
+SCRIPT
+
 cat > "$dh0/S/badlogin" <<'SCRIPT'
 user baduser wrong
 ls
@@ -135,6 +159,7 @@ SCRIPT
 	echo "FailAt 30"
 	echo 'DH0:C/rtcheck START="DH0:C/Riptide >DH0:riptide.log CONFIG=DH0:S/riptide.conf" NOCHECK >DH0:out/start'
 	echo 'DH0:C/rtcheck START="DH0:C/ftpd-test -v -p 2121 DH0:ftproot >DH0:out/ftpd.log" NOCHECK >NIL:'
+	echo 'DH0:C/rtcheck START="DH0:C/ftpd-test -6 -v -p 2122 DH0:ftproot >DH0:out/ftpd6.log" NOCHECK >NIL:'
 	# give the server a moment to listen
 	echo 'DH0:C/ping -c 2 -i 0.5 -q 127.0.0.1 >NIL:'
 	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/ftpscript >DH0:out/ftp1'
@@ -143,6 +168,9 @@ SCRIPT
 	echo 'DH0:C/ftp -u ftp://127.0.0.1:2121/sub/ DH0:local/m1.txt >DH0:out/url_put'
 	echo 'DH0:C/ftp -v ftp://127.0.0.1:2121/sub/ >DH0:out/url_list'
 	echo 'DH0:C/ftp ftp://127.0.0.1:2121/nosuch.bin >DH0:out/url_missing'
+	echo 'DH0:C/ftp -v -n ::1 2122 <DH0:S/ftp6 >DH0:out/ftp6'
+	echo 'DH0:C/ftp -v -n 127.0.0.1 2122 <DH0:S/ftp46 >DH0:out/ftp46'
+	echo 'DH0:C/ftp -o DH0:local/url6.dat ftp://[::1]:2122/sub/a.dat >DH0:out/url6'
 	echo 'DH0:C/ftp -h >DH0:out/zz_done'
 } > "$dh0/S/Startup-Sequence"
 
@@ -249,6 +277,14 @@ expect url_get '^3000 bytes received in [0-9]+\.[0-9]{2} secs'
 reject url_get '^(220|230|150|226)'
 expect url_put '^9 bytes sent in [0-9]+\.[0-9]{2} secs'
 expect zz_done 'usage: ftp'
+expect ftp6 '^Connected to ::1 \(::1\)\.' '^230 User test logged in\.' '^---> EPSV$' \
+	'^229 Entering Extended Passive Mode \(\|\|\|[0-9]+\|\)' '^1048576 bytes received in' \
+	'^Passive mode: off\.' '^---> EPRT \|2\|::1\|[0-9]+\|$' '^200 EPRT command successful\.' '^221 Goodbye\.'
+reject ftp6 '^---> (PASV|PORT)'
+expect ftp46 '^Connected to 127\.0\.0\.1 \(127\.0\.0\.1\)\.' '^---> PASV$' '^227 Entering Passive Mode \(127,0,0,1,' \
+	'^---> PORT 127,0,0,1,[0-9]+,[0-9]+$' '^200 PORT command successful\.'
+expect url6 '^3000 bytes received in [0-9]+\.[0-9]{2} secs'
+expect ftpd6.log 'connection from ::1' 'connection from ::ffff:127\.0\.0\.1'
 
 # files, byte for byte
 same "$loc/big.copy" "$root/big.bin" "get"
@@ -272,6 +308,13 @@ same "$loc/act.txt" "$root/hello.txt" "active mode get"
 same "$loc/after.txt" "$root/hello.txt" "get after the aborts"
 same "$loc/url.dat" "$root/sub/a.dat" "URL get"
 same "$root/sub/m1.txt" "$loc/m1.txt" "URL put"
+same "$loc/hello6.txt" "$root/hello.txt" "IPv6 EPSV get"
+same "$loc/big6.bin" "$root/big.bin" "IPv6 EPSV get (1 MB)"
+same "$root/up6.bin" "$loc/up.bin" "IPv6 EPRT put"
+same "$loc/act6.txt" "$root/hello.txt" "IPv6 EPRT get"
+same "$loc/hello46.txt" "$root/hello.txt" "IPv4 client, dual-stack server, PASV"
+same "$loc/act46.txt" "$root/hello.txt" "IPv4 client, dual-stack server, PORT"
+same "$loc/url6.dat" "$root/sub/a.dat" "URL get from [::1]"
 bs=$(wc -c < "$loc/broken.bin" 2>/dev/null || echo 0)
 if [ "$bs" -lt 200000 ] || [ "$bs" -ge 1048576 ]; then
 	echo "FAIL abort: broken.bin has $bs bytes"; fails=$((fails + 1))
@@ -279,6 +322,8 @@ fi
 
 echo "---- throughput (loopback, client and server on the same emulated ${FSUAE_MODEL:-A1200} ${FSUAE_EXTRA:-})"
 grep -E 'bytes (received|sent) in' "$dh0/out/ftp1" | grep -E '^(1048576|648576|748576) ' | head -8 | sed 's/^/  /'
+echo "---- the same over IPv6 (::1)"
+grep -E 'bytes (received|sent) in' "$dh0/out/ftp6" | grep -E '^1048576 ' | sed 's/^/  /'
 echo "---- work dir $work (outputs in $dh0/out)"
 if [ ! -s "$dh0/out/zz_done" ]; then
 	echo "run_fsuae_ftp: did not finish (timeout ${TIMEOUT}s)"

@@ -214,10 +214,10 @@ static u32 tcp_orphan_retries(const struct tcp_sock *tp, int alive)
 
 static void tcp_refresh_route(struct tcp_sock *tp)
 {
-	struct rt_nexthop nh;
+	struct rt_inet_route rt;
 
-	if (rt_ip_route(tp->daddr, &nh) == 0 && nh.mtu >= 68 && nh.mtu != tp->pmtu_cookie)
-		tcp_sync_mss(tp, nh.mtu);
+	if (rt_inet_route(&tp->daddr, tp->scope, &rt) == 0 && rt.mtu >= 68 && rt.mtu != tp->pmtu_cookie)
+		tcp_sync_mss(tp, rt.mtu);
 }
 
 /* Linux tcp_write_timeout(): 1 if the connection was aborted */

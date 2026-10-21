@@ -5,7 +5,12 @@
  * options:
  *
  *   ping HOST [COUNT=n] [SIZE=bytes] [INTERVAL=ms] [TIMEOUT=ms] [QUIET]
- *   ping [-c count] [-s size] [-i seconds] [-W seconds] [-t ttl] [-q] [-n] HOST
+ *   ping [-4|-6] [-c count] [-s size] [-i seconds] [-W seconds] [-t ttl] [-q] [-n] HOST
+ *
+ * IPv6 (ICMPv6 echo over a raw AF_INET6 socket) with -6, for IPv6 literals
+ * ("fe80::1%eth0" too) and when the program is called ping6. Host names
+ * resolve to IPv4 unless -6 is given. The hop limit of IPv6 replies is not
+ * shown (no IPV6_RECVHOPLIMIT ancillary data).
  *
  * COUNT 0 (-c 0) pings until Ctrl-C; the default is 4. Ctrl-C stops early
  * and prints the summary. Exit code 0 if any reply arrived, 5 if none,
@@ -31,10 +36,16 @@ static u64 sum_us, sum2_us;
 static int quiet;
 static u16 ident;
 static u8 *rbuf;
+static int v6;                        /* ICMPv6 */
+static struct cl_addr dst6;
+#ifndef PING_NAME
+#define PING_NAME "ping"
+#define PING_FAMILY 0
+#endif
 
 static void usage(void)
 {
-	cl_puts("Usage: ping [-c count] [-s size] [-i interval] [-W timeout] [-t ttl] [-qn] HOST\n"
+	cl_puts("Usage: " PING_NAME " [-4|-6] [-c count] [-s size] [-i interval] [-W timeout] [-t ttl] [-qn] HOST\n"
 	        "       ping HOST [COUNT=n] [SIZE=bytes] [INTERVAL=ms] [TIMEOUT=ms] [QUIET]\n");
 }
 
@@ -186,6 +197,85 @@ static void handle(LONG n, u32 from, u32 dst)
 	}
 }
 
+static const char *unreach6_text(int type, int code)
+{
+	if (type == RT_ICMP6_TIME_EXCEEDED)
+		return code ? "Time exceeded: Frag reassembly time exceeded" : "Time exceeded: Hop limit";
+	if (type == RT_ICMP6_PARAM_PROB)
+		return "Parameter problem";
+	if (type == RT_ICMP6_PACKET_TOO_BIG)
+		return "Packet too big";
+	switch (code) {
+	case 0: return "Destination unreachable: No route";
+	case 1: return "Destination unreachable: Administratively prohibited";
+	case 2: return "Destination unreachable: Beyond scope of source address";
+	case 3: return "Destination unreachable: Address unreachable";
+	case 4: return "Destination unreachable: Port unreachable";
+	case 5: return "Destination unreachable: Source address failed ingress/egress policy";
+	case 6: return "Destination unreachable: Reject route to destination";
+	}
+	return "Destination unreachable: Unknown code";
+}
+
+/* One ICMPv6 message (raw IPv6 sockets deliver no IP header). */
+static void handle6(LONG n, const struct cl_addr *from)
+{
+	u8 *ic = rbuf;
+	char a[CL_ADDRSTRLEN], b[20];
+	u32 seq, t0, rt;
+
+	if (n < HDR)
+		return;
+	if (ic[0] == RT_ICMP6_ECHO_REPLY) {
+		int dup;
+		if (rt_get_be16(ic + 4) != ident || n < HDR + 4)
+			return;
+		if (!rt_in6_is_mcast(&dst6.a) && !rt_in6_eq(&from->a, &dst6.a))
+			return;
+		seq = rt_get_be16(ic + 6);
+		memcpy(&t0, ic + HDR, 4);
+		if (seq == 0 || seq > sent || sent - seq >= SEQ_BITS || t0 != sendtime[seq % SEQ_BITS]) {
+			corrupt++;
+			return;
+		}
+		rt = cl_now_us() - t0;
+		dup = (bitmap[(seq % SEQ_BITS) / 32] >> (seq % 32)) & 1;
+		bitmap[(seq % SEQ_BITS) / 32] |= 1UL << (seq % 32);
+		if (dup) {
+			dups++;
+		} else {
+			recvd++;
+			sum_us += rt;
+			sum2_us += (u64)rt * rt;
+			if (rt < min_us)
+				min_us = rt;
+			if (rt > max_us)
+				max_us = rt;
+		}
+		if (!quiet) {
+			fmt_ms(b, rt);
+			cl_printf("%ld bytes from %s: icmp_seq=%lu time=%s ms%s\n", (long)n, cl_addr_str(from, a),
+			          (unsigned long)seq, b, dup ? " (DUP!)" : "");
+		}
+		return;
+	}
+	if (ic[0] >= RT_ICMP6_DST_UNREACH && ic[0] <= RT_ICMP6_PARAM_PROB) {
+		/* the invoking packet: IPv6 header (no extension headers) + our echo request */
+		u8 *in = ic + 8, *iq = in + 40;
+		if (n < 8 + 40 + 8 || in[6] != RT_IPPROTO_ICMPV6 || iq[0] != RT_ICMP6_ECHO_REQUEST ||
+		    rt_get_be16(iq + 4) != ident || memcmp(in + 24, dst6.a.b, 16))
+			return;
+		errors++;
+		if (!quiet) {
+			cl_printf("From %s icmp_seq=%lu %s", cl_addr_str(from, a), (unsigned long)rt_get_be16(iq + 6),
+			          unreach6_text(ic[0], ic[1]));
+			if (ic[0] == RT_ICMP6_PACKET_TOO_BIG)
+				cl_printf(" (mtu = %lu)", (unsigned long)rt_get_be32(ic + 4));
+			cl_puts("\n");
+		}
+	}
+}
+
 /* Receive until 'until' (cl_now_us). Returns 1 on Ctrl-C. */
 static int receive_until(int s, u32 until, u32 dst, u32 stop_after)
 {
@@ -193,7 +283,7 @@ static int receive_until(int s, u32 until, u32 dst, u32 stop_after)
 		u32 now = cl_now_us(), left;
 		ULONG rd[2] = { 0, 0 }, sigs = SIGBREAKF_CTRL_C;
 		struct tv tmo;
-		struct rt_sockaddr_in from;
+		struct rt_sockaddr_in6 from;
 		LONG fl = sizeof(from), n;
 
 		if (stop_after && recvd + errors >= stop_after)
@@ -215,8 +305,14 @@ static int receive_until(int s, u32 until, u32 dst, u32 stop_after)
 		if (n == 0)
 			continue;
 		n = recvfrom(s, rbuf, RBUF, 0, &from, &fl);
-		if (n >= 20)
-			handle(n, from.sin_addr, dst);
+		if (v6) {
+			struct cl_addr fa;
+			cl_from_sockaddr(&from, &fa, NULL);
+			if (n >= HDR)
+				handle6(n, &fa);
+		} else if (n >= 20) {
+			handle(n, ((struct rt_sockaddr_in *)&from)->sin_addr, dst);
+		}
 		cl_flush();
 	}
 }
@@ -240,12 +336,13 @@ static const char *kw(int argc, char **argv, int *i, const char *full, const cha
 static int ping_main(int argc, char **argv)
 {
 	const char *host = NULL, *v;
-	u32 count = 4, size = 56, interval_ms = 1000, timeout_ms = 2000, ttl = 0, dst, x;
-	struct rt_sockaddr_in to;
+	u32 count = 4, size = 56, interval_ms = 1000, timeout_ms = 2000, ttl = 0, dst = 0, x, tolen;
+	int family = PING_FAMILY;
+	struct rt_sockaddr_in6 to;
 	u8 *pkt = NULL;
 	int s = -1, i, rc = CL_FAIL, stop = 0;
 	u32 start;
-	char a[16], b[20], c[20], d[20], e[20];
+	char a[CL_ADDRSTRLEN], b[20], c[20], d[20], e[20];
 
 	for (i = 1; i < argc; i++) {
 		const char *arg = argv[i];
@@ -272,7 +369,9 @@ static int ping_main(int argc, char **argv)
 				case 't': if (cl_parse_uint(val, 255, &ttl) < 0 || !ttl) goto bad; break;
 				case 'w': case 'l': break;
 				case 'q': quiet = 1; break;
-				case 'n': case '4': break;
+				case 'n': break;
+				case '4': family = 4; break;
+				case '6': family = 6; break;
 				default:
 					cl_printf("ping: invalid option -- '%c'\n", *o);
 					usage();
@@ -315,16 +414,26 @@ static int ping_main(int argc, char **argv)
 		interval_ms = 10;
 	if (cl_need_timer() < 0 || cl_need_socket() < 0)
 		return CL_FAIL;
-	if (cl_resolve(host, &dst) < 0)
+	if (family == 6 || (family == 0 && cl_parse_addr(host, &dst6) == 0 && dst6.family == RT_AF_INET6)) {
+		if (cl_resolve_af(host, 6, &dst6) < 0)
+			return CL_FAIL;
+		v6 = 1;
+		if (size > MAX_PAYLOAD - 20)
+			size = MAX_PAYLOAD - 20;
+	} else if (cl_resolve(host, &dst) < 0) {
 		return CL_FAIL;
-	s = socket(RT_AF_INET, RT_SOCK_RAW, RT_IPPROTO_ICMP);
+	}
+	s = v6 ? socket(RT_AF_INET6, RT_SOCK_RAW, RT_IPPROTO_ICMPV6) : socket(RT_AF_INET, RT_SOCK_RAW, RT_IPPROTO_ICMP);
 	if (s < 0) {
-		cl_error("cannot create raw ICMP socket (errno %ld)", (long)Errno());
+		cl_error("cannot create raw %s socket (errno %ld)", v6 ? "ICMPv6" : "ICMP", (long)Errno());
 		return CL_FAIL;
 	}
 	if (ttl) {
 		LONG t = (LONG)ttl;
-		setsockopt(s, RT_IPPROTO_IP, RT_IP_TTL, &t, sizeof(t));
+		if (v6)
+			setsockopt(s, RT_IPPROTO_IPV6, RT_IPV6_UNICAST_HOPS, &t, sizeof(t));
+		else
+			setsockopt(s, RT_IPPROTO_IP, RT_IP_TTL, &t, sizeof(t));
 	}
 	pkt = AllocVec(HDR + MAX_PAYLOAD, MEMF_ANY | MEMF_CLEAR);
 	rbuf = AllocVec(RBUF, MEMF_ANY);
@@ -332,19 +441,27 @@ static int ping_main(int argc, char **argv)
 		cl_error("out of memory");
 		goto done;
 	}
-	memset(&to, 0, sizeof(to));
-	to.sin_len = sizeof(to);
-	to.sin_family = RT_AF_INET;
-	to.sin_addr = dst;
+	if (v6) {
+		tolen = cl_sockaddr(&dst6, 0, &to);
+	} else {
+		struct cl_addr d4;
+		d4.family = RT_AF_INET;
+		d4.scope = 0;
+		rt_in6_set_v4mapped(&d4.a, dst);
+		tolen = cl_sockaddr(&d4, 0, &to);
+	}
 	ident = (u16)((u32)FindTask(NULL) >> 4);
-	cl_printf("PING %s (%s) %lu(%lu) bytes of data.\n", host, cl_ip(dst, a), (unsigned long)size,
-	          (unsigned long)(size + 28));
+	if (v6)
+		cl_printf("PING %s(%s) %lu data bytes\n", host, cl_addr_str(&dst6, a), (unsigned long)size);
+	else
+		cl_printf("PING %s (%s) %lu(%lu) bytes of data.\n", host, cl_ip(dst, a), (unsigned long)size,
+		          (unsigned long)(size + 28));
 	cl_flush();
 	start = cl_now_us();
 	while (!stop && (count == 0 || sent < count)) {
 		u32 t0, seq = (sent + 1) & 0xffff, k;
 
-		pkt[0] = RT_ICMP_ECHO;
+		pkt[0] = v6 ? RT_ICMP6_ECHO_REQUEST : RT_ICMP_ECHO;
 		pkt[1] = 0;
 		pkt[2] = pkt[3] = 0;
 		rt_put_be16(pkt + 4, ident);
@@ -354,10 +471,11 @@ static int ping_main(int argc, char **argv)
 		sendtime[seq % SEQ_BITS] = t0;
 		for (k = 4; k < size; k++)
 			pkt[HDR + k] = (u8)k;
-		rt_put_be16(pkt + 2, cksum(pkt, HDR + size));
+		if (!v6)                /* the stack computes the ICMPv6 checksum */
+			rt_put_be16(pkt + 2, cksum(pkt, HDR + size));
 		bitmap[(seq % SEQ_BITS) / 32] &= ~(1UL << (seq % 32));
 		sent++;
-		if (sendto(s, pkt, (LONG)(HDR + size), 0, &to, sizeof(to)) < 0) {
+		if (sendto(s, pkt, (LONG)(HDR + size), 0, &to, (LONG)tolen) < 0) {
 			LONG err = Errno();
 			cl_printf("ping: sendmsg: %s\n", cl_strerror((int)err));
 			errors++;
@@ -405,4 +523,4 @@ bad:
 	return CL_ERROR;
 }
 
-CL_MAIN(ping_main, "ping")
+CL_MAIN(ping_main, PING_NAME)

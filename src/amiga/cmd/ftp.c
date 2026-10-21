@@ -1,10 +1,13 @@
 /*
- * Riptide - ftp: interactive FTP client (RFC 959, RFC 2428 EPSV) for
+ * Riptide - ftp: interactive FTP client (RFC 959, RFC 2428 EPSV/EPRT) for
  * AmigaOS, in the style of the BSD/Linux ftp command.
  *
- *   ftp [-n] [-v] [-p|-A] [-i] [-d] [-t secs] [host [port]]
+ *   ftp [-4|-6] [-n] [-v] [-p|-A] [-i] [-d] [-t secs] [host [port]]
  *   ftp [-o localfile] ftp://[user[:pass]@]host[:port]/path
  *   ftp -u ftp://[user[:pass]@]host[:port]/[path] localfile...
+ *
+ * IPv6 servers (-6, an IPv6 literal, "[addr]" in URLs) use EPSV in passive
+ * and EPRT in active mode (RFC 2428; PASV/PORT cannot carry IPv6).
  *
  * Commands are read from standard input, so "ftp -n host <script" runs a
  * script. Passive mode (EPSV, then PASV) is the default; the address in a
@@ -43,7 +46,8 @@ struct cmdtab {
 
 /* connection */
 static int ctl = -1;
-static u32 peer_addr, local_addr;
+static struct cl_addr peer, local;  /* control connection's addresses */
+static int ftp_family;              /* -4 / -6 */
 static char hostname[128];
 static int loggedin;
 static int epsv_ok = 1;             /* cleared when the server refuses EPSV */
@@ -84,7 +88,7 @@ struct tv64 { ULONG secs, micro; };
 
 static void usage(void)
 {
-	cl_puts("usage: ftp [-nvpAid] [-t secs] [host [port]]\n"
+	cl_puts("usage: ftp [-46nvpAid] [-t secs] [host [port]]\n"
 	        "       ftp [-o localfile] ftp://[user[:pass]@]host[:port]/path\n"
 	        "       ftp -u ftp://[user[:pass]@]host[:port]/[path] localfile...\n");
 }
@@ -512,22 +516,26 @@ static int parse_pasv(u32 *addr, u16 *port)
  * connects now, active mode listens and sends PORT. 0 or -1. */
 static int initconn(void)
 {
-	struct rt_sockaddr_in sa;
+	struct rt_sockaddr_in6 sa;
+	struct cl_addr ad;
 	LONG len;
-	int r, s;
+	int r, s, v6 = peer.family == RT_AF_INET6;
 	u16 port = 0;
-	u32 addr = peer_addr;
-	char a[16], b[16];
+	u32 addr = rt_in6_v4(&peer.a);
+	char a[CL_ADDRSTRLEN], b[CL_ADDRSTRLEN];
 
 	close_data();
 	if (passive) {
 		int got = 0;
-		if (use_epsv && epsv_ok) {
+		if ((use_epsv && epsv_ok) || v6) {
 			r = command("EPSV");
 			if (r < 0)
 				return -1;
 			if (r == COMPLETE && parse_epsv(&port) == 0) {
 				got = 1;
+			} else if (v6) {
+				cl_puts("Extended passive mode refused (IPv6 needs EPSV). Try \"passive\" off.\n");
+				return -1;
 			} else if (r == COMPLETE || code == 500 || code == 501 || code == 502 || code == 504) {
 				epsv_ok = 0;            /* not supported: PASV from now on */
 				if (debug)
@@ -550,20 +558,20 @@ static int initconn(void)
 			}
 			/* Behind NAT (or with a misconfigured server) the advertised
 			 * address is often private or wrong: use the control peer. */
-			if (addr != peer_addr) {
+			if (addr != rt_in6_v4(&peer.a)) {
 				if (debug)
-					cl_printf("Ignoring PASV address %s, using %s.\n", cl_ip(addr, a), cl_ip(peer_addr, b));
-				addr = peer_addr;
+					cl_printf("Ignoring PASV address %s, using %s.\n", cl_ip(addr, a), cl_addr_str(&peer, b));
 			}
 		}
-		s = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
+		/* the data connection always goes to the control peer */
+		s = socket(peer.family, RT_SOCK_STREAM, 0);
 		if (s < 0) {
 			cl_printf("ftp: socket: %s\n", cl_strerror((int)Errno()));
 			return -1;
 		}
-		r = cl_connect(s, addr, port, timeout_s * 1000UL);
+		r = cl_connect_addr(s, &peer, port, timeout_s * 1000UL);
 		if (r) {
-			cl_printf("ftp: connect to %s port %u: %s\n", cl_ip(addr, a), (unsigned)port,
+			cl_printf("ftp: connect to %s port %u: %s\n", cl_addr_str(&peer, a), (unsigned)port,
 			          r == RT_EINTR ? "Interrupted" : cl_strerror(r));
 			CloseSocket(s);
 			if (r == RT_EINTR)
@@ -574,28 +582,29 @@ static int initconn(void)
 		return 0;
 	}
 	/* active: listen on the control connection's local address */
-	s = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
+	s = socket(local.family, RT_SOCK_STREAM, 0);
 	if (s < 0) {
 		cl_printf("ftp: socket: %s\n", cl_strerror((int)Errno()));
 		return -1;
 	}
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_len = sizeof(sa);
-	sa.sin_family = RT_AF_INET;
-	sa.sin_addr = local_addr;
 	len = sizeof(sa);
-	if (bind(s, &sa, sizeof(sa)) < 0 || listen(s, 1) < 0 || getsockname(s, &sa, &len) < 0) {
+	if (bind(s, &sa, (LONG)cl_sockaddr(&local, 0, &sa)) < 0 || listen(s, 1) < 0 ||
+	    getsockname(s, &sa, &len) < 0) {
 		cl_printf("ftp: data socket: %s\n", cl_strerror((int)Errno()));
 		CloseSocket(s);
 		return -1;
 	}
 	data_listen = s;
-	{
-		u32 h = rt_ntohl(local_addr);
-		u16 p = rt_ntohs(sa.sin_port);
+	cl_from_sockaddr(&sa, &ad, &port);
+	if (v6) {
+		/* RFC 2428 2: EPRT |2|address|port| (no zone) */
+		rt_inet6_ntop(&local.a, a, RT_INET6_ADDRSTRLEN);
+		r = command("EPRT |2|%s|%u|", a, (unsigned)port);
+	} else {
+		u32 h = rt_ntohl(rt_in6_v4(&local.a));
 		r = command("PORT %lu,%lu,%lu,%lu,%u,%u", (unsigned long)(h >> 24), (unsigned long)((h >> 16) & 255),
-		            (unsigned long)((h >> 8) & 255), (unsigned long)(h & 255), (unsigned)(p >> 8),
-		            (unsigned)(p & 255));
+		            (unsigned long)((h >> 8) & 255), (unsigned long)(h & 255), (unsigned)(port >> 8),
+		            (unsigned)(port & 255));
 	}
 	if (r != COMPLETE) {
 		close_data();
@@ -607,7 +616,7 @@ static int initconn(void)
 /* After the 1xx reply: the connected data socket, or -1 (-2: Ctrl-C). */
 static int dataconn(void)
 {
-	struct rt_sockaddr_in sa;
+	struct rt_sockaddr_in6 sa;
 	LONG len = sizeof(sa);
 	int s, w;
 
@@ -1097,26 +1106,35 @@ static int login(const char *user, const char *pass, int quiet_defaults)
 
 static int ftp_open(const char *host, u32 port)
 {
-	struct rt_sockaddr_in sa;
+	struct rt_sockaddr_in6 sa;
+	struct cl_addr addr;
 	LONG len;
-	u32 addr;
-	int s, r;
-	char a[16];
+	int s, r, fam = ftp_family;
+	char a[CL_ADDRSTRLEN], h[128];
 
 	if (ctl >= 0) {
 		cl_printf("Already connected to %s, use close first.\n", hostname);
 		return -1;
 	}
-	if (cl_resolve(host, &addr) < 0)
+	/* "[2001:db8::1]" (URLs) */
+	if (host[0] == '[') {
+		rt_strlcpy(h, host + 1, sizeof(h));
+		if (strchr(h, ']'))
+			*strchr(h, ']') = 0;
+		host = h;
+	}
+	if (!fam && cl_parse_addr(host, &addr) == 0)
+		fam = addr.family == RT_AF_INET6 ? 6 : 4;
+	if (cl_resolve_af(host, fam == 6 ? 6 : 4, &addr) < 0)
 		return -1;
-	s = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
+	s = socket(addr.family, RT_SOCK_STREAM, 0);
 	if (s < 0) {
 		cl_printf("ftp: socket: %s\n", cl_strerror((int)Errno()));
 		return -1;
 	}
-	r = cl_connect(s, addr, (u16)port, timeout_s * 1000UL);
+	r = cl_connect_addr(s, &addr, (u16)port, timeout_s * 1000UL);
 	if (r) {
-		cl_printf("ftp: connect to %s port %lu: %s\n", cl_ip(addr, a), (unsigned long)port,
+		cl_printf("ftp: connect to %s port %lu: %s\n", cl_addr_str(&addr, a), (unsigned long)port,
 		          r == RT_EINTR ? "Interrupted" : cl_strerror(r));
 		CloseSocket(s);
 		return -1;
@@ -1127,13 +1145,18 @@ static int ftp_open(const char *host, u32 port)
 	}
 	ctl = s;
 	ctlpos = ctllen = 0;
-	peer_addr = addr;
+	peer = addr;
 	len = sizeof(sa);
-	local_addr = getsockname(s, &sa, &len) == 0 ? sa.sin_addr : 0;
+	if (getsockname(s, &sa, &len) == 0) {
+		cl_from_sockaddr(&sa, &local, NULL);
+	} else {
+		memset(&local, 0, sizeof(local));
+		local.family = addr.family;
+	}
 	rt_strlcpy(hostname, host, sizeof(hostname));
 	epsv_ok = 1;
 	if (verbose)
-		cl_printf("Connected to %s (%s).\n", host, cl_ip(addr, a));
+		cl_printf("Connected to %s (%s).\n", host, cl_addr_str(&addr, a));
 	/* the greeting; 120 = "ready in nnn minutes" */
 	do {
 		r = get_reply();
@@ -1652,10 +1675,10 @@ static void c_restart(int argc, char **argv)
 
 static void c_status(int argc, char **argv)
 {
-	char a[16];
+	char a[CL_ADDRSTRLEN];
 
 	if (ctl >= 0)
-		cl_printf("Connected to %s (%s).\n", hostname, cl_ip(peer_addr, a));
+		cl_printf("Connected to %s (%s).\n", hostname, cl_addr_str(&peer, a));
 	else
 		cl_puts("Not connected.\n");
 	if (ctl >= 0)
@@ -1943,7 +1966,7 @@ static int parse_url(char *url, char **user, char **pass, char **host, u32 *port
 		url_decode(*user);
 		p = at + 1;
 	}
-	colon = strchr(p, ':');
+	colon = p[0] == '[' && strchr(p, ']') ? strchr(strchr(p, ']'), ':') : strchr(p, ':');
 	if (colon) {
 		*colon = 0;
 		if (cl_parse_uint(colon + 1, 65535, port) < 0 || !*port)
@@ -2007,8 +2030,10 @@ static int ftp_main(int argc, char **argv)
 	u32 port = 21, n;
 
 	memset(&g, 0, sizeof(g));
-	while ((c = cl_getopt(argc, argv, "nvpAidguo:t:P:h", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "nvpAidguo:t:P:h46", &g)) != -1) {
 		switch (c) {
+		case '4': ftp_family = 4; break;
+		case '6': ftp_family = 6; break;
 		case 'n': autologin = 0; break;
 		case 'v': force_verbose = 1; break;
 		case 'p': passive = 1; break;

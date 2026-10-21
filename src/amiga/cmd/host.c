@@ -3,15 +3,17 @@
  *
  *   host [-v] [-t TYPE] [-W secs] NAME|ADDR [SERVER]
  *
- * Without -t and SERVER, names are looked up with gethostbyname() and
- * addresses with gethostbyaddr() (static host table, cache and DNS, as
- * every program sees them). With -t (A, NS, CNAME, SOA, PTR, MX, TXT,
- * AAAA, ANY) or a SERVER, host sends its own DNS query over UDP to SERVER
- * or the first configured name server.
+ * Without -t and SERVER, names are looked up with gethostbyname() (and
+ * gethostbyname2(AF_INET6) of riptide.library for the IPv6 addresses) and
+ * addresses (IPv4 or IPv6) with gethostbyaddr() (static host table, cache
+ * and DNS, as every program sees them). With -t (A, NS, CNAME, SOA, PTR,
+ * MX, TXT, AAAA, ANY) or a SERVER, host sends its own DNS query over UDP
+ * (IPv4 or IPv6) to SERVER or the first configured name server.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "cmdlib.h"
 #include "gen/bsdsocket_calls.h"
+#include "gen/riptide_calls.h"
 
 #define DNSBUF 1024
 struct tv { ULONG secs, micro; };
@@ -35,6 +37,22 @@ static const char *rcode_name(int r)
 {
 	static const char *const n[] = { "NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMP", "REFUSED" };
 	return r >= 0 && r <= 5 ? n[r] : "UNKNOWN";
+}
+
+/* RFC 3596 2.5: nibbles in reverse order under ip6.arpa */
+static void ptr_name6(const u8 *a, char *b, u32 len)
+{
+	static const char hx[] = "0123456789abcdef";
+	u32 o = 0;
+	int i;
+
+	for (i = 15; i >= 0 && o + 4 < len; i--) {
+		b[o++] = hx[a[i] & 15];
+		b[o++] = '.';
+		b[o++] = hx[a[i] >> 4];
+		b[o++] = '.';
+	}
+	rt_strlcpy(b + o, "ip6.arpa", len - o);
 }
 
 static void ptr_name(u32 addr, char *b, u32 len)
@@ -119,7 +137,7 @@ static u32 build_query(u8 *b, const char *name, u16 type, u16 id)
 
 static void print_rr(const u8 *m, u32 mlen, u32 off, const char *owner, u16 type, u16 rdlen)
 {
-	char n1[256], n2[256], a[16];
+	char n1[256], n2[256], a[RT_INET6_ADDRSTRLEN];
 	const u8 *rd = m + off;
 	u32 i;
 
@@ -132,12 +150,8 @@ static void print_rr(const u8 *m, u32 mlen, u32 off, const char *owner, u16 type
 		}
 		break;
 	case 28:
-		if (rdlen == 16) {
-			cl_printf("%s has IPv6 address ", owner);
-			for (i = 0; i < 16; i += 2)
-				cl_printf("%s%lx", i ? ":" : "", (unsigned long)rt_get_be16(rd + i));
-			cl_puts("\n");
-		}
+		if (rdlen == 16)
+			cl_printf("%s has IPv6 address %s\n", owner, cl_ip6(rd, a));
 		break;
 	case 2: case 5: case 12:
 		if (dn_expand(m, mlen, rd, n1, sizeof(n1)) < 0)
@@ -187,9 +201,10 @@ static void print_rr(const u8 *m, u32 mlen, u32 off, const char *owner, u16 type
 	}
 }
 
-static int query(const char *name, u16 type, u32 server)
+static int query(const char *name, u16 type, const struct cl_addr *server)
 {
-	struct rt_sockaddr_in sa;
+	struct rt_sockaddr_in6 sa;
+	u32 salen;
 	u8 *q, *r;
 	u32 qlen, try;
 	LONG n = -1;
@@ -209,13 +224,9 @@ static int query(const char *name, u16 type, u32 server)
 		FreeVec(q);
 		return CL_ERROR;
 	}
-	s = socket(RT_AF_INET, RT_SOCK_DGRAM, 0);
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_len = sizeof(sa);
-	sa.sin_family = RT_AF_INET;
-	sa.sin_port = rt_htons(53);
-	sa.sin_addr = server;
-	if (s < 0 || connect(s, &sa, sizeof(sa)) < 0) {
+	s = socket(server->family, RT_SOCK_DGRAM, 0);
+	salen = cl_sockaddr(server, 53, &sa);
+	if (s < 0 || connect(s, &sa, (LONG)salen) < 0) {
 		cl_error("cannot reach the name server");
 		goto out;
 	}
@@ -269,7 +280,7 @@ static int query(const char *name, u16 type, u32 server)
 			off += (u32)k + 4;
 		}
 		if (!an) {
-			cl_printf("%s has no %s record\n", name, type == 1 ? "A" : "such");
+			cl_printf("%s has no %s record\n", name, type == 1 ? "A" : type == 28 ? "AAAA" : "such");
 			rc = CL_OK;
 			goto out;
 		}
@@ -303,23 +314,24 @@ static int host_main(int argc, char **argv)
 {
 	struct cl_getopt g;
 	const char *name, *tname = NULL;
-	u32 addr, server = 0, i;
+	u32 addr, i;
+	struct cl_addr server, a6;
 	u16 type = 0;
-	int c, isaddr;
-	char b[64], a[16];
+	int c, isaddr, is6 = 0, have_server = 0;
+	char b[80], a[CL_ADDRSTRLEN];
 
 	memset(&g, 0, sizeof(g));
 	if (argc > 1 && (!strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
 		usage();
 		return CL_OK;
 	}
-	while ((c = cl_getopt(argc, argv, "vadt:W:4", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "vadt:W:46", &g)) != -1) {
 		switch (c) {
 		case 'v': case 'd': verbose = 1; break;
 		case 'a': verbose = 1; tname = "ANY"; break;
 		case 't': tname = g.arg; break;
 		case 'W': if (cl_parse_ms(g.arg, &wait_ms) < 0 || !wait_ms) { usage(); return CL_ERROR; } break;
-		case '4': break;
+		case '4': case '6': break;
 		default: usage(); return CL_ERROR;
 		}
 	}
@@ -340,34 +352,64 @@ static int host_main(int argc, char **argv)
 	if (cl_need_socket() < 0 || cl_need_timer() < 0)
 		return CL_FAIL;
 	isaddr = cl_parse_ip(name, &addr) == 0;
+	if (!isaddr && cl_parse_addr(name, &a6) == 0 && a6.family == RT_AF_INET6)
+		isaddr = is6 = 1;
 	if (g.ind + 1 < argc) {
-		if (cl_resolve(argv[g.ind + 1], &server) < 0)
+		if (cl_resolve_af(argv[g.ind + 1], 0, &server) < 0)
 			return CL_ERROR;
+		have_server = 1;
 		cl_printf("Using domain server:\nName: %s\nAddress: %s#53\nAliases: \n\n", argv[g.ind + 1],
-		          cl_ip(server, a));
+		          cl_addr_str(&server, a));
 		if (!type)
 			type = isaddr ? 12 : 1;
 	}
 	if (type) {
 		char q[256];
-		if (!server) {
+		if (!have_server) {
+			/* the first server of either family (net.riptide.dns6), else the IPv4 list */
 			struct rt_ctl_hdr h;
-			void *d = cl_dump(RT_CTL_DNS, &h);
-			struct rt_ctl_dns *dn = d ? cl_rec(d, &h, 0) : NULL;
-			if (dn && dn->nservers)
-				server = dn->servers[0];
-			if (d)
+			void *d = cl_dump(RT_CTL_DNS6, &h);
+			memset(&server, 0, sizeof(server));
+			if (d) {
+				struct rt_ctl_dns6 *dn = cl_rec(d, &h, 0);
+				if (dn->nservers) {
+					memcpy(server.a.b, dn->servers[0].addr, 16);
+					server.family = rt_in6_is_v4mapped(&server.a) ? RT_AF_INET : RT_AF_INET6;
+					server.scope = dn->servers[0].ifindex;
+					have_server = 1;
+				}
 				FreeVec(d);
-			if (!server) {
+			} else if ((d = cl_dump(RT_CTL_DNS, &h)) != NULL) {
+				struct rt_ctl_dns *dn = cl_rec(d, &h, 0);
+				if (dn->nservers) {
+					server.family = RT_AF_INET;
+					rt_in6_set_v4mapped(&server.a, dn->servers[0]);
+					have_server = 1;
+				}
+				FreeVec(d);
+			}
+			if (!have_server) {
 				cl_puts(";; no name servers configured\n");
 				return CL_ERROR;
 			}
 		}
-		if (isaddr && type == 12)
+		if (isaddr && type == 12 && is6)
+			ptr_name6(a6.a.b, q, sizeof(q));
+		else if (isaddr && type == 12)
 			ptr_name(addr, q, sizeof(q));
 		else
 			rt_strlcpy(q, name, sizeof(q));
-		return query(q, type, server);
+		return query(q, type, &server);
+	}
+	if (is6) {
+		struct hostent *h = (struct hostent *)gethostbyaddr((APTR)a6.a.b, 16, RT_AF_INET6);
+		ptr_name6(a6.a.b, b, sizeof(b));
+		if (!h || !h->h_name) {
+			cl_printf("Host %s. not found: 3(NXDOMAIN)\n", b);
+			return CL_ERROR;
+		}
+		cl_printf("%s domain name pointer %s.\n", b, h->h_name);
+		return CL_OK;
 	}
 	if (isaddr) {
 		struct hostent *h = (struct hostent *)gethostbyaddr((APTR)&addr, 4, RT_AF_INET);
@@ -381,15 +423,34 @@ static int host_main(int argc, char **argv)
 	}
 	{
 		struct hostent *h = (struct hostent *)gethostbyname((CONST_STRPTR)name);
-		if (!h || !h->h_addr_list || !h->h_addr_list[0]) {
+		int found = 0, alias = 0;
+		if (h && h->h_addr_list && h->h_addr_list[0]) {
+			if (h->h_name && rt_strcasecmp(h->h_name, name)) {
+				cl_printf("%s is an alias for %s.\n", name, h->h_name);
+				alias = 1;
+			}
+			rt_strlcpy(b, h->h_name ? h->h_name : name, sizeof(b));
+			for (i = 0; h->h_addr_list[i]; i++) {
+				memcpy(&addr, h->h_addr_list[i], 4);
+				cl_printf("%s has address %s\n", b, cl_ip(addr, a));
+			}
+			found = 1;
+		}
+		/* AAAA through riptide.library (the hostent buffer is reused) */
+		if (cl_need_riptide() == 0) {
+			h = (struct hostent *)gethostbyname2((CONST_STRPTR)name, RT_AF_INET6);
+			if (h && h->h_length == 16 && h->h_addr_list && h->h_addr_list[0]) {
+				if (!alias && h->h_name && rt_strcasecmp(h->h_name, name))
+					cl_printf("%s is an alias for %s.\n", name, h->h_name);
+				for (i = 0; h->h_addr_list[i]; i++)
+					cl_printf("%s has IPv6 address %s\n", h->h_name ? h->h_name : name,
+					          cl_ip6((const u8 *)h->h_addr_list[i], a));
+				found = 1;
+			}
+		}
+		if (!found) {
 			cl_printf("Host %s not found: 3(NXDOMAIN)\n", name);
 			return CL_ERROR;
-		}
-		if (h->h_name && rt_strcasecmp(h->h_name, name))
-			cl_printf("%s is an alias for %s.\n", name, h->h_name);
-		for (i = 0; h->h_addr_list[i]; i++) {
-			memcpy(&addr, h->h_addr_list[i], 4);
-			cl_printf("%s has address %s\n", h->h_name ? h->h_name : name, cl_ip(addr, a));
 		}
 	}
 	return CL_OK;

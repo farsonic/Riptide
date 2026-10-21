@@ -17,11 +17,17 @@
  * ndots 1, one search domain. Queries use a random ID and a fresh socket
  * bound to port 0 (random ephemeral port); replies must come from the
  * server's address and port 53 and echo ID and question.
+ *
+ * IPv6: servers may be IPv6 (kept with the interface for link-local
+ * ones); those learned from router advertisements (RFC 8106) or DHCPv6
+ * expire. AAAA lookups and ip6.arpa PTR lookups use the same machinery;
+ * the hosts table holds both families (IPv4 as IPv4-mapped).
  */
 #include "sock_internal.h"
 #include "resolv_internal.h"
 
-#define DNS_MAX_SERVERS  4
+#define DNS_MAX_SERVERS  6
+#define DNS_MAX_STATIC   4
 #define DNS_PORT         53
 #define DNS_TIMEOUT_MS   2000
 #define DNS_ATTEMPTS     2
@@ -34,13 +40,20 @@
 
 int rt_dns_disallowed;
 
-static u32 dns_servers[DNS_MAX_SERVERS];
+struct dns_server {
+	rt_in6_addr addr;         /* IPv4-mapped for IPv4 */
+	u32 ifindex;              /* zone of link-local servers */
+	u32 expires_s;            /* rt_ip6_seconds() deadline, 0 = never */
+	u8  source;               /* RT_DNS_SRC_* */
+};
+static struct dns_server dns_servers[DNS_MAX_SERVERS];
 static int dns_nservers;
 static char dns_search[64];
+static u8 dns_search_auto;    /* dns_search came from DNSSL / DHCPv6 */
 
 struct host_ent {
 	struct host_ent *next;
-	u32 addr;
+	rt_in6_addr addr;         /* IPv4-mapped for IPv4 */
 	char name[1];             /* allocated to length */
 };
 static struct host_ent *hosts_head, *hosts_tail;
@@ -48,7 +61,8 @@ static struct host_ent *hosts_head, *hosts_tail;
 struct cache_ent {
 	char name[DNS_CACHE_NAME];
 	char canon[DNS_CACHE_NAME];
-	u32  addr[DNS_CACHE_ADDRS];
+	rt_in6_addr addr[DNS_CACHE_ADDRS];   /* IPv4-mapped for A */
+	u16  qtype;
 	u8   naddr;
 	u32  expires;             /* rt_now_ms() */
 	u32  stamp;               /* for LRU replacement */
@@ -62,27 +76,80 @@ static u32 dns_cache_clock;
  * Configuration (lock held)
  * ====================================================================== */
 
-int rt_dns_add_server(u32 addr)
+static void servers_expire(void)
+{
+	u32 now = rt_ip6_seconds();
+	int i = 0, j;
+
+	while (i < dns_nservers) {
+		if (dns_servers[i].expires_s && (s32)(now - dns_servers[i].expires_s) >= 0) {
+			for (j = i; j + 1 < dns_nservers; j++)
+				dns_servers[j] = dns_servers[j + 1];
+			dns_nservers--;
+			continue;
+		}
+		i++;
+	}
+}
+
+int rt_dns_add_server6(const rt_in6_addr *a, u32 ifindex, u32 lifetime_s, int source)
 {
 	int i;
 
-	if (addr == 0 || addr == RT_INADDR_BROADCAST)
+	if (rt_in6_is_unspec(a) || rt_in6_is_mcast(a) ||
+	    (rt_in6_is_v4mapped(a) && (a->w[3] == 0 || a->w[3] == RT_INADDR_BROADCAST)))
 		return -RT_EINVAL;
-	for (i = 0; i < dns_nservers; i++)
-		if (dns_servers[i] == addr)
-			return 0;
+	if (!rt_in6_is_linklocal(a))
+		ifindex = 0;
+	servers_expire();
+	for (i = 0; i < dns_nservers; i++) {
+		if (!rt_in6_eq(&dns_servers[i].addr, a))
+			continue;
+		/* a configured server stays configured; learned ones refresh */
+		if (dns_servers[i].source != RT_DNS_SRC_STATIC) {
+			dns_servers[i].source = (u8)source;
+			dns_servers[i].ifindex = ifindex;
+			dns_servers[i].expires_s = source == RT_DNS_SRC_STATIC || lifetime_s == RT_IN6_INFINITE ?
+			                           0 : rt_ip6_seconds() + lifetime_s;
+		}
+		return 0;
+	}
 	if (dns_nservers >= DNS_MAX_SERVERS)
 		return -RT_ENOSPC;
-	dns_servers[dns_nservers++] = addr;
+	if (source == RT_DNS_SRC_STATIC) {
+		/* as before IPv6: four configured servers; the other slots are
+		 * for servers learned from RAs / DHCPv6 */
+		int nstatic = 0;
+		for (i = 0; i < dns_nservers; i++)
+			nstatic += dns_servers[i].source == RT_DNS_SRC_STATIC;
+		if (nstatic >= DNS_MAX_STATIC)
+			return -RT_ENOSPC;
+	}
+	dns_servers[dns_nservers].addr = *a;
+	dns_servers[dns_nservers].ifindex = ifindex;
+	dns_servers[dns_nservers].source = (u8)source;
+	dns_servers[dns_nservers].expires_s = source == RT_DNS_SRC_STATIC || lifetime_s == RT_IN6_INFINITE ?
+	                                      0 : rt_ip6_seconds() + lifetime_s;
+	dns_nservers++;
 	return 0;
 }
 
-void rt_dns_remove_server(u32 addr)
+int rt_dns_add_server(u32 addr)
+{
+	rt_in6_addr a;
+
+	if (addr == 0 || addr == RT_INADDR_BROADCAST)
+		return -RT_EINVAL;
+	rt_in6_set_v4mapped(&a, addr);
+	return rt_dns_add_server6(&a, 0, RT_IN6_INFINITE, RT_DNS_SRC_STATIC);
+}
+
+void rt_dns_remove_server6(const rt_in6_addr *a)
 {
 	int i, j;
 
 	for (i = 0; i < dns_nservers; i++) {
-		if (dns_servers[i] != addr)
+		if (!rt_in6_eq(&dns_servers[i].addr, a))
 			continue;
 		for (j = i; j + 1 < dns_nservers; j++)
 			dns_servers[j] = dns_servers[j + 1];
@@ -91,18 +158,64 @@ void rt_dns_remove_server(u32 addr)
 	}
 }
 
+void rt_dns_remove_server(u32 addr)
+{
+	rt_in6_addr a;
+
+	rt_in6_set_v4mapped(&a, addr);
+	rt_dns_remove_server6(&a);
+}
+
 void rt_dns_clear_servers(void)
 {
 	dns_nservers = 0;
 }
 
+/* IPv4 servers only (the rt_ctl_dns record and the old API) */
 int rt_dns_get_servers(u32 *out, int max)
+{
+	int i, n = 0;
+
+	servers_expire();
+	for (i = 0; i < dns_nservers; i++) {
+		if (!rt_in6_is_v4mapped(&dns_servers[i].addr))
+			continue;
+		if (out && n < max)
+			out[n] = rt_in6_v4(&dns_servers[i].addr);
+		n++;
+	}
+	return n;
+}
+
+int rt_dns_get_servers6(rt_in6_addr *out, u32 *ifindex, u8 *source, int max)
 {
 	int i;
 
-	for (i = 0; out && i < dns_nservers && i < max; i++)
-		out[i] = dns_servers[i];
+	servers_expire();
+	for (i = 0; i < dns_nservers && i < max; i++) {
+		if (out)
+			out[i] = dns_servers[i].addr;
+		if (ifindex)
+			ifindex[i] = dns_servers[i].ifindex;
+		if (source)
+			source[i] = dns_servers[i].source;
+	}
 	return dns_nservers;
+}
+
+const char *rt_dns_search_domain(void)
+{
+	return dns_search;
+}
+
+/* RFC 8106 DNSSL / DHCPv6 domain list: only when none is configured */
+void rt_dns_set_search_auto(const char *domain);
+void rt_dns_set_search_auto(const char *domain)
+{
+	if (dns_search[0] && !dns_search_auto)
+		return;
+	rt_dns_set_search(domain);
+	dns_search_auto = 1;
 }
 
 void rt_dns_set_search(const char *domain)
@@ -112,12 +225,21 @@ void rt_dns_set_search(const char *domain)
 	while (*domain == '.')
 		domain++;
 	rt_strlcpy(dns_search, domain, sizeof(dns_search));
+	dns_search_auto = 0;
 	/* no trailing dot */
 	if (dns_search[0] && dns_search[strlen(dns_search) - 1] == '.')
 		dns_search[strlen(dns_search) - 1] = 0;
 }
 
 int rt_hosts_add(const char *name, u32 addr)
+{
+	rt_in6_addr a;
+
+	rt_in6_set_v4mapped(&a, addr);
+	return rt_hosts_add6(name, &a);
+}
+
+int rt_hosts_add6(const char *name, const rt_in6_addr *addr)
 {
 	struct host_ent *h;
 	u32 len;
@@ -131,7 +253,7 @@ int rt_hosts_add(const char *name, u32 addr)
 	if (!h)
 		return -RT_ENOMEM;
 	h->next = NULL;
-	h->addr = addr;
+	h->addr = *addr;
 	memcpy(h->name, name, len + 1);
 	if (len && h->name[len - 1] == '.')
 		h->name[len - 1] = 0;
@@ -398,6 +520,19 @@ int dns_parse_response(const u8 *msg, u32 len, u16 id, const char *qname, u16 qt
 				continue;
 			res->addrs[res->naddr++] = a;
 			n++;
+		} else if (type == DNS_TYPE_AAAA) {
+			rt_in6_addr a;
+			int k;
+			if (rdlen != 16 || !res->addrs6)
+				continue;
+			memcpy(a.b, msg + off, 16);
+			for (k = 0; k < res->naddr; k++)
+				if (rt_in6_eq(&res->addrs6[k], &a))
+					break;
+			if (k < res->naddr || res->naddr >= res->max)
+				continue;
+			res->addrs6[res->naddr++] = a;
+			n++;
 		} else if (type == DNS_TYPE_PTR) {
 			if (n)
 				continue;
@@ -422,7 +557,7 @@ int dns_parse_response(const u8 *msg, u32 len, u16 id, const char *qname, u16 qt
 struct dns_work {
 	struct rt_sockctx ctx;
 	struct dns_result res;
-	u32 servers[DNS_MAX_SERVERS];
+	struct dns_server servers[DNS_MAX_SERVERS];
 	int nservers;
 	char search[64];
 	char qname[DNS_NAMEBUF];
@@ -443,6 +578,7 @@ static struct dns_work *work_alloc(u32 *addrs, int max)
 	w->res.addrs = addrs;
 	w->res.max = max;
 	rt_lock();
+	servers_expire();
 	w->nservers = dns_nservers;
 	memcpy(w->servers, dns_servers, sizeof(w->servers));
 	rt_strlcpy(w->search, dns_search, sizeof(w->search));
@@ -456,6 +592,40 @@ static void work_free(struct dns_work *w)
 	rt_free(w);
 }
 
+/* A socket of the server's family (opened on first use) bound to an
+ * ephemeral port. */
+static int dns_socket(struct dns_work *w, int v6, int *fd)
+{
+	struct rt_sockaddr_in sin;
+	struct rt_sockaddr_in6 sin6;
+	int r;
+
+	if (*fd >= 0)
+		return *fd;
+	r = rt_api_socket(&w->ctx, v6 ? RT_AF_INET6 : RT_AF_INET, RT_SOCK_DGRAM, 0);
+	if (r < 0)
+		return r;
+	if (v6) {
+		memset(&sin6, 0, sizeof(sin6));
+		sin6.sin6_len = sizeof(sin6);
+		sin6.sin6_family = RT_AF_INET6;
+		if (rt_api_bind(&w->ctx, r, &sin6, sizeof(sin6)) < 0) {
+			rt_api_close(&w->ctx, r);
+			return -RT_EADDRNOTAVAIL;
+		}
+	} else {
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_len = sizeof(sin);
+		sin.sin_family = RT_AF_INET;
+		if (rt_api_bind(&w->ctx, r, &sin, sizeof(sin)) < 0) {
+			rt_api_close(&w->ctx, r);
+			return -RT_EADDRNOTAVAIL;
+		}
+	}
+	*fd = r;
+	return r;
+}
+
 /* Send query q (ID 'id') to every server, DNS_ATTEMPTS rounds.
  * Parse mode (qname != NULL): the reply must answer (qname, qtype) and is
  * parsed into w->res; returns as dns_parse_response().
@@ -463,30 +633,42 @@ static void work_free(struct dns_work *w)
  * server is accepted, left in w->a; returns its length or -RT_TRY_AGAIN. */
 static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname, u16 qtype)
 {
-	struct rt_sockaddr_in sin;
-	int fd, att, s, r, result = -RT_TRY_AGAIN;
+	int fd4 = -1, fd6 = -1, att, s, r, result = -RT_TRY_AGAIN;
 
 	if (w->nservers == 0)
 		return -RT_TRY_AGAIN;
-	fd = rt_api_socket(&w->ctx, RT_AF_INET, RT_SOCK_DGRAM, 0);
-	if (fd < 0)
-		return -RT_TRY_AGAIN;
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_len = sizeof(sin);
-	sin.sin_family = RT_AF_INET;
-	if (rt_api_bind(&w->ctx, fd, &sin, sizeof(sin)) < 0)
-		goto out;
-
 	for (att = 0; att < DNS_ATTEMPTS; att++) {
 		for (s = 0; s < w->nservers; s++) {
+			const struct dns_server *sv = &w->servers[s];
+			int v6 = !rt_in6_is_v4mapped(&sv->addr);
 			u32 start = rt_now_ms();
-			sin.sin_port = rt_htons(DNS_PORT);
-			sin.sin_addr = w->servers[s];
-			if (rt_api_sendto(&w->ctx, fd, w->q, qlen, 0, &sin, sizeof(sin)) < 0)
+			int fd = dns_socket(w, v6, v6 ? &fd6 : &fd4);
+			if (fd < 0)
+				continue;
+			if (v6) {
+				struct rt_sockaddr_in6 to;
+				memset(&to, 0, sizeof(to));
+				to.sin6_len = sizeof(to);
+				to.sin6_family = RT_AF_INET6;
+				to.sin6_port = rt_htons(DNS_PORT);
+				to.sin6_addr = sv->addr;
+				to.sin6_scope_id = sv->ifindex;
+				r = rt_api_sendto(&w->ctx, fd, w->q, qlen, 0, &to, sizeof(to));
+			} else {
+				struct rt_sockaddr_in to;
+				memset(&to, 0, sizeof(to));
+				to.sin_len = sizeof(to);
+				to.sin_family = RT_AF_INET;
+				to.sin_port = rt_htons(DNS_PORT);
+				to.sin_addr = rt_in6_v4(&sv->addr);
+				r = rt_api_sendto(&w->ctx, fd, w->q, qlen, 0, &to, sizeof(to));
+			}
+			if (r < 0)
 				continue;
 			for (;;) {
-				struct rt_sockaddr_in from;
+				struct rt_sockaddr_in6 from;
 				u32 el = rt_now_ms() - start, fl = sizeof(from), set;
+				int ok;
 				if (el >= DNS_TIMEOUT_MS)
 					break;
 				set = 1u << fd;
@@ -498,11 +680,19 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 				}
 				if (r <= 0)
 					break;
+				memset(&from, 0, sizeof(from));
 				r = rt_api_recvfrom(&w->ctx, fd, w->a, sizeof(w->a), RT_MSG_DONTWAIT,
 				                    &from, &fl);
 				if (r < 0)
 					continue;
-				if (from.sin_addr != w->servers[s] || from.sin_port != rt_htons(DNS_PORT))
+				if (v6) {
+					ok = rt_in6_eq(&from.sin6_addr, &sv->addr) &&
+					     from.sin6_port == rt_htons(DNS_PORT);
+				} else {
+					const struct rt_sockaddr_in *f4 = (const struct rt_sockaddr_in *)(const void *)&from;
+					ok = f4->sin_addr == rt_in6_v4(&sv->addr) && f4->sin_port == rt_htons(DNS_PORT);
+				}
+				if (!ok)
 					continue;
 				if (!qname) {
 					u16 rc;
@@ -527,7 +717,10 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 		}
 	}
 out:
-	rt_api_close(&w->ctx, fd);
+	if (fd4 >= 0)
+		rt_api_close(&w->ctx, fd4);
+	if (fd6 >= 0)
+		rt_api_close(&w->ctx, fd6);
 	return result;
 }
 
@@ -543,7 +736,8 @@ static int dns_query(struct dns_work *w, const char *name, u16 qtype)
 
 /* ---- hosts table and cache (lock held) ---- */
 
-static int hosts_lookup(const char *name, const char *search, u32 *addrs, int max)
+/* v6 = 0: IPv4 entries into a4; v6 = 1: IPv6 entries into a6 */
+static int hosts_lookup(const char *name, const char *search, u32 *a4, rt_in6_addr *a6, int max)
 {
 	struct host_ent *h;
 	int n = 0;
@@ -559,13 +753,17 @@ static int hosts_lookup(const char *name, const char *search, u32 *addrs, int ma
 		    rt_strncasecmp(h->name, name, nl) == 0 &&
 		    rt_strcasecmp(h->name + nl + 1, search) == 0)
 			m = 1;
-		if (m)
-			addrs[n++] = h->addr;
+		if (!m || rt_in6_is_v4mapped(&h->addr) == (a6 != NULL))
+			continue;
+		if (a6)
+			a6[n++] = h->addr;
+		else
+			a4[n++] = rt_in6_v4(&h->addr);
 	}
 	return n;
 }
 
-static struct cache_ent *cache_find(const char *name)
+static struct cache_ent *cache_find(const char *name, u16 qtype)
 {
 	int i;
 
@@ -573,7 +771,7 @@ static struct cache_ent *cache_find(const char *name)
 		return NULL;
 	for (i = 0; i < dns_cache_size && i < DNS_CACHE_MAX; i++) {
 		struct cache_ent *c = &dns_cache[i];
-		if (c->naddr && dns_name_eq(c->name, name)) {
+		if (c->naddr && c->qtype == qtype && dns_name_eq(c->name, name)) {
 			if ((s32)(c->expires - rt_now_ms()) <= 0) {
 				c->naddr = 0;
 				return NULL;
@@ -585,7 +783,8 @@ static struct cache_ent *cache_find(const char *name)
 	return NULL;
 }
 
-static void cache_add(const char *name, const char *canon, const u32 *addrs, int n, u32 ttl)
+static void cache_add(const char *name, const char *canon, u16 qtype, const u32 *a4,
+                      const rt_in6_addr *a6, int n, u32 ttl)
 {
 	struct cache_ent *c, *victim = NULL;
 	int i;
@@ -597,7 +796,7 @@ static void cache_add(const char *name, const char *canon, const u32 *addrs, int
 		ttl = DNS_CACHE_MAXTTL;
 	for (i = 0; i < dns_cache_size && i < DNS_CACHE_MAX; i++) {
 		c = &dns_cache[i];
-		if (!c->naddr || dns_name_eq(c->name, name)) {
+		if (!c->naddr || (c->qtype == qtype && dns_name_eq(c->name, name))) {
 			victim = c;
 			break;
 		}
@@ -608,8 +807,14 @@ static void cache_add(const char *name, const char *canon, const u32 *addrs, int
 		return;
 	rt_strlcpy(victim->name, name, DNS_CACHE_NAME);
 	rt_strlcpy(victim->canon, canon, DNS_CACHE_NAME);
+	victim->qtype = qtype;
 	victim->naddr = (u8)RT_MIN(n, DNS_CACHE_ADDRS);
-	memcpy(victim->addr, addrs, victim->naddr * sizeof(u32));
+	for (i = 0; i < victim->naddr; i++) {
+		if (a6)
+			victim->addr[i] = a6[i];
+		else
+			rt_in6_set_v4mapped(&victim->addr[i], a4[i]);
+	}
 	victim->expires = rt_now_ms() + ttl * 1000u;
 	victim->stamp = ++dns_cache_clock;
 }
@@ -625,34 +830,37 @@ static int is_localhost(const char *name)
 	return !rt_strcasecmp(name, "localhost") || !rt_strcasecmp(name, "localhost.");
 }
 
-int rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 canonlen)
+/* Forward lookup of qtype A (a4) or AAAA (a6). */
+static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int max,
+                   char *canon, u32 canonlen)
 {
 	struct dns_work *w;
 	struct cache_ent *c;
-	u32 a, nl;
+	u32 nl;
 	int n, r, i, dots = 0, ncand, best = -RT_HOST_NOT_FOUND, disallowed;
 	char search[64];
 
-	if (!name || !addrs || max <= 0)
-		return -RT_NO_RECOVERY;
 	nl = (u32)strlen(name);
 	if (nl == 0 || nl > 254)
 		return -RT_HOST_NOT_FOUND;
-	if (rt_parse_ipv4(name, &a) == 0) {
-		addrs[0] = a;
-		put_canon(canon, canonlen, name);
-		return 1;
-	}
 	rt_lock();
 	rt_strlcpy(search, dns_search, sizeof(search));
-	n = hosts_lookup(name, search, addrs, max);
+	n = hosts_lookup(name, search, a4, a6, max);
 	if (n == 0 && is_localhost(name)) {
-		addrs[0] = RT_INADDR_LOOPBACK;
+		if (a6)
+			a6[0] = rt_in6addr_loopback;
+		else
+			a4[0] = RT_INADDR_LOOPBACK;
 		n = 1;
 	}
-	if (n == 0 && (c = cache_find(name)) != NULL) {
+	if (n == 0 && (c = cache_find(name, qtype)) != NULL) {
 		n = RT_MIN(max, (int)c->naddr);
-		memcpy(addrs, c->addr, (size_t)n * sizeof(u32));
+		for (i = 0; i < n; i++) {
+			if (a6)
+				a6[i] = c->addr[i];
+			else
+				a4[i] = rt_in6_v4(&c->addr[i]);
+		}
 		put_canon(canon, canonlen, c->canon);
 		rt_unlock();
 		return n;
@@ -666,9 +874,10 @@ int rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 cano
 	if (disallowed)
 		return -RT_HOST_NOT_FOUND;
 
-	w = work_alloc(addrs, max);
+	w = work_alloc(a4, max);
 	if (!w)
 		return -RT_TRY_AGAIN;
+	w->res.addrs6 = a6;
 	for (i = 0; i < (int)nl; i++)
 		dots += name[i] == '.';
 	/* candidates (ndots:1): absolute first if the name has a dot */
@@ -682,10 +891,10 @@ int rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 cano
 		} else {
 			rt_strlcpy(w->qname, name, sizeof(w->qname));
 		}
-		r = dns_query(w, w->qname, DNS_TYPE_A);
+		r = dns_query(w, w->qname, qtype);
 		if (r > 0) {
 			rt_lock();
-			cache_add(name, w->res.canon, addrs, r, w->res.ttl);
+			cache_add(name, w->res.canon, qtype, a4, a6, r, w->res.ttl);
 			rt_unlock();
 			put_canon(canon, canonlen, w->res.canon);
 			work_free(w);
@@ -700,23 +909,84 @@ int rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 cano
 	return best;
 }
 
+int rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 canonlen)
+{
+	u32 a;
+
+	if (!name || !addrs || max <= 0)
+		return -RT_NO_RECOVERY;
+	if (rt_parse_ipv4(name, &a) == 0) {
+		addrs[0] = a;
+		put_canon(canon, canonlen, name);
+		return 1;
+	}
+	return resolve(name, DNS_TYPE_A, addrs, NULL, max, canon, canonlen);
+}
+
+int rt_resolve_name6(const char *name, rt_in6_addr *addrs, int max, char *canon, u32 canonlen)
+{
+	rt_in6_addr a;
+	int plen;
+
+	if (!name || !addrs || max <= 0)
+		return -RT_NO_RECOVERY;
+	if (rt_inet6_parse_prefix(name, &a, &plen, NULL, 0) == 0 && plen < 0) {
+		addrs[0] = a;
+		put_canon(canon, canonlen, name);
+		return 1;
+	}
+	{
+		u32 v4;
+		if (rt_parse_ipv4(name, &v4) == 0)
+			return -RT_NO_DATA;   /* an IPv4 literal has no AAAA */
+	}
+	return resolve(name, DNS_TYPE_AAAA, NULL, addrs, max, canon, canonlen);
+}
+
+static int resolve_ptr(const char *qname, char *name, u32 namelen)
+{
+	struct dns_work *w = work_alloc(NULL, 0);
+	int r;
+
+	if (!w)
+		return -RT_TRY_AGAIN;
+	rt_strlcpy(w->qname, qname, sizeof(w->qname));
+	r = dns_query(w, w->qname, DNS_TYPE_PTR);
+	if (r > 0) {
+		rt_strlcpy(name, w->res.name, namelen);
+		r = 0;
+	} else if (r == 0) {
+		r = -RT_NO_DATA;
+	}
+	work_free(w);
+	return r;
+}
+
+static int hosts_reverse(const rt_in6_addr *a, char *name, u32 namelen)
+{
+	struct host_ent *h;
+
+	for (h = hosts_head; h; h = h->next) {
+		if (rt_in6_eq(&h->addr, a)) {
+			rt_strlcpy(name, h->name, namelen);
+			return 1;
+		}
+	}
+	return 0;
+}
+
 int rt_resolve_addr(u32 addr, char *name, u32 namelen)
 {
-	struct dns_work *w;
-	struct host_ent *h;
+	rt_in6_addr a;
+	char q[32];
 	u32 ha = rt_ntohl(addr);
-	int r, found = 0, disallowed;
+	int found, disallowed;
 
 	if (!name || namelen == 0)
 		return -RT_NO_RECOVERY;
+	rt_in6_set_v4mapped(&a, addr);
 	rt_lock();
-	for (h = hosts_head; h; h = h->next) {
-		if (h->addr == addr) {
-			rt_strlcpy(name, h->name, namelen);
-			found = 1;
-			break;
-		}
-	}
+	found = hosts_reverse(&a, name, namelen);
 	disallowed = rt_dns_disallowed;
 	rt_unlock();
 	if (found)
@@ -727,20 +997,47 @@ int rt_resolve_addr(u32 addr, char *name, u32 namelen)
 	}
 	if (disallowed)
 		return -RT_HOST_NOT_FOUND;
-	w = work_alloc(NULL, 0);
-	if (!w)
-		return -RT_TRY_AGAIN;
-	rt_snprintf(w->qname, sizeof(w->qname), "%u.%u.%u.%u.in-addr.arpa",
+	rt_snprintf(q, sizeof(q), "%u.%u.%u.%u.in-addr.arpa",
 	            (unsigned)(ha & 255), (unsigned)((ha >> 8) & 255),
 	            (unsigned)((ha >> 16) & 255), (unsigned)(ha >> 24));
-	r = dns_query(w, w->qname, DNS_TYPE_PTR);
-	if (r > 0) {
-		rt_strlcpy(name, w->res.name, namelen);
-		r = 0;
-	} else if (r == 0) {
-		r = -RT_NO_DATA;
+	return resolve_ptr(q, name, namelen);
+}
+
+int rt_resolve_addr6(const rt_in6_addr *addr, char *name, u32 namelen)
+{
+	static const char hex[] = "0123456789abcdef";
+	char *q;
+	int i, n = 0, found, disallowed, r;
+
+	if (!addr || !name || namelen == 0)
+		return -RT_NO_RECOVERY;
+	if (rt_in6_is_v4mapped(addr))
+		return rt_resolve_addr(rt_in6_v4(addr), name, namelen);
+	rt_lock();
+	found = hosts_reverse(addr, name, namelen);
+	disallowed = rt_dns_disallowed;
+	rt_unlock();
+	if (found)
+		return 0;
+	if (rt_in6_is_loopback(addr)) {
+		rt_strlcpy(name, "localhost", namelen);
+		return 0;
 	}
-	work_free(w);
+	if (disallowed)
+		return -RT_HOST_NOT_FOUND;
+	q = rt_malloc(80);
+	if (!q)
+		return -RT_TRY_AGAIN;
+	/* RFC 3596 2.5: nibbles in reverse order under ip6.arpa */
+	for (i = 15; i >= 0; i--) {
+		q[n++] = hex[addr->b[i] & 15];
+		q[n++] = '.';
+		q[n++] = hex[addr->b[i] >> 4];
+		q[n++] = '.';
+	}
+	memcpy(q + n, "ip6.arpa", 9);
+	r = resolve_ptr(q, name, namelen);
+	rt_free(q);
 	return r;
 }
 

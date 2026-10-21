@@ -68,6 +68,7 @@ run() {
 	fi
 }
 
+TOOLS6="ping6 traceroute6"           # installed with the network tools
 has() { [ -f "$1" ] || fail "$name: missing $1"; }
 hasnt() { [ ! -e "$1" ] || fail "$name: unexpected $1"; }
 grepf() { grep -q -- "$2" "$1" 2>/dev/null || fail "$name: $1 lacks /$2/"; }
@@ -77,7 +78,7 @@ TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp
 # ---- 1. novice, fresh ------------------------------------------------------
 setup novice
 run novice 0
-for f in Riptide rtcheck $TOOLS; do
+for f in Riptide rtcheck $TOOLS $TOOLS6; do
 	has "$root/C/$f"
 	cmp -s "$root/C/$f" "$PKG/C/$f" || fail "novice: C/$f differs"
 done
@@ -149,7 +150,7 @@ grepnot "$conf" '^dhcp'
 root=$work/novice
 # (the host build of InstallerLG answers every askbool with the first choice)
 run uninstall 1 -e 's|^(set #mode 1) .*|(set #mode 0)|' -e 's|^  (set #mode$|  (set #mode-ignored|'
-for f in Riptide rtcheck $TOOLS; do hasnt "$root/C/$f"; done
+for f in Riptide rtcheck $TOOLS $TOOLS6; do hasnt "$root/C/$f"; done
 hasnt "$root/SYS/Riptide/Docs/AMIGA.md"
 # the host build answers "yes" to "Also delete your configuration?"
 hasnt "$root/ENVARC/Riptide/riptide.conf"

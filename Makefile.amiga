@@ -32,6 +32,11 @@ ST_SRC    := st_main st_xml st_http st_util
 # the ftp test, a minimal speedtest HTTP server for the speedtest test
 TESTTOOLS := ftpd-test httpd-test
 
+# IPv6 variants of ping and traceroute (ping6.c / traceroute6.c include
+# ping.c / traceroute.c); NETTOOLS is the list of tools linked with cmdlib
+NETTOOLS  += ping6 traceroute6
+TOOLS     += ping6 traceroute6
+
 ifeq ($(TOOLCHAIN),gcc)
 # ---------------------------------------------------------------- GCC ----
 BUILD   := build/amiga-gcc
@@ -53,7 +58,7 @@ GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC) src/amiga/libc.c) \
            $(BUILD)/gcc_thunks.o $(BUILD)/arch/rt_m68k.o $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/startup.o $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
-TOOL_LIB := $(BUILD)/startup.o $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
+TOOL_LIB := $(BUILD)/startup.o $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o $(BUILD)/core/inet6_text.o
 
 all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS))
 
@@ -112,7 +117,7 @@ GEN_H   := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(BUILD)/arch/rt_m68k.o $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o
-TOOL_LIB := $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o
+TOOL_LIB := $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o $(BUILD)/core/inet6_text.o
 
 all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS))
 
@@ -162,6 +167,10 @@ $(BUILD)/sdk_test: tests/amiga/sdk_test.c $(wildcard sdk/include/*/*.h)
 	$(VC) -c99 -O2 -cpu=68020 -I$(NDK)/Include_H -Isdk/include -o $@ $< -lamiga
 SDK_BIN := $(BUILD)/sdk_test
 endif
+
+# ping6 / traceroute6 are ping.c / traceroute.c built for IPv6
+$(BUILD)/amiga/cmd/ping6.o: src/amiga/cmd/ping.c
+$(BUILD)/amiga/cmd/traceroute6.o: src/amiga/cmd/traceroute.c
 
 # ---------------------------------------------------------------- SDK ----
 sdk:

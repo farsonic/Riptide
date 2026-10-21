@@ -18,6 +18,7 @@
 #include "rt/rt_bsd.h"
 #include "rt/rt_errno.h"
 #include "rt/rt_ip.h"
+#include "rt/rt_ip6.h"
 #include "rt/rt_ctl.h"
 #include "rt/rt_stats.h"
 #include "rt/riptide_port.h"
@@ -96,6 +97,31 @@ int  cl_resolve(const char *name, u32 *addr);
 /* Reverse lookup into buf, or the dotted quad if numeric/no name. */
 char *cl_hostname(u32 addr, int numeric, char *buf, u32 len);
 const char *cl_strerror(int err);
+
+/* ---- either family (IPv4 kept IPv4-mapped in a) ---- */
+struct cl_addr {
+	int family;              /* RT_AF_INET or RT_AF_INET6 */
+	rt_in6_addr a;
+	u32 scope;               /* zone (interface index) of link-local IPv6 */
+};
+#define CL_ADDRSTRLEN 64         /* RT_INET6_ADDRSTRLEN + "%" + interface */
+/* family: 0 any (getaddrinfo order, RFC 6724), 4 or 6. Numeric forms
+ * "A.B.C.D" and "IPV6[%IF]". 0 or -1 (message printed). */
+int  cl_resolve_af(const char *name, int family, struct cl_addr *out);
+/* Literal only (no lookups, no message). 0 or -1. */
+int  cl_parse_addr(const char *s, struct cl_addr *out);
+char *cl_addr_str(const struct cl_addr *a, char *buf);  /* buf >= CL_ADDRSTRLEN */
+/* Reverse lookup (or the numeric form). */
+char *cl_addr_name(const struct cl_addr *a, int numeric, char *buf, u32 len);
+/* Fill a sockaddr_in / sockaddr_in6 (buffer >= 28 bytes); returns its length. */
+u32  cl_sockaddr(const struct cl_addr *a, u16 port, void *sa);
+/* Back from a sockaddr (either family; IPv4-mapped stays AF_INET6). */
+void cl_from_sockaddr(const void *sa, struct cl_addr *out, u16 *port);
+/* cl_connect for either family */
+int  cl_connect_addr(int fd, const struct cl_addr *a, u16 port, u32 ms);
+char *cl_ip6(const u8 *a16, char *buf);                /* buf >= RT_INET6_ADDRSTRLEN */
+/* interface name of an index ("" if unknown), static buffer */
+const char *cl_ifname(u32 index);
 u32  cl_classful(u32 addr);
 
 /* ---- Riptide interfaces ---- */
