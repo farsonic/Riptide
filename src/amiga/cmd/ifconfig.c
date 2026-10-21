@@ -6,9 +6,11 @@
  *   ifconfig IF [A.B.C.D[/BITS]] [netmask M] [broadcast B] [pointopoint P]
  *               [mtu N] [metric N] [[-]promisc] [[-]arp] [[-]allmulti]
  *               [del A.B.C.D] [up|down]
+ *   ifconfig IF inet6 { add | del } IPV6[/PLEN]
  *
  * Changes use the standard BSD interface ioctls (SIOCAIFADDR, SIOCSIF*),
- * the listing the net.riptide.ifaces table.
+ * IPv6 addresses the configuration command channel; the listing comes from
+ * the net.riptide.ifaces and addrs6 tables.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "cmdlib.h"
@@ -20,7 +22,8 @@ static void usage(void)
 	        "  ifconfig [-a] [-v] [-s] <interface>\n"
 	        "  ifconfig <interface> [<address>[/<bits>]] [netmask <address>] [broadcast <address>]\n"
 	        "           [pointopoint <address>] [mtu <NN>] [metric <NN>] [[-]promisc] [[-]arp]\n"
-	        "           [[-]allmulti] [del <address>] [up|down]\n");
+	        "           [[-]allmulti] [del <address>] [up|down]\n"
+	        "  ifconfig <interface> inet6 {add|del} <address>[/<prefixlen>]\n");
 }
 
 /* Linux numbering of the flag word shown by net-tools */
@@ -66,7 +69,31 @@ static void human(u32 v, char *b)
 		rt_snprintf(b, 24, "%lu.0 B", (unsigned long)v);
 }
 
-static void print_if(const struct rt_ctl_iface *f)
+static void print_inet6(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6)
+{
+	char a[RT_INET6_ADDRSTRLEN];
+	u32 k;
+
+	for (k = 0; d6 && k < h6->count; k++) {
+		struct rt_ctl_addr6 *x = cl_rec(d6, h6, k);
+		rt_in6_addr ad;
+		if (x->ifindex != f->index)
+			continue;
+		memcpy(ad.b, x->addr, 16);
+		cl_printf("        inet6 %s  prefixlen %u  scopeid %s", cl_ip6(x->addr, a), (unsigned)x->plen,
+		          rt_in6_is_loopback(&ad) ? "0x10<host>" : x->scope == 2 ? "0x20<link>" :
+		          x->scope == 5 ? "0x40<site>" : "0x0<global>");
+		if (x->flags & RT_CTL_IN6_TENTATIVE)
+			cl_puts("  tentative");
+		if (x->flags & RT_CTL_IN6_DUPLICATED)
+			cl_puts("  duplicated");
+		if (x->flags & RT_CTL_IN6_TEMPORARY)
+			cl_puts("  temporary");
+		cl_puts("\n");
+	}
+}
+
+static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6)
 {
 	char fl[128], a[16], b[16], c[16], h[24];
 
@@ -81,6 +108,7 @@ static void print_if(const struct rt_ctl_iface *f)
 			cl_printf("  broadcast %s", cl_ip(f->broadaddr, c));
 		cl_puts("\n");
 	}
+	print_inet6(f, d6, h6);
 	if (f->type == RT_IFT_ETHER)
 		cl_printf("        ether %s  txqueuelen 1000  (Ethernet)\n", cl_mac(f->hwaddr, 6, fl));
 	else if (f->type == RT_IFT_LOOP)
@@ -122,12 +150,13 @@ static void print_short(const struct rt_ctl_iface *f)
 
 static int list(int all, int shortfmt, const char *only)
 {
-	struct rt_ctl_hdr h;
-	void *d = cl_dump(RT_CTL_IFACES, &h);
+	struct rt_ctl_hdr h, h6;
+	void *d = cl_dump(RT_CTL_IFACES, &h), *d6;
 	u32 k;
 
 	if (!d)
 		return CL_FAIL;
+	d6 = shortfmt ? NULL : cl_dump(RT_CTL_ADDRS6, &h6);
 	if (only && !cl_find_iface(d, &h, only)) {
 		cl_printf("%s: error fetching interface information: Device not found\n", only);
 		FreeVec(d);
@@ -142,9 +171,11 @@ static int list(int all, int shortfmt, const char *only)
 		if (shortfmt)
 			print_short(f);
 		else
-			print_if(f);
+			print_if(f, d6, &h6);
 	}
 	FreeVec(d);
+	if (d6)
+		FreeVec(d6);
 	return CL_OK;
 }
 
@@ -300,6 +331,26 @@ bad:
 	return CL_ERROR;
 }
 
+/* ifconfig IF inet6 add|del ADDR[/PLEN] (net-tools syntax) */
+static int inet6_cmd(const char *ifn, int argc, char **argv, int i)
+{
+	rt_in6_addr a;
+	int plen, r;
+	char s[RT_INET6_ADDRSTRLEN];
+
+	if (i + 1 >= argc || (strcmp(argv[i], "add") && strcmp(argv[i], "del")) ||
+	    rt_inet6_parse_prefix(argv[i + 1], &a, &plen, NULL, 0) < 0) {
+		usage();
+		return CL_ERROR;
+	}
+	rt_inet6_ntop(&a, s, sizeof(s));
+	if (!strcmp(argv[i], "del"))
+		r = cl_command(cl_line("ifconfig %s inet6 %s delete", ifn, s), 1);
+	else
+		r = cl_command(cl_line("ifconfig %s inet6 %s/%d", ifn, s, plen < 0 ? 128 : plen), 1);
+	return r < 0 ? CL_FAIL : r ? CL_ERROR : CL_OK;
+}
+
 static int ifconfig_main(int argc, char **argv)
 {
 	int i = 1, all = 0, shortfmt = 0, fd;
@@ -332,6 +383,8 @@ static int ifconfig_main(int argc, char **argv)
 		cl_printf("%s: ERROR while getting interface flags: No such device\n", argv[i]);
 		return CL_ERROR;
 	}
+	if (i + 1 < argc && !strcmp(argv[i + 1], "inet6"))
+		return inet6_cmd(argv[i], argc, argv, i + 2);
 	return configure(fd, argv[i], argc, argv, i + 1);
 }
 

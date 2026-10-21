@@ -2,7 +2,7 @@
  * Riptide - ip: show and change interfaces, addresses, routes and the
  * neighbour table with iproute2 syntax and output.
  *
- *   ip [-s] [-d] [-4] [-br] OBJECT [COMMAND [ARGS]]
+ *   ip [-s] [-d] [-4 | -6] [-br] OBJECT [COMMAND [ARGS]]
  *   OBJECT := link | address | route | neigh | dhcp | dns   (abbreviations work)
  *
  * Data comes from the net.riptide.* tables (RiptideSysCtl), changes go to
@@ -14,12 +14,13 @@
 #include "gen/bsdsocket_calls.h"
 
 static int opt_stats, opt_brief, opt_details;
+static int opt_family;           /* 0 both, 4, 6 (-4 / -6 / -f inet|inet6) */
 
 static void usage(void)
 {
 	cl_puts("Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n"
 	        "where  OBJECT := { link | address | route | neigh | dhcp | dns }\n"
-	        "       OPTIONS := { -s[tatistics] | -d[etails] | -4 | -br[ief] | -V[ersion] }\n"
+	        "       OPTIONS := { -s[tatistics] | -d[etails] | -4 | -6 | -br[ief] | -V[ersion] }\n"
 	        "\n"
 	        "  ip link [show [dev] IF]\n"
 	        "  ip link set [dev] IF { up | down | mtu N | promisc on|off | arp on|off }\n"
@@ -29,10 +30,12 @@ static void usage(void)
 	        "  ip addr [show [dev] IF]\n"
 	        "  ip addr { add | replace } A.B.C.D/BITS [peer P] [broadcast B] dev IF\n"
 	        "  ip addr del A.B.C.D[/BITS] dev IF | ip addr flush dev IF\n"
+	        "  ip -6 addr { add | del } IPV6/PLEN dev IF [nodad]\n"
 	        "  ip route [show | list] [cache]\n"
 	        "  ip route { add | del | replace | change | append } PREFIX|default\n"
 	        "           [via GW] [dev IF] [metric N] [mtu N]\n"
 	        "  ip route get ADDR | ip route flush { dev IF | cache | all }\n"
+	        "  ip -6 route [show] | ip -6 route { add | del } PREFIX|default [via GW] [dev IF]\n"
 	        "  ip neigh [show [dev IF]]\n"
 	        "  ip neigh { add | replace } ADDR lladdr MAC [dev IF] [nud permanent]\n"
 	        "  ip neigh del ADDR [dev IF] | ip neigh flush [dev IF]\n"
@@ -132,6 +135,64 @@ static void print_addr_lines(const struct rt_ctl_iface *f)
 	print_lft(f);
 }
 
+static const char *scope6_name(const struct rt_ctl_addr6 *x)
+{
+	rt_in6_addr a;
+
+	memcpy(a.b, x->addr, 16);
+	if (rt_in6_is_loopback(&a))
+		return "host";
+	return x->scope == 2 ? "link" : x->scope == 5 ? "site" : "global";
+}
+
+static void print_lft6(u32 v)
+{
+	if (v == 0xffffffffUL)
+		cl_puts("forever");
+	else
+		cl_printf("%lusec", (unsigned long)v);
+}
+
+static void print_addr6_lines(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6)
+{
+	char a[RT_INET6_ADDRSTRLEN];
+	u32 k;
+
+	for (k = 0; d6 && k < h6->count; k++) {
+		struct rt_ctl_addr6 *x = cl_rec(d6, h6, k);
+		if (x->ifindex != f->index)
+			continue;
+		cl_printf("    inet6 %s/%u scope %s", cl_ip6(x->addr, a), (unsigned)x->plen, scope6_name(x));
+		if (x->flags & RT_CTL_IN6_TEMPORARY)
+			cl_puts(" temporary");
+		if (x->flags & RT_CTL_IN6_AUTOCONF)
+			cl_puts(" dynamic");
+		if (x->flags & RT_CTL_IN6_NODAD)
+			cl_puts(" nodad");
+		if (x->flags & RT_CTL_IN6_DEPRECATED)
+			cl_puts(" deprecated");
+		if (x->flags & RT_CTL_IN6_DUPLICATED)
+			cl_puts(" dadfailed");
+		if (x->flags & RT_CTL_IN6_TENTATIVE)
+			cl_puts(" tentative");
+		cl_puts(" \n       valid_lft ");
+		print_lft6(x->valid_s);
+		cl_puts(" preferred_lft ");
+		print_lft6(x->pref_s);
+		cl_puts("\n");
+	}
+}
+
+static int has_addr6(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6)
+{
+	u32 k;
+
+	for (k = 0; d6 && k < h6->count; k++)
+		if (((struct rt_ctl_addr6 *)cl_rec(d6, h6, k))->ifindex == f->index)
+			return 1;
+	return 0;
+}
+
 static struct rt_ctl_iface *get_ifaces(void **dump, struct rt_ctl_hdr *h)
 {
 	*dump = cl_dump(RT_CTL_IFACES, h);
@@ -174,11 +235,11 @@ static int run(const char *line)
 
 static int do_show_ifs(int argc, char **argv, int i, int addrs)
 {
-	struct rt_ctl_hdr h;
-	void *d;
+	struct rt_ctl_hdr h, h6;
+	void *d, *d6 = NULL;
 	const char *only = NULL;
-	u32 k;
-	char a[16], mac[64], fl[128], ab[24];
+	u32 k, j;
+	char a[RT_INET6_ADDRSTRLEN], mac[64], fl[128], ab[160];
 
 	while (i < argc) {
 		if (!strcmp(argv[i], "dev") || !strcmp(argv[i], "label")) {
@@ -201,16 +262,27 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 		FreeVec(d);
 		return no_dev(only);
 	}
+	if (addrs && opt_family != 4)
+		d6 = cl_dump(RT_CTL_ADDRS6, &h6);
 	for (k = 0; k < h.count; k++) {
 		struct rt_ctl_iface *f = cl_rec(d, &h, k);
 		if (only && strcmp(f->name, only))
 			continue;
+		if (addrs && opt_family == 6 && !has_addr6(f, d6, &h6))
+			continue;
 		if (opt_brief) {
 			if (addrs) {
+				u32 o = 0;
 				ab[0] = 0;
-				if (f->addr)
-					rt_snprintf(ab, sizeof(ab), "%s/%d", cl_ip(f->addr, a),
-					            rt_ctl_prefixlen(f->netmask));
+				if (f->addr && opt_family != 6)
+					o = (u32)rt_snprintf(ab, sizeof(ab), "%s/%d ", cl_ip(f->addr, a),
+					                     rt_ctl_prefixlen(f->netmask));
+				for (j = 0; d6 && j < h6.count && o + 1 < sizeof(ab); j++) {
+					struct rt_ctl_addr6 *x = cl_rec(d6, &h6, j);
+					if (x->ifindex == f->index)
+						o += (u32)rt_snprintf(ab + o, sizeof(ab) - o, "%s/%u ", cl_ip6(x->addr, a),
+						                      (unsigned)x->plen);
+				}
 				cl_printf("%-16s %-14s %s\n", f->name, link_state(f), ab);
 			} else {
 				link_flags(f, fl, sizeof(fl));
@@ -221,10 +293,14 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 			continue;
 		}
 		print_link_line(f);
-		if (addrs)
+		if (addrs && opt_family != 6)
 			print_addr_lines(f);
+		if (addrs)
+			print_addr6_lines(f, d6, &h6);
 	}
 	FreeVec(d);
+	if (d6)
+		FreeVec(d6);
 	return CL_OK;
 }
 
@@ -335,6 +411,48 @@ static int do_link(int argc, char **argv, int i)
 	return CL_ERROR;
 }
 
+static int addr6_change(const char *cmd, const char *pfx, const char *dev, int nodad)
+{
+	rt_in6_addr a;
+	int plen;
+	char s[RT_INET6_ADDRSTRLEN];
+
+	if (rt_inet6_parse_prefix(pfx, &a, &plen, NULL, 0) < 0) {
+		cl_printf("Error: an inet6 prefix is expected rather than \"%s\".\n", pfx);
+		return CL_ERROR;
+	}
+	rt_inet6_ntop(&a, s, sizeof(s));
+	if (cl_match(cmd, "delete"))
+		return run(cl_line("ifconfig %s inet6 %s delete", dev, s));
+	if (!cl_match(cmd, "add") && !cl_match(cmd, "replace") && !cl_match(cmd, "change")) {
+		cl_printf("Command \"%s\" is unknown, try \"ip address help\".\n", cmd);
+		return CL_ERROR;
+	}
+	return run(cl_line("ifconfig %s inet6 %s/%d%s", dev, s, plen < 0 ? 128 : plen, nodad ? " nodad" : ""));
+}
+
+/* delete the IPv6 addresses of an interface except the link-local ones */
+static int addr6_flush(const char *dev, u32 index)
+{
+	struct rt_ctl_hdr h6;
+	void *d6 = cl_dump(RT_CTL_ADDRS6, &h6);
+	char s[RT_INET6_ADDRSTRLEN];
+	u32 k;
+	int rc = CL_OK;
+
+	if (!d6)
+		return CL_FAIL;
+	for (k = 0; k < h6.count; k++) {
+		struct rt_ctl_addr6 *x = cl_rec(d6, &h6, k);
+		if (x->ifindex != index || x->scope <= 2)
+			continue;
+		if (run(cl_line("ifconfig %s inet6 %s delete", dev, cl_ip6(x->addr, s))) != CL_OK)
+			rc = CL_ERROR;
+	}
+	FreeVec(d6);
+	return rc;
+}
+
 static int do_addr(int argc, char **argv, int i)
 {
 	const char *cmd = i < argc ? argv[i++] : "show";
@@ -344,7 +462,7 @@ static int do_addr(int argc, char **argv, int i)
 	const char *dev = NULL, *pfx = NULL;
 	char line[RIPTIDE_TEXTLEN], a[16];
 	u32 addr, peer = 0, brd = 0;
-	int bits, replace = 0, r;
+	int bits, replace = 0, r, nodad = 0;
 
 	if (cl_match(cmd, "show") || cl_match(cmd, "list") || !strcmp(cmd, "lst"))
 		return do_show_ifs(argc, argv, i, 1);
@@ -371,6 +489,9 @@ static int do_addr(int argc, char **argv, int i)
 		} else if (!strcmp(k, "local") && v) {
 			pfx = v;
 			i++;
+		} else if (!strcmp(k, "nodad") || !strcmp(k, "noprefixroute") || !strcmp(k, "home") ||
+		           !strcmp(k, "mngtmpaddr")) {
+			nodad |= !strcmp(k, "nodad");
 		} else if (!pfx) {
 			pfx = k;
 		} else {
@@ -385,12 +506,17 @@ static int do_addr(int argc, char **argv, int i)
 		if (!get_ifaces(&d, &h))
 			return CL_FAIL;
 		f = cl_find_iface(d, &h, dev);
-		r = f && f->addr;
+		r = f && f->addr && opt_family != 6;
+		bits = f ? (int)f->index : 0;
 		FreeVec(d);
 		if (!f)
 			return no_dev(dev);
-		return r ? run(cl_line("ifconfig %s delete", dev)) : CL_OK;
+		if (r && run(cl_line("ifconfig %s delete", dev)) != CL_OK)
+			return CL_ERROR;
+		return opt_family == 4 ? CL_OK : addr6_flush(dev, (u32)bits);
 	}
+	if (pfx && dev && (opt_family == 6 || strchr(pfx, ':')))
+		return addr6_change(cmd, pfx, dev, nodad);
 	if (!pfx || !dev) {
 		cl_puts("Not enough information: \"dev\" argument is required.\n");
 		return CL_ERROR;
@@ -488,6 +614,160 @@ static void print_route(const struct rt_ctl_route *r, void *ifd, const struct rt
 	cl_puts("\n");
 	if (opt_stats && r->use)
 		cl_printf("    used %lu\n", (unsigned long)r->use);
+}
+
+static const char *proto6_name(u8 p)
+{
+	return p == RT_PROTO_RA ? "ra" : proto_name(p);
+}
+
+static void print_route6(const struct rt_ctl_route6 *r)
+{
+	char a[RT_INET6_ADDRSTRLEN];
+	static const u8 zero[16];
+
+	if (r->flags & RT_RTF_REJECT)
+		cl_puts("unreachable ");
+	if (r->plen == 0)
+		cl_puts("default");
+	else if (r->plen == 128)
+		cl_printf("%s", cl_ip6(r->dst, a));
+	else
+		cl_printf("%s/%u", cl_ip6(r->dst, a), (unsigned)r->plen);
+	if (memcmp(r->gateway, zero, 16))
+		cl_printf(" via %s", cl_ip6(r->gateway, a));
+	if (r->ifname[0])
+		cl_printf(" dev %s", r->ifname);
+	cl_printf(" proto %s", proto6_name(r->proto));
+	cl_printf(" metric %lu", (unsigned long)r->metric);
+	if (r->expire_s)
+		cl_printf(" expires %lusec", (unsigned long)r->expire_s);
+	if (r->mtu)
+		cl_printf(" mtu %lu", (unsigned long)r->mtu);
+	if (r->linkdown)
+		cl_puts(" linkdown");
+	cl_printf(" pref %s\n", r->pref > 0 ? "high" : r->pref < 0 ? "low" : "medium");
+	if (opt_stats && r->use)
+		cl_printf("    used %lu\n", (unsigned long)r->use);
+}
+
+static int route6_show(int argc, char **argv, int i)
+{
+	struct rt_ctl_hdr h;
+	void *d;
+	int cache = 0;
+	const char *dev = NULL;
+	u32 k;
+	char a[RT_INET6_ADDRSTRLEN];
+
+	for (; i < argc; i++) {
+		if (!strcmp(argv[i], "cache"))
+			cache = 1;
+		else if (!strcmp(argv[i], "dev") && i + 1 < argc)
+			dev = argv[++i];
+		else if (!strcmp(argv[i], "table") && i + 1 < argc)
+			i++;
+	}
+	d = cl_dump(RT_CTL_ROUTES6, &h);
+	if (!d)
+		return CL_FAIL;
+	for (k = 0; k < h.count && !cl_break(); k++) {
+		struct rt_ctl_route6 *r = cl_rec(d, &h, k);
+		if (dev && strcmp(r->ifname, dev))
+			continue;
+		if (!!(r->flags & (RT_RTF_PMTU | RT_RTF_DYNAMIC)) != cache)
+			continue;
+		if (cache) {
+			cl_printf("%s dev %s", cl_ip6(r->dst, a), r->ifname);
+			cl_puts("\n    cache");
+			if (r->expire_s)
+				cl_printf(" expires %lusec", (unsigned long)r->expire_s);
+			if (r->mtu)
+				cl_printf(" mtu %lu", (unsigned long)r->mtu);
+			cl_puts("\n");
+			continue;
+		}
+		print_route6(r);
+	}
+	FreeVec(d);
+	return CL_OK;
+}
+
+static int prefix_match(const u8 *a, const u8 *p, int plen)
+{
+	int i;
+
+	for (i = 0; i < plen; i++)
+		if (((a[i >> 3] ^ p[i >> 3]) >> (7 - (i & 7))) & 1)
+			return 0;
+	return 1;
+}
+
+/* ip -6 route get: longest prefix over the table copy; the source is the
+ * first usable address of the outgoing interface (link-local for link-local
+ * destinations); the stack's RFC 6724 selection may differ in corner cases. */
+static int route6_get(const char *target)
+{
+	struct rt_ctl_hdr h, ah;
+	void *d, *ad;
+	struct rt_ctl_route6 *best = NULL;
+	struct cl_addr dst;
+	char a[CL_ADDRSTRLEN];
+	u32 k;
+	static const u8 zero[16];
+
+	if (cl_resolve_af(target, 6, &dst) < 0)
+		return CL_ERROR;
+	d = cl_dump(RT_CTL_ROUTES6, &h);
+	ad = d ? cl_dump(RT_CTL_ADDRS6, &ah) : NULL;
+	if (!d || !ad) {
+		if (d)
+			FreeVec(d);
+		return CL_FAIL;
+	}
+	for (k = 0; k < ah.count; k++) {
+		struct rt_ctl_addr6 *x = cl_rec(ad, &ah, k);
+		if (!memcmp(x->addr, dst.a.b, 16)) {
+			cl_printf("local %s dev lo0 proto kernel src ", cl_ip6(x->addr, a));
+			cl_printf("%s metric 0 pref medium\n", cl_ip6(x->addr, a));
+			FreeVec(d);
+			FreeVec(ad);
+			return CL_OK;
+		}
+	}
+	for (k = 0; k < h.count; k++) {
+		struct rt_ctl_route6 *r = cl_rec(d, &h, k);
+		if ((r->flags & RT_RTF_PMTU) || r->linkdown || !prefix_match(dst.a.b, r->dst, r->plen))
+			continue;
+		if (dst.scope && r->ifindex != dst.scope)
+			continue;
+		if (!best || r->plen > best->plen || (r->plen == best->plen && r->metric < best->metric))
+			best = r;
+	}
+	if (!best || (best->flags & RT_RTF_REJECT)) {
+		cl_printf("RTNETLINK answers: %s\n", best ? "No route to host" : "Network is unreachable");
+		FreeVec(d);
+		FreeVec(ad);
+		return CL_ERROR;
+	}
+	cl_printf("%s", cl_addr_str(&dst, a));
+	if (memcmp(best->gateway, zero, 16))
+		cl_printf(" via %s", cl_ip6(best->gateway, a));
+	cl_printf(" dev %s proto %s", best->ifname, proto6_name(best->proto));
+	for (k = 0; k < ah.count; k++) {
+		struct rt_ctl_addr6 *x = cl_rec(ad, &ah, k);
+		int ll = dst.a.b[0] == 0xfe && (dst.a.b[1] & 0xc0) == 0x80;
+		if (x->ifindex == best->ifindex && !(x->flags & (RT_CTL_IN6_TENTATIVE | RT_CTL_IN6_DUPLICATED |
+		                                                   RT_CTL_IN6_DEPRECATED)) &&
+		    (x->scope == 2) == ll) {
+			cl_printf(" src %s", cl_ip6(x->addr, a));
+			break;
+		}
+	}
+	cl_printf(" metric %lu pref medium\n", (unsigned long)best->metric);
+	FreeVec(d);
+	FreeVec(ad);
+	return CL_OK;
 }
 
 static int route_show(int argc, char **argv, int i)
@@ -621,7 +901,7 @@ static int do_route(int argc, char **argv, int i)
 	u32 o;
 
 	if (cl_match(cmd, "show") || cl_match(cmd, "list") || !strcmp(cmd, "lst"))
-		return route_show(argc, argv, i);
+		return opt_family == 6 ? route6_show(argc, argv, i) : route_show(argc, argv, i);
 	if (cl_match(cmd, "help")) {
 		usage();
 		return CL_OK;
@@ -633,6 +913,8 @@ static int do_route(int argc, char **argv, int i)
 		}
 		if (!strcmp(argv[i], "to") && i + 1 < argc)
 			i++;
+		if (opt_family == 6 || strchr(argv[i], ':'))
+			return route6_get(argv[i]);
 		return route_get(argv[i]);
 	}
 	if (cl_match(cmd, "flush")) {
@@ -672,7 +954,7 @@ static int do_route(int argc, char **argv, int i)
 		cl_puts("Error: destination prefix is required.\n");
 		return CL_ERROR;
 	}
-	o = (u32)rt_snprintf(line, sizeof(line), "route %s %s", op, argv[i++]);
+	o = (u32)rt_snprintf(line, sizeof(line), "route %s%s %s", op, opt_family == 6 ? " -inet6" : "", argv[i++]);
 	for (; i < argc; i++)
 		o += (u32)rt_snprintf(line + o, sizeof(line) - o, " %s", argv[i]);
 	if (type && strcmp(type, "unicast"))
@@ -681,6 +963,31 @@ static int do_route(int argc, char **argv, int i)
 }
 
 /* ------------------------------------------------------------ neigh */
+
+static void neigh6_show(const char *dev)
+{
+	struct rt_ctl_hdr h;
+	void *d = cl_dump(RT_CTL_NEIGH6, &h);
+	char a[RT_INET6_ADDRSTRLEN], mac[24];
+	u32 k;
+
+	for (k = 0; d && k < h.count; k++) {
+		struct rt_ctl_neigh6 *n = cl_rec(d, &h, k);
+		if (dev && strcmp(n->ifname, dev))
+			continue;
+		cl_printf("%s dev %s ", cl_ip6(n->addr, a), n->ifname);
+		if (n->state != RT_NUD_INCOMPLETE && n->state != RT_NUD_FAILED)
+			cl_printf("lladdr %s ", cl_mac(n->hwaddr, 6, mac));
+		if (n->router)
+			cl_puts("router ");
+		if (opt_stats)
+			cl_printf("used %lu/%lu/%lu probes 0 ", (unsigned long)n->age_s, (unsigned long)n->age_s,
+			          (unsigned long)n->age_s);
+		cl_printf("%s\n", rt_ctl_nud_name(n->state));
+	}
+	if (d)
+		FreeVec(d);
+}
 
 static int do_neigh(int argc, char **argv, int i)
 {
@@ -700,10 +1007,10 @@ static int do_neigh(int argc, char **argv, int i)
 			else if (cl_parse_prefix(argv[i], &to, &bits) == 0)
 				have_to = 1;
 		}
-		d = cl_dump(RT_CTL_NEIGH, &h);
-		if (!d)
+		d = opt_family == 6 ? NULL : cl_dump(RT_CTL_NEIGH, &h);
+		if (!d && opt_family != 6)
 			return CL_FAIL;
-		for (k = 0; k < h.count; k++) {
+		for (k = 0; d && k < h.count; k++) {
 			struct rt_ctl_neigh *n = cl_rec(d, &h, k);
 			if ((dev && strcmp(n->ifname, dev)) || (have_to && n->addr != to))
 				continue;
@@ -717,7 +1024,10 @@ static int do_neigh(int argc, char **argv, int i)
 				          (unsigned long)n->age_s, (unsigned long)n->age_s);
 			cl_printf("%s\n", rt_ctl_nud_name(n->state));
 		}
-		FreeVec(d);
+		if (d)
+			FreeVec(d);
+		if (opt_family != 4)
+			neigh6_show(dev);
 		return CL_OK;
 	}
 	if (cl_match(cmd, "help")) {
@@ -832,6 +1142,26 @@ static int do_dns(int argc, char **argv, int i)
 	char a[16];
 
 	if (cl_match(cmd, "show") || cl_match(cmd, "list")) {
+		d = cl_dump(RT_CTL_DNS6, &h);
+		if (d) {
+			/* every server, both families, with where it came from */
+			static const char *const src[] = { "", " (router advertisement)", " (DHCPv6)" };
+			struct rt_ctl_dns6 *d6 = cl_rec(d, &h, 0);
+			for (k = 0; k < d6->nservers && k < RT_CTL_MAXNS; k++) {
+				struct cl_addr x;
+				char s[CL_ADDRSTRLEN];
+				memset(&x, 0, sizeof(x));
+				memcpy(x.a.b, d6->servers[k].addr, 16);
+				x.family = rt_in6_is_v4mapped(&x.a) ? RT_AF_INET : RT_AF_INET6;
+				x.scope = d6->servers[k].ifindex;
+				cl_printf("nameserver %s%s\n", cl_addr_str(&x, s),
+				          d6->servers[k].source <= 2 ? src[d6->servers[k].source] : "");
+			}
+			if (d6->domain[0])
+				cl_printf("search %s\n", d6->domain);
+			FreeVec(d);
+			return CL_OK;
+		}
 		d = cl_dump(RT_CTL_DNS, &h);
 		if (!d)
 			return CL_FAIL;
@@ -870,12 +1200,16 @@ static int ip_main(int argc, char **argv)
 			opt_brief = 1;
 		else if (cl_match(o, "details"))
 			opt_details = 1;
-		else if (!strcmp(o, "4") || !strcmp(o, "f") || !strcmp(o, "family")) {
-			if (o[0] == 'f')
-				i++;
-		} else if (!strcmp(o, "6")) {
-			cl_puts("Riptide has no IPv6.\n");
-			return CL_ERROR;
+		else if (!strcmp(o, "4"))
+			opt_family = 4;
+		else if (!strcmp(o, "6"))
+			opt_family = 6;
+		else if (!strcmp(o, "f") || !strcmp(o, "family")) {
+			if (++i >= argc) {
+				usage();
+				return CL_ERROR;
+			}
+			opt_family = !strcmp(argv[i], "inet6") ? 6 : !strcmp(argv[i], "inet") ? 4 : 0;
 		} else if (cl_match(o, "Version")) {
 			cl_puts("ip utility, Riptide 0.10\n");
 			return CL_OK;
