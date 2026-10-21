@@ -1934,6 +1934,12 @@ static u32 tcp_v4_poll(struct rt_socket *so)
 	state = tp->state;
 	if (state == RT_TCPS_LISTEN)
 		return so->acceptq_head ? RT_POLLIN : 0;
+	/* Never connected (a connection that ended has shutdown set by
+	 * tcp_done(), a failed one so_error): BSD/AmiTCP soreadable() and
+	 * sowriteable() are false, so WaitSelect() reports nothing. Linux
+	 * would say POLLOUT | POLLHUP. */
+	if (state == RT_TCPS_CLOSED && !tp->shutdown && !so->so_error)
+		return 0;
 	if (tp->shutdown == SHUTDOWN_MASK || state == RT_TCPS_CLOSED)
 		mask |= RT_POLLHUP;
 	if (tp->shutdown & RCV_SHUTDOWN)

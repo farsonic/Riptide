@@ -603,6 +603,39 @@ static void test_tcpwindow(void)
 	rt_api_close(&ss, lfd);
 }
 
+/* WaitSelect() on TCP sockets, AmiTCP semantics (bsdsocktest #70): a socket
+ * never connected is neither readable nor writable, also above fd 63 after
+ * the table grew; one whose connection ended (EOF) is readable */
+static void test_select_fresh(void)
+{
+	struct rt_sockctx x;
+	int fds[65], i, lfd, cfd, afd;
+	u32 rd[4], wr[4];
+
+	CHECK(rt_ctx_init(&x, 64, NULL) == 0);
+	CHECK(rt_ctx_set_dtablesize(&x, 128) == 0);
+	for (i = 0; i < 65; i++)
+		fds[i] = rt_api_socket(&x, RT_AF_INET, RT_SOCK_STREAM, 0);
+	CHECK(fds[64] >= 64);
+	memset(rd, 0, sizeof(rd));
+	memset(wr, 0, sizeof(wr));
+	rd[fds[64] >> 5] |= 1u << (fds[64] & 31);
+	wr[fds[0] >> 5] |= 1u << (fds[0] & 31);
+	CHECK(rt_api_select(&x, fds[64] + 1, rd, wr, NULL, 0, NULL) == 0);   /* fresh: not ready */
+	CHECK(rd[2] == 0 && wr[0] == 0);
+	for (i = 0; i < 65; i++)
+		rt_api_close(&x, fds[i]);
+	rt_ctx_destroy(&x);
+
+	CHECK(pair(5081, &lfd, &cfd, &afd));
+	rt_api_close(&ss, afd);
+	memset(rd, 0, sizeof(rd));
+	rd[cfd >> 5] |= 1u << (cfd & 31);
+	CHECK(rt_api_select(&cs, cfd + 1, rd, NULL, NULL, 2000, NULL) == 1);
+	rt_api_close(&cs, cfd);
+	rt_api_close(&ss, lfd);
+}
+
 /* listen backlog overflow: SYN cookies, nothing lost */
 static void test_backlog(void)
 {
@@ -917,6 +950,7 @@ int main(int argc, char **argv)
 	test_tcpinfo();
 	test_delack();
 	test_tcpwindow();
+	test_select_fresh();
 	test_backlog();
 	test_many();
 	test_simultaneous_open();
