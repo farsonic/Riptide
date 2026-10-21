@@ -21,7 +21,77 @@ under one exec semaphore (the stack lock).
 
 ## Installation
 
-1. Copy `Riptide` to `C:` or anywhere else in your path.
+### With the Installer
+
+The release archive `riptide-<version>.lha` (also as an 880 KB floppy
+image, `riptide-<version>.adf`) unpacks to a drawer `Riptide` with a
+standard Amiga Installer script. Double-click `Install_Riptide`, or from a
+shell:
+
+```
+cd Riptide
+Installer Install_Riptide
+```
+
+It needs the Installer of AmigaOS 3.x (Installer 43.x, in `C:` or
+`SYS:Utilities`; the icon's default tool is `Installer`) or InstallerLG.
+The icon's tooltypes are `APPNAME=Riptide`, `MINUSER=NOVICE` and
+`DEFUSER=AVERAGE`. At Novice level it asks no questions and uses the
+defaults below; Average asks which parts to install and how to configure
+the network; Expert can also choose the program drawer. Pretend mode
+("Pretend to Install") shows what would happen without changing anything.
+
+The script does what the manual steps below describe:
+
+1. **Checks for other stacks.** If Riptide is running, it offers to stop it
+   (`Riptide QUIT`). If another `bsdsocket.library` is in memory (another
+   stack, or the emulator's bsdsocket emulation) it explains how to turn
+   it off and does not start Riptide. Another stack's
+   `LIBS:bsdsocket.library` is renamed to `bsdsocket.library.disabled` if
+   you agree; it is never deleted.
+2. **Copies the programs** `Riptide`, `rtcheck` and the network tools to
+   `C:`. With another drawer (Expert), a `Path ... ADD` line is added to the
+   startup block. `ftpd-test` is only installed when you select it.
+3. **Copies the documentation** to `Riptide/Docs` in the Installer's default
+   place (`Work:` if you have it, else `SYS:`) and, if selected, the SDK
+   to `Riptide/SDK`.
+4. **Writes the configuration** `ENVARC:Riptide/riptide.conf` and copies it
+   to `ENV:Riptide/`. The default is the emulator's `uaenet.device`, unit
+   0, with DHCP, as in `examples/riptide-uaenet.conf` (the static slirp
+   block is there, commented out). At Average level you can enter the host
+   name, another SANA-II device (for example
+   `DEVS:Networks/a2065.device`) and unit, and a static address, netmask,
+   gateway and DNS server. An existing configuration is kept at Novice
+   level; otherwise you are asked, and the old file is saved as
+   `riptide.conf.bak`. `ENVARC:Riptide/hosts` gets a `localhost` entry if it
+   does not exist.
+5. **Starts Riptide at boot** with a block in `S:User-Startup`:
+
+   ```
+   ;BEGIN Riptide
+   Run >NIL: C:Riptide
+   ;END Riptide
+   ```
+
+   and, if you agree, starts it at once (through `rtcheck START=...
+   NOCHECK`, which waits until the libraries are there).
+
+The install locations are kept in `ENVARC:Riptide/BinDir`, `DocDir` and
+`SDKDir`. Run the installer again to update Riptide (your configuration is
+kept unless you replace it) or to uninstall it: uninstalling deletes the
+programs, the documentation and the SDK, empties the `;BEGIN Riptide`
+block (the Installer cannot delete a block, only replace it) and deletes
+the configuration only when you ask for it.
+
+Under FS-UAE, `uaenet.device` needs `uae_sana2 = 1` and `network_card =
+a2065`; in WinUAE add uaenet.device under Hardware > Expansions. Turn the
+emulator's bsdsocket.library emulation off in both. Then check the stack
+with `Riptide STATUS`, `rtcheck -v` and, under slirp, `ping -c 3 10.0.2.2`.
+
+### By hand
+
+1. Copy `Riptide` to `C:` or anywhere else in your path (and the tools in
+   `C/` too, see "Tools").
 2. Create the configuration file `ENV:Riptide/riptide.conf` (keep a copy in
    `ENVARC:Riptide/`). Riptide also reads `ENV:Riptide/hosts` if that file
    exists.
@@ -765,7 +835,19 @@ make -f Makefile.amiga            # VBCC=/opt/vbcc NDK=/opt/ndk3.2 by default
                                   # -> build/amiga/Riptide, build/amiga/rtcheck
 make -f Makefile.amiga check      # SDK up to date, hunk checks + vamos self test
 make -f Makefile.amiga sdk        # regenerate sdk/ from src/amiga/lib_lvos.txt
+make -f Makefile.amiga package    # Installer package, see below
 ```
+
+`make -f Makefile.amiga package` (`tools/mkpackage.sh`) assembles
+`build/package/Riptide/`: `Install_Riptide` (from `install/`), `ReadMe`,
+the Aminet readme `Riptide.readme`, `C/` with all programs, `Docs/` and
+`SDK/`, with icons made by `tools/mkicon.py` (classic OS 2.x/3.x
+`.info` files; `tools/mkicon.py dump FILE.info` prints one). From that it
+makes `build/riptide-<version>.lha` with an LHA archiver that can write
+archives ("LHa for UNIX" `lha`, or `jlha` from Debian/Ubuntu's
+`jlha-utils`; Debian's `lhasa` only extracts) or else a `.zip`, the Aminet
+readme `build/riptide-<version>.readme`, and with amitools' `xdftool` an
+880 KB FFS floppy image `build/riptide-<version>.adf`.
 
 An alternative build uses Debian's `m68k-linux-gnu-gcc` in freestanding
 mode. It needs no NDK:
@@ -801,6 +883,9 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
 | `tests/t_arch_m68k.c` (host, `make CROSS=m68k-linux-gnu-`) | Every assembly routine against the C versions: all lengths 0..160 with every source/destination alignment 0..15, 3000 random lengths up to 4096, 64-128 KB and 4 MB buffers, initial sums 0, 0xffffffff and others, random/all-ones/zero data, guard bytes around every copy; odd-offset chaining, the TCP `rt_buf` copy + checksum, routine selection and the sysctls. Run it on each CPU: `RT_CPU=68040 qemu-m68k -cpu m68040 build/m68k-linux-gnu/tests/t_arch_m68k` (also `m68020`, `m68030`, `m68060`). qemu's 68060 model lacks MOVE16, so there the test turns MOVE16 off through the kill switch. It skips in other builds. |
 | `tests/amiga/run_fsuae_bench.sh build/amiga` | `Riptide BENCH` on FS-UAE (A1200; `FSUAE_MODEL=A4000/040 FSUAE_EXTRA="cpu = 68060"` and so on for other CPUs). |
+| `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
+| `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
+| `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real

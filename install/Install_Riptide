@@ -1,0 +1,734 @@
+; $VER: Install_Riptide 0.10 (21.10.2026)
+;
+; Installer script for Riptide, a TCP/IP stack for AmigaOS 3.x (68020+).
+; Written for the Commodore/Amiga Technologies Installer V43 language; it
+; also runs with InstallerLG and the AROS Installer. It follows the
+; "Installation" section of Docs/AMIGA.md:
+;
+;   * checks for a running stack, a leftover LIBS:bsdsocket.library and
+;     emulator bsdsocket emulation (they stop Riptide from starting),
+;   * copies Riptide, rtcheck and the network tools (default C:),
+;   * optionally the documentation, the SDK and the ftpd-test server,
+;   * writes ENVARC:Riptide/riptide.conf (copied to ENV:Riptide/) for the
+;     emulator's uaenet.device with DHCP by default, and a hosts file,
+;   * adds a ";BEGIN Riptide" block to S:User-Startup and can start the
+;     stack at once.
+;
+; It can also uninstall Riptide again. The install locations are kept in
+; ENVARC:Riptide/BinDir, DocDir and SDKDir for that.
+;
+; SPDX-License-Identifier: GPL-2.0-only
+
+(set #version "0.10")
+(if (= @app-name "") (set @app-name "Riptide"))
+
+; ---------------------------------------------------------------------------
+; Files that make up the package (paths relative to the package drawer)
+; ---------------------------------------------------------------------------
+
+; the stack and its test client are always installed
+(set #core-help
+  (cat "Riptide is the TCP/IP stack itself. rtcheck is its test client: "
+       "\"rtcheck -v\" runs about 80 checks against the running stack."))
+
+; ---------------------------------------------------------------------------
+; Procedures
+; ---------------------------------------------------------------------------
+
+; #q quoted for AmigaDOS when it contains a space
+(procedure P_QUOTE #q
+  (if (patmatch "#?[ ]#?" #q) (cat "\"" #q "\"") #q))
+
+; Does directory #d name the same place as C:?
+(procedure P_IS_C #d
+  (if (= (exists #d (noreq)) 2)
+    (= (expandpath #d) (expandpath "C:"))
+    (OR (= #d "C:") (= #d "c:"))))
+
+; Are #a and #b the same existing directory?
+(procedure P_SAMEDIR #a #b
+  (if (AND (= (exists #a (noreq)) 2) (= (exists #b (noreq)) 2))
+    (= (expandpath #a) (expandpath #b))
+    0))
+
+; Read one of our ENV: records ("" when missing)
+(procedure P_GETREC #name
+  (if (= (exists (tackon "ENV:Riptide" #name) (noreq)) 1)
+    (getenv (tackon "Riptide" #name))
+    ""))
+
+; Store an install location in ENVARC:Riptide/#name (and ENV:)
+(procedure P_PUTREC #name #val
+  (textfile (dest (tackon #envarc-dir #name)) (append #val))
+  (if #have-env
+    (textfile (dest (tackon "ENV:Riptide" #name)) (append #val))))
+
+; Ask a running Riptide to quit. Returns 1 when it is gone.
+(procedure P_STOP_RIPTIDE
+  (set #stopped 0)
+  (if (getversion "riptide.library" (resident))
+    (
+      (set #rt-old (tackon #old-bin "Riptide"))
+      (if (NOT (= (exists #rt-old (noreq)) 1)) (set #rt-old "Riptide"))
+      ; QUIT returns 0 when Riptide accepts, 5 while programs use it
+      (set #stopped (= (run (cat (P_QUOTE #rt-old) " >NIL: QUIT")) 0))
+    )
+    (set #stopped 1)))
+
+; Delete one file if it exists, also when it is protected
+(procedure P_DEL #file
+  (if (= (exists #file (noreq)) 1)
+    (delete #file (optional "force") (infos))))
+
+; ---------------------------------------------------------------------------
+; Where is the package?
+; ---------------------------------------------------------------------------
+
+(set #pkg (pathonly @icon))
+(if (NOT (= (exists (tackon #pkg "C/Riptide") (noreq)) 1))
+  (if (= (exists "C/Riptide" (noreq)) 1)
+    (set #pkg "")
+  ))
+
+; ---------------------------------------------------------------------------
+; Environment
+; ---------------------------------------------------------------------------
+
+(set #envarc "ENVARC:")
+(if (= (getassign "ENVARC" "a") "")
+  (set #envarc "SYS:Prefs/Env-Archive"))
+(set #envarc-dir (tackon #envarc "Riptide"))
+(set #have-env (NOT (= (getassign "ENV" "a") "")))
+(set #conf-arc (tackon #envarc-dir "riptide.conf"))
+(set #hosts-arc (tackon #envarc-dir "hosts"))
+
+; previous installation (if any)
+(set #old-bin (P_GETREC "BinDir"))
+(set #old-doc (P_GETREC "DocDir"))
+(set #old-sdk (P_GETREC "SDKDir"))
+(if (= #old-bin "") (set #old-bin "C:"))
+(set #installed
+  (OR (= (exists (tackon #old-bin "Riptide") (noreq)) 1)
+      (= (exists #conf-arc (noreq)) 1)))
+
+; drawer for documentation and SDK: <default-dest>Riptide (Work:Riptide
+; when there is a Work: volume, else SYS:Riptide)
+(set #base @default-dest)
+(if (= #base "") (set #base "SYS:"))
+(set #drawer (tackon #base "Riptide"))
+(if (NOT (= #old-doc "")) (set #drawer (pathonly #old-doc)))
+; no records (older installation, or ENV: records deleted): look in the
+; default drawer
+(if (AND (= #old-doc "") (= (exists (tackon #drawer "Docs/AMIGA.md") (noreq)) 1))
+  (set #old-doc (tackon #drawer "Docs")))
+(if (AND (= #old-sdk "") (= (exists (tackon #drawer "SDK/include/proto/riptide.h") (noreq)) 1))
+  (set #old-sdk (tackon #drawer "SDK")))
+
+; ---------------------------------------------------------------------------
+; Welcome
+; ---------------------------------------------------------------------------
+
+(message
+  (cat "Riptide " #version "\n\n"
+       "A TCP/IP stack for AmigaOS 3.x on a 68020 or better, with "
+       "bsdsocket.library 4 and Linux style network tools.\n\n"
+       "Free software under the GNU General Public License version 2 "
+       "(Docs/LICENSE). It comes with ABSOLUTELY NO WARRANTY.\n\n"
+       "The installer copies the programs, writes a configuration for "
+       "the emulator's uaenet.device (or another network driver) and "
+       "starts Riptide at boot.")
+  (all))
+
+(set #mode 1)   ; 1 = install, 0 = uninstall
+(if (OR (> @user-level 0) #installed)
+  (set #mode
+    (askbool
+      (prompt (if #installed
+                (cat "Riptide is already installed (in " #old-bin ").\n\n"
+                     "Install (update) or remove it?")
+                "Install Riptide, or remove an earlier installation?"))
+      (help (cat "Install copies Riptide and writes its configuration. An "
+                 "existing configuration is kept unless you choose to "
+                 "replace it.\n\nUninstall removes the programs, the "
+                 "documentation and the SDK and empties the Riptide block "
+                 "in S:User-Startup. Your configuration in ENVARC:Riptide is "
+                 "only removed when you say so."))
+      (choices "Install" "Uninstall")
+      (default 1))))
+
+; ===========================================================================
+; Uninstall
+; ===========================================================================
+
+(if (= #mode 0)
+(
+  (if (getversion "riptide.library" (resident))
+    (if (NOT (P_STOP_RIPTIDE))
+      (message
+        (cat "Riptide is running and could not be stopped: programs still "
+             "use its libraries. Quit them (or reboot without Riptide) and "
+             "run the uninstaller again if the files cannot be deleted.")
+        (all))))
+
+  (set #rm-bin #old-bin)
+  (if (= @user-level 2)
+    (set #rm-bin
+      (askdir
+        (prompt "Directory that holds the Riptide programs:")
+        (help @askdir-help)
+        (default #rm-bin))))
+  (complete 10)
+  (P_DEL (tackon #rm-bin "Riptide"))
+  (P_DEL (tackon #rm-bin "rtcheck"))
+  (P_DEL (tackon #rm-bin "ip"))
+  (P_DEL (tackon #rm-bin "ifconfig"))
+  (P_DEL (tackon #rm-bin "route"))
+  (P_DEL (tackon #rm-bin "arp"))
+  (P_DEL (tackon #rm-bin "netstat"))
+  (P_DEL (tackon #rm-bin "ping"))
+  (P_DEL (tackon #rm-bin "traceroute"))
+  (P_DEL (tackon #rm-bin "host"))
+  (P_DEL (tackon #rm-bin "sysctl"))
+  (P_DEL (tackon #rm-bin "hostname"))
+  (P_DEL (tackon #rm-bin "nc"))
+  (P_DEL (tackon #rm-bin "ftp"))
+  (P_DEL (tackon #rm-bin "ftpd-test"))
+  (complete 40)
+
+  (if (NOT (= #old-doc ""))
+  (
+    (P_DEL (tackon #old-doc "AMIGA.md"))
+    (P_DEL (tackon #old-doc "COMPARISON.md"))
+    (P_DEL (tackon #old-doc "README.md"))
+    (P_DEL (tackon #old-doc "LICENSE"))
+    (P_DEL (tackon #old-doc "riptide-uaenet.conf"))
+    (P_DEL (tackon #old-doc "ReadMe"))
+    (if (= (exists #old-doc (noreq)) 2) (delete #old-doc (infos) (optional "nofail")))
+  ))
+  (if (NOT (= #old-sdk ""))
+  (
+    (P_DEL (tackon #old-sdk "fd/riptide_lib.fd"))
+    (P_DEL (tackon #old-sdk "include/proto/riptide.h"))
+    (P_DEL (tackon #old-sdk "include/libraries/riptide.h"))
+    (P_DEL (tackon #old-sdk "include/clib/riptide_protos.h"))
+    (P_DEL (tackon #old-sdk "include/pragmas/riptide_pragmas.h"))
+    (P_DEL (tackon #old-sdk "include/inline/riptide_protos.h"))
+    (delete (tackon #old-sdk "include/proto") (optional "nofail"))
+    (delete (tackon #old-sdk "include/libraries") (optional "nofail"))
+    (delete (tackon #old-sdk "include/clib") (optional "nofail"))
+    (delete (tackon #old-sdk "include/pragmas") (optional "nofail"))
+    (delete (tackon #old-sdk "include/inline") (optional "nofail"))
+    (delete (tackon #old-sdk "include") (optional "nofail"))
+    (delete (tackon #old-sdk "fd") (optional "nofail"))
+    (delete #old-sdk (infos) (optional "nofail"))
+  ))
+  (if (NOT (= #old-doc ""))
+    (if (= (exists (pathonly #old-doc) (noreq)) 2)
+      (delete (pathonly #old-doc) (infos) (optional "nofail"))))
+  (complete 70)
+
+  ; Installer can only replace a ;BEGIN/;END block, so the block is left
+  ; empty. Other programs' blocks are not touched.
+  (startup "Riptide"
+    (prompt "Remove the Riptide commands from S:User-Startup?")
+    (help @startup-help)
+    (command ""))
+
+  (set #rm-conf 0)
+  (if (> @user-level 0)
+    (set #rm-conf
+      (askbool
+        (prompt (cat "Also delete your Riptide configuration?\n\n" #envarc-dir
+                     "\n(riptide.conf, hosts and backups)"))
+        (help "Keep it if you plan to install Riptide again.")
+        (default 0))))
+  (if #rm-conf
+  (
+    (P_DEL #conf-arc)
+    (P_DEL (tackon #envarc-dir "riptide.conf.bak"))
+    (P_DEL #hosts-arc)
+    (P_DEL "ENV:Riptide/riptide.conf")
+    (P_DEL "ENV:Riptide/riptide.conf.bak")
+    (P_DEL "ENV:Riptide/hosts")
+  ))
+  (P_DEL (tackon #envarc-dir "BinDir"))
+  (P_DEL (tackon #envarc-dir "DocDir"))
+  (P_DEL (tackon #envarc-dir "SDKDir"))
+  (P_DEL "ENV:Riptide/BinDir")
+  (P_DEL "ENV:Riptide/DocDir")
+  (P_DEL "ENV:Riptide/SDKDir")
+  (if #rm-conf
+  (
+    (delete #envarc-dir (optional "nofail"))
+    (delete "ENV:Riptide" (optional "nofail"))
+  ))
+  (complete 100)
+  (set @default-dest "")
+  (exit
+    (cat "Riptide has been removed.\n\n"
+         (if #rm-conf "" (cat "Your configuration is still in " #envarc-dir ".\n"))
+         (if (= (exists "LIBS:bsdsocket.library.disabled" (noreq)) 1)
+           (cat "\nThe bsdsocket.library of your previous TCP/IP stack is "
+                "still disabled; rename LIBS:bsdsocket.library.disabled back "
+                "to bsdsocket.library if you want to use that stack again.\n")
+           "")))
+))
+
+; ===========================================================================
+; Install
+; ===========================================================================
+
+; ---- system requirements --------------------------------------------------
+
+(set #cpu (database "cpu"))
+(if (OR (= #cpu "68000") (= #cpu "68010"))
+  (if (= @user-level 2)
+    (if (NOT (askbool
+               (prompt (cat "Riptide needs a 68020 or better; this Amiga has a "
+                            #cpu ".\n\nInstall anyway?"))
+               (help "The programs will not run on this CPU.")
+               (default 0)))
+      (exit (quiet)))
+    (abort (cat "Riptide needs a 68020 or better CPU. This Amiga has a "
+                #cpu "."))))
+(if (< (/ (getversion "exec.library" (resident)) 65536) 37)
+  (abort "Riptide needs AmigaOS 2.04 or newer (it is written for 3.x)."))
+
+(if (NOT (= (exists (tackon #pkg "C/Riptide") (noreq)) 1))
+  (set #pkg
+    (askdir
+      (prompt "Where is the Riptide package (the drawer with Install_Riptide and C/)?")
+      (help "Select the drawer you unpacked the Riptide archive into.")
+      (default #pkg))))
+(if (NOT (= (exists (tackon #pkg "C/Riptide") (noreq)) 1))
+  (abort (cat "Cannot find " (tackon #pkg "C/Riptide") ". Start the installer "
+              "from the unpacked Riptide drawer.")))
+
+; ---- other stacks ---------------------------------------------------------
+
+(set #conflict 0)
+(set #rt-was-running 0)
+(complete 0)
+
+(if (getversion "riptide.library" (resident))
+(
+  ; an older Riptide is running: stop it so the new one can be started
+  (set #rt-was-running 1)
+  (set #stop 1)
+  (if (> @user-level 0)
+    (set #stop
+      (askbool
+        (prompt "Riptide is running. Stop it now (Riptide QUIT)?")
+        (help (cat "The programs can be replaced while Riptide runs, but the "
+                   "new version is only used after Riptide has been restarted. "
+                   "Riptide refuses to quit while programs still use its "
+                   "libraries."))
+        (default 1))))
+  (if #stop
+    (if (P_STOP_RIPTIDE)
+      (set #rt-was-running 0)
+      (message (cat "Riptide did not quit: programs still use its libraries.\n\n"
+                    "The installation continues; the new version will be used "
+                    "after Riptide is restarted (or after a reboot).")
+               (all)))))
+  ; not Riptide: another TCP/IP stack or the emulator's bsdsocket emulation
+  (if (getversion "bsdsocket.library" (resident))
+  (
+    (set #conflict 1)
+    (message
+      (cat "Another TCP/IP stack is running: bsdsocket.library is in "
+           "memory. Riptide cannot start while it is there.\n\n"
+           "Quit that stack and take it out of your startup files. Under "
+           "an emulator, turn off its bsdsocket emulation (WinUAE: Hardware "
+           "> Expansions; FS-UAE: bsdsocket_library = 0).\n\n"
+           "Riptide is installed, but not started now.")
+      (all))
+  )))
+
+; another stack's bsdsocket.library on disk opens by itself when a program
+; asks for it, before or instead of Riptide's. Rename it, never delete it.
+(if (= (exists "LIBS:bsdsocket.library" (noreq)) 1)
+(
+  (set #disable
+    (askbool
+      (prompt (cat "LIBS:bsdsocket.library belongs to another TCP/IP stack. "
+                   "Programs would load it instead of using Riptide.\n\n"
+                   "Rename it to bsdsocket.library.disabled?"))
+      (help (cat "Riptide creates bsdsocket.library in memory while it runs; "
+                 "it does not need a file in LIBS:. The file is only renamed, "
+                 "so you can rename it back to use the other stack again."))
+      (choices "Rename it" "Leave it")
+      (default 1)))
+  (if #disable
+  (
+    (set #dis-name "LIBS:bsdsocket.library.disabled")
+    (set #n 1)
+    (while (> (exists #dis-name (noreq)) 0)
+      (set #n (+ #n 1))
+      (set #dis-name ("LIBS:bsdsocket.library.disabled%ld" #n)))
+    (rename "LIBS:bsdsocket.library" #dis-name)
+  ))
+))
+
+; ---- what to install ------------------------------------------------------
+
+(set #bindir "C:")
+(if (= @user-level 2)
+  (set #bindir
+    (askdir
+      (prompt "Where should Riptide and the network tools go?")
+      (help (cat "C: is the usual place. If you choose another drawer, for "
+                 "example SYS:Riptide/C, the installer adds it to the command "
+                 "path in S:User-Startup.\n\n" @askdir-help))
+      (default #old-bin)
+      (newpath))))
+
+(set #opts 3)   ; tools + documentation
+(if (> @user-level 0)
+  (set #opts
+    (askoptions
+      (prompt "Which parts of Riptide should be installed?")
+      (help (cat "Riptide and rtcheck are always installed.\n\n"
+                 "Network tools: ip, ifconfig, route, arp, netstat, ping, "
+                 "traceroute, host, sysctl, hostname, nc and ftp.\n\n"
+                 "Documentation: AMIGA.md (the manual), COMPARISON.md, "
+                 "README.md and the licence.\n\n"
+                 "SDK: C headers and the FD file for programs that use "
+                 "riptide.library.\n\n"
+                 "ftpd-test: a minimal FTP server FOR TESTING ONLY. It "
+                 "accepts any user and password and has no access control."))
+      (choices "Network tools" "Documentation" "SDK for developers"
+               "ftpd-test (test FTP server, insecure)")
+      (default 3))))
+
+(if (IN #opts 1 2)
+(
+  (if (> @user-level 0)
+    (set #drawer
+      (askdir
+        (prompt "Drawer for the Riptide documentation and SDK:")
+        (help (cat "The documentation goes into Docs/ and the SDK into SDK/ "
+                   "inside this drawer.\n\n" @askdir-help))
+        (default #drawer)
+        (newpath))))
+))
+(set #docdir (if (IN #opts 1) (tackon #drawer "Docs") ""))
+(set #sdkdir (if (IN #opts 2) (tackon #drawer "SDK") ""))
+; unpacked right there (e.g. the archive was unpacked to Work:): the
+; documentation and the SDK are already in place
+(set #in-place (P_SAMEDIR #drawer #pkg))
+
+; ---- copy -----------------------------------------------------------------
+
+(complete 10)
+(copyfiles
+  (prompt "Copying Riptide and rtcheck")
+  (help #core-help)
+  (source (tackon #pkg "C"))
+  (dest #bindir)
+  (choices "Riptide" "rtcheck")
+  (optional "force"))
+
+(if (IN #opts 0)
+  (copyfiles
+    (prompt "Copying the network tools")
+    (help @copyfiles-help)
+    (source (tackon #pkg "C"))
+    (dest #bindir)
+    (choices "ip" "ifconfig" "route" "arp" "netstat" "ping" "traceroute"
+             "host" "sysctl" "hostname" "nc" "ftp")
+    (optional "force")))
+
+(if (IN #opts 3)
+  (copyfiles
+    (prompt "Copying ftpd-test (test FTP server)")
+    (help @copyfiles-help)
+    (source (tackon #pkg "C"))
+    (dest #bindir)
+    (choices "ftpd-test")
+    (optional "force")))
+(complete 40)
+
+(if (AND (IN #opts 1 2) (NOT #in-place))
+  (if (NOT (= (exists #drawer (noreq)) 2))
+  (
+    (makedir #drawer (prompt "Creating the Riptide drawer") (help @makedir-help))
+    ; give it the package's drawer icon
+    (if (= (exists (cat #pkg ".info") (noreq)) 1)
+      (copyfiles (prompt "") (help "") (source (cat #pkg ".info"))
+                 (dest (pathonly #drawer)) (newname (cat (fileonly #drawer) ".info"))
+                 (optional "nofail")))
+  )))
+
+(if (AND (IN #opts 1) (NOT #in-place))
+  (copyfiles
+    (prompt "Copying the documentation")
+    (help @copyfiles-help)
+    (source (tackon #pkg "Docs"))
+    (dest #docdir)
+    (all)
+    (infos)
+    (optional "force")))
+(if (AND (IN #opts 1) (NOT #in-place))
+  (if (= (exists (tackon #pkg "Docs.info") (noreq)) 1)
+    (copyfiles (prompt "") (help "") (source (tackon #pkg "Docs.info"))
+               (dest #drawer) (optional "nofail"))))
+
+(if (AND (IN #opts 2) (NOT #in-place))
+  (copyfiles
+    (prompt "Copying the SDK")
+    (help @copyfiles-help)
+    (source (tackon #pkg "SDK"))
+    (dest #sdkdir)
+    (all)
+    (optional "force")))
+(complete 60)
+
+; ---- configuration --------------------------------------------------------
+
+(set #conf-exists
+  (OR (= (exists #conf-arc (noreq)) 1)
+      (= (exists "ENV:Riptide/riptide.conf" (noreq)) 1)))
+(set #write-conf 1)
+(set #uae 1)
+(set #dhcp 1)
+(set #gw "10.0.2.2")
+(if #conf-exists
+  (if (= @user-level 0)
+    (set #write-conf 0)
+    (set #write-conf
+      (askbool
+        (prompt (cat "There is already a Riptide configuration:\n" #conf-arc
+                     "\n\nReplace it with a new one? The old file is kept as "
+                     "riptide.conf.bak."))
+        (help "Keep it to install the new programs with your existing settings.")
+        (choices "Replace" "Keep")
+        (default 0)))))
+
+(if (NOT (= (exists #envarc-dir (noreq)) 2))
+  (makedir #envarc-dir (prompt "Creating the configuration drawer") (help @makedir-help)))
+(if #have-env
+  (if (NOT (= (exists "ENV:Riptide" (noreq)) 2))
+    (makedir "ENV:Riptide" (prompt "") (help @makedir-help))))
+
+(if #write-conf
+(
+  (set #hostname "amiga")
+  (set #uae 1)
+  (set #device "uaenet.device")
+  (set #unit 0)
+  (set #dhcp 1)
+  (set #addr "10.0.2.15")
+  (set #mask "255.255.255.0")
+  (set #gw "10.0.2.2")
+  (set #dns "10.0.2.3")
+
+  (if (> @user-level 0)
+  (
+    (set #hostname
+      (askstring
+        (prompt "Host name of this Amiga:")
+        (help "One word, for example amiga. It can be changed later with the hostname command.")
+        (default #hostname)))
+    (set #uae
+      (askbool
+        (prompt "Which network driver should Riptide use?")
+        (help (cat "uaenet.device is the network card of WinUAE and FS-UAE. "
+                   "It is built into the emulator (no file in DEVS:). In FS-UAE "
+                   "it needs uae_sana2 = 1 and network_card = a2065.\n\n"
+                   "On a real Amiga choose another SANA-II driver, for example "
+                   "DEVS:Networks/a2065.device. MNI drivers can be set up "
+                   "afterwards, see Docs/AMIGA.md."))
+        (choices "uaenet.device (emulator)" "Another SANA-II device")
+        (default 1)))
+    (if (NOT #uae)
+      (set #device
+        (askstring
+          (prompt "SANA-II device driver (with its path):")
+          (help "For example DEVS:Networks/a2065.device or DEVS:Networks/prism2.device.")
+          (default "DEVS:Networks/a2065.device"))))
+    (if (OR (NOT #uae) (= @user-level 2))
+      (set #unit
+        (asknumber
+          (prompt "Unit number of the device:")
+          (help "Usually 0: the first board, or the first host adapter under emulation.")
+          (range 0 255)
+          (default 0))))
+    (set #dhcp
+      (askbool
+        (prompt "How does this Amiga get its address?")
+        (help (cat "DHCP works with most routers and with the emulator's "
+                   "slirp (user mode) network, which hands out 10.0.2.15.\n\n"
+                   "Choose a static address if your network has no DHCP server."))
+        (choices "DHCP (automatic)" "Static address")
+        (default 1)))
+    (if (NOT #dhcp)
+    (
+      (set #addr (askstring (prompt "IP address of this Amiga:")
+                            (help "For example 192.168.1.20 (slirp: 10.0.2.15).")
+                            (default #addr)))
+      (set #mask (askstring (prompt "Netmask:")
+                            (help "For example 255.255.255.0.")
+                            (default #mask)))
+      (set #gw   (askstring (prompt "Default gateway (router):")
+                            (help "The router's address, for example 192.168.1.1 (slirp: 10.0.2.2). Leave empty for none.")
+                            (default #gw)))
+      (set #dns  (askstring (prompt "DNS server:")
+                            (help "For example your router or 1.1.1.1 (slirp: 10.0.2.3). Leave empty for none.")
+                            (default #dns)))
+    ))
+  ))
+
+  (set #c-if
+    (if #uae
+      (cat "# uaenet.device is supplied by the emulator itself, so it is given by\n"
+           "# name without a DEVS:Networks/ path. unit= picks the host network\n"
+           "# adapter (0 = the first one in the emulator's network settings).\n"
+           "# FS-UAE needs uae_sana2 = 1 and network_card = a2065.\n"
+           ("interface eth0 device=%s unit=%ld mtu=1500\n" #device #unit))
+      ("interface eth0 device=%s unit=%ld\n" #device #unit)))
+  (set #c-addr
+    (if #dhcp
+      (cat "# 1) DHCP. Works when the network has a DHCP server, and with the\n"
+           "#    emulator's slirp (user-mode NAT), whose built-in DHCP server\n"
+           "#    answers. Router and nameservers come from the lease.\n"
+           "dhcp eth0\n\n"
+           "# 2) Static. Example values for slirp NAT (guest 10.0.2.15, gateway\n"
+           "#    10.0.2.2, slirp DNS forwarder 10.0.2.3). For a bridged LAN use\n"
+           "#    your own subnet instead (and comment out the dhcp line).\n"
+           "#ifconfig  eth0 10.0.2.15/24 up\n"
+           "#route     add default 10.0.2.2\n"
+           "#nameserver 10.0.2.3\n")
+      (cat "# 1) DHCP (comment out the static lines below when you use it)\n"
+           "#dhcp eth0\n\n"
+           "# 2) Static address\n"
+           ("ifconfig  eth0 %s netmask %s up\n" #addr #mask)
+           (if (= #gw "") "" ("route     add default %s\n" #gw))
+           (if (= #dns "") "" ("nameserver %s\n" #dns)))))
+
+  (set #conf
+    (cat "# Riptide configuration, written by Install_Riptide " #version ".\n"
+         "# Riptide reads ENV:Riptide/riptide.conf; keep this copy in\n"
+         "# ENVARC:Riptide/. The keywords are described in Docs/AMIGA.md,\n"
+         "# \"Configuration file\".\n\n"
+         "hostname " #hostname "\n"
+         "#domain  lan\n\n"
+         "# --- the interface -------------------------------------------------\n"
+         #c-if "\n"
+         "# --- address: pick ONE of the two blocks --------------------------\n\n"
+         #c-addr "\n"
+         "# Check from a shell with:  ip a   ip r   ip dhcp   ping -c 3 10.0.2.2\n"
+         "# Change at run time with, e.g.:  ip route replace default via 10.0.2.2\n"
+         "#                                 ip dhcp renew dev eth0   ip dns add 1.1.1.1\n\n"
+         "# --- names ---------------------------------------------------------\n"
+         "# Static host entries (more in ENV:Riptide/hosts)\n"
+         "host " #hostname " 127.0.0.1\n\n"
+         "# --- optional TCP tuning (Linux-style defaults are already set) ----\n"
+         "#sysctl net.inet.tcp.cc=cubic           # or reno\n"
+         "#sysctl net.inet.tcp.recvspace=65536\n"
+         "#sysctl net.inet.tcp.sendspace=32768\n"
+         "#sysctl net.inet.tcp.ecn=2              # 1 = request ECN on outgoing connections\n"))
+
+  ; keep the old file(s)
+  (if (= (exists #conf-arc (noreq)) 1)
+    (copyfiles (prompt "") (help "") (source #conf-arc) (dest #envarc-dir)
+               (newname "riptide.conf.bak") (optional "force")))
+  (if #have-env
+    (if (= (exists "ENV:Riptide/riptide.conf" (noreq)) 1)
+      (copyfiles (prompt "") (help "") (source "ENV:Riptide/riptide.conf")
+                 (dest "ENV:Riptide") (newname "riptide.conf.bak") (optional "force"))))
+
+  (textfile
+    (prompt "Writing the Riptide configuration")
+    (help "This is Riptide's configuration file; see Docs/AMIGA.md.")
+    (dest #conf-arc)
+    (append #conf))
+))
+
+(if (NOT (= (exists #hosts-arc (noreq)) 1))
+  (textfile
+    (prompt "Writing the hosts file")
+    (help "Static host names, one \"address name [alias...]\" per line.")
+    (dest #hosts-arc)
+    (append "# Riptide hosts file: address name [alias...]\n127.0.0.1 localhost\n")))
+
+; ENV: is what Riptide reads; ENVARC: is copied there at boot
+(if #have-env
+(
+  (if (OR #write-conf (NOT (= (exists "ENV:Riptide/riptide.conf" (noreq)) 1)))
+    (if (= (exists #conf-arc (noreq)) 1)
+      (copyfiles (prompt "") (help "") (source #conf-arc) (dest "ENV:Riptide")
+                 (optional "force"))))
+  (if (NOT (= (exists "ENV:Riptide/hosts" (noreq)) 1))
+    (copyfiles (prompt "") (help "") (source #hosts-arc) (dest "ENV:Riptide")
+               (optional "force")))
+))
+
+; remember where everything went (for updates and the uninstaller)
+(P_PUTREC "BinDir" #bindir)
+(P_PUTREC "DocDir" #docdir)
+(P_PUTREC "SDKDir" #sdkdir)
+(complete 80)
+
+; ---- start at boot --------------------------------------------------------
+
+(set #rt-cmd (P_QUOTE (tackon #bindir "Riptide")))
+(set #boot 1)
+(if (> @user-level 0)
+  (set #boot
+    (askbool
+      (prompt "Start Riptide automatically when the Amiga boots?")
+      (help (cat "Adds \"Run >NIL: " #rt-cmd "\" to S:User-Startup, between "
+                 "the lines ;BEGIN Riptide and ;END Riptide.\n\n"
+                 "Do not start another TCP/IP stack at boot as well."))
+      (default 1))))
+(if #boot
+  (startup "Riptide"
+    (prompt (cat "Add these lines to S:User-Startup so Riptide starts at boot:\n\n"
+                 (if (P_IS_C #bindir) "" ("Path %s ADD\n" (P_QUOTE #bindir)))
+                 "Run >NIL: " #rt-cmd))
+    (help @startup-help)
+    (command (if (P_IS_C #bindir) "" ("Path %s ADD\n" (P_QUOTE #bindir))))
+    (command (cat "Run >NIL: " #rt-cmd "\n"))))
+(complete 90)
+
+; ---- start now ------------------------------------------------------------
+
+(set #started 0)
+(if (AND (NOT #conflict) (NOT #rt-was-running) (NOT @pretend))
+  (if (askbool
+        (prompt "Start Riptide now?")
+        (help (cat "Starts Riptide in the background with the new "
+                   "configuration and waits until its libraries are there."))
+        (default 1))
+    (
+      (set #rc (run (cat (P_QUOTE (tackon #bindir "rtcheck")) " >NIL: START=\""
+                         (tackon #bindir "Riptide") " >NIL:\" NOCHECK")))
+      (set #started (if (= #rc 0) 1 -1))
+    )))
+(complete 100)
+
+; ---- done -----------------------------------------------------------------
+
+(message
+  (cat (if #uae
+         (cat "Using uaenet.device under emulation:\n\n"
+              "FS-UAE: uae_sana2 = 1 and\nnetwork_card = a2065\n"
+              "WinUAE: add uaenet.device\n(Hardware > Expansions)\n\n"
+              "Turn the emulator's bsdsocket.library emulation OFF.\n\n")
+         "")
+       "Test from a Shell:\nRiptide STATUS\nrtcheck -v\nping -c 3 "
+       (if (AND #uae #dhcp) "10.0.2.2" (if (= #gw "") "127.0.0.1" #gw)))
+  (all))
+
+(set @default-dest (if (IN #opts 1 2) #drawer #bindir))
+(exit
+  (cat "Riptide " #version " is installed.\n\n"
+       "Programs: " #bindir "\n"
+       "Configuration: " #conf-arc
+       (if #write-conf "" " (kept)") "\n"
+       (if (IN #opts 1) (cat "Manual: " (tackon #docdir "AMIGA.md") "\n") "")
+       (if #boot "It starts from S:User-Startup at boot.\n" "")
+       (if (= #started 1) "\nRiptide is running now.\n" "")
+       (if (= #started -1) "\nRiptide did not start; run it in a Shell to see why.\n" "")
+       (if #conflict "\nQuit the other TCP/IP stack before starting Riptide.\n" "")))

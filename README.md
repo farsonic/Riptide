@@ -26,6 +26,19 @@ the modern Linux TCP stack.
   routing/ARP ioctls, the `net.riptide.*` tables via `MiamiSysCtl()` and
   the `RIPTIDE` command port (see `docs/AMIGA.md`).
 
+## Installing
+
+Unpack `riptide-<version>.lha` (or use the floppy image
+`riptide-<version>.adf`) and double-click `Riptide/Install_Riptide`, the
+standard Amiga Installer script. It copies Riptide and the tools to `C:`,
+writes `ENVARC:Riptide/riptide.conf` for the emulator's `uaenet.device`
+with DHCP (or another SANA-II device and a static address), adds Riptide to
+`S:User-Startup` and can start it right away. It warns about other running
+stacks and emulator bsdsocket emulation, and can update or uninstall.
+Under FS-UAE use `uae_sana2 = 1` and `network_card = a2065`. The manual
+steps are in `docs/AMIGA.md`, "Installation"; `make -f Makefile.amiga
+package` builds the package.
+
 ## Documentation
 
 * `docs/RE-NOTES.md`: reverse-engineering notes on MiamiDx (library tables,
@@ -41,10 +54,13 @@ make && ./tests/run_tests.sh build/host       # Linux host build + tests
 make CROSS=m68k-linux-gnu-                     # big-endian 68020 build (run tests under qemu-m68k)
 make -f Makefile.amiga                         # AmigaOS: build/amiga/{Riptide,rtcheck,ip,ping,...} (vbcc + NDK 3.2)
 make -f Makefile.amiga check                   # hunk checks + vamos self test
+make -f Makefile.amiga package                 # Installer package: build/riptide-<version>.lha (.zip) and .adf
 tests/amiga/run_fsuae.sh build/amiga           # full-system test on FS-UAE + AROS ROM
 tests/amiga/run_fsuae_tools.sh build/amiga     # every network tool on FS-UAE (loopback + uaenet.device)
 tests/amiga/run_fsuae_ftp.sh build/amiga       # ftp client against the ftpd-test server over loopback
 tests/amiga/run_fsuae_bench.sh build/amiga     # Riptide BENCH: C vs 680x0 assembly checksum/copy
+tests/amiga/test_installer.sh                  # Install_Riptide under InstallerLG (INSTALLERLG=)
+tests/amiga/run_fsuae_installer.sh             # Install_Riptide with Installer 43.3 on FS-UAE (INSTALLER43=)
 ```
 
 One binary serves the 68020 to 68060: Riptide picks hand-written

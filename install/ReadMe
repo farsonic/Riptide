@@ -1,0 +1,57 @@
+Riptide @VERSION@ - TCP/IP stack for AmigaOS 3.x (68020 or better)
+==================================================================
+
+Installing
+----------
+
+Double-click "Install_Riptide" (it uses the standard Amiga Installer,
+Installer 43.x or InstallerLG). From a Shell:
+
+  cd Riptide
+  Installer Install_Riptide
+
+The installer
+
+  * copies Riptide, rtcheck and the network tools (ip, ifconfig, route,
+    arp, netstat, ping, traceroute, host, sysctl, hostname, nc, ftp) to
+    C: (Expert users can pick another drawer),
+  * installs the documentation in <Work: or SYS:>Riptide/Docs and,
+    if you ask for it, the SDK in <Work: or SYS:>Riptide/SDK,
+  * writes ENVARC:Riptide/riptide.conf (and copies it to ENV:Riptide/)
+    for the emulator's uaenet.device with DHCP, or for another SANA-II
+    device and a static address,
+  * adds a ";BEGIN Riptide" block to S:User-Startup that starts Riptide
+    at boot, and can start it right away.
+
+It warns about another running TCP/IP stack or the emulator's
+bsdsocket.library emulation, and offers to rename another stack's
+LIBS:bsdsocket.library to bsdsocket.library.disabled. Run it again to
+update or to uninstall.
+
+Emulators
+---------
+
+FS-UAE:  uae_sana2 = 1
+         network_card = a2065
+WinUAE:  enable uaenet.device; turn off bsdsocket.library emulation.
+
+With the emulator's slirp network Riptide gets 10.0.2.15 by DHCP; the
+host is 10.0.2.2 and the DNS forwarder 10.0.2.3.
+
+Testing
+-------
+
+  Riptide STATUS
+  rtcheck -v
+  ping -c 3 10.0.2.2
+
+Manual installation
+-------------------
+
+  1. Copy C/#? to C:.
+  2. Put a configuration in ENVARC:Riptide/riptide.conf and
+     ENV:Riptide/riptide.conf (Docs/riptide-uaenet.conf is an example).
+  3. Start it with "Run >NIL: Riptide", e.g. from S:User-Startup.
+
+Docs/AMIGA.md is the manual. Riptide is free software under the GNU
+General Public License version 2 (Docs/LICENSE).

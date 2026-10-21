@@ -4,6 +4,8 @@
 #   make -f Makefile.amiga TOOLCHAIN=gcc    m68k-linux-gnu-gcc + tools/elf2hunk.py: build/amiga-gcc/...
 #   make -f Makefile.amiga check            vamos self test + hunk/relocation checks
 #   make -f Makefile.amiga sdk              regenerate the riptide.library SDK in sdk/
+#   make -f Makefile.amiga package          Installer package: build/package/Riptide/,
+#                                           build/riptide-<version>.lha (or .zip) and .adf
 #
 # vbcc needs VBCC (default /opt/vbcc) and the NDK 3.2 headers (NDK, default
 # /opt/ndk3.2). The GCC build needs neither: it uses src/amiga/os.
@@ -158,8 +160,15 @@ check: all sdk-check
 	$(PYTHON) tests/amiga/test_hunk.py $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS)) $(SDK_BIN)
 	tests/amiga/run_vamos.sh $(BUILD)/Riptide
 
+# ------------------------------------------------------------ package ----
+# build/package/Riptide/ (Install_Riptide, icons, C/, Docs/, SDK/, ReadMe),
+# build/riptide-<version>.lha (or .zip without an LHA writer) and .adf
+VERSION := $(shell sed -n 's/^\#define RIPTIDE_VERSION_STRING "\(.*\)"/\1/p' include/rt/riptide.h)
+package: all
+	PYTHON=$(PYTHON) tools/mkpackage.sh $(BUILD) build $(VERSION)
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all check clean sdk sdk-check
+.PHONY: all check clean sdk sdk-check package
 .SECONDARY:

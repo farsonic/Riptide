@@ -1,0 +1,33 @@
+Short:        TCP/IP stack with modern TCP and Linux tools
+Author:       Riptide developers
+Uploader:     farsonic@gmail.com (Riptide)
+Type:         comm/tcp
+Version:      @VERSION@
+Architecture: m68k-amigaos >= 3.0
+Requires:     68020+, a SANA-II network driver (or uaenet.device)
+Distribution: Aminet
+URL:          https://github.com/farsonic/riptide
+
+Riptide is a TCP/IP stack for AmigaOS 3.x on the 68020 to 68060.
+
+* publishes bsdsocket.library 4 (the AmiTCP API, all 46 functions),
+  riptide.library and usergroup.library while it runs
+* modern TCP after the Linux stack: CUBIC with HyStart, SACK, RACK-TLP,
+  PRR, F-RTO, timestamps, window scaling, ECN, buffer auto-tuning
+* SANA-II devices (Ethernet or point-to-point) and MNI drivers, a DHCP
+  client and a DNS resolver
+* Linux style tools: ip, ifconfig, route, arp, netstat, ping,
+  traceroute, host, sysctl, hostname, nc, and an ftp client
+* one binary for the 68020 to 68060 with hand-written checksum and copy
+  routines
+
+Installation: double-click Install_Riptide (standard Amiga Installer).
+It copies the programs to C:, writes ENVARC:Riptide/riptide.conf for the
+emulator's uaenet.device with DHCP (or another SANA-II device / a static
+address) and adds Riptide to S:User-Startup. See Riptide/ReadMe and
+Riptide/Docs/AMIGA.md.
+
+Under FS-UAE use uae_sana2 = 1 and network_card = a2065; turn off the
+emulator's bsdsocket.library emulation (WinUAE and FS-UAE).
+
+Licence: GPL-2.0-only. Source code: https://github.com/farsonic/riptide
