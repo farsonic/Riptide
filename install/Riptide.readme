@@ -17,7 +17,8 @@ Riptide is a TCP/IP stack for AmigaOS 3.x on the 68020 to 68060.
 * SANA-II devices (Ethernet or point-to-point) and MNI drivers, a DHCP
   client and a DNS resolver
 * Linux style tools: ip, ifconfig, route, arp, netstat, ping,
-  traceroute, host, sysctl, hostname, nc, and an ftp client
+  traceroute, host, sysctl, hostname, nc, an ftp client and speedtest
+  (a speedtest.net bandwidth test after speedtest-cli)
 * one binary for the 68020 to 68060 with hand-written checksum and copy
   routines
 

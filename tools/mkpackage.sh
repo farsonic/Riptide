@@ -29,7 +29,7 @@ BUILD=${1:?BUILDDIR}
 OUT=${2:?OUTDIR}
 VERSION=${3:?VERSION}
 PYTHON=${PYTHON:-python3}
-TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp"
+TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp speedtest"
 top=$(cd "$(dirname "$0")/.." && pwd)
 mkicon="$PYTHON $top/tools/mkicon.py"
 

@@ -284,7 +284,7 @@ before DNS.
 
 Riptide comes with the usual Linux network commands, written for AmigaOS:
 `ip`, `ifconfig`, `route`, `arp`, `netstat`, `traceroute`, `ping`, `host`,
-`sysctl`, `hostname`, `nc` and `ftp`. Copy them to `C:`. They take Linux style
+`sysctl`, `hostname`, `nc`, `ftp` and `speedtest`. Copy them to `C:`. They take Linux style
 arguments (`-n`, `-c 3`, ...), print what their Linux counterparts print,
 stop on Ctrl-C and return 0 (ok), 5 (warning, e.g. no ping reply), 10
 (error) or 20 (failure, e.g. no stack). Each has `-h` / `--help`. They
@@ -292,8 +292,9 @@ need little stack (buffers come from AllocVec()).
 
 Where the data comes from:
 
-* `ping`, `traceroute`, `host` (A/PTR), `nc` and `ftp` use only the
-  standard bsdsocket.library API, so they also work with other stacks.
+* `ping`, `traceroute`, `host` (A/PTR), `nc`, `ftp` and `speedtest` use
+  only the standard bsdsocket.library API, so they also work with other
+  stacks.
 * `ifconfig` (changes), `route add/del` and `arp -s/-d` use the BSD ioctls
   (SIOCAIFADDR, SIOCSIF*, SIOCADDRT/SIOCDELRT, SIOCSARP/SIOCDARP).
 * Listings read Riptide's tables with `RiptideSysCtl()` (below), and `ip`,
@@ -566,6 +567,73 @@ and NAT handling. `-1` exits after one session, `-v` logs the protocol.
 1> run >NIL: ftpd-test RAM:
 1> ftp 127.0.0.1 2121
 ```
+
+### speedtest
+
+A speedtest.net bandwidth test with the options and output of
+[speedtest-cli](https://github.com/sivel/speedtest-cli) (Matt Martz,
+Apache-2.0), the reference for its behaviour; an original C
+implementation of the legacy HTTP protocol (`src/apps/speedtest`).
+
+```
+speedtest [--simple|--json|--csv [--csv-delimiter C]] [--bytes] [--single]
+          [--no-download] [--no-upload] [--server ID]... [--exclude ID]...
+          [--timeout SECS] [--list] [--csv-header] [--version]
+speedtest --server-url http://HOST:PORT/speedtest/upload.php [options]
+speedtest --mirror http://HOST[:PORT] [options]
+```
+
+```
+Retrieving speedtest.net configuration...
+Testing from Example ISP (203.0.113.7)...
+Retrieving speedtest.net server list...
+Selecting best server based on ping...
+Hosted by Example Sponsor (Sydney) [12.34 km]: 23.456 ms
+Testing download speed................................
+Download: 12.34 Mbit/s
+Testing upload speed....................
+Upload: 1.23 Mbit/s
+```
+
+It reads `speedtest-config.php` and the server list (read as it arrives;
+distances in fixed point, no FPU needed), times three `latency.txt`
+requests to each of the 5 nearest servers, then downloads
+`random350x350.jpg` ... `random4000x4000.jpg` over 4 connections and
+uploads 128 KB to 2 MB bodies over 2 (the configuration's `threads`, at
+most 4), 10 seconds each (its `testlength`). All connections are
+non-blocking keep-alive HTTP/1.1, served by one WaitSelect() loop: Ctrl-C
+works at any time (exit code 5). Riptide extras: `--server-url URL` (test
+against that server without the configuration and list), `--mirror URL`
+(read those from another http:// base), `--duration SECS`, `--threads N`,
+`--count N` (requests per size), `--download-sizes 350,...`,
+`--upload-sizes KB,...` and `--debug`.
+
+**HTTPS.** There is no TLS, so no `--secure` or `--share`. speedtest.net
+may serve the configuration and list only over HTTPS; speedtest then says
+so and stops. The test servers (`http://host:8080/speedtest/`) speak http:
+use `--server-url` with a server's `url` from a list fetched elsewhere
+(`curl -s https://www.speedtest.net/speedtest-servers-static.php`).
+
+**Testing against your computer.** `tools/speedtest_mock.py` (python3)
+plays speedtest.net and a test server, pointing its server list back at
+itself; `/__stats` shows what it counted. Options: `--chunked`,
+`--redirect`, `--https-redirect`, `--delay MS`, `--rate KB/s`, `--close`,
+`--size-div N`, `--servers N`. Under FS-UAE with slirp:
+
+```
+python3 tools/speedtest_mock.py --port 8080         # on the host
+1> speedtest --mirror http://10.0.2.2:8080
+1> speedtest --server-url http://10.0.2.2:8080/speedtest/upload.php
+```
+
+`httpd-test [-p port] [-d div] [-c] [-r] [-s] [-k] [-v]` (in
+`build/amiga`, not in the package) does the same on the Amiga, and
+`make` builds `build/host/speedtest` for Linux.
+
+**Speed.** On a 68020 the result is CPU bound. In FS-UAE (A1200, cycle
+exact) with speedtest, `httpd-test` and Riptide on one CPU over loopback:
+about 0.5-1.2 Mbit/s down, 1.2-1.3 Mbit/s up and 100 ms ping. Timestamps use
+the Amiga clock (local time).
 
 ### rtcheck
 
@@ -882,6 +950,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. |
 | `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
 | `tests/t_arch_m68k.c` (host, `make CROSS=m68k-linux-gnu-`) | Every assembly routine against the C versions: all lengths 0..160 with every source/destination alignment 0..15, 3000 random lengths up to 4096, 64-128 KB and 4 MB buffers, initial sums 0, 0xffffffff and others, random/all-ones/zero data, guard bytes around every copy; odd-offset chaining, the TCP `rt_buf` copy + checksum, routine selection and the sysctls. Run it on each CPU: `RT_CPU=68040 qemu-m68k -cpu m68040 build/m68k-linux-gnu/tests/t_arch_m68k` (also `m68020`, `m68030`, `m68060`). qemu's 68060 model lacks MOVE16, so there the test turns MOVE16 off through the kill switch. It skips in other builds. |
+| `tests/amiga/run_fsuae_speedtest.sh build/amiga` | speedtest against three `httpd-test` servers on FS-UAE (plain, chunked with redirects, redirecting to https://): `--server-url`, `--mirror`, all output formats, byte counts against the servers' counters, errors and Ctrl-C. |
+| `tests/t_speedtest_*.c` (host) | speedtest's XML, URL and HTTP parsers (every split point, random input), distances; end to end against `tools/speedtest_mock.py` over Linux sockets and over Riptide through TUN. |
 | `tests/amiga/run_fsuae_bench.sh build/amiga` | `Riptide BENCH` on FS-UAE (A1200; `FSUAE_MODEL=A4000/040 FSUAE_EXTRA="cpu = 68060"` and so on for other CPUs). |
 | `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |

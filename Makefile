@@ -14,6 +14,9 @@ ifeq ($(CROSS),)
 else
   BUILD := build/$(patsubst %-,%,$(CROSS))
   ARCHFLAGS := -m68020 -mtune=68020-60 -static
+  # static binaries: speedtest's POSIX shim takes numeric addresses only
+  # (getaddrinfo would need glibc's shared NSS modules at run time)
+  ARCHFLAGS += -DST_POSIX_STATIC
   LDFLAGS += -pthread -static
 endif
 VBCC ?= /opt/vbcc
@@ -38,10 +41,15 @@ HOST_SRC := $(wildcard src/host/*.c)
 LIB_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(HOST_SRC)) $(ASM_OBJ)
 TEST_SRC := $(wildcard tests/*.c)
 TEST_BIN := $(patsubst tests/%.c,$(BUILD)/tests/%,$(TEST_SRC))
+# speedtest (src/apps/speedtest): portable code + the POSIX shim, for the
+# host tests and build/host/speedtest
+ST_SRC   := $(wildcard src/apps/speedtest/*.c)
+ST_OBJ   := $(patsubst src/%.c,$(BUILD)/%.o,$(filter-out %/st_posix_main.c,$(ST_SRC)))
+ST_HDR   := $(wildcard src/apps/speedtest/*.h)
 
-all: $(BUILD)/libriptide.a $(TEST_BIN)
+all: $(BUILD)/libriptide.a $(BUILD)/libspeedtest.a $(BUILD)/speedtest $(TEST_BIN)
 
-$(BUILD)/%.o: src/%.c $(wildcard include/rt/*.h)
+$(BUILD)/%.o: src/%.c $(wildcard include/rt/*.h) $(ST_HDR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -54,9 +62,16 @@ $(BUILD)/libriptide.a: $(LIB_OBJ)
 	@mkdir -p $(dir $@)
 	rm -f $@ && $(AR) rcs $@ $^
 
-$(BUILD)/tests/%: tests/%.c $(BUILD)/libriptide.a
+$(BUILD)/libspeedtest.a: $(ST_OBJ)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -o $@ $< $(BUILD)/libriptide.a $(LDFLAGS) -lm
+	rm -f $@ && $(AR) rcs $@ $^
+
+$(BUILD)/speedtest: $(BUILD)/apps/speedtest/st_posix_main.o $(BUILD)/libspeedtest.a $(BUILD)/libriptide.a
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILD)/tests/%: tests/%.c $(BUILD)/libriptide.a $(BUILD)/libspeedtest.a $(ST_HDR) $(wildcard tests/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -Isrc/apps/speedtest -o $@ $< $(BUILD)/libspeedtest.a $(BUILD)/libriptide.a $(LDFLAGS) -lm
 
 check: all
 	./tests/run_tests.sh $(BUILD)

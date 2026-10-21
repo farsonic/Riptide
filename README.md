@@ -21,8 +21,10 @@ the modern Linux TCP stack.
   sockets, IPv4 fragmentation, path-MTU discovery, a DHCP client and a DNS
   resolver.
 * **Tools:** Linux style `ip` (iproute2 syntax), `ifconfig`, `route`, `arp`,
-  `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname`, `nc`, and
-  a BSD style `ftp` client (passive mode through NAT, ftp:// URLs).
+  `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname`, `nc`, a
+  BSD style `ftp` client (passive mode through NAT, ftp:// URLs) and
+  `speedtest`, a speedtest.net bandwidth test with the options and output
+  of speedtest-cli (an original C implementation).
   Interfaces, routes, ARP entries, DNS servers and DHCP can be inspected
   and changed while the stack runs. Third-party tools can use the BSD
   routing/ARP ioctls, the `net.riptide.*` tables via `MiamiSysCtl()` and
@@ -60,6 +62,8 @@ make -f Makefile.amiga package                 # Installer package: build/riptid
 tests/amiga/run_fsuae.sh build/amiga           # full-system test on FS-UAE + AROS ROM
 tests/amiga/run_fsuae_tools.sh build/amiga     # every network tool on FS-UAE (loopback + uaenet.device)
 tests/amiga/run_fsuae_ftp.sh build/amiga       # ftp client against the ftpd-test server over loopback
+tests/amiga/run_fsuae_speedtest.sh build/amiga # speedtest against httpd-test servers over loopback
+python3 tools/speedtest_mock.py --port 8080    # mock speedtest.net + server: speedtest --mirror http://10.0.2.2:8080
 tests/amiga/run_fsuae_bench.sh build/amiga     # Riptide BENCH: C vs 680x0 assembly checksum/copy
 tests/amiga/test_installer.sh                  # Install_Riptide under InstallerLG (INSTALLERLG=)
 tests/amiga/run_fsuae_installer.sh             # Install_Riptide with Installer 43.3 on FS-UAE (INSTALLER43=)
@@ -82,4 +86,5 @@ IPv6, multicast/IGMP, SSL, packet-filter hooks, and the MiamiDx-private
 `miami.library` calls used by Miami's own NetStat, DiG and NSLookup.
 
 Licence: GPL-2.0-only. MiamiDx is © Nordic Global Inc.; this repository
-contains none of its code or SDK files.
+contains none of its code or SDK files. `speedtest` follows the behaviour
+of speedtest-cli by Matt Martz (Apache-2.0) but contains none of its code.

@@ -1,5 +1,8 @@
 /*
  * Riptide - shared code of the network tools (see cmdlib.h).
+ * With -DCL_BASIC (cmdlib_basic.o, vbcc build) only the start-up, output,
+ * library, clock and cl_parse_ip parts are compiled, for tools that need
+ * no more (speedtest): vlink keeps every function of an object.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "cmdlib.h"
@@ -190,6 +193,7 @@ out:
 	return rc;
 }
 
+#ifndef CL_BASIC
 int cl_match(const char *arg, const char *word)
 {
 	u32 n = (u32)strlen(arg);
@@ -293,6 +297,8 @@ int cl_parse_ms(const char *s, u32 *ms)
 	return 0;
 }
 
+#endif /* CL_BASIC */
+
 /* ------------------------------------------------------------ libraries */
 
 int cl_need_socket(void)
@@ -307,6 +313,7 @@ int cl_need_socket(void)
 	return 0;
 }
 
+#ifndef CL_BASIC
 int cl_need_riptide(void)
 {
 	if (cl_need_socket() < 0)
@@ -320,6 +327,8 @@ int cl_need_riptide(void)
 	}
 	return 0;
 }
+
+#endif /* CL_BASIC */
 
 int cl_need_timer(void)
 {
@@ -346,6 +355,7 @@ u32 cl_now_us(void)
 	return (u32)t.tv_secs * 1000000UL + (u32)t.tv_micro;
 }
 
+#ifndef CL_BASIC
 int cl_socket(int type, int proto)
 {
 	if (cl_need_socket() < 0)
@@ -421,6 +431,8 @@ done:
 	return (int)err;
 }
 
+#endif /* CL_BASIC */
+
 /* ------------------------------------------------------------ addresses */
 
 int cl_parse_ip(const char *s, u32 *addr)
@@ -447,6 +459,7 @@ int cl_parse_ip(const char *s, u32 *addr)
 	return 0;
 }
 
+#ifndef CL_BASIC
 u32 cl_mask(int bits)
 {
 	return bits <= 0 ? 0 : rt_htonl(0xffffffffUL << (32 - bits));
@@ -763,3 +776,4 @@ out:
 		DeleteMsgPort(reply);
 	return r;
 }
+#endif /* CL_BASIC */

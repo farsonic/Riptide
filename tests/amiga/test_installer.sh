@@ -72,7 +72,7 @@ has() { [ -f "$1" ] || fail "$name: missing $1"; }
 hasnt() { [ ! -e "$1" ] || fail "$name: unexpected $1"; }
 grepf() { grep -q -- "$2" "$1" 2>/dev/null || fail "$name: $1 lacks /$2/"; }
 grepnot() { ! grep -q -- "$2" "$1" 2>/dev/null || fail "$name: $1 has /$2/"; }
-TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp"
+TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp speedtest"
 
 # ---- 1. novice, fresh ------------------------------------------------------
 setup novice

@@ -21,11 +21,16 @@ AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/ami
              src/amiga/usergroup.c src/amiga/sana2.c src/amiga/mni.c src/amiga/stackproc.c \
              src/amiga/main.c src/amiga/selftest.c src/amiga/bench.c
 LIBS      := bsdsocket riptide usergroup
-HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h) tests/amiga/rtcheck_body.h
+HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h \
+               src/apps/speedtest/*.h) tests/amiga/rtcheck_body.h
 # network tools (src/amiga/cmd), each linked with cmdlib.o
-TOOLS     := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp
-# test programs linked like the tools (tests/amiga): a minimal FTP server for the ftp test
-TESTTOOLS := ftpd-test
+NETTOOLS  := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp
+# speedtest: src/amiga/cmd/speedtest.c (shim) + the portable src/apps/speedtest
+TOOLS     := $(NETTOOLS) speedtest
+ST_SRC    := st_main st_xml st_http st_util
+# test programs linked like the tools (tests/amiga): a minimal FTP server for
+# the ftp test, a minimal speedtest HTTP server for the speedtest test
+TESTTOOLS := ftpd-test httpd-test
 
 ifeq ($(TOOLCHAIN),gcc)
 # ---------------------------------------------------------------- GCC ----
@@ -85,9 +90,14 @@ $(BUILD)/Riptide.elf: $(RT_OBJ) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(RT_OBJ) $(LIBGCC)
 $(BUILD)/rtcheck.elf: $(RC_OBJ) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(RC_OBJ) $(LIBGCC)
-$(addsuffix .elf,$(addprefix $(BUILD)/,$(TOOLS))): $(BUILD)/%.elf: $(BUILD)/amiga/cmd/%.o $(TOOL_LIB) src/amiga/link.ld
+$(addsuffix .elf,$(addprefix $(BUILD)/,$(NETTOOLS))): $(BUILD)/%.elf: $(BUILD)/amiga/cmd/%.o $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
+ST_OBJ  := $(BUILD)/amiga/cmd/speedtest.o $(patsubst %,$(BUILD)/apps/speedtest/%.o,$(ST_SRC))
+$(BUILD)/speedtest.elf: $(ST_OBJ) $(TOOL_LIB) src/amiga/link.ld
+	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $(ST_OBJ) $(LIBGCC)
 $(BUILD)/ftpd-test.elf: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB) src/amiga/link.ld
+	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
+$(BUILD)/httpd-test.elf: $(BUILD)/tests/httpd_test.o $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
 $(BUILD)/%: $(BUILD)/%.elf tools/elf2hunk.py
 	$(PYTHON) tools/elf2hunk.py -v $< $@
@@ -132,9 +142,17 @@ $(BUILD)/Riptide: $(RT_OBJ)
 	$(VC) -o $@ $(RT_OBJ) -lamiga
 $(BUILD)/rtcheck: $(RC_OBJ)
 	$(VC) -o $@ $(RC_OBJ) -lamiga
-$(addprefix $(BUILD)/,$(TOOLS)): $(BUILD)/%: $(BUILD)/amiga/cmd/%.o $(TOOL_LIB)
+$(addprefix $(BUILD)/,$(NETTOOLS)): $(BUILD)/%: $(BUILD)/amiga/cmd/%.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
+ST_OBJ  := $(BUILD)/amiga/cmd/speedtest.o $(patsubst %,$(BUILD)/apps/speedtest/%.o,$(ST_SRC))
+# cmdlib without the parts speedtest does not use (vlink keeps whole objects)
+$(BUILD)/amiga/cmd/cmdlib_basic.o: src/amiga/cmd/cmdlib.c $(HDRS) $(GEN_H)
+	$(VC) $(CFLAGS) -DCL_BASIC -c -o $@ $<
+$(BUILD)/speedtest: $(ST_OBJ) $(BUILD)/amiga/cmd/cmdlib_basic.o $(BUILD)/core/printf.o
+	$(VC) -o $@ $(ST_OBJ) $(BUILD)/amiga/cmd/cmdlib_basic.o $(BUILD)/core/printf.o -lamiga
 $(BUILD)/ftpd-test: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB)
+	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
+$(BUILD)/httpd-test: $(BUILD)/tests/httpd_test.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
 
 # a client built only from the SDK in sdk/ and the NDK

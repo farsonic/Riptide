@@ -24,7 +24,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -u
 BUILD=${1:-build}
-TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp"
+TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp speedtest"
 here=$(cd "$(dirname "$0")" && pwd)
 ptr="python3 $here/fsuae_pointer.py"
 VBCC=${VBCC:-/opt/vbcc}

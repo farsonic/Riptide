@@ -25,6 +25,7 @@ Licence: GPL-2.0-only (the TCP follows Linux's algorithms and structure).
 | `src/amiga/` | AmigaOS glue: libraries, SANA-II, MNI, startup, OS headers | amiga |
 | `sdk/` | Developer SDK for riptide.library (generated FD and headers) | amiga |
 | `src/amiga/cmd/` | Network tools (ip, ifconfig, route, ...) and their shared `cmdlib` | amiga |
+| `src/apps/` | Portable applications with a thin OS shim per platform: `speedtest` (shims: `src/amiga/cmd/speedtest.c`, `st_posix.c` for Linux, the TUN test for the host stack); core rules apply, except that `st_posix.c` uses libc | amiga |
 | `tests/` | Host tests (`make check`), interop with Linux via TUN | everybody |
 | `tools/` | RE scripts (hunk parser etc.), `elf2hunk.py` | — |
 

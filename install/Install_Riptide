@@ -192,6 +192,7 @@
   (P_DEL (tackon #rm-bin "hostname"))
   (P_DEL (tackon #rm-bin "nc"))
   (P_DEL (tackon #rm-bin "ftp"))
+  (P_DEL (tackon #rm-bin "speedtest"))
   (P_DEL (tackon #rm-bin "ftpd-test"))
   (complete 40)
 
@@ -390,7 +391,7 @@
       (prompt "Which parts of Riptide should be installed?")
       (help (cat "Riptide and rtcheck are always installed.\n\n"
                  "Network tools: ip, ifconfig, route, arp, netstat, ping, "
-                 "traceroute, host, sysctl, hostname, nc and ftp.\n\n"
+                 "traceroute, host, sysctl, hostname, nc, ftp and speedtest.\n\n"
                  "Documentation: AMIGA.md (the manual), COMPARISON.md, "
                  "README.md and the licence.\n\n"
                  "SDK: C headers and the FD file for programs that use "
@@ -436,7 +437,7 @@
     (source (tackon #pkg "C"))
     (dest #bindir)
     (choices "ip" "ifconfig" "route" "arp" "netstat" "ping" "traceroute"
-             "host" "sysctl" "hostname" "nc" "ftp")
+             "host" "sysctl" "hostname" "nc" "ftp" "speedtest")
     (optional "force")))
 
 (if (IN #opts 3)

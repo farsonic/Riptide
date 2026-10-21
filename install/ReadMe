@@ -13,8 +13,8 @@ Installer 43.x or InstallerLG). From a Shell:
 The installer
 
   * copies Riptide, rtcheck and the network tools (ip, ifconfig, route,
-    arp, netstat, ping, traceroute, host, sysctl, hostname, nc, ftp) to
-    C: (Expert users can pick another drawer),
+    arp, netstat, ping, traceroute, host, sysctl, hostname, nc, ftp,
+    speedtest) to C: (Expert users can pick another drawer),
   * installs the documentation in <Work: or SYS:>Riptide/Docs and,
     if you ask for it, the SDK in <Work: or SYS:>Riptide/SDK,
   * writes ENVARC:Riptide/riptide.conf (and copies it to ENV:Riptide/)
