@@ -24,7 +24,8 @@ patch also fixes two `uaenet.device` bugs:
 They apply to v3.2.35 in that order. `issue-1-uaenet-frame-drops.md` and
 `issue-2-uaenet-lan-bridge.md` are the reports for FS-UAE's maintainer.
 
-The patch is GPL-2.0 like FS-UAE. It was tested on Linux; the build script
+The patch is GPL-2.0 like FS-UAE. It was tested on Linux and on macOS (a
+wired interface: DHCP, IPv4, IPv6, 41.6/21.3 Mbit/s speedtest); the build script
 supports macOS through Homebrew.
 
 ## Build
