@@ -20,6 +20,11 @@ the modern Linux TCP stack.
   direct loader for Miami's MNI drivers. Also loopback, ARP, ICMP, UDP, raw
   sockets, IPv4 fragmentation, path-MTU discovery, a DHCP client and a DNS
   resolver.
+* **IPv6:** dual-stack host with SLAAC (RFC 7217 stable and RFC 8981
+  temporary addresses), NDP, MLDv2, router advertisement routes, MTU and
+  DNS (RDNSS/DNSSL), stateless DHCPv6, ICMPv6, fragments and path MTU;
+  TCP, UDP and raw sockets over IPv6 with dual-stack `AF_INET6` sockets,
+  `getaddrinfo()` with RFC 6724 ordering, AAAA and `ip6.arpa` lookups.
 * **Tools:** Linux style `ip` (iproute2 syntax), `ifconfig`, `route`, `arp`,
   `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname`, `nc`, and
   a BSD style `ftp` client (passive mode through NAT, ftp:// URLs).
@@ -77,8 +82,11 @@ and the NDK 3.2 headers from Aminet in `/opt/ndk3.2`. See `docs/AMIGA.md`.
 Tested on the Linux host (native, with ASan/UBSan, and big-endian under
 qemu-m68k) against the real Linux kernel TCP over TUN. On AmigaOS it is
 tested under vamos and in FS-UAE with the AROS Kickstart (loopback). Still to
-verify: SANA-II receive on real hardware, and MNI drivers. Not implemented:
-IPv6, multicast/IGMP, SSL, packet-filter hooks, and the MiamiDx-private
+verify: SANA-II receive on real hardware, and MNI drivers. IPv6 (dual-stack
+host: SLAAC, NDP, MLDv2, stateless DHCPv6) is tested against gVisor's
+netstack; `t_tap` repeats it against a Linux kernel with IPv6 over TAP.
+Not implemented: stateful DHCPv6, IPv4 multicast/IGMP, SSL, packet-filter
+hooks, and the MiamiDx-private
 `miami.library` calls used by Miami's own NetStat, DiG and NSLookup.
 
 Licence: GPL-2.0-only. MiamiDx is © Nordic Global Inc.; this repository

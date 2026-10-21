@@ -34,6 +34,8 @@ The core files are owned per area:
   icmp.c udp.c raw.c loopback.c checksum.c arch.c init.c stats.c`
 * **tcp**: `tcp*.c` plus internal `src/core/tcp.h`
 * **sockets**: `socket.c socket_api.c ioctl_net.c sysctl.c config.c ctl.c resolv.c netdb.c dhcp.c errno.c`
+* **ipv6**: `inet.c inet6_text.c ip6.c ip6_if.c ip6_frag.c nd6.c route6.c icmp6.c
+  dhcp6.c` plus internal `src/core/ip6_internal.h` (see "IPv6" below)
 
 ## Rules for core code
 
@@ -135,3 +137,55 @@ time:
 
 The host build mirrors this. A stack thread polls TUN or wire file
 descriptors and runs timers, and test threads call `rt_api_*` directly.
+
+## IPv6
+
+Riptide is a dual-stack host (RFC 8200, 4291, 4861, 4862, 8981, 7217,
+3810, 6724, 4443, 8106, 8415 stateless). The contract is `rt_ip6.h`;
+the code is in `src/core`:
+
+| File | Contents |
+|---|---|
+| `inet6_text.c` | Text forms (RFC 4291 2.2 parsing, RFC 5952 output) and address helpers. Self contained, so the Amiga tools link it too. |
+| `ip6.c` | Input (extension header walk, option action bits, hop-by-hop only first, atomic fragments), output (optional Router Alert), forwarding, the sysctls and the 1-second slow timer that drives lifetimes. |
+| `ip6_if.c` | Per-interface state (`nif->ip6`): addresses, DAD (RFC 7527 nonces), SLAAC with the two-hour rule, RFC 7217 identifiers (SipHash-2-4), RFC 8981 temporary addresses, MLDv2 with v1 fallback, router solicitations, source selection (RFC 6724 rules 1-3, 5-8 and a fixed policy table). |
+| `nd6.c` | Neighbour cache (RFC 4861 states incl. DELAY/PROBE; router entries) and NS/NA/RS/RA/redirect handling, RA options PIO, MTU, RIO (RFC 4191), RDNSS/DNSSL (RFC 8106). |
+| `route6.c` | Longest-prefix table, default routers with preference, RA routes with lifetimes, PMTU entries (minimum 1280), redirects. |
+| `ip6_frag.c` | Reassembly (RFC 5722: overlaps drop the datagram; RFC 7112: the whole header chain in the first fragment) and fragmentation with random identifiers (RFC 7739). |
+| `icmp6.c` | Echo, errors with per-destination token buckets plus a global limit (packet too big exempt), error delivery to transports, ND/MLD dispatch. |
+| `dhcp6.c` | Stateless DHCPv6 client (Information-request when an RA has O or M). |
+| `inet.c` | The family-independent glue the transports use. |
+
+**One address type in the transports.** TCP, UDP and raw keep every
+address as `rt_in6_addr`, IPv4 as IPv4-mapped (`::ffff:a.b.c.d`), the
+way dual-stack BSD and Linux sockets work. `inet.c` routes, sums and
+sends by the destination's family (`rt_inet_route`, `rt_inet_pseudo`,
+`rt_inet_output`), and its bind rules let an `AF_INET6` socket on `::`
+also own the IPv4 port unless `IPV6_V6ONLY` is set. The socket layer
+converts `sockaddr_in`/`sockaddr_in6` by the socket's domain, so the
+protocols see one normalized `rt_sockaddr_in6`. IPv4 packets come out
+byte for byte as before: the IPv4 paths still go through `ip.c`
+unchanged and only the PCB keys widened.
+
+**ABI choices** (documented in `AMIGA.md`, "IPv6"): `AF_INET6` 28 and the
+`IPV6_*`/`AI_*` numbers are the KAME/BSD values, which is what the Miami
+SDK shipped (its `MiamiSupportsIPV6()` never returned TRUE, but programs
+built against it use those numbers); `sockaddr_in6` is the 28-byte RFC
+3493 layout, and 24-byte RFC 2133 callers are accepted and served.
+`IPV6_V6ONLY` defaults to 0 (RFC 3493, Linux), so dual-stack servers
+work out of the box; FreeBSD's default of 1 is one sysctl away.
+
+**Drivers.** `nif->mcast(nif, mac, join)` programs the link-layer
+filter for the groups IPv6 joins; SANA-II queues the requests for the
+Riptide process (the core may call from any task under the lock), MNI
+calls the driver directly, the host TAP driver keeps its own filter.
+
+**Testing.** The build machine's kernel has no IPv6, so interop runs
+against gVisor's netstack (`tests/interop/gvpeer`, Go) attached to the
+simulated wire: it plays the router (hand-built RAs, RDNSS, DHCPv6) and
+serves TCP/UDP/DNS; `t_ip6_gvisor` checks SLAAC, ND, ping, TCP both ways
+at MTU 1500 and 1280, UDP, DNS (AAAA, PTR) and DHCPv6, and prints TCP
+throughput over IPv6 next to IPv4 on the same link. `t_tap` repeats the
+interop against the Linux kernel over TAP where the kernel has IPv6.
+`t_ip6_unit` and `t_ip6_loop` cover the protocol logic and a fuzzer
+(run them under `SAN=1`).
