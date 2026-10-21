@@ -112,7 +112,7 @@ static void tap_rx(void *arg)
 	int i;
 
 	for (i = 0; i < TAP_RX_BURST; i++) {
-		struct rt_buf *b = rt_buf_alloc(RT_BUF_HEADROOM, room);
+		struct rt_buf *b = rt_buf_alloc(RT_BUF_HEADROOM - ETH_HLEN, room);  /* IP header aligned after the pull */
 		u8 src[6];
 		u16 et, flags = 0;
 		ssize_t n;
