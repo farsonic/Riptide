@@ -68,14 +68,14 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 	if (!rt_strcasecmp(argv[0], "interface")) {
 		const char *dev = NULL, *mni = NULL, *opts = NULL, *v;
 		unsigned long unit = 0;
-		int mtu = 0, raw = 0, r;
+		int mtu = 0, raw = 0, reads = 0, r;
 
 		if (argc == 3 && (!rt_strcasecmp(argv[2], "delete") || !rt_strcasecmp(argv[2], "del") ||
 		                  !rt_strcasecmp(argv[2], "remove")))
 			return amiga_if_delete(argv[1], err, errlen);
 
 		if (argc < 3) {
-			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [raw] [options=TEXT]");
+			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] [raw] [options=TEXT]");
 			return -RT_EINVAL;
 		}
 		if (strlen(argv[1]) >= RT_IFNAMSIZ) {
@@ -95,6 +95,8 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 				unit = rt_strtoul(v, NULL, 0);
 			else if ((v = kv(argv[i], "mtu")) != NULL)
 				mtu = (int)rt_strtoul(v, NULL, 0);
+			else if ((v = kv(argv[i], "reads")) != NULL)
+				reads = (int)rt_strtoul(v, NULL, 0);
 			else if ((v = kv(argv[i], "options")) != NULL)
 				opts = v;
 			else if (!rt_strcasecmp(argv[i], "raw"))
@@ -112,7 +114,7 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 		 * device; drop the configuration lock meanwhile. */
 		rt_unlock();
 		if (dev)
-			r = sana2_open_if(argv[1], dev, (ULONG)unit, mtu, raw, err, errlen);
+			r = sana2_open_if(argv[1], dev, (ULONG)unit, mtu, raw, reads, err, errlen);
 		else
 			r = mni_open_if(argv[1], mni, (ULONG)unit, opts, mtu, err, errlen);
 		rt_lock();
@@ -139,6 +141,24 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 				return -RT_EINVAL;
 			}
 		}
+		return 0;
+	}
+	if (!rt_strcasecmp(argv[0], "priority")) {
+		/* priority N: exec priority of the Riptide process (the config is
+		 * always executed by that process) */
+		long pri;
+		const char *e;
+
+		if (argc != 2) {
+			rt_snprintf(err, errlen, "usage: priority N   (-128..127, default %d)", AMIGA_STACK_PRI);
+			return -RT_EINVAL;
+		}
+		pri = argv[1][0] == '-' ? -(long)rt_strtoul(argv[1] + 1, &e, 0) : (long)rt_strtoul(argv[1], &e, 0);
+		if (*e || pri < -128 || pri > 127) {
+			rt_snprintf(err, errlen, "priority: bad value '%s'", argv[1]);
+			return -RT_EINVAL;
+		}
+		SetTaskPri(FindTask(NULL), pri);
 		return 0;
 	}
 	if (!rt_strcasecmp(argv[0], "compat")) {
@@ -479,11 +499,25 @@ int amiga_stack_start(const char *config, int selftest)
 	int r;
 
 	rt_sock_async_hook = amiga_async_hook;
+	/* Above ordinary programs (0) so received frames are taken off the
+	 * driver promptly; 'priority N' in the config changes it. */
+	if (!selftest)
+		SetTaskPri(FindTask(NULL), AMIGA_STACK_PRI);
 	r = rt_init();
 	if (r < 0) {
 		amiga_out("Riptide: initialisation failed: %s\n", rt_strerror(-r));
 		return -1;
 	}
+	/* Amiga defaults, before the config so it can override them: SANA-II
+	 * drivers drop frames that arrive while no read is queued, and the
+	 * receive window bounds how large a burst a sender may deliver, so
+	 * keep it near what the queued reads can absorb (48 x 1.5 KB). A
+	 * 64 KB window still allows ~200 KB/s at 300 ms RTT, more than a
+	 * 68020 processes. */
+	rt_lock();
+	rt_sysctl_set_text("net.inet.tcp.recvspace", "32768");
+	rt_sysctl_set_text("net.inet.tcp.rmem_max", "65536");
+	rt_unlock();
 	if (amiga_load_config(config) < 0 && config)
 		return -1;
 	if (selftest)

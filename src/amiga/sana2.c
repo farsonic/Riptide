@@ -15,7 +15,13 @@
  */
 #include "amiga_priv.h"
 
-#define S2_READS_IP   8
+/* Read requests queued per interface. A TCP sender (e.g. slirp in an
+ * emulator, or a fast host on the LAN) delivers a whole window as one
+ * burst; any frame that arrives while no read is queued is dropped by the
+ * driver, so this must cover a typical burst. 'reads=N' overrides. */
+#define S2_READS_IP_DEF 48
+#define S2_READS_IP_MIN 4
+#define S2_READS_IP_MAX 128
 #define S2_READS_ARP  4
 #define S2_MAX_WRITES 32
 #define S2_RX_HEADROOM 64
@@ -169,6 +175,7 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 	struct rt_buf *b = r->b;
 	u16 type = (u16)r->io.ios2_PacketType, flags = 0;
 	const u8 *src = r->io.ios2_SrcAddr;
+	u8 srcbuf[6];
 
 	r->busy = 0;
 	if (r->io.ios2_Req.io_Error) {
@@ -207,10 +214,18 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 		si->ai.online = 1;
 		nif->flags |= RT_IFF_RUNNING;
 	}
+	/* Give the driver a fresh buffer before processing this frame:
+	 * protocol input can take a while on a slow CPU, and frames that
+	 * arrive meanwhile need a queued read or they are lost. The request
+	 * is reused at once, so copy the source address out of it first. */
+	if (src && src != srcbuf) {
+		memcpy(srcbuf, src, 6);
+		src = srcbuf;
+	}
 	r->b = NULL;
+	s2_submit_read(si, r);
 	b->netif = nif;
 	rt_netif_input(nif, b, type, si->ether ? src : NULL, flags);
-	s2_submit_read(si, r);
 }
 
 static void s2_write_done(struct s2if *si, struct s2req *r)
@@ -383,7 +398,7 @@ static void sana2_close(struct amiga_if *ai)
 	rt_free(si);
 }
 
-int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw,
+int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw, int reads,
                   char *err, u32 errlen)
 {
 	struct s2if *si;
@@ -491,19 +506,22 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	}
 	if (si->ai.online)
 		nif->flags |= RT_IFF_RUNNING;
-	nreads = S2_READS_IP + (si->ether ? S2_READS_ARP : 0);
+	if (reads <= 0)
+		reads = S2_READS_IP_DEF;
+	reads = RT_MAX(S2_READS_IP_MIN, RT_MIN(reads, S2_READS_IP_MAX));
+	nreads = reads + (si->ether ? S2_READS_ARP : 0);
 	for (i = 0; i < nreads; i++) {
 		r = s2_newreq(si, REQ_READ);
 		if (!r)
 			break;
-		r->io.ios2_PacketType = i < S2_READS_IP ? RT_ETH_P_IP : RT_ETH_P_ARP;
+		r->io.ios2_PacketType = i < reads ? RT_ETH_P_IP : RT_ETH_P_ARP;
 		s2_submit_read(si, r);
 	}
 	si->ai.next = amiga_ifs;
 	amiga_ifs = &si->ai;
 	rt_unlock();
-	rt_log(RT_LOG_INFO, "%s: %s unit %lu, %s, mtu %u", name, device, (unsigned long)unit,
-	       si->ether ? "Ethernet" : "point-to-point", (unsigned)nif->mtu);
+	rt_log(RT_LOG_INFO, "%s: %s unit %lu, %s, mtu %u, %d reads", name, device, (unsigned long)unit,
+	       si->ether ? "Ethernet" : "point-to-point", (unsigned)nif->mtu, reads);
 	return 0;
 
 nomem:

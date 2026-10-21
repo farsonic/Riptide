@@ -18,6 +18,7 @@
 258 struct Node* RemHead(struct List* list a0)
 276 struct Node* FindName(struct List* list a0, CONST_STRPTR name a1)
 294 struct Task* FindTask(CONST_STRPTR name a1)
+300 BYTE SetTaskPri(struct Task* task a1, LONG priority d0)
 306 ULONG SetSignal(ULONG newSignals d0, ULONG signalSet d1)
 318 ULONG Wait(ULONG signalSet d0)
 324 void Signal(struct Task* task a1, ULONG signalSet d0)

@@ -54,6 +54,8 @@ static int data_fd = -1;            /* passive mode: connected socket */
 static int verbose, debug, passive = 1, use_epsv = 1, hashmark, prompting = 1;
 static int interactive, autologin = 1, ascii_mode, show_replies, show_stats;
 static u32 hashbytes = 1024, timeout_s = 60, restart_point, test_break;
+static int stale_replies;     /* abort replies still expected from the server */
+static void drain_stale(void);
 
 /* replies */
 static int code;                    /* code of the last reply */
@@ -341,8 +343,8 @@ static int get_reply_t(u32 ms, int fatal)
 	for (;;) {
 		r = ctl_line(l, LINESZ, ms);
 		if (r < 0) {
-			if (r == -3 && !fatal)
-				return 0;
+			if ((r == -3 || r == -2) && !fatal)
+				return 0;      /* non-fatal wait: timeout or Ctrl-C */
 			cl_flush();
 			if (r == -1)
 				cl_puts("421 Service not available, remote server has closed connection.\n");
@@ -414,6 +416,8 @@ static int command(const char *fmt, ...)
 		code = -1;
 		return -1;
 	}
+	if (stale_replies)
+		drain_stale();
 	va_start(ap, fmt);
 	rt_vsnprintf(cmdbuf, sizeof(cmdbuf) - 2, fmt, ap);
 	va_end(ap);
@@ -638,9 +642,32 @@ static void abort_remote(void)
 		cl_puts("---> ABOR\n");
 	if (send_ctl("ABOR\r\n", 6) < 0)
 		return;
-	if (get_reply() == 421 && ctl < 0)
+	/* Servers answer an abort with two replies (426 + 226, or 226 +
+	 * 225/226). Some take long or never send the second one, so neither
+	 * a slow server nor another Ctrl-C closes the session: replies that
+	 * come later are skipped before the next command. */
+	stale_replies = 2;
+	if (get_reply_t(15000, 0) == 0) {
+		if (ctl >= 0)
+			cl_puts("No reply to ABOR yet; continuing (late replies will be skipped).\n");
 		return;
-	get_reply_t(10000, 0);
+	}
+	if (ctl < 0)
+		return;
+	stale_replies = 1;
+	if (get_reply_t(5000, 0) != 0)
+		stale_replies = 0;
+}
+
+/* Swallow replies left over from an abort before sending a new command. */
+static void drain_stale(void)
+{
+	while (stale_replies > 0 && ctl >= 0) {
+		if (get_reply_t(300, 0) == 0)
+			break;             /* nothing (more) pending */
+		stale_replies--;
+	}
+	stale_replies = 0;
 }
 
 static void print_stats(u64 bytes, u64 us, const char *what)
