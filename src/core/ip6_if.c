@@ -1107,18 +1107,18 @@ int rt_ip6_ifenable(struct rt_netif *nif, int on)
 
 /* ---- source address selection (RFC 6724 5) ---- */
 
-struct policy { u8 prefix[16]; u8 plen, prec, label; };
+struct policy { rt_in6_addr prefix; u8 plen, prec, label; };
 
 static const struct policy policy_table[] = {
-	{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 128, 50, 0 },
-	{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 }, 96, 35, 4 },
-	{ { 0x20, 0x01, 0, 0 }, 32, 5, 5 },
-	{ { 0x20, 0x02 }, 16, 30, 2 },
-	{ { 0x3f, 0xfe }, 16, 1, 12 },
-	{ { 0xfe, 0xc0 }, 10, 1, 11 },
-	{ { 0xfc }, 7, 3, 13 },
-	{ { 0 }, 96, 1, 3 },
-	{ { 0 }, 0, 40, 1 },
+	{ { { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } }, 128, 50, 0 },
+	{ { { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0 } }, 96, 35, 4 },
+	{ { { 0x20, 0x01, 0, 0 } }, 32, 5, 5 },
+	{ { { 0x20, 0x02 } }, 16, 30, 2 },
+	{ { { 0x3f, 0xfe } }, 16, 1, 12 },
+	{ { { 0xfe, 0xc0 } }, 10, 1, 11 },
+	{ { { 0xfc } }, 7, 3, 13 },
+	{ { { 0 } }, 96, 1, 3 },
+	{ { { 0 } }, 0, 40, 1 },
 };
 
 static const struct policy *policy_of(const rt_in6_addr *a)
@@ -1128,7 +1128,7 @@ static const struct policy *policy_of(const rt_in6_addr *a)
 
 	for (i = 0; i < RT_ARRAY_SIZE(policy_table); i++) {
 		const struct policy *p = &policy_table[i];
-		if (p->plen > best->plen && rt_in6_prefix_eq(a, (const rt_in6_addr *)(const void *)p->prefix, p->plen))
+		if (p->plen > best->plen && rt_in6_prefix_eq(a, &p->prefix, p->plen))
 			best = p;
 	}
 	return best;

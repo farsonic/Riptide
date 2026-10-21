@@ -25,6 +25,9 @@ void rt_host_stop(void);
 int  rt_host_register_fd(int fd, void (*rx)(void *arg), void *arg);
 void rt_host_unregister_fd(int fd);
 
+/* Tests: move rt_now_ms()/rt_now_us() forward by ms (lifetimes, timers). */
+void rt_host_advance_clock(u32 ms);
+
 /* Memory accounting of rt_malloc() (outstanding blocks and bytes). */
 void rt_host_mem_stats(u32 *blocks, u32 *bytes);
 

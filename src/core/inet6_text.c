@@ -74,6 +74,8 @@ static int pton_range(const char *s, const char *end, rt_in6_addr *out)
 				p += 2;
 				if (p == end)
 					break;
+				if (*p == ':')
+					return -1;  /* ":::" */
 				continue;
 			}
 			if (n == 0 && gap < 0)
