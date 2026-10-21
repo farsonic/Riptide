@@ -369,7 +369,6 @@ static void ip6_forward(struct rt_netif *inif, struct rt_buf *b)
 	b->flags = 0;
 	b->netif = NULL;
 	rt_ip6stat.OutForwDatagrams++;
-	(void)inif;
 	ip6_send_link(nh.netif, b, &nh.nexthop);
 	return;
 drop:

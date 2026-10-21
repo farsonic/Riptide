@@ -27,6 +27,7 @@
 
 #include "rt/riptide.h"
 #include "rt/rt_host.h"
+#include "../src/core/sock_internal.h"
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; \
@@ -357,6 +358,41 @@ static void *udp_server(void *p)
 	return NULL;
 }
 
+/* the resolver over IPv6 to the RDNSS server, then DHCPv6 (O flag) */
+static void test_dns_dhcp6(void)
+{
+	rt_in6_addr a[4], dns[8];
+	u32 v4[4];
+	char name[128], *ans;
+	int i, n, found, t;
+
+	CHECK(rt_resolve_name6("v6.test", a, 4, name, sizeof(name)) == 1 &&
+	      rt_in6_eq(&a[0], &(rt_in6_addr){ .b = { 0x20, 1, 0xd, 0xb8, 0, 1, [15] = 1 } }));
+	CHECK(rt_resolve_name("v4.test", v4, 4, NULL, 0) == 1 && v4[0] == rt_htonl(0xc0000201u));
+	CHECK(rt_resolve_name6("v4.test", a, 4, NULL, 0) == -RT_NO_DATA);
+	CHECK(rt_resolve_name6("both.test", a, 4, NULL, 0) == 1 &&
+	      rt_resolve_name("both.test", v4, 4, NULL, 0) == 1);
+	CHECK(rt_resolve_name6("nosuch.test", a, 4, NULL, 0) == -RT_HOST_NOT_FOUND);
+	a[0] = (rt_in6_addr){ .b = { 0x20, 1, 0xd, 0xb8, 0, 1, [15] = 1 } };
+	CHECK(rt_resolve_addr6(&a[0], name, sizeof(name)) == 0 && !strcmp(name, "gv.test"));
+
+	ans = peer_cmd("ra other");
+	CHECK(!strcmp(ans, "ok ra"));
+	for (t = 0, found = 0; t < 60 && !found; t++) {
+		usleep(100000);
+		rt_lock();
+		n = rt_dns_get_servers6(dns, NULL, NULL, 8);
+		for (i = 0; i < n && i < 8; i++)
+			if (dns[i].b[14] == 0x53 && dns[i].b[15] == 0x53)
+				found = 1;
+		rt_unlock();
+	}
+	CHECK(found);
+	rt_lock();
+	CHECK(!strcmp(rt_dns_search_domain(), "dhcp.example"));
+	rt_unlock();
+}
+
 static void test_peer_client(void)
 {
 	struct rt_sockaddr_in6 a = sa6("::", 8000, 0);
@@ -477,6 +513,7 @@ int main(int argc, char **argv)
 	test_tcp(4u << 20, "MTU 1500");
 	test_udp();
 	test_peer_client();
+	test_dns_dhcp6();
 
 	/* RA lowers the link MTU: new connections use MSS 1280 - 60 - 12 */
 	ans = peer_cmd("ra mtu 1280");

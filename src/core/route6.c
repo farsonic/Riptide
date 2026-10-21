@@ -121,7 +121,6 @@ static void r6_gc(int force)
 
 void route6_slowtimo(u32 now_s)
 {
-	(void)now_s;
 	r6_gc(0);
 }
 

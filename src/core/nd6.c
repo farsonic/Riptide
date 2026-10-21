@@ -832,7 +832,6 @@ void nd6_input(struct rt_netif *nif, struct rt_buf *b, const struct rt_ip6hdr *i
 		redirect_input(nif, ip6, m, len);
 		break;
 	}
-	(void)b;
 }
 
 /* ---- administration ---- */

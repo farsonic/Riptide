@@ -6,10 +6,16 @@
 // by hand: netstack only implements the host side of NDP) and owns
 // fe80::1 and 2001:db8:1::1/64. Services: TCP echo on 7, TCP discard on 9,
 // TCP source of N pattern bytes on 19 (the first 4 bytes received give N,
-// big-endian), UDP echo on 7; ICMPv6 echo is answered by netstack itself.
+// big-endian), UDP echo on 7; ICMPv6 echo is answered by netstack itself;
+// a DNS server on [2001:db8:1::53]:53 (UDP) with a few fixed records
+// (v6.test AAAA, v4.test A, both.test A+AAAA, PTR of 2001:db8:1::1); a
+// stateless DHCPv6 server (Reply to Information-request: DNS server
+// 2001:db8:1::5353, domain dhcp.example).
 //
 // Commands on stdin (one per line), answers on stdout:
-//   ra [mtu N] [lifetime S] [noprefix]  send an RA (prefix 2001:db8:1::/64, RDNSS 2001:db8:1::53)
+//   ra [mtu N] [lifetime S] [noprefix] [other]
+//                                       send an RA (prefix 2001:db8:1::/64, RDNSS
+//                                       2001:db8:1::53; "other" sets the O flag)
 //   connect ADDR PORT BYTES             TCP to Riptide: send BYTES of pattern, half-close,
 //                                       expect them echoed: "ok N" / "fail ..."
 //   ping ADDR                           ICMPv6 echo to Riptide: "ok" / "fail ..."
@@ -87,9 +93,13 @@ func csum(b []byte, sum uint32) uint16 {
 	return ^uint16(sum)
 }
 
-func sendRA(mtu uint32, lifetime uint16, prefix bool) {
+func sendRA(mtu uint32, lifetime uint16, prefix bool, other bool) {
 	var m []byte
-	m = append(m, 134, 0, 0, 0, 64, 0)
+	flags := byte(0)
+	if other {
+		flags = 0x40
+	}
+	m = append(m, 134, 0, 0, 0, 64, flags)
 	m = binary.BigEndian.AppendUint16(m, lifetime)
 	m = append(m, 0, 0, 0, 0, 0, 0, 0, 0) // reachable, retrans
 	m = append(m, 1, 1)                   // SLLA
@@ -341,6 +351,134 @@ func cmdUDP(addr string, port uint16, n int) {
 	say("ok %d", k)
 }
 
+// ---- DNS (just enough for the resolver tests) ----
+
+func dnsName(m []byte, off int) (string, int) {
+	var parts []string
+	for off < len(m) {
+		l := int(m[off])
+		if l == 0 {
+			return strings.Join(parts, "."), off + 1
+		}
+		if l&0xc0 != 0 || off+1+l > len(m) {
+			return "", -1
+		}
+		parts = append(parts, string(m[off+1:off+1+l]))
+		off += 1 + l
+	}
+	return "", -1
+}
+
+func dnsServer() {
+	c, err := gonet.DialUDP(st, &tcpip.FullAddress{NIC: 1, Addr: dnsAddr, Port: 53}, nil, ipv6.ProtocolNumber)
+	if err != nil {
+		say("fail dns %v", err)
+		os.Exit(1)
+	}
+	v6 := glAddr.As16()
+	ptr := ""
+	for i := 15; i >= 0; i-- {
+		ptr += fmt.Sprintf("%x.%x.", v6[i]&15, v6[i]>>4)
+	}
+	ptr += "ip6.arpa"
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, a, err := c.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := buf[:n]
+			if n < 12 {
+				continue
+			}
+			name, off := dnsName(q, 12)
+			if off < 0 || off+4 > n {
+				continue
+			}
+			qtype := binary.BigEndian.Uint16(q[off:])
+			resp := append([]byte{}, q[:off+4]...)
+			resp[2] = 0x81
+			resp[3] = 0x80
+			var answers [][]byte
+			rr := func(t uint16, data []byte) {
+				r := []byte{0xc0, 12}
+				r = binary.BigEndian.AppendUint16(r, t)
+				r = append(r, 0, 1, 0, 0, 0, 60)
+				r = binary.BigEndian.AppendUint16(r, uint16(len(data)))
+				answers = append(answers, append(r, data...))
+			}
+			lname := strings.ToLower(name)
+			switch {
+			case qtype == 28 && (lname == "v6.test" || lname == "both.test"):
+				rr(28, v6[:])
+			case qtype == 1 && (lname == "v4.test" || lname == "both.test"):
+				rr(1, []byte{192, 0, 2, 1})
+			case qtype == 12 && lname == ptr:
+				rr(12, []byte("\x02gv\x04test\x00"))
+			case lname != "v6.test" && lname != "v4.test" && lname != "both.test" && lname != ptr:
+				resp[3] = 0x83 // NXDOMAIN
+			}
+			binary.BigEndian.PutUint16(resp[6:], uint16(len(answers)))
+			binary.BigEndian.PutUint16(resp[8:], 0)
+			binary.BigEndian.PutUint16(resp[10:], 0)
+			for _, r := range answers {
+				resp = append(resp, r...)
+			}
+			c.WriteTo(resp, a)
+		}
+	}()
+}
+
+// ---- stateless DHCPv6 server (RFC 8415 18.3.6) ----
+
+func dhcp6Server() {
+	if terr := st.JoinGroup(ipv6.ProtocolNumber, 1, netip("ff02::1:2")); terr != nil {
+		say("fail join %v", terr)
+		os.Exit(1)
+	}
+	c, err := gonet.DialUDP(st, &tcpip.FullAddress{NIC: 1, Port: 547}, nil, ipv6.ProtocolNumber)
+	if err != nil {
+		say("fail dhcp6 %v", err)
+		os.Exit(1)
+	}
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, a, err := c.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if n < 4 || buf[0] != 11 {
+				continue
+			}
+			r := []byte{7, buf[1], buf[2], buf[3]}
+			// echo the client id, add a server id (DUID-LL)
+			for off := 4; off+4 <= n; {
+				code := binary.BigEndian.Uint16(buf[off:])
+				l := int(binary.BigEndian.Uint16(buf[off+2:]))
+				if off+4+l > n {
+					break
+				}
+				if code == 1 {
+					r = append(r, buf[off:off+4+l]...)
+				}
+				off += 4 + l
+			}
+			r = append(r, 0, 2, 0, 10, 0, 3, 0, 1)
+			r = append(r, mac...)
+			d := netip("2001:db8:1::5353").As16()
+			r = append(r, 0, 23, 0, 16)
+			r = append(r, d[:]...)
+			dom := []byte("\x04dhcp\x07example\x00")
+			r = append(r, 0, 24, 0, byte(len(dom)))
+			r = append(r, dom...)
+			r = append(r, 0, 32, 0, 4, 0, 0, 0x0e, 0x10) // refresh 3600 s
+			c.WriteTo(r, a)
+		}
+	}()
+}
+
 type bytesReader struct{ b []byte }
 
 func (r *bytesReader) Read(p []byte) (int, error) {
@@ -419,7 +557,7 @@ func main() {
 	for _, a := range []struct {
 		addr tcpip.Address
 		plen int
-	}{{llAddr, 64}, {glAddr, 64}} {
+	}{{llAddr, 64}, {glAddr, 64}, {dnsAddr, 128}} {
 		pa := tcpip.ProtocolAddress{Protocol: ipv6.ProtocolNumber,
 			AddressWithPrefix: tcpip.AddressWithPrefix{Address: a.addr, PrefixLen: a.plen}}
 		if terr := st.AddProtocolAddress(1, pa, stack.AddressProperties{}); terr != nil {
@@ -435,6 +573,8 @@ func main() {
 	serveTCP(9, discard)
 	serveTCP(19, source)
 	udpEcho()
+	dnsServer()
+	dhcp6Server()
 	_ = buffer.Buffer{}
 	say("ready")
 
@@ -449,6 +589,7 @@ func main() {
 			var m uint64
 			lt := uint64(1800)
 			prefix := true
+			other := false
 			for i := 1; i < len(f); i++ {
 				switch f[i] {
 				case "mtu":
@@ -459,9 +600,11 @@ func main() {
 					lt, _ = strconv.ParseUint(f[i], 10, 16)
 				case "noprefix":
 					prefix = false
+				case "other":
+					other = true
 				}
 			}
-			sendRA(uint32(m), uint16(lt), prefix)
+			sendRA(uint32(m), uint16(lt), prefix, other)
 		case "connect":
 			p, _ := strconv.Atoi(f[2])
 			n, _ := strconv.ParseUint(f[3], 10, 32)
