@@ -7,6 +7,9 @@ the modern Linux TCP stack. This is simply providing an external experience
 of the interfaces used (bsdsocket.library etc) and not reusing any existing 
 Amiga based code. 
 
+Note: This is a hobby project and it is suggested you use a time tested product
+if you want stability etc. 
+
 <a href="https://buymeacoffee.com/farsonic" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="217" height="60"></a>
 
 * **Compatible:** publishes `bsdsocket.library` 4 (AmiTCP API, 46 LVOs),
