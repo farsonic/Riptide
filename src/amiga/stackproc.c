@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
+#include "rt/rt_capture.h"
 
 #define DEFAULT_CONFIG "ENV:Riptide/riptide.conf"
 #define DEFAULT_HOSTS  "ENV:Riptide/hosts"
@@ -670,6 +671,9 @@ void amiga_stack_stop(void)
 		DeleteMsgPort(pub_port);
 		pub_port = NULL;
 	}
+	rt_lock();
+	rt_capture_shutdown();     /* saves to its file= first */
+	rt_unlock();
 	for (ai = amiga_ifs; ai; ai = next) {
 		next = ai->next;
 		ai->close(ai);

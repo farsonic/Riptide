@@ -2,17 +2,19 @@
  * Riptide - CLI entry point.
  *
  *   Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
+ *           [CAPTURE start|stop|status|save FILE|clear ...]
  *
  * Without QUIT/STATUS it starts the stack and stays in this process (start
  * it with "Run >NIL: Riptide"). QUIT and STATUS talk to a running instance
- * through the public message port "RIPTIDE". BENCH times the checksum and
+ * through the public message port "RIPTIDE", as does CAPTURE (packet
+ * capture, the rest of the line is the "capture" command). BENCH times the checksum and
  * copy routines (bench.c) and exits.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
 
-#define TEMPLATE "CONFIG/K,DEBUG/N,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S"
-enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_COUNT };
+#define TEMPLATE "CONFIG/K,DEBUG/N,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,CAPTURE/K/F"
+enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_CAPTURE, ARG_COUNT };
 
 const char riptide_version_tag[] = "$VER: Riptide " RIPTIDE_VERSION_STRING " (" RIPTIDE_DATE ")";
 
@@ -21,7 +23,8 @@ static void put(const char *s)
 	PutStr((CONST_STRPTR)s);
 }
 
-static int send_command(ULONG cmd)
+/* line: the command line of RTCMD_COMMAND, else NULL */
+static int send_command(ULONG cmd, const char *line)
 {
 	struct MsgPort *reply, *port;
 	struct RiptideMsg *m;
@@ -40,6 +43,8 @@ static int send_command(ULONG cmd)
 	m->msg.mn_ReplyPort = reply;
 	m->msg.mn_Length = sizeof(*m);
 	m->cmd = cmd;
+	if (line)
+		rt_snprintf(m->text, sizeof(m->text), "capture %s", line);
 	m->reply = (STRPTR)out;
 	m->replysize = 8192;
 	Forbid();
@@ -87,8 +92,13 @@ static int riptide_main(void)
 		PrintFault(IoErr(), (CONST_STRPTR)"Riptide");
 		return 10;
 	}
+	if (args[ARG_CAPTURE]) {
+		rc = send_command(RTCMD_COMMAND, (const char *)args[ARG_CAPTURE]);
+		FreeArgs(rda);
+		return rc;
+	}
 	if (args[ARG_QUIT] || args[ARG_STATUS]) {
-		rc = send_command(args[ARG_QUIT] ? RTCMD_QUIT : RTCMD_STATUS);
+		rc = send_command(args[ARG_QUIT] ? RTCMD_QUIT : RTCMD_STATUS, NULL);
 		FreeArgs(rda);
 		return rc;
 	}

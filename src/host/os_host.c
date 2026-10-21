@@ -387,3 +387,20 @@ void rt_waitq_wake(struct rt_waitq *wq)
 	for (e = wq->head; e; e = e->next)
 		sleeper_wake(e->sleeper);
 }
+
+/* ---- files (packet captures) ---- */
+
+void *rt_file_create(const char *path)
+{
+	return fopen(path, "wb");
+}
+
+int rt_file_write(void *f, const void *p, u32 n)
+{
+	return fwrite(p, 1, n, f) == n ? 0 : -1;
+}
+
+int rt_file_close(void *f)
+{
+	return fclose(f) == 0 ? 0 : -1;
+}

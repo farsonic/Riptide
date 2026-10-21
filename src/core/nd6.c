@@ -199,7 +199,7 @@ static void nd_xmit(struct rt_netif *nif, struct rt_buf *b, const rt_in6_addr *s
 	}
 	nif->stats.opackets++;
 	nif->stats.obytes += b->len;
-	if (nif->link_output(nif, b, nif->type == RT_IFT_ETHER ? hw : NULL, RT_ETH_P_IPV6) < 0)
+	if (rt_netif_xmit(nif, b, nif->type == RT_IFT_ETHER ? hw : NULL, RT_ETH_P_IPV6) < 0)
 		nif->stats.oerrors++;
 }
 
@@ -335,7 +335,7 @@ static void nd_xmit_data(struct nd6_entry *e, struct rt_buf *b)
 	struct rt_netif *nif = e->nif;
 
 	e->used_ms = rt_now_ms();
-	if (nif->link_output(nif, b, e->hw, RT_ETH_P_IPV6) < 0)
+	if (rt_netif_xmit(nif, b, e->hw, RT_ETH_P_IPV6) < 0)
 		nif->stats.oerrors++;
 }
 

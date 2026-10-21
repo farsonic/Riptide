@@ -1029,6 +1029,8 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 			return cfg_err(err, errlen, r, "usage: cpu routines auto|generic|020|040|060%s", NULL);
 		return 0;
 	}
+	if (!strcmp(k, "capture"))
+		return rt_capture_command(argc, argv, err, errlen);
 	if (!strcmp(k, "ifconfig"))
 		return cfg_ifconfig(argc, argv, err, errlen);
 	if (!strcmp(k, "ipv6"))

@@ -566,3 +566,31 @@ void amiga_os_fini(void)
 	clock_port = NULL;
 	TimerBase = NULL;
 }
+
+/* ---- files (packet captures) ---- */
+
+/* Only a process may call dos.library: client tasks get NULL. */
+void *rt_file_create(const char *path)
+{
+	struct Process *me = (struct Process *)FindTask(NULL);
+	APTR win;
+	BPTR fh;
+
+	if (me->pr_Task.tc_Node.ln_Type != NT_PROCESS)
+		return NULL;
+	win = me->pr_WindowPtr;
+	me->pr_WindowPtr = (APTR)-1;     /* no "insert volume" requester */
+	fh = Open((CONST_STRPTR)path, MODE_NEWFILE);
+	me->pr_WindowPtr = win;
+	return fh ? (void *)fh : NULL;
+}
+
+int rt_file_write(void *f, const void *p, u32 n)
+{
+	return Write((BPTR)f, (APTR)p, (LONG)n) == (LONG)n ? 0 : -1;
+}
+
+int rt_file_close(void *f)
+{
+	return Close((BPTR)f) ? 0 : -1;
+}

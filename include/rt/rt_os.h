@@ -38,6 +38,12 @@ void  rt_free(void *p);           /* rt_free(NULL) is a no-op */
 u32  rt_random32(void);
 void rt_random_bytes(void *buf, size_t n);
 
+/* Files, for debug output (packet captures). Called from the stack
+ * thread (on AmigaOS a process), without the lock. NULL or -1 on error. */
+void *rt_file_create(const char *path);
+int   rt_file_write(void *f, const void *p, u32 n);
+int   rt_file_close(void *f);
+
 /* Logging. level: 0=err 1=warn 2=info 3=debug */
 #define RT_LOG_ERR   0
 #define RT_LOG_WARN  1

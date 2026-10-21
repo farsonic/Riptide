@@ -22,7 +22,8 @@
  *                  "ifconfig eth0 mtu 1400", "dhcp eth0 renew",
  *                  "nameserver del 10.0.2.3", "arp add IP MAC",
  *                  "interface eth1 device=a2065.device unit=0",
- *                  "interface eth1 delete", "sysctl -a".
+ *                  "interface eth1 delete", "sysctl -a",
+ *                  "capture start iface=eth0", "capture save RAM:x.pcap".
  *
  * Reply: result is 0 or a positive errno (BSD numbering); the text reply
  * (output, or the error message) goes to 'reply' when the client supplies

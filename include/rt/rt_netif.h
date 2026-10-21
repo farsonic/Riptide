@@ -119,6 +119,10 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
  * unresolved). Consumes b. */
 int  rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop);
 
+/* Every transmission goes through here (packet capture), never through
+ * nif->link_output() directly. Consumes b. */
+int  rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype);
+
 /* The loopback interface "lo0" (127.0.0.1/8), created by rt_init(). */
 extern struct rt_netif *rt_loopback_if;
 
