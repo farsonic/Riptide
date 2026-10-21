@@ -166,7 +166,7 @@ static void arp_send(struct rt_netif *nif, u16 op, const u8 *dst, u32 sip,
 	memcpy(p + 24, &tip, 4);
 	nif->stats.opackets++;
 	nif->stats.obytes += b->len;
-	if (nif->link_output(nif, b, dst, RT_ETH_P_ARP) < 0)
+	if (rt_netif_xmit(nif, b, dst, RT_ETH_P_ARP) < 0)
 		nif->stats.oerrors++;
 }
 
@@ -184,7 +184,7 @@ static void arp_xmit(struct arp_entry *e, struct rt_buf *b)
 	struct rt_netif *nif = e->nif;
 
 	e->used_ms = rt_now_ms();
-	if (nif->link_output(nif, b, e->hw, RT_ETH_P_IP) < 0)
+	if (rt_netif_xmit(nif, b, e->hw, RT_ETH_P_IP) < 0)
 		nif->stats.oerrors++;
 }
 
@@ -252,7 +252,7 @@ int rt_arp_resolve_output(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
 
 	if (nif->flags & RT_IFF_NOARP) {
 		/* no resolution possible: broadcast at link level */
-		return nif->link_output(nif, b, NULL, RT_ETH_P_IP);
+		return rt_netif_xmit(nif, b, NULL, RT_ETH_P_IP);
 	}
 	if (!e) {
 		e = arp_create(nif, nexthop);

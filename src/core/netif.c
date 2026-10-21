@@ -214,6 +214,8 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
 	nif->stats.ibytes += b->len;
 	if (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST))
 		nif->stats.imcasts++;
+	if (rt_capture_on)
+		rt_capture_frame(nif, b, RT_CAP_IN, ethertype, srchw, flags);
 	if (!(nif->flags & RT_IFF_UP)) {
 		nif->stats.iqdrops++;
 		rt_buf_free(b);
@@ -244,6 +246,13 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
 	rt_buf_free(b);
 }
 
+int rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
+{
+	if (rt_capture_on)
+		rt_capture_frame(nif, b, RT_CAP_OUT, ethertype, NULL, 0);
+	return nif->link_output(nif, b, dsthw, ethertype);
+}
+
 int rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
 {
 	u8 mc[6];
@@ -260,14 +269,14 @@ int rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
 	case RT_IFT_ETHER:
 		if (rt_ip_is_broadcast(nexthop, nif)) {
 			nif->stats.omcasts++;
-			r = nif->link_output(nif, b, NULL, RT_ETH_P_IP);
+			r = rt_netif_xmit(nif, b, NULL, RT_ETH_P_IP);
 		} else if (rt_ip_is_multicast(nexthop)) {
 			/* RFC 1112 6.4: 01:00:5e + low 23 bits of the group */
 			u32 h = rt_ntohl(nexthop);
 			mc[0] = 0x01; mc[1] = 0x00; mc[2] = 0x5e;
 			mc[3] = (u8)((h >> 16) & 0x7f); mc[4] = (u8)(h >> 8); mc[5] = (u8)h;
 			nif->stats.omcasts++;
-			r = nif->link_output(nif, b, mc, RT_ETH_P_IP);
+			r = rt_netif_xmit(nif, b, mc, RT_ETH_P_IP);
 		} else {
 			return rt_arp_resolve_output(nif, b, nexthop);
 		}
@@ -276,7 +285,7 @@ int rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
 	case RT_IFT_LOOP:
 	default:
 		/* loopback's link_output is the deferred queue of loopback.c */
-		r = nif->link_output(nif, b, NULL, RT_ETH_P_IP);
+		r = rt_netif_xmit(nif, b, NULL, RT_ETH_P_IP);
 		break;
 	}
 	if (r < 0)

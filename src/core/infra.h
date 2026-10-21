@@ -8,6 +8,7 @@
 #define RT_INFRA_H
 
 #include "rt/riptide.h"
+#include "rt/rt_capture.h"
 
 /* ---- tunables (s32 so they can be registered with rt_sysctl) ---- */
 extern s32 rt_ip_forwarding;        /* net.inet.ip.forwarding */

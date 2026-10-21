@@ -7,7 +7,7 @@
  *
  * Until the interface has an address, messages are built here as complete
  * IP/UDP datagrams from 0.0.0.0:68 to 255.255.255.255:67 and handed to
- * nif->link_output() (dsthw NULL = link broadcast). Renewals go unicast to
+ * rt_netif_xmit() (dsthw NULL = link broadcast). Renewals go unicast to
  * the server through rt_ip_output(). Replies are received on one shared
  * kernel UDP socket bound to INADDR_ANY:68 (ip.c accepts 255.255.255.255
  * on any interface, configured or not); we always set the BROADCAST flag
@@ -247,7 +247,7 @@ static int send_link(struct dhcp_client *c, struct rt_buf *b, u32 saddr, u32 dad
 	}
 	nif->stats.opackets++;
 	nif->stats.obytes += b->len;
-	return nif->link_output(nif, b, NULL, RT_ETH_P_IP);
+	return rt_netif_xmit(nif, b, NULL, RT_ETH_P_IP);
 }
 
 static int send_unicast(struct dhcp_client *c, struct rt_buf *b)

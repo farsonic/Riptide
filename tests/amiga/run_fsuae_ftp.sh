@@ -7,7 +7,8 @@
 # error replies, EPSV->PASV fallback with a bogus PASV address (the NAT
 # case), active mode (PORT), aborted transfers (simulated Ctrl-C) and the
 # ftp:// URL forms. DH0: is a host directory, so the transferred files are
-# compared here, byte for byte.
+# compared here, byte for byte. A packet capture (Riptide CAPTURE) of one
+# URL download is saved to DH0: and checked here (and with tcpdump).
 #
 #   tests/amiga/run_fsuae_ftp.sh [BUILDDIR] [TIMEOUT_SECONDS]
 # Environment: FSUAE_MODEL (default A1200), FSUAE_EXTRA (more fs-uae
@@ -164,7 +165,13 @@ SCRIPT
 	echo 'DH0:C/ping -c 2 -i 0.5 -q 127.0.0.1 >NIL:'
 	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/ftpscript >DH0:out/ftp1'
 	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/badlogin >DH0:out/badlogin'
+	echo 'DH0:C/Riptide CAPTURE start iface=nope >DH0:out/cap_bad'
+	echo 'DH0:C/Riptide CAPTURE start proto=tcp host=127.0.0.1 snaplen=96 file=DH0:cap.pcap >DH0:out/cap_start'
 	echo 'DH0:C/ftp -o DH0:local/url.dat ftp://user:pw@127.0.0.1:2121/sub/a.dat >DH0:out/url_get'
+	echo 'DH0:C/Riptide CAPTURE status >DH0:out/cap_status'
+	echo 'DH0:C/Riptide CAPTURE stop >DH0:out/cap_stop'
+	echo 'DH0:C/Riptide CAPTURE save DH0:cap2.pcap >DH0:out/cap_save'
+	echo 'DH0:C/Riptide CAPTURE clear >DH0:out/cap_clear'
 	echo 'DH0:C/ftp -u ftp://127.0.0.1:2121/sub/ DH0:local/m1.txt >DH0:out/url_put'
 	echo 'DH0:C/ftp -v ftp://127.0.0.1:2121/sub/ >DH0:out/url_list'
 	echo 'DH0:C/ftp ftp://127.0.0.1:2121/nosuch.bin >DH0:out/url_missing'
@@ -315,6 +322,55 @@ same "$loc/act6.txt" "$root/hello.txt" "IPv6 EPRT get"
 same "$loc/hello46.txt" "$root/hello.txt" "IPv4 client, dual-stack server, PASV"
 same "$loc/act46.txt" "$root/hello.txt" "IPv4 client, dual-stack server, PORT"
 same "$loc/url6.dat" "$root/sub/a.dat" "URL get from [::1]"
+# packet capture of the URL download
+expect cap_bad '^capture: no interface .nope.'
+expect cap_start '^capture: running, 0 frames' 'snaplen 96, stop when full, proto tcp host 127\.0\.0\.1, file DH0:cap\.pcap'
+expect cap_status '^capture: running, [1-9][0-9]* frames .* 0 dropped'
+expect cap_stop '^capture: [1-9][0-9]* frames saved to DH0:cap\.pcap'
+expect cap_save '^capture: [1-9][0-9]* frames saved to DH0:cap2\.pcap'
+expect cap_clear '^capture: off$'
+nframes=$(sed -n 's/^capture: \([0-9]*\) frames saved to DH0:cap\.pcap.*/\1/p' "$dh0/out/cap_stop")
+same "$dh0/cap2.pcap" "$dh0/cap.pcap" "capture save = file saved by stop"
+if ! python3 -I - "$dh0/cap.pcap" "${nframes:-0}" <<'PY'
+import struct, sys
+d = open(sys.argv[1], 'rb').read()
+want = int(sys.argv[2])
+assert d[:4] == b'\xa1\xb2\xc3\xd4', 'big-endian pcap magic'
+major, minor, _, _, snap, link = struct.unpack('>HHiIII', d[4:24])
+assert (major, minor, snap, link) == (2, 4, 16 + 96, 113), (major, minor, snap, link)
+off, n, syn, retr, data = 24, 0, 0, 0, 0
+while off < len(d):
+    sec, usec, incl, orig = struct.unpack('>IIII', d[off:off + 16])
+    rec = d[off + 16:off + 16 + incl]
+    assert 16 <= incl <= orig and incl <= snap and usec < 1000000 and len(rec) == incl
+    pkt, hat, hal, proto = struct.unpack('>HHH8xH', rec[:16])
+    assert (pkt, hat, hal, proto) == (0, 772, 0, 0x800), (pkt, hat, hal, proto)
+    ip = rec[16:]
+    assert ip[9] == 6 and ip[12:16] == b'\x7f\0\0\x01'
+    ihl = (ip[0] & 15) * 4
+    sport, dport = struct.unpack('>HH', ip[ihl:ihl + 4])
+    flags = ip[ihl + 13]
+    if dport == 2121 and flags & 2:
+        syn += 1
+    if b'RETR sub/a.dat' in ip or b'RETR a.dat' in ip:
+        retr += 1
+    tlen = struct.unpack('>H', ip[2:4])[0] - ihl - (ip[ihl + 12] >> 4) * 4
+    if sport != 2121 and dport != 2121:
+        data += tlen
+    off += 16 + incl
+    n += 1
+assert n == want, (n, want)
+assert syn == 1 and retr == 1, (syn, retr)
+assert data >= 3000, data
+print('  capture: %d frames, %d data-connection bytes' % (n, data))
+PY
+then
+	echo "FAIL capture: DH0:cap.pcap"; fails=$((fails + 1))
+fi
+if command -v tcpdump >/dev/null 2>&1; then
+	tl=$(tcpdump -nn -r "$dh0/cap.pcap" 2>/dev/null | grep -c '127\.0\.0\.1\.2121 >')
+	[ "$tl" -gt 0 ] || { echo "FAIL capture: tcpdump cannot read DH0:cap.pcap"; fails=$((fails + 1)); }
+fi
 bs=$(wc -c < "$loc/broken.bin" 2>/dev/null || echo 0)
 if [ "$bs" -lt 200000 ] || [ "$bs" -ge 1048576 ]; then
 	echo "FAIL abort: broken.bin has $bs bytes"; fails=$((fails + 1))

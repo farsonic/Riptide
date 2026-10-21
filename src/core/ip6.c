@@ -124,9 +124,9 @@ int ip6_send_link(struct rt_netif *nif, struct rt_buf *b, const rt_in6_addr *nex
 		rt_in6_mc_mac(mac, nexthop);
 		nif->stats.omcasts++;
 		rt_ip6stat.OutMcastPkts++;
-		r = nif->link_output(nif, b, mac, RT_ETH_P_IPV6);
+		r = rt_netif_xmit(nif, b, mac, RT_ETH_P_IPV6);
 	} else {
-		r = nif->link_output(nif, b, NULL, RT_ETH_P_IPV6);
+		r = rt_netif_xmit(nif, b, NULL, RT_ETH_P_IPV6);
 	}
 	if (r < 0)
 		nif->stats.oerrors++;

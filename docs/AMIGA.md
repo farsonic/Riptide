@@ -126,6 +126,7 @@ while Riptide runs.
 
 ```
 Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
+        [CAPTURE start|stop|status|save FILE|clear ...]
 ```
 
 | Argument | Meaning |
@@ -136,8 +137,9 @@ Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
 | `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
 | `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and exit. Needs timer.device, so not under vamos. |
+| `CAPTURE ...` | Packet capture in the running stack; the rest of the line is the command (see "Packet capture"). |
 
-`QUIT` and `STATUS` talk to the running stack through the public message
+`QUIT`, `STATUS` and `CAPTURE` talk to the running stack through the public message
 port `RIPTIDE`. You can also signal the Riptide process directly:
 
 * **Ctrl-C** works like `QUIT`. If programs still have the libraries open,
@@ -170,6 +172,8 @@ ifconfig IFNAME [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D]
 dhcp IFNAME [start|stop|renew]     # run (stop, renew) the DHCP client on IFNAME
 arp add A.B.C.D MAC [dev IF] | arp del A.B.C.D [dev IF] | arp flush [dev IF]
 cpu routines auto|generic|020|040|060   # checksum/copy routines (troubleshooting)
+capture start [OPTIONS] | capture stop | capture status | capture save FILE | capture clear
+                                   # packet capture, see "Packet capture"
 ```
 
 The short forms of older versions (`route add default 10.0.2.2`,
@@ -205,6 +209,61 @@ smaller than the last one; otherwise the ACK waits until the application
 reads (or for the delayed ACK timer). The SANA-II read count is changed
 with `ip link set NAME reads N` (see below). `netstat -T` shows the effect
 on each connection.
+
+### Packet capture
+
+Riptide can record the frames it sends and receives into a ring buffer in
+RAM and save them as a pcap file for Wireshark or tcpdump on another
+computer. This is the first thing to look at when transfers are slow: the
+file shows whether the sender waits for window updates, loses packets and
+retransmits, or is held back by late ACKs (Wireshark: Statistics > TCP
+Stream Graphs > Stevens / tcptrace).
+
+```
+Riptide CAPTURE start                          ; every interface, 256 KB ring
+ftp ftp://ftp.example.org/pub/big.lha          ; the transfer to look at
+Riptide CAPTURE stop
+Riptide CAPTURE save RAM:slow.pcap
+```
+
+`capture start` takes these options (all optional; they can also go in
+the configuration file, to capture from start-up):
+
+| Option | Meaning |
+|---|---|
+| `iface=NAME` | only this interface (default all, including `lo0`) |
+| `proto=tcp\|udp\|icmp` | only this protocol (`icmp` includes ICMPv6) |
+| `port=N` | only TCP/UDP with this source or destination port |
+| `host=ADDR` | only IPv4 or IPv6 packets from or to this address |
+| `snaplen=N` | bytes kept of each packet (default 128: all headers, a little payload; 20 to 65535) |
+| `size=KB` | ring size (default 256, 16 to 16384); allocated at `start`, freed by `clear` |
+| `wrap` | when the ring is full, overwrite the oldest packets (default: stop recording and count the rest as dropped) |
+| `file=PATH` | save to PATH on `capture stop` and when Riptide quits |
+
+`capture stop` stops recording and keeps the packets, `capture save FILE`
+writes them (it can also run while recording: recording pauses while the
+file is written, outside the stack lock), `capture status` shows the
+state and counters, and `capture clear` frees the ring. A new `start`
+discards the previous packets. With a filter, ARP is not recorded.
+
+```
+capture: running, 1210 frames (180 KB of 256 KB), 1210 seen, 0 dropped, 0 overwritten
+  snaplen 128, stop when full, iface eth0 proto tcp
+```
+
+The file uses the Linux "cooked capture" link type (`LINKTYPE_LINUX_SLL`),
+which every version of Wireshark and tcpdump reads: one file can hold
+Ethernet, point-to-point and loopback interfaces, ARP as well as
+IPv4/IPv6, and each packet says whether it was sent ("Out") or received,
+broadcast or multicast, and the sender's MAC address. Packets are
+recorded where they meet the driver: received ones as the driver hands
+them over, sent ones as they go to it; loopback packets appear once, when
+`lo0` delivers them. Timestamps come from the EClock (microseconds).
+
+Memory: the ring is the only allocation (each packet takes 32 bytes plus
+up to `snaplen` bytes, rounded up to 4: about 1,600 full-size TCP
+segments in the default 256 KB), plus 4 KB while saving. When capture is
+off the cost is one test per packet.
 
 ### Amiga keywords
 
@@ -821,7 +880,7 @@ The public message port `RIPTIDE` takes a `struct RiptideMsg`
 |---|---|
 | `RTCMD_STATUS` (1) | status text, as `Riptide STATUS` prints it |
 | `RTCMD_QUIT` (2) | quit if no program has the libraries open, else `result` = EBUSY |
-| `RTCMD_COMMAND` (3) | `text` holds one line of the configuration language (all keywords above, including `interface ...` and `interface NAME delete`), or a query: `sysctl -a`, `sysctl [-n] NAME...`, `sysctl [-w] NAME=VALUE` |
+| `RTCMD_COMMAND` (3) | `text` holds one line of the configuration language (all keywords above, including `interface ...` and `interface NAME delete`), or a query: `sysctl -a`, `sysctl [-n] NAME...`, `sysctl [-w] NAME=VALUE`. `capture ...` (packet capture) answers with its status line; `capture save FILE` writes the file from Riptide's process before it replies |
 
 The client allocates the message in public memory, sets `mn_ReplyPort`
 and `mn_Length = sizeof(struct RiptideMsg)`, and may point `reply` /
