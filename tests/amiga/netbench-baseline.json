@@ -1,0 +1,75 @@
+{
+ "about": "Speed lab baseline (tests/amiga/run_fsuae_netbench.sh): Riptide built from main d814867, FS-UAE 3.2.35 with the tools/fs-uae libpcap bridge, AROS ROM, veth; KB/s of emulated time. See docs/COMPARISON.md section 11.",
+ "date": "2026-10-22",
+ "bytes": 2097152,
+ "repeat": 3,
+ "results": {
+  "riptide": {
+   "a1200-020": {
+    "download_kbs": 447.94,
+    "upload_kbs": 269.36,
+    "download_runs": [
+     445.12,
+     447.94,
+     449.31
+    ],
+    "upload_runs": [
+     262.63,
+     274.34,
+     269.36
+    ],
+    "ping_ms": 7.075
+   },
+   "a1200-030": {
+    "download_kbs": 791.34,
+    "upload_kbs": 459.19,
+    "download_runs": [
+     791.03,
+     792.26,
+     791.34
+    ],
+    "upload_runs": [
+     455.11,
+     473.3,
+     459.19
+    ],
+    "ping_ms": 3.525
+   },
+   "a4000-040": {
+    "download_kbs": 1574.17,
+    "upload_kbs": 900.61,
+    "download_runs": [
+     1550.34,
+     1587.59,
+     1574.17
+    ],
+    "upload_runs": [
+     917.97,
+     900.61,
+     878.59
+    ],
+    "ping_ms": 5.699
+   },
+   "a4000-060": {
+    "download_kbs": 2760.1,
+    "upload_kbs": 1539.84,
+    "download_runs": [
+     2760.1,
+     2582.59,
+     2929.89
+    ],
+    "upload_runs": [
+     1543.33,
+     1488.37,
+     1539.84
+    ],
+    "ping_ms": 7.684
+   }
+  }
+ },
+ "not_measured": {
+  "amitcp": "AmiTCP 3.0b2 crashes the AROS ROM when a program opens its bsdsocket.library; needs KICKSTART= (a real Kickstart ROM)",
+  "roadshow": "the demo needs AmigaOS 3.x (a real Kickstart and Workbench)",
+  "miami": "the evaluation version needs Kickstart 2.04+, MUI and its GUI"
+ }
+}

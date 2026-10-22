@@ -30,7 +30,7 @@ TOOLS     := $(NETTOOLS) speedtest
 ST_SRC    := st_main st_xml st_http st_util
 # test programs linked like the tools (tests/amiga): a minimal FTP server for
 # the ftp test, a minimal speedtest HTTP server for the speedtest test
-TESTTOOLS := ftpd-test httpd-test
+TESTTOOLS := ftpd-test httpd-test netbench
 # RiptidePrefs (src/amiga/prefs): GadTools preferences editor for riptide.conf
 PREFS_SRC := riptideprefs conf_edit
 
@@ -106,6 +106,8 @@ $(BUILD)/ftpd-test.elf: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
 $(BUILD)/httpd-test.elf: $(BUILD)/tests/httpd_test.o $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
+$(BUILD)/netbench.elf: $(BUILD)/tests/netbench.o $(TOOL_LIB) src/amiga/link.ld
+	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
 PREFS_OBJ := $(patsubst %,$(BUILD)/amiga/prefs/%.o,$(PREFS_SRC))
 $(BUILD)/RiptidePrefs.elf: $(PREFS_OBJ) $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $(PREFS_OBJ) $(LIBGCC)
@@ -163,6 +165,8 @@ $(BUILD)/speedtest: $(ST_OBJ) $(BUILD)/amiga/cmd/cmdlib_basic.o $(BUILD)/core/pr
 $(BUILD)/ftpd-test: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
 $(BUILD)/httpd-test: $(BUILD)/tests/httpd_test.o $(TOOL_LIB)
+	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
+$(BUILD)/netbench: $(BUILD)/tests/netbench.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
 PREFS_OBJ := $(patsubst %,$(BUILD)/amiga/prefs/%.o,$(PREFS_SRC))
 $(BUILD)/RiptidePrefs: $(PREFS_OBJ) $(TOOL_LIB)
