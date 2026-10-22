@@ -225,7 +225,7 @@ handled as one batch: the ACKs `delack_segs` calls for within it go out as
 one at its end, covering at most `2 * delack_segs` segments (duplicate
 ACKs are never held). A reader that empties the window by small reads
 gets a window update once the window can open by four segments (or a
-quarter of the buffer), not after every read. The SANA-II read count is changed
+quarter of the buffer) or the queue is empty, not after every read. The SANA-II read count is changed
 with `ip link set NAME reads N` (see below). `netstat -T` shows the effect
 on each connection.
 

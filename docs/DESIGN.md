@@ -184,9 +184,10 @@ FS-UAE):
 * **Window updates.** Linux sends a window update after a read that
   doubles a nearly closed window. A reader slower than the link (2 KB
   `recv()`s, the window at a segment or two) then costs one pure ACK per
-  read. Riptide also asks for the window to open by four segments (or a
-  quarter of the buffer, if smaller); the queue holds the rest of the
-  buffer for the reader meanwhile, so the sender is not starved.
+  read. While data is still queued, Riptide also asks for the window to
+  open by four segments (or a quarter of the buffer, if smaller); the
+  queue holds the rest of the buffer for the reader meanwhile, so the
+  sender is not starved. A read that drains the queue always sends it.
 * **Clocks.** A segment reads the clock about nine times (TCP's clocks,
   timers, caches). On AmigaOS each is a `ReadEClock()` and divisions (about
   110 µs on the emulated A1200), so the holder of the stack lock reads it

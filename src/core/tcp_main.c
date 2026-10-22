@@ -799,11 +799,13 @@ void tcp_cleanup_rbuf(struct tcp_sock *tp, int copied)
 			/* Unlike Linux, not for every small read that doubles a
 			 * nearly closed window: a reader slower than the link
 			 * (nc's 2 KB recv()s on a 68020) would cost a window
-			 * update per read. Open it by 4 segments (or a quarter
-			 * of the buffer) at a time; the queue still holds the
-			 * rest of the buffer for the reader meanwhile. */
+			 * update per read. While data is still queued, open it
+			 * by 4 segments (or a quarter of the buffer) at a time;
+			 * the queue holds the rest of the buffer for the reader
+			 * meanwhile. A drained queue always gets its update. */
 			if (new_window && new_window >= 2 * rcv_window_now &&
-			    new_window - rcv_window_now >= RT_MIN(tp->window_clamp / 4, 4u * tp->ack.rcv_mss))
+			    (!tp->rcvq_bytes ||
+			     new_window - rcv_window_now >= RT_MIN(tcp_full_space(tp) / 4, 4u * tp->ack.rcv_mss)))
 				time_to_ack = 1;
 		}
 	}
