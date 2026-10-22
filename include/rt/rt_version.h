@@ -6,7 +6,7 @@
 #ifndef RT_VERSION_H
 #define RT_VERSION_H
 
-#define RIPTIDE_VERSION_STRING "0.12"
-#define RIPTIDE_DATE           "21.10.2026"
+#define RIPTIDE_VERSION_STRING "0.13"
+#define RIPTIDE_DATE           "22.10.2026"
 
 #endif

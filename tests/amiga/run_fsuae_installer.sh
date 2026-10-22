@@ -60,7 +60,9 @@ EOF
 PATH=$VBCC/bin:$PATH VBCC=$VBCC "$VBCC/bin/vc" +aos68k -O2 -I"$NDK/Include_H" -o "$dh0/C/tassign" "$work/tassign.c" -lamiga ||
 	{ echo "FAIL: cannot build the assign helper"; exit 1; }
 
-lha=$(ls "$BUILD"/riptide-*.lha 2>/dev/null | head -1)
+# the archive of this version (older ones may still be in BUILD)
+version=$(sed -n 's/^#define RIPTIDE_VERSION_STRING "\(.*\)"/\1/p' "$here/../../include/rt/rt_version.h")
+lha=$(ls "$BUILD/riptide-$version.lha" 2>/dev/null)
 assigns='DH0:C/tassign ENVARC DH0:Prefs/Env-Archive
 DH0:C/tassign LIBS DH0:Libs
 DH0:C/tassign DEVS DH0:Devs
@@ -122,9 +124,10 @@ fails=0
 fail() { echo "FAIL $*"; fails=$((fails + 1)); }
 prev=
 step() {
-	# step NAME X Y EX EY: wait for a settled new screen with a button edge at
-	# EX,EY, keep a screenshot, click X,Y
-	$ptr wait 3 300 "$4" "$5" $prev || fail "boot 1: no '$1' screen"
+	# step NAME X Y EX EY [SECS]: wait for a new screen with a button edge at
+	# EX,EY that stays the same for SECS (3) seconds, keep a screenshot,
+	# click X,Y
+	$ptr wait "${6:-3}" 300 "$4" "$5" $prev || fail "boot 1: no '$1' screen"
 	$ptr shot "$work/$1.png"
 	prev=$work/$1.png
 	$ptr click "$2" "$3" >/dev/null
@@ -134,7 +137,9 @@ step() {
 boot 1
 step 01-welcome 400 484 296 470    # "Proceed With Install" (Novice preselected)
 step 02-about 400 511 296 498      # "Proceed"
-step 03-notes 400 511 296 498      # emulator notes: "Proceed"
+# the copy progress box stays up while the Installer starts Riptide (a few
+# seconds on a Chip RAM A1200): not the next screen
+step 03-notes 400 511 296 498 12   # emulator notes: "Proceed"
 step 04-summary 510 511 405 498    # (exit ...) summary: "Proceed"
 step 05-complete 510 511 405 498   # "Installation complete": "Proceed"
 waitfile "$dh0/out/zz_boot1" 60 || fail "boot 1: the Installer did not finish (see $work/*.png)"
