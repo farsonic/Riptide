@@ -162,22 +162,31 @@ static int first_band(const struct qos_if *q)
 	return -1;
 }
 
+/* send what the driver may take; the failsafe timer runs while frames wait */
+static void pump(struct qos_if *q)
+{
+	int band;
+
+	if (q->running)
+		return;
+	q->running = 1;
+	while ((band = first_band(q)) >= 0 && inflight(q->nif) < (u32)rt_qos_inflight)
+		send_one(q, band);
+	q->running = 0;
+	if (!queued(q))
+		rt_timer_del(&q->timer);
+	else if (!rt_timer_pending(&q->timer))
+		rt_timer_after(&q->timer, 250);
+}
+
 void rt_qos_run(struct rt_netif *nif)
 {
 	struct qos_if *q = nif->qos;
-	int band;
 
-	if (!q || q->running)
+	if (!q)
 		return;
-	q->running = 1;
-	q->last_done_ms = rt_now_ms();
-	while ((band = first_band(q)) >= 0 && inflight(nif) < (u32)rt_qos_inflight)
-		send_one(q, band);
-	q->running = 0;
-	if (queued(q))
-		rt_timer_after(&q->timer, 250);
-	else
-		rt_timer_del(&q->timer);
+	q->last_done_ms = rt_now_ms();     /* the driver made progress */
+	pump(q);
 }
 
 /* A driver that stopped reporting completions must not hold the queue
@@ -193,8 +202,11 @@ static void qos_timer(void *arg)
 		q->running = 1;
 		send_one(q, band);
 		q->running = 0;
+		q->last_done_ms = rt_now_ms();
 	}
-	rt_qos_run(q->nif);
+	pump(q);
+	if (queued(q) && !rt_timer_pending(&q->timer))
+		rt_timer_after(&q->timer, 250);
 }
 
 int rt_qos_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
@@ -225,7 +237,9 @@ int rt_qos_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 eth
 	rt_bufq_tail(&q->q[band], b);
 	if (q->q[band].qlen > q->maxq[band])
 		q->maxq[band] = q->q[band].qlen;
-	rt_qos_run(nif);
+	if (queued(q) == 1)
+		q->last_done_ms = rt_now_ms();  /* the wait starts now */
+	pump(q);
 	return 0;
 }
 
