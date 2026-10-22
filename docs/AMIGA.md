@@ -177,6 +177,16 @@ route flush [dev IF] | route flush cache
 sysctl NAME=VALUE                  # e.g. sysctl net.inet.tcp.sack=1
 ifconfig IFNAME [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D]
       [mtu N] [metric N] [tcpwindow N] [[-]promisc] [[-]arp] [delete] [up|down]
+ifconfig IFNAME alias A.B.C.D[/BITS] [netmask M] [broadcast B]   # a further address
+ifconfig IFNAME A.B.C.D -alias     # remove one address; "ifconfig IFNAME delete": all
+ipv4 [IFNAME] on|off               # IPv4 on that interface (or all, and the default)
+ipv6 [IFNAME] on|off               # IPv6 on that interface (or all, and the default)
+happy_eyeballs on|off | delay MS | resolution_delay MS | prefer auto|ipv6|ipv4 |
+      aaaa_filter on|off | status  # connecting by name, see "Happy Eyeballs"
+qos on|off [IFNAME] | inflight N | limit N | priodscp on|off | status
+qos rule [proto=tcp|udp] [port=|lport=|rport=P,..] [program=NAME]
+      [priority=interactive|default|bulk|0-7] [dscp=EF|CS1|AF41|0-63]
+qos rules flush                    # see "Priorities and quality of service"
 dhcp IFNAME [start|stop|renew]     # run (stop, renew) the DHCP client on IFNAME
 arp add A.B.C.D MAC [dev IF] | arp del A.B.C.D [dev IF] | arp flush [dev IF]
 cpu routines auto|generic|020|040|060   # checksum/copy routines (troubleshooting)
@@ -349,7 +359,8 @@ off the cost is one test per packet.
 
 ```
 interface NAME device=DEVICE [unit=N] [mtu=N] [reads=N] [tcpwindow=N] [raw]
-interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N]
+      [ipv4=on|off] [ipv6=on|off] [qos=on|off]
+interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off]
 interface NAME reads=N             # at run time: change a SANA-II interface's IPv4 reads
 interface NAME delete              # at run time: close the driver, drop the interface
 interface NAME|all resetstats      # zero the interface and driver counters (ip link resetstats)
@@ -425,7 +436,7 @@ with `EBUSY` while a program still has the alias open. The startup line
 and `Riptide STATUS` show the state:
 
 ```
-Libraries: bsdsocket.library 4, riptide.library 1, usergroup.library 4; compat alias: miami.library 21
+Libraries: bsdsocket.library 4, riptide.library 2, usergroup.library 4; compat alias: miami.library 21
 ```
 
 ### Example: Ethernet with DHCP
@@ -498,6 +509,67 @@ limit; the value is 0 or 536..16777216 bytes and applies to connections
 opened after the change. `ip link` and `Riptide STATUS` show it. Other
 interfaces keep the full window, so the limit costs nothing on a real
 network card.
+
+### Several IPv4 addresses per interface
+
+An interface can have up to nine IPv4 addresses: the primary one (the
+`ifconfig IF A.B.C.D` or DHCP address) and eight more, on the same subnet
+or on others:
+
+```
+ifconfig eth0 192.168.1.20/24 up
+ifconfig eth0 alias 192.168.1.21/24        # same subnet
+ifconfig eth0 alias 10.0.5.2/24            # another subnet on the same wire
+```
+
+* Each address answers ARP (and announces itself with a gratuitous ARP),
+  ICMP, UDP and TCP; programs can `bind()` to any of them. Each prefix gets
+  its connected route and its broadcast address.
+* **Source address.** Packets to a destination (or through a gateway) on
+  the subnet of an address leave from that address; anything else from
+  the primary one. `ip route get` is not needed: `ip addr` shows which is
+  which.
+* **DHCP** keeps managing the primary address; additional static ones stay
+  across renewals and when the lease ends.
+* Removing the primary address (`ip addr del`, `ifconfig IF A.B.C.D
+  -alias`) promotes the next one, as Linux does with
+  `promote_secondaries`. `ifconfig IF delete` (and `ip addr flush dev IF`)
+  removes all of them.
+* Point-to-point interfaces keep one address and their peer.
+* Tools: `ip addr add A.B.C.D/N dev IF` adds one when the interface has an
+  address (`ip addr replace` changes the primary), `ip addr show` lists the
+  others as `secondary`; `ifconfig IF:1 A.B.C.D` (the Linux label form) and
+  BSD's `ifconfig IF alias A.B.C.D` / `-alias A.B.C.D` work too;
+  `ifconfig` shows them as `(alias)` lines and `Riptide STATUS` as `also
+  A.B.C.D/M`. The new table `net.riptide.addrs4` lists every address; the
+  ioctls follow BSD: `SIOCAIFADDR` adds, `SIOCDIFADDR` removes the address
+  given, `SIOCGIFCONF` has one entry per address, `SIOCGIFADDR` and
+  `SIOCSIFADDR` work on the primary one.
+* The mDNS responder answers `HOSTNAME.local` with all of them (four per
+  interface).
+
+Several network cards work at once as before: give each its own
+`interface` line, address and routes.
+
+### IPv4 and IPv6 on or off
+
+`ipv4 off` and `ipv6 off` switch a protocol off for every interface (and
+for interfaces added later); `ipv4 eth0 off` / `ipv6 eth0 off`, or
+`ipv4=off` / `ipv6=off` on the `interface` line, for one. `on` switches it
+back on. Both work in the configuration and at run time (RIPTIDE port,
+RiptidePrefs' Apply).
+
+* **IPv4 off** removes the interface's IPv4 addresses and routes, stops its
+  DHCP client and ignores IPv4 and ARP frames: an IPv6-only interface.
+  After `ipv4 eth0 on` configure an address or start DHCP again.
+* **IPv6 off** removes the interface's IPv6 state: no link-local address,
+  no router solicitations, no MLD, no IPv6 input.
+* With IPv6 off everywhere (or no IPv6 route to the Internet),
+  `getaddrinfo()` does not ask for AAAA records (see `aaaa_filter` under
+  "Happy Eyeballs"), so programs do not wait for IPv6 addresses they
+  cannot reach.
+
+`ip link` shows the state, `Riptide STATUS` prints `IPv4 off`.
 
 ### Hosts file
 
@@ -1198,6 +1270,8 @@ byte order, everything else in host order; there are no pointers.
 | 20 | `net.riptide.drivers` | `struct rt_ctl_driver`, one per driver interface (SANA-II, MNI): receive queues (reads configured/queued, lowest, times empty), frames per wakeup, buffer shortages, errors by code, transmits in flight, the `S2_DEVICEQUERY` values and the driver's own `S2_GETGLOBALSTATS`/`S2_GETSPECIALSTATS` |
 | 30 | `net.riptide.mcast` | `struct rt_ctl_mcast`: multicast memberships of both families: interface, group, link layer address, users, IGMP version and reporter flag (`ip maddr`, `netstat -g`) |
 | 31 | `net.riptide.igmpstat` | one `struct rt_igmp_stats` |
+| 40 | `net.riptide.addrs4` | `struct rt_ctl_addr4`: every IPv4 address of every interface: interface, address, netmask, broadcast, prefix length, primary/DHCP flags (0.15) |
+| 41 | `net.riptide.qos` | `struct rt_ctl_qos`: the transmit bands of each interface with QoS: frames queued now and at most, sent, bytes, dropped, sent straight to the driver (0.15) |
 
 Use BSD sysctl semantics: call with `oldp = NULL` to get the size,
 allocate a bit more (a table can grow in between) and call again. If it
@@ -1209,7 +1283,8 @@ versions can append fields.
 ### BSD ioctls
 
 Besides the interface ioctls (`SIOCGIFCONF`, `SIOC[GS]IF*`), Riptide
-supports `SIOCAIFADDR`, `SIOCADDRT`/`SIOCDELRT` (4.3BSD `struct ortentry`)
+supports `SIOCAIFADDR` (adds an address, see "Several IPv4 addresses per
+interface"), `SIOCDIFADDR` (removes the one given), `SIOCADDRT`/`SIOCDELRT` (4.3BSD `struct ortentry`)
 and `SIOCSARP`/`SIOCGARP`/`SIOCDARP` (AmiTCP's 38 byte `struct arpreq`;
 the 4.4BSD 36 byte form with group `'i'` works too). Two extensions for
 `struct ortentry`, harmless for programs that leave the fields zero: with
@@ -1243,6 +1318,121 @@ cannot hang the stack. Only `interface` lines take a moment while the
 driver opens. Messages still queued at shutdown are replied with
 `ESHUTDOWN`. Version 1 messages (`mn_Length` without the reply buffer
 fields, as sent by Riptide 0.9) are still understood.
+
+## Happy Eyeballs
+
+Riptide connects to host names the way RFC 8305 ("Happy Eyeballs version
+2") describes, so a broken IPv6 path (a dead tunnel, a router that
+advertises IPv6 but does not forward it, an unreachable AAAA address)
+costs a quarter of a second instead of a connect timeout:
+
+1. **Lookups.** The AAAA and A queries go out together. When the A answer
+   comes first, Riptide waits at most `resolution_delay` (50 ms) for the
+   AAAA one and goes on without it; a late A answer is waited for (the
+   IPv4 fallback needs it). Cached, hosts file and `.local` answers need no
+   network.
+2. **Order.** The addresses are sorted by RFC 6724 (which puts IPv4 before
+   ULA IPv6 addresses `fc00::/7`, and global IPv6 before IPv4), or with
+   `prefer ipv6` / `prefer ipv4` that family first; then the families
+   alternate.
+3. **Racing.** Riptide connects to the first address, and every `delay`
+   ms (250) or as soon as an attempt fails to the next one, keeping
+   several attempts going; the first that connects wins, the others are
+   closed.
+
+With `happy_eyeballs off` the lookups are one after the other and the
+addresses are tried in turn, each with an equal share of the timeout.
+
+| keyword | sysctl | default | |
+|---|---|---|---|
+| `happy_eyeballs on\|off` | `net.inet.he.enable` | on | parallel lookups and racing |
+| `happy_eyeballs delay MS` | `net.inet.he.attempt_delay` | 250 | 10..2000: ms before the next attempt starts |
+| `happy_eyeballs resolution_delay MS` | `net.inet.he.resolution_delay` | 50 | 0..1000: ms an A answer waits for the AAAA one |
+| `happy_eyeballs prefer auto\|ipv6\|ipv4` | `net.inet.he.prefer` | auto (0) | first family (6 or 4), auto = RFC 6724 |
+| `happy_eyeballs aaaa_filter on\|off` | `net.inet.he.aaaa_filter` | on | no AAAA lookups (getaddrinfo with AF_UNSPEC, connecting by name) while IPv6 has no route to global addresses |
+
+**Who uses it.** The `nc` and `ftp` tools connect by name this way (with
+`-4`/`-6` only that family). Programs get it from riptide.library 2:
+
+```c
+LONG RiptideConnectName(CONST_STRPTR host, ULONG port, struct TagItem *tags);
+```
+
+returns a connected TCP socket (`RTCN_Type`, SOCK_DGRAM: a connected UDP
+socket) in the caller's descriptor table (shared with bsdsocket.library),
+in blocking mode, or -1 with `Errno()` set (`EHOSTUNREACH` when the name
+does not resolve). Tags: `RTCN_Family` (AF_UNSPEC, AF_INET, AF_INET6),
+`RTCN_Timeout` (ms, default 75000) and `RTCN_Result` (a `struct
+RiptideConnectResult`: the address that answered, the time it took, how
+many addresses there were and attempts started). Open riptide.library
+version 2 for it.
+
+**Programs that use gethostbyname()** only ever get IPv4 addresses, so
+they are not affected by IPv6 problems. Programs that use
+`getaddrinfo()` and try the first result only get IPv4 first whenever
+IPv6 cannot reach the Internet (`aaaa_filter`), and RFC 6724 order
+otherwise; `getaddrinfo()` itself does the lookups in parallel.
+
+## Priorities and quality of service
+
+On a slow link, or with a fast upload, the frames a program sends queue up
+in front of the network driver: a SANA-II driver takes up to 32, which at
+the speed of an emulated or real Amiga is a few hundred milliseconds of
+data in front of every keystroke, ACK or DNS query. With **QoS** on (the
+default for SANA-II and MNI interfaces) Riptide gives the driver at most
+`inflight` frames (4) at a time and keeps the rest in three bands, sent
+strictly in order:
+
+| band | what |
+|---|---|
+| interactive | ARP, ICMP and ICMPv6, DNS, NTP, mDNS and DHCP, TCP segments without data (ACKs, SYN, FIN), TCP segments of up to 64 bytes (keystrokes), DSCP EF, CS4..CS7 and AF4x, TOS "low delay", socket priority 6 and 7 |
+| default | everything else |
+| bulk | DSCP CS1, LE and AF1x, TOS "throughput", socket priority 1, 2, 3 and 5 |
+
+So a telnet or IRC keystroke waits behind at most four frames, not behind
+a whole upload, and the ACKs of a download leave at once while an upload
+fills the link. `ip -s link` shows each band (`QoS: direct N, interactive
+N (queued, most, dropped) ...`); `qos status` too. A band holds `limit`
+frames (128); beyond that TCP backs off as on any full queue.
+
+**Socket priority.** `setsockopt(s, SOL_SOCKET, SO_PRIORITY, &n, 4)` with
+n 0..7 (Linux semantics; `SO_PRIORITY` is 0x1100 in Riptide's headers,
+`SO_RIPTIDE_PRIORITY` in the SDK, and Linux's number 12 is accepted too)
+picks the band, and, when the program has not set `IP_TOS` /
+`IPV6_TCLASS` itself, the DSCP of its packets, so a home router with QoS
+can tell them apart too: 0 none, 1 CS1, 2 AF11, 3 AF21, 4 AF31, 5 AF41, 6
+EF, 7 CS6 (`qos priodscp off` keeps the DSCP at 0). Accepted sockets
+inherit their listener's priority. `IP_TOS` and `IPV6_TCLASS` are honoured
+on every packet of TCP (SYN and ACKs included), UDP and raw sockets.
+
+**Rules for programs that set nothing.** Most Amiga programs never set a
+priority. `qos rule` lines give one to their sockets, by port (`port=`
+either end, `lport=` local, `rport=` remote), protocol and program (the
+command name a Shell runs, or the task name, without its path):
+
+```
+qos rule proto=tcp port=22,23,6667 priority=interactive dscp=EF   # ssh, telnet, IRC
+qos rule program=AmiFTP priority=bulk                              # downloads give way
+qos rule rport=6881,6882 priority=bulk dscp=CS1
+```
+
+A rule never overrides what a program sets itself (`SO_PRIORITY`,
+`IP_TOS`); program rules apply when the socket is created, port rules
+when its ports are known (bind, connect, accept, sendto). At most 16
+rules; `qos rules flush` removes them, `qos status` lists them.
+
+QoS decides the order in which frames leave this Amiga. How fast a TCP
+transfer sends at all is TCP's congestion control: a transfer can also
+be made to yield to others in the network with the background
+congestion control (`tcp background ...`, LEDBAT), which takes the same
+kind of rules.
+
+| keyword | sysctl | default | |
+|---|---|---|---|
+| `qos on\|off [IF]`, `interface ... qos=on\|off` | `net.inet.ip.qos_default` | on | bands on driver interfaces |
+| `qos inflight N` | `net.inet.ip.qos_inflight` | 4 | 1..32 frames in the driver |
+| `qos limit N` | `net.inet.ip.qos_limit` | 128 | 8..1024 frames per band |
+| `qos priodscp on\|off` | `net.inet.ip.qos_prio_dscp` | on | DSCP from SO_PRIORITY |
 
 ## IPv4 multicast
 
@@ -1446,6 +1636,8 @@ readable (end of file), one whose connect failed reports the error.
   `gethostbyname2()`, `getaddrinfo()`, `freeaddrinfo()`,
   `getnameinfo()`, `gai_strerror()`, the `if_*` functions, `sockatmark()`,
   `RiptideGetFdCallback()` and `RiptideSetFdCallback()`.
+* Version 2 (Riptide 0.15) adds `RiptideConnectName()` at LVO -528, after
+  the historical table (see "Happy Eyeballs").
 * Fd callbacks must be 68k register callbacks (`RIPTIDECPU_M68KREG`); PPC
   callbacks are refused.
 * Return fixed values:
@@ -1471,7 +1663,7 @@ is out of date):
 | File | |
 |---|---|
 | `sdk/fd/riptide_lib.fd` | FD file (base `_RiptideBase`; the reserved vectors are `##private`), for `fd2pragma`, `fd2sfd` and the like |
-| `sdk/include/libraries/riptide.h` | `RIPTIDE_LIB_NAME`, `RIPTIDE_LIB_VERSION`, `RIPTIDECPU_*`, the `net.riptide.*` MIB numbers |
+| `sdk/include/libraries/riptide.h` | `RIPTIDE_LIB_NAME`, `RIPTIDE_LIB_VERSION`, `RIPTIDECPU_*`, the `net.riptide.*` MIB numbers, the `RTCN_*` tags and `struct RiptideConnectResult`, `SO_RIPTIDE_PRIORITY` |
 | `sdk/include/clib/riptide_protos.h` | prototypes |
 | `sdk/include/inline/riptide_protos.h` | vbcc inline calls |
 | `sdk/include/pragmas/riptide_pragmas.h` | SAS/C and DICE `#pragma libcall` |

@@ -184,13 +184,17 @@ slightly between runs (seeded but timing dependent).
 | Raw sockets | Yes | Yes, with `IP_HDRINCL` [RS-DOC] | Yes (ICMP, `IP_HDRINCL`) |
 | Forwarding / router | Yes (`ip.forwarding` 1 by default) | `ip.forwarding` tunable [RS-DOC] | IPv4 no; IPv6 basic forwarding (`net.inet6.ip6.forwarding`, off), no router advertisements |
 | ZeroConf (169.254/16) | Not analysed | Yes, as DHCP fallback [RS-README] | No |
+| Several IPv4 addresses per interface | Not analysed | **Unverified** | Yes (0.15): up to 9 per interface (`ifconfig IF alias`, `ip addr add`, BSD `SIOCAIFADDR`/`SIOCDIFADDR`), source address by subnet, DHCP keeps the primary |
+| IPv4 / IPv6 per interface on or off | Not applicable (no IPv6) | **Unverified** | Yes (0.15): `ipv4 [IF] on\|off`, `ipv6 [IF] on\|off` |
+| Happy Eyeballs (RFC 8305) | No | **Unverified** | Yes (0.15): parallel A/AAAA lookups (50 ms resolution delay), RFC 6724 order, connection racing with 250 ms attempt delay (`RiptideConnectName()`, nc, ftp); no AAAA for `getaddrinfo()` while IPv6 has no route |
+| QoS / DiffServ | Not analysed | **Unverified** | Yes (0.15): three strict-priority transmit bands in front of SANA-II/MNI drivers (ACKs, DNS, small segments, EF first; CS1 last), `SO_PRIORITY` with DSCP marking, `IP_TOS`/`IPV6_TCLASS`, `qos rule` by port or program |
 
 ## 5. Application interfaces
 
 | | MiamiDx | Roadshow | Riptide |
 |---|---|---|---|
 | bsdsocket.library | AmiTCP 4 (46 LVOs) | AmiTCP 4.0 API [RS-DOC] plus many extensions (below) | AmiTCP 4, all 46 functions |
-| Extended API | miami.library 21: sysctl, getaddrinfo & co., fd callbacks, packet filter hooks, SSL | In bsdsocket.library itself [RS-DOC]: routing (`AddRouteTagList`, `DeleteRouteTagList`, `ChangeRouteTagList`, `GetRouteInfo`), interfaces (`AddInterfaceTagList`, `ConfigureInterfaceTagList`, `QueryInterfaceTagList`, `ObtainInterfaceList`, `RemoveInterface`), DNS (`AddDomainNameServer`, `ObtainDomainNameServerList`, `SetDefaultDomainName`...), monitoring (`AddNetMonitorHookTagList`, `GetNetworkStatistics`), BPF (`bpf_open`...), mbuf access, `ObtainRoadshowData`/`ChangeRoadshowData`, server sockets, `gethostbyname_r`, `getaddrinfo`/`getnameinfo` | `riptide.library` 1 (the MiamiDx API under Riptide names) plus a compat alias under the old name; `net.riptide.*` tables via `RiptideSysCtl()`; the RIPTIDE command port; BSD routing and ARP ioctls |
+| Extended API | miami.library 21: sysctl, getaddrinfo & co., fd callbacks, packet filter hooks, SSL | In bsdsocket.library itself [RS-DOC]: routing (`AddRouteTagList`, `DeleteRouteTagList`, `ChangeRouteTagList`, `GetRouteInfo`), interfaces (`AddInterfaceTagList`, `ConfigureInterfaceTagList`, `QueryInterfaceTagList`, `ObtainInterfaceList`, `RemoveInterface`), DNS (`AddDomainNameServer`, `ObtainDomainNameServerList`, `SetDefaultDomainName`...), monitoring (`AddNetMonitorHookTagList`, `GetNetworkStatistics`), BPF (`bpf_open`...), mbuf access, `ObtainRoadshowData`/`ChangeRoadshowData`, server sockets, `gethostbyname_r`, `getaddrinfo`/`getnameinfo` | `riptide.library` 2 (the MiamiDx API under Riptide names, plus `RiptideConnectName()`) and a compat alias under the old name; `net.riptide.*` tables via `RiptideSysCtl()`; the RIPTIDE command port; BSD routing and ARP ioctls |
 | usergroup.library | Yes | **Unverified** | Yes, single user |
 
 Riptide does **not** implement any of Roadshow's bsdsocket.library
