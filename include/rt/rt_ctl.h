@@ -322,7 +322,18 @@ struct rt_ctl_tcpinfo {
 	u32  age_ms;              /* since the connection was established (0 never) */
 	u32  last_data_recv_ago, last_data_sent_ago, last_ack_recv_ago;
 	char cc[16];              /* congestion control */
+	/* 0.15: background transfers (tcp_ledbat.c) */
+	u8   bg;                  /* RT_CTL_TCPBG_* */
+	u8   ledbat_phase;        /* 0 slow start 1 normal 2 slowdown 3 ramp (when a LEDBAT is on) */
+	u8   bg_pad[2];
+	u32  rledbat_wnd;         /* rLEDBAT's window limit, bytes (0: off) */
+	u32  ledbat_qdelay_us;    /* queueing delay LEDBAT/rLEDBAT measures */
+	u32  ledbat_base_us;      /* its base (minimum) RTT */
 };
+#define RT_CTL_TCPBG_RECV   0x01  /* rLEDBAT wanted */
+#define RT_CTL_TCPBG_SEND   0x02  /* LEDBAT wanted */
+#define RT_CTL_TCPBG_RL_ON  0x04  /* rLEDBAT limits the window now */
+#define RT_CTL_TCPBG_RULE   0x08  /* chosen by a "background" rule (not by the program) */
 
 /* every resolver server, IPv4 ones IPv4-mapped (rt_ctl_dns keeps the IPv4 list) */
 #define RT_CTL_DNS_STATIC 0

@@ -156,6 +156,10 @@ struct rt_ipv6_mreq {
 #define RT_TCP_KEEPCNT     0x400
 #define RT_TCP_QUICKACK    0x1000 /* Linux semantics */
 #define RT_TCP_USER_TIMEOUT 0x2000 /* ms, RFC 5482 / Linux semantics */
+/* Riptide: a background connection that yields to others. int, bits:
+ * 1 receive side (rLEDBAT limits the advertised window), 2 send side
+ * (LEDBAT++ congestion control, as TCP_CONGESTION "ledbat"); 0 normal. */
+#define RT_TCP_BACKGROUND  0x5200
 
 /* ---- message flags ---- */
 #define RT_MSG_OOB       0x01

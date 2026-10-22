@@ -6,6 +6,7 @@
  *   Riptide PROFILE START|STOP|RESET|SHOW
  *   Riptide DEBUG CATEGORIES|NONE|SHOW [N]|CLEAR|DUMP FILE|STATUS [SIZE=KB]
  *   Riptide NTP [SYNC|STATUS|...] | MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
+ *   Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=...]
  *
  * Without QUIT/STATUS/CAPTURE/PROFILE/DEBUG it starts the stack and stays
  * in this process (start it with "Run >NIL: Riptide"); a numeric DEBUG is
@@ -127,7 +128,7 @@ static int riptide_main(void)
 	/* Riptide NTP SYNC|STATUS|..., MDNS ON|OFF|STATUS, TIMEZONE +HH:MM
 	 * (ReadArgs takes a STATUS word for the STATUS switch) */
 	if (more && (!rt_strcasecmp(more[0], "ntp") || !rt_strcasecmp(more[0], "mdns") ||
-	             !rt_strcasecmp(more[0], "timezone"))) {
+	             !rt_strcasecmp(more[0], "timezone") || !rt_strcasecmp(more[0], "background"))) {
 		char verb[12];
 		u32 i;
 		for (i = 0; more[0][i] && i + 1 < sizeof(verb); i++)

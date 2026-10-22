@@ -198,6 +198,63 @@ FS-UAE):
   so arming the stack's next deadline after an idle spell does not abort
   and resend the tick each time.
 
+## Background transfers (tcp_ledbat.c)
+
+One controller, `struct ledbat`, serves both directions. It keeps a window
+in segments * 256 (fixed point, no FPU), a base RTT (the minimum of each
+of the last four minutes) and a current RTT (the minimum of the last four
+samples); the queueing delay is their difference. Per acknowledged (or
+received) segment it follows LEDBAT++: below the 60 ms target it grows,
+in slow start by `acked / gain_inv`, else by `gain * (1 - delay/target)`
+per window (remainders carried), with `gain = 1 / min(16, ceil(2 *
+target / base))`; above the target it decreases once per RTT by `W *
+(delay / target - 1)`, at most half; slow start ends at 3/4 of the
+target. A loss halves once per RTT. Two RTTs after slow start, and then
+nine times the last slowdown's duration later, it freezes at two segments
+for two RTTs and ramps back to the old window: the queue drains and the
+base delay is measured again (late-comer advantage, base drift).
+
+* **Sender:** `tcp_congestion_ops` "ledbat" (`ca_priv` holds the 80
+  bytes). RTT samples come from `pkts_acked()`; the stack's own changes to
+  `snd_cwnd` (recovery, RTO) are taken over at the next ACK.
+* **Receiver (rLEDBAT, RFC 9840):** a `struct tcp_rledbat` allocated per
+  connection that wants it (and has timestamps). Samples are those of
+  `tcp_rcv_rtt_measure_ts()` (the first full segment echoing a new TSval
+  of ours); in-order data counts as acknowledged; a new hole in the
+  out-of-order queue counts as a loss. `__tcp_select_window()` clamps the
+  free space to the controller's window (at least two segments);
+  `tcp_select_window()` already never shrinks the right edge, so a lower
+  limit takes effect as data arrives.
+* **Policy:** `tcp_bg_attach()` matches the creating program (its name
+  through `rt_os_program_name()`, in the program's context) when a socket
+  is made; `tcp_bg_classify()` adds the port rules when connect() picks
+  the local port or a passive connection is created (children inherit the
+  listener's program match and `TCP_BACKGROUND`). `TCP_BACKGROUND` and an
+  explicit `TCP_CONGESTION` win over the rules.
+
+The host test (`tests/t_ledbat_tun.c`) needed a real bottleneck queue in
+front of a Linux sender: a qdisc on the sender's own host never fills
+(TCP Small Queues count the bytes until the qdisc releases them), so
+Riptide reads its TUN device at a fixed rate (`rt_host_tun_rx_rate()`)
+and the tun queue, whose packets the kernel orphans, is the bottleneck.
+The container's Linux defaults to BBR, which builds no standing queue;
+the test uses CUBIC senders.
+
+## Socket memory (tcp_mem.c)
+
+The use is the sum of `rmem_alloc + wmem_queued` over the connections
+(truesizes) and the datagram receive queues, recomputed at most once per
+millisecond below `mem_pressure` and at every check above it (loopback
+moves hundreds of KB per millisecond). Checks: receive auto-tuning,
+`tcp_sndbuf_expand()` and `tcp_grow_window()` stop under pressure; the
+window scale at SYN time is chosen for `tcp_rmem_max_now()` (64 KB under
+pressure); above `mem_high`, `tcp_try_rmem_schedule()` prunes the
+out-of-order queue and refuses data beyond an 8 KB minimum, the send path
+and `tcp_stream_is_writeable()` refuse to queue beyond 8 KB, and
+`rcv_ssthresh` is clamped to four segments. The minimums mean the use can
+exceed `mem_high` by up to two minimums and two segments per connection
+that was below them (Linux keeps 4 KB, `tcp_rmem[0]`).
+
 ## IPv6
 
 Riptide is a dual-stack host (RFC 8200, 4291, 4861, 4862, 8981, 7217,

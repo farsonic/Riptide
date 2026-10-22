@@ -93,6 +93,8 @@ struct rt_buf_stats {
 	u32 bytes;       /* bytes currently allocated */
 };
 void rt_buf_get_stats(struct rt_buf_stats *st);
+/* bytes of all allocated buffers and their headers (cheap) */
+u32 rt_buf_bytes_total(void);
 /* Global cap on buffer memory (bytes); allocation fails beyond it. 0=none */
 void rt_buf_set_limit(u32 bytes);
 

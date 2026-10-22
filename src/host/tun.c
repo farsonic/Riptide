@@ -24,7 +24,17 @@ struct tun_dev {
 	struct rt_netif nif;     /* first: nif->driver points back here too */
 	int fd;
 	char name[IFNAMSIZ];
+	/* receive rate limit (rt_host_tun_rx_rate): a token bucket; while it
+	 * is empty the fd is not polled and packets wait in the kernel's
+	 * tun queue (txqueuelen), which so becomes a bottleneck queue */
+	u32 rx_kbit;
+	s64 tokens;              /* bytes */
+	u64 last_us;
+	int paused;
+	struct rt_timer resume;
 };
+
+static void tun_resume(void *arg);
 
 static int tun_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
@@ -50,9 +60,28 @@ static void tun_rx(void *arg)
 	u32 room = t->nif.mtu > 1500 ? t->nif.mtu : 1500;
 	int i;
 
+	if (t->rx_kbit) {
+		u64 now = rt_now_us();
+		t->tokens += (s64)((now - t->last_us) * t->rx_kbit / 8000u);
+		if (t->tokens > 3000)
+			t->tokens = 3000;
+		t->last_us = now;
+	}
 	for (i = 0; i < TUN_RX_BURST; i++) {
-		struct rt_buf *b = rt_buf_alloc(RT_BUF_HEADROOM, room);
+		struct rt_buf *b;
 		ssize_t n;
+
+		if (t->rx_kbit && t->tokens <= 0) {
+			/* wait until the bucket has a packet's worth again */
+			u32 ms = (u32)((u64)(-t->tokens + 1500) * 8u / t->rx_kbit);
+			if (!t->paused) {
+				t->paused = 1;
+				rt_host_unregister_fd(t->fd);
+			}
+			rt_timer_after(&t->resume, ms ? ms : 1);
+			return;
+		}
+		b = rt_buf_alloc(RT_BUF_HEADROOM, room);
 
 		if (!b)
 			return;
@@ -62,6 +91,7 @@ static void tun_rx(void *arg)
 			return;
 		}
 		b->len = (u32)n;
+		t->tokens -= n;
 		rt_netif_input(&t->nif, b, (b->data[0] >> 4) == 4 ? RT_ETH_P_IP : RT_ETH_P_IPV6, NULL, 0);
 	}
 }
@@ -118,6 +148,33 @@ struct rt_netif *rt_host_tun_open(const char *ifname, u32 local, u32 peer_or_0, 
 		return NULL;
 	}
 	return &t->nif;
+}
+
+static void tun_resume(void *arg)
+{
+	struct tun_dev *t = arg;
+
+	if (t->paused) {
+		t->paused = 0;
+		rt_host_register_fd(t->fd, tun_rx, t);
+	}
+}
+
+void rt_host_tun_rx_rate(struct rt_netif *nif, u32 kbit)
+{
+	struct tun_dev *t = nif->driver;
+
+	rt_lock();
+	if (!t->resume.fn)
+		rt_timer_init(&t->resume, tun_resume, t);
+	t->rx_kbit = kbit;
+	t->tokens = 0;
+	t->last_us = rt_now_us();
+	if (!kbit) {
+		rt_timer_del(&t->resume);
+		tun_resume(t);
+	}
+	rt_unlock();
 }
 
 const char *rt_host_tun_name(const struct rt_netif *nif)

@@ -157,6 +157,13 @@ u32 __tcp_select_window(struct tcp_sock *tp)
 	}
 	if (free_space > (s32)tp->rcv_ssthresh)
 		free_space = (s32)tp->rcv_ssthresh;
+	if (tp->rl) {
+		/* rLEDBAT: no further than its window (tcp_select_window
+		 * never shrinks what was offered) */
+		s32 lim = (s32)RT_MAX(tcp_rledbat_window(tp), 2u * (u32)mss);
+		if (free_space > lim)
+			free_space = lim;
+	}
 	window = (s32)tp->rcv_wnd;
 	if (ws) {
 		window = free_space;
@@ -213,7 +220,8 @@ void tcp_select_initial_window(u32 space, u32 mss, u32 *rcv_wnd, u32 *window_cla
 	*rcv_wnd = RT_MIN(space, TCP_MAX_WINDOW);
 	*rcv_wscale = 0;
 	if (wscale_ok) {
-		u32 s = RT_MAX(space, (u32)sysctl_tcp_rmem_max);
+		/* under memory pressure for 64 KB only */
+		u32 s = RT_MAX(space, tcp_rmem_max_now());
 		int l = 0;
 		s = RT_MIN(s, *window_clamp);
 		while ((s >> l) > 1)
@@ -719,7 +727,7 @@ int tcp_connect(struct tcp_sock *tp)
 	if (tp->rcvbuf_locked || !sysctl_tcp_moderate_rcvbuf)
 		clamp = tcp_full_space(tp);
 	else
-		clamp = RT_MAX((u32)sysctl_tcp_rmem_max, tcp_full_space(tp));
+		clamp = RT_MAX(tcp_rmem_max_now(), tcp_full_space(tp));
 	tp->window_limit = tcp_route_window(&tp->daddr, tp->scope);
 	if (tp->window_limit && clamp > tp->window_limit)
 		clamp = tp->window_limit;

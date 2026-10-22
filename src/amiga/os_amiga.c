@@ -250,6 +250,45 @@ static void amiga_locale_tz(void)
 static int amiga_have_fast;
 static int amiga_check_move16;      /* 68040+: watch for non-Fast buffers */
 
+u32 rt_os_mem_avail(int *chip_only)
+{
+	u32 fast = AvailMem(MEMF_FAST);
+
+	if (chip_only)
+		*chip_only = fast == 0;
+	return fast ? fast : AvailMem(MEMF_ANY);
+}
+
+/* The program behind the calling task: a Shell's current command
+ * (cli_CommandName, the fifth longword of struct CommandLineInterface)
+ * without its path, else the task name ("AmiFTP", "Workbench"...). */
+void rt_os_program_name(char *buf, u32 len)
+{
+	struct Task *t = FindTask(NULL);
+	u32 n = 0, i, start = 0;
+
+	if (!len)
+		return;
+	buf[0] = 0;
+	if (!t)
+		return;
+	if (t->tc_Node.ln_Type == NT_PROCESS && ((struct Process *)t)->pr_CLI) {
+		ULONG *cli = BADDR(((struct Process *)t)->pr_CLI);
+		UBYTE *b = cli[4] ? (UBYTE *)BADDR(cli[4]) : NULL;
+		if (b && b[0]) {
+			for (i = 1; i <= b[0]; i++)
+				if (b[i] == ':' || b[i] == '/')
+					start = i;
+			for (i = start + 1; i <= b[0] && n + 1 < len; i++)
+				buf[n++] = (char)b[i];
+			buf[n] = 0;
+			return;
+		}
+	}
+	if (t->tc_Node.ln_Name)
+		rt_strlcpy(buf, t->tc_Node.ln_Name, len);
+}
+
 void *rt_malloc(size_t n)
 {
 	void *p;

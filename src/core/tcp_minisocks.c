@@ -178,7 +178,7 @@ static void tcp_req_window(struct tcp_sock *lp, struct tcp_request_sock *req)
 	if (lp->rcvbuf_locked || !sysctl_tcp_moderate_rcvbuf)
 		clamp = tcp_full_space(lp);
 	else
-		clamp = RT_MAX((u32)sysctl_tcp_rmem_max, tcp_full_space(lp));
+		clamp = RT_MAX(tcp_rmem_max_now(), tcp_full_space(lp));
 	if (limit && clamp > limit)
 		clamp = limit;
 	req->window_clamp = clamp;
@@ -330,6 +330,12 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->tos = lp->tos;
 	tp->ttl = lp->ttl;
 	tp->ca_ops = lp->ca_ops;
+	tp->ca_user = lp->ca_user;
+	tp->bg_prog = lp->bg_prog;
+	if (lp->bg_explicit) {
+		tp->bg_explicit = 1;
+		tp->bg_want = lp->bg_want;
+	}
 	tp->linger2 = lp->linger2;
 	tp->pingpong = lp->pingpong;
 	tp->rcvbuf = RT_MAX(so->rcvbuf, 2048u);
@@ -385,6 +391,7 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->ack.lrcvtime = tcp_jiffies();
 	tcp_bhash_insert(tp);
 	tcp_ehash_insert(tp);
+	tcp_bg_classify(tp);
 	tcp_init_transfer(tp);
 	tp->rcv_tstamp = tcp_jiffies();
 	tcp_initialize_rcv_mss(tp);

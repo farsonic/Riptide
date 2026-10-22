@@ -9,6 +9,7 @@
 static const struct tcp_congestion_ops *const tcp_ca_list[] = {
 	&tcp_cubic,
 	&tcp_reno,
+	&tcp_ledbat,
 };
 
 const struct tcp_congestion_ops *tcp_ca_find(const char *name)
