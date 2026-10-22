@@ -619,10 +619,14 @@ static void out_add(struct outbuf *o, const char *fmt, ...)
 
 static void sysctl_print(struct outbuf *o, const struct rt_sysctl *e, int value_only)
 {
-	char v[96];
+	static char v[1024];      /* strings may be tables (net.inet.tcp.fastopen_cache); lock held */
+	u32 l;
 
 	if (rt_sysctl_get_text(e, v, sizeof(v)) < 0)
 		v[0] = 0;
+	l = (u32)strlen(v);
+	if (l && v[l - 1] == '\n')
+		v[l - 1] = 0;
 	if (value_only)
 		out_add(o, "%s\n", v);
 	else

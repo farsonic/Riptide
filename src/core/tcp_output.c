@@ -13,6 +13,7 @@
 #define OPTION_MSS            0x04
 #define OPTION_WSCALE         0x08
 #define OPTION_SACK_BLOCKS    0x10
+#define OPTION_FAST_OPEN      0x20
 
 struct tcp_out_options {
 	u16 options;
@@ -23,6 +24,8 @@ struct tcp_out_options {
 	u32 tsval, tsecr;
 	const struct tcp_sack_block *dsack_blk;
 	const struct tcp_sack_block *sacks;
+	u8  fo_len;                  /* OPTION_FAST_OPEN: 0 = cookie request */
+	const u8 *fo_cookie;
 };
 
 /* Linux tcp_options_write(): MSS, SACK_PERM+TS packed, WSCALE, SACK. */
@@ -70,6 +73,17 @@ static u32 tcp_options_write(u8 *p, const struct tcp_out_options *o)
 			p += 8;
 		}
 	}
+	if (o->options & OPTION_FAST_OPEN) {
+		/* RFC 7413, last, NOP padded to 32 bits (Linux pads the same) */
+		u32 len = TCPOLEN_FASTOPEN_BASE + o->fo_len, al = (len + 3u) & ~3u;
+		p[0] = TCPOPT_FASTOPEN;
+		p[1] = (u8)len;
+		if (o->fo_len)
+			memcpy(p + 2, o->fo_cookie, o->fo_len);
+		while (len < al)
+			p[len++] = TCPOPT_NOP;
+		p += al;
+	}
 	return (u32)(p - start);
 }
 
@@ -97,6 +111,15 @@ static u32 tcp_syn_options(struct tcp_sock *tp, struct tcp_out_options *o)
 		o->options |= OPTION_SACK_ADVERTISE;
 		if (!(o->options & OPTION_TS))
 			size += 4;
+	}
+	if (tp->fo_len != TCP_FASTOPEN_NONE) {
+		u32 al = (TCPOLEN_FASTOPEN_BASE + tp->fo_len + 3u) & ~3u;
+		if (size + al <= TCP_MAX_OPT_LEN) {
+			o->options |= OPTION_FAST_OPEN;
+			o->fo_len = tp->fo_len;
+			o->fo_cookie = tp->fo_cookie;
+			size += al;
+		}
 	}
 	return size;
 }
@@ -699,8 +722,9 @@ int tcp_send_synack(struct tcp_sock *tp)
 	return tcp_transmit_skb(tp, b, 1);
 }
 
-/* Linux tcp_connect_init() + tcp_connect() */
-int tcp_connect(struct tcp_sock *tp)
+/* Linux tcp_connect_init(): negotiation state and the SYN, queued but not
+ * sent (tcp_connect_xmit() sends it; data queued behind it may go along) */
+int tcp_connect_init(struct tcp_sock *tp)
 {
 	struct rt_buf *b;
 	u32 clamp;
@@ -741,7 +765,7 @@ int tcp_connect(struct tcp_sock *tp)
 	tp->rcv_nxt = 0;
 	tp->rcv_wup = 0;
 	tp->copied_seq = 0;
-	tp->icsk_rto = TCP_TIMEOUT_INIT;
+	tp->icsk_rto = (u32)sysctl_tcp_syn_rto_initial_ms;
 	tp->icsk_retransmits = 0;
 	tp->icsk_backoff = 0;
 	tp->total_retrans = 0;
@@ -760,16 +784,90 @@ int tcp_connect(struct tcp_sock *tp)
 		tp->ecn_flags = TCP_ECN_OK;
 	}
 	tp->write_seq++;
-	tp->retrans_stamp = tcp_jiffies();
 	rt_bufq_tail(&tp->wq, b);
 	tp->wmem_queued += tcp_buf_truesize(b);
 	tp->packets_out = 1;
-	tcp_transmit_skb(tp, b, 1);
 	tp->snd_nxt = tp->write_seq;
 	tp->pushed_seq = tp->write_seq;
+	return 0;
+}
+
+static void tcp_event_new_data_sent(struct tcp_sock *tp, struct rt_buf *b);
+
+static void tcp_stamp_sent(struct rt_buf *b)
+{
+	struct tcp_skb_cb *cb = TCP_SKB_CB(b);
+
+	cb->tx_us = tcp_clock_us;
+	cb->tx_ms = tcp_jiffies();
+	if (!cb->first_tx_ms)
+		cb->first_tx_ms = cb->tx_ms;
+}
+
+/* Linux tcp_send_syn_data(): the SYN goes out with the first queued data
+ * (one segment of at most the server's MSS less 40 bytes of options).
+ * The queue keeps the SYN and that data as two segments, both in flight;
+ * a retransmitted SYN is a plain one. 0, or -1 to send a plain SYN. */
+static int tcp_send_syn_data(struct tcp_sock *tp, struct rt_buf *syn)
+{
+	struct rt_buf *d = tp->send_head, *b;
+	u32 space, n;
+
+	if (!d || d != syn->next || !d->len)
+		return -1;
+	space = tp->pmtu_cookie - tp->net_hlen - TCP_HDR_LEN;
+	if (tp->fo_mss && tp->fo_mss < space)
+		space = tp->fo_mss;
+	if (space <= TCP_MAX_OPT_LEN + 16)
+		return -1;
+	space -= TCP_MAX_OPT_LEN;
+	if (d->len > space && tcp_fragment(tp, d, space))
+		return -1;
+	n = d->len;
+	b = rt_buf_alloc(RT_BUF_HEADROOM, n);
+	if (!b)
+		return -1;
+	rt_copy_buf(rt_buf_put(b, n), d->data, n);
+	TCP_SKB_CB(b)->seq = TCP_SKB_CB(syn)->seq;
+	TCP_SKB_CB(b)->end_seq = TCP_SKB_CB(syn)->end_seq + n;
+	TCP_SKB_CB(b)->tcp_flags = TCP_SKB_CB(syn)->tcp_flags;
+	tcp_mstamp_refresh();
+	tcp_stamp_sent(syn);
+	tcp_stamp_sent(d);
+	tcp_transmit_skb(tp, b, 0);
+	tcp_event_new_data_sent(tp, d);
+	tp->fo_flags |= TCP_FO_SYN_DATA;
+	tp->fo_syn_len = (u16)n;
+	TCP_DBG(tp, "TFO: SYN with %lu bytes of data", (unsigned long)n);
+	return 0;
+}
+
+/* Linux tcp_connect(): send the queued SYN, with data when a TFO cookie
+ * is known and data is queued */
+int tcp_connect_xmit(struct tcp_sock *tp)
+{
+	struct rt_buf *b = tp->wq.head;
+
+	if (!b || !(TCP_SKB_CB(b)->tcp_flags & TCPHDR_SYN))
+		return -RT_EINVAL;
+	tp->retrans_stamp = tcp_jiffies();
+	if (tp->fo_len != TCP_FASTOPEN_NONE) {
+		tp->fo_flags |= TCP_FO_OPT_SENT;
+		if (!tp->fo_len)
+			rt_tcpstat.TCPFastOpenCookieReqd++;
+	}
+	if (tp->fo_len == TCP_FASTOPEN_NONE || !tp->fo_len || tcp_send_syn_data(tp, b))
+		tcp_transmit_skb(tp, b, 1);
 	rt_tcpstat.ActiveOpens++;
 	tcp_reset_xmit_timer(tp, ICSK_TIME_RETRANS, tp->icsk_rto);
 	return 0;
+}
+
+int tcp_connect(struct tcp_sock *tp)
+{
+	int err = tcp_connect_init(tp);
+
+	return err ? err : tcp_connect_xmit(tp);
 }
 
 /* ---- segmentation ---- */

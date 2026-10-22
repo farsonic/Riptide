@@ -198,6 +198,51 @@ FS-UAE):
   so arming the stack's next deadline after an idle spell does not abort
   and resend the tick each time.
 
+## TCP connection behaviour (Fast Open, connecting, keepalive, cork)
+
+User-visible behaviour and the knobs are in AMIGA.md ("Connecting, Fast
+Open, keepalive, cork"); this is how they are built.
+
+* **Fast Open client** (`tcp_fastopen.c`, Linux `tcp_fastopen.c` and the
+  fastopen part of `tcp_metrics.c`). The cookie cache is a 32-entry array
+  keyed by server address (LRU), with the server's MSS and a SYN-loss
+  count; a global run of lost TFO SYNs switches TFO off for
+  `fastopen_blackhole << n` seconds. `tcp_connect()` is split:
+  `tcp_connect_init()` queues the SYN unsent, `tcp_connect_xmit()` sends
+  it. A deferred connect (`TCP_FASTOPEN_CONNECT` with a known cookie) is
+  hashed and in SYN-SENT but has sent nothing (`TCP_FO_DEFER`,
+  `RT_SS_DEFERCONN`); the first `send()` runs init, queues its data behind
+  the SYN like any send, and `tcp_send_syn_data()` sends the SYN with a
+  copy of the first data segment (fragmented to the cached MSS less 40)
+  while the queue keeps SYN and data as two segments in flight. So the
+  retransmission machinery needs no special case: a retransmitted SYN is
+  the plain SYN skb (and goes without the option once the first timed
+  out), data the SYN-ACK did not acknowledge is retransmitted at once from
+  `tcp_rcv_synsent_state_process()`. `recv()`, `shutdown()` and
+  `WaitSelect()` for reading (`RT_SIOC_KICKCONN`, sent by `sel_scan()` for
+  sockets with `RT_SS_DEFERCONN`) start the handshake without data.
+  `shutdown(SHUT_WR)` of a TFO socket in SYN-SENT sets `fin_pending`; the
+  FIN goes after the handshake (an HTTP/1.0-style client shuts down right
+  after its request, before the SYN-ACK).
+* **Connecting.** SYN retransmissions use `syn_rto_initial_ms`, then double
+  or grow linearly up to `syn_rto_max_ms` (`tcp_retransmit_timer()`);
+  `connect_timeout` (or `TCP_KEEPINIT`) is the user timeout of SYN-SENT and
+  also clamps the last RTO, so the connect fails on time.
+  `syn_icmp_abort` in `tcp_err()` decides whether net/host unreachable
+  (soft in RFC 1122) end a connect: the default ends it on the second
+  report, which also covers Riptide's own ARP/ND failures (they answer
+  queued packets with ICMP host unreachable).
+* **Keepalive for all.** `keepalive_all` sets `ka_auto` at attach and on
+  accepted children; `keepalive_time_when()` then uses it as the idle
+  time. An explicit `SO_KEEPALIVE` clears `ka_auto`.
+* **Cork.** `TCP_CORK` and `MSG_MORE` push with `TCP_NAGLE_CORK` and arm
+  `cork_timer` (200 ms), which pushes with `TCP_NAGLE_PUSH`; `TCP_NOPUSH`
+  has no timer. With nothing in flight the zero window probe timer also
+  sends held data after an RTO (as Linux).
+* **Counters.** Appended to `struct rt_tcp_stats` (Riptide 0.15); `netstat`
+  reads the old part from older stacks and the new counters only when
+  the record is long enough.
+
 ## IPv6
 
 Riptide is a dual-stack host (RFC 8200, 4291, 4861, 4862, 8981, 7217,

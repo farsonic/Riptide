@@ -60,6 +60,7 @@
 #define TCPOPT_SACK_PERM  4
 #define TCPOPT_SACK       5
 #define TCPOPT_TIMESTAMP  8
+#define TCPOPT_FASTOPEN   34     /* RFC 7413 */
 #define TCPOLEN_MSS       4
 #define TCPOLEN_WINDOW    3
 #define TCPOLEN_SACK_PERM 2
@@ -67,6 +68,10 @@
 #define TCPOLEN_TSTAMP_ALIGNED 12
 #define TCPOLEN_SACK_BASE 2
 #define TCPOLEN_SACK_PERBLOCK 8
+#define TCPOLEN_FASTOPEN_BASE 2
+#define TCP_FASTOPEN_COOKIE_MIN 4
+#define TCP_FASTOPEN_COOKIE_MAX 16
+#define TCP_FASTOPEN_NONE 0xff   /* tcp_rx_opt.fo_len / tcp_sock.fo_len: no option */
 #define TCP_NUM_SACKS     4
 #define TCP_HDR_LEN       20
 #define TCP_MAX_OPT_LEN   40
@@ -132,6 +137,15 @@ struct tcp_skb_cb {
 #define TCP_NAGLE_OFF  1
 #define TCP_NAGLE_CORK 2
 #define TCP_NAGLE_PUSH 4
+#define TCP_CORK_MAX_MS 200      /* Linux: TCP_CORK holds partial segments at most this long */
+
+/* fo_flags */
+#define TCP_FO_WANT      0x01    /* TCP_FASTOPEN_CONNECT / TCP_FASTOPEN / MSG_FASTOPEN */
+#define TCP_FO_DEFER     0x02    /* connect() returned, SYN waits for the first send() */
+#define TCP_FO_SYN_DATA  0x04    /* the SYN carried data */
+#define TCP_FO_OPT_SENT  0x08    /* the first SYN carried the option (cookie or request) */
+#define TCP_FO_SYN_LOST  0x10    /* that SYN timed out; later SYNs go without the option */
+#define TCP_FO_DATA_ACKED 0x20   /* the SYN-ACK acknowledged the SYN data */
 
 /* ecn_flags */
 #define TCP_ECN_OK          1
@@ -219,6 +233,10 @@ struct tcp_rx_opt {
 	u8  sack_off;        /* offset of SACK option in header (0 none) */
 	u8  saw_wscale_raw;
 	u16 user_mss;
+	/* RFC 7413 option of a SYN: TCP_FASTOPEN_NONE, 0 (cookie request) or
+	 * the cookie length; only the SYN-SENT parse fills it */
+	u8  fo_len;
+	u8  fo_cookie[TCP_FASTOPEN_COOKIE_MAX];
 };
 
 /* Diagnostics (net.riptide.tcpinfo, TCP_INFO): plain counters and
@@ -282,6 +300,16 @@ struct tcp_sock {
 	u8  user_keepcnt;
 	u8  ever_connected;
 	u8  write_space_wanted;
+	u8  ka_auto;                   /* keepalive from net.inet.tcp.keepalive_all */
+	u8  cork_linux;                /* TCP_CORK (200 ms ceiling) rather than TCP_NOPUSH */
+	u8  fin_pending;               /* shutdown(SHUT_WR) while a TFO connect was in SYN-SENT */
+
+	/* TCP Fast Open client (RFC 7413, tcp_fastopen.c) */
+	u8  fo_flags;                  /* TCP_FO_* */
+	u8  fo_len;                    /* SYN option: TCP_FASTOPEN_NONE, 0 request, cookie length */
+	u16 fo_syn_len;                /* payload bytes sent in the SYN */
+	u16 fo_mss;                    /* the server's MSS from the cookie cache (0 unknown) */
+	u8  fo_cookie[TCP_FASTOPEN_COOKIE_MAX];
 
 	/* sequence space */
 	u32 iss, irs;
@@ -360,6 +388,7 @@ struct tcp_sock {
 
 	/* inet_connection_sock */
 	struct rt_timer retrans_timer, delack_timer, keepalive_timer;
+	struct rt_timer cork_timer;    /* TCP_CORK ceiling */
 	u32 icsk_rto;                  /* ms */
 	u32 icsk_timeout;
 	u8  icsk_pending;
@@ -446,7 +475,10 @@ extern s32 sysctl_tcp_timestamps, sysctl_tcp_window_scaling, sysctl_tcp_sack,
            sysctl_tcp_slow_start_after_idle, sysctl_tcp_max_orphans,
            sysctl_tcp_mssdflt,
            sysctl_tcp_keepidle, sysctl_tcp_keepintvl, sysctl_tcp_max_tw,
-           sysctl_tcp_delack_segs, sysctl_tcp_delack_ms, sysctl_tcp_quickack;
+           sysctl_tcp_delack_segs, sysctl_tcp_delack_ms, sysctl_tcp_quickack,
+           sysctl_tcp_syn_rto_initial_ms, sysctl_tcp_syn_rto_max_ms, sysctl_tcp_syn_backoff,
+           sysctl_tcp_connect_timeout, sysctl_tcp_syn_icmp_abort, sysctl_tcp_keepalive_all,
+           sysctl_tcp_fastopen, sysctl_tcp_fastopen_all, sysctl_tcp_fastopen_blackhole;
 extern char sysctl_tcp_cc[16];
 #define TCP_RACK_LOSS_DETECTION 0x1
 #define TCP_RACK_STATIC_REO_WND 0x2
@@ -515,7 +547,11 @@ static inline int tcp_stream_is_writeable(const struct tcp_sock *tp)
 }
 static inline int keepalive_time_when(const struct tcp_sock *tp)
 {
-	return (int)(tp->keepalive_time ? tp->keepalive_time : (u32)sysctl_tcp_keepidle * 1000u);
+	if (tp->keepalive_time)
+		return (int)tp->keepalive_time;
+	if (tp->ka_auto && sysctl_tcp_keepalive_all)
+		return (int)((u32)sysctl_tcp_keepalive_all * 1000u);
+	return (int)((u32)sysctl_tcp_keepidle * 1000u);
 }
 static inline u32 keepalive_intvl_when(const struct tcp_sock *tp)
 {
@@ -631,6 +667,13 @@ void tcp_send_active_reset(struct tcp_sock *tp);
 void tcp_send_fin(struct tcp_sock *tp);
 int  tcp_send_synack(struct tcp_sock *tp);
 int  tcp_connect(struct tcp_sock *tp);
+int  tcp_connect_init(struct tcp_sock *tp);
+int  tcp_connect_xmit(struct tcp_sock *tp);
+void tcp_pending_fin(struct tcp_sock *tp);
+/* tcp_fastopen.c */
+void tcp_fastopen_init(void);
+int  tcp_fastopen_lookup(const rt_in6_addr *daddr, u8 *cookie, u8 *len, u16 *mss);
+void tcp_fastopen_synack(struct tcp_sock *tp, const struct tcp_rx_opt *opt);
 int  tcp_write_xmit(struct tcp_sock *tp, u32 mss_now, int nonagle, int push_one);
 void tcp_push_pending_frames(struct tcp_sock *tp);
 void __tcp_push_pending_frames(struct tcp_sock *tp, u32 cur_mss, int nonagle);
@@ -663,6 +706,7 @@ void tcp_event_ack_sent(struct tcp_sock *tp);
 
 /* ---- tcp_timer.c ---- */
 void tcp_init_xmit_timers(struct tcp_sock *tp);
+void tcp_arm_cork_timer(struct tcp_sock *tp);
 void tcp_clear_xmit_timers(struct tcp_sock *tp);
 void tcp_reset_xmit_timer(struct tcp_sock *tp, int what, u32 when);
 void tcp_clear_xmit_timer(struct tcp_sock *tp, int what);

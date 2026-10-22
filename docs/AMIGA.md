@@ -229,6 +229,113 @@ quarter of the buffer) or the queue is empty, not after every read. The SANA-II 
 with `ip link set NAME reads N` (see below). `netstat -T` shows the effect
 on each connection.
 
+### Connecting, Fast Open, keepalive, cork
+
+Riptide's TCP connection behaviour for clients. Every setting is a sysctl
+(change it at run time with the `sysctl` tool or RiptidePrefs' Advanced
+page; in `riptide.conf` as `sysctl NAME=VALUE`). New values apply to
+connections started afterwards.
+
+| sysctl `net.inet.tcp.` | type, range | default | |
+|---|---|---|---|
+| `fastopen` | 0/1 | 1 | TCP Fast Open client (RFC 7413) for sockets that ask for it |
+| `fastopen_all` | 0/1 | 0 | every `connect()` as with `TCP_FASTOPEN_CONNECT` |
+| `fastopen_blackhole` | seconds, 0-86400 | 3600 | Fast Open off for this long (doubling, up to 64 times) after three lost TFO SYNs in a row; 0 never |
+| `fastopen_cache` | text (read; writing clears) | | the cookies: `ADDR cookie HEX mss N [syn-lost]`, or `disabled for N s` first |
+| `syn_rto_initial_ms` | ms, 200-3000 | 1000 | first SYN retransmission timeout |
+| `syn_rto_max_ms` | ms, 200-120000 | 4000 | longest SYN retransmission timeout |
+| `syn_backoff` | 0/1 | 1 | 1 doubles the SYN timeout, 0 adds `syn_rto_initial_ms` each time |
+| `connect_timeout` | seconds, 0-600 | 20 | give up connecting after this long (`ETIMEDOUT`); 0: only `syn_retries` (6) |
+| `syn_icmp_abort` | 0-2 | 1 | ICMP net/host unreachable while connecting: 2 fails the connect at once (Linux), 1 on the second one (after the SYN went out twice), 0 only at the timeout (RFC 1122) |
+| `tw_reuse` | 0-2 | 1 | connect() may reuse a 4-tuple in TIME_WAIT (with timestamps, 1 s later); 2: loopback only (Linux's default) |
+| `max_tw_buckets` | 0-65536 | 1024 | TIME_WAIT records (about 120 bytes each with the allocation, 120 KB for 1024); beyond that connections close without one |
+| `keepalive_all` | seconds, 0-32767 | 0 | keepalive on every connection, after this long idle (0 off) |
+| `keepidle`, `keepintvl`, `keepcnt` | s, s, 1-127 | 7200, 75, 9 | keepalive defaults for `SO_KEEPALIVE` |
+| `net.inet.ip.portrange.first`, `.last` | 1024-65535 | 49152, 65535 | ephemeral ports |
+
+**Connecting.** Linux retries a SYN after 1, 2, 4, 8, 16 and 32 s, so a
+program that connects to a dead host or a broken IPv6 path hangs in
+`connect()` for over two minutes. Riptide retries after 1, 2, 4, 4 ... s
+and gives up after `connect_timeout` (20 s). Per socket, `TCP_KEEPINIT`
+(seconds) or `TCP_USER_TIMEOUT` (ms) replace `connect_timeout`, and
+`SO_SNDTIMEO` ends a blocking `connect()` with `ETIMEDOUT` (the attempt
+goes on; `connect()` again gives `EALREADY`). An ICMP port unreachable or
+a RST fails the connect at once; host and network unreachable (from a
+router, or from Riptide itself when ARP or neighbour discovery fail) fail
+it on the second report with `syn_icmp_abort` 1, about a second after
+`connect()`.
+
+**TCP Fast Open** (RFC 7413, client side) saves a round trip on repeated
+connections to the same server: the first connection asks for a cookie
+(an empty option in the SYN), later ones send the cookie and the first
+data in the SYN, and the server can answer with the SYN-ACK. Only servers
+that offer it take part (Linux with `net.ipv4.tcp_fastopen` 2 or 3 on a
+listener with `TCP_FASTOPEN`); others ignore the option, and data they did
+not take in the SYN is sent again at once. Cookies are kept per server
+address (32, the least recently used goes). A program asks for it:
+
+* `setsockopt(s, IPPROTO_TCP, TCP_FASTOPEN_CONNECT (30), &one, 4)` before
+  `connect()`: with a cookie for the server, `connect()` returns 0 at
+  once and the first `send()` goes out in the SYN; without one, the
+  connect is normal (with a cookie request). A socket that is read from,
+  waited on for reading (`WaitSelect()`) or shut down before it sent
+  anything starts the handshake without data, so servers that speak first
+  work too. `TCP_FASTOPEN` (1025, FreeBSD's number) on a socket that is not
+  listening does the same.
+* `sendto(s, buf, len, MSG_FASTOPEN (0x20000000), &addr, addrlen)` on an
+  unconnected TCP socket connects and sends in one call; it returns the
+  bytes queued (without a cookie the data follows the handshake; a
+  non-blocking socket gets `EWOULDBLOCK` until then).
+* `fastopen_all` 1 does the first for every `connect()`, for programs that
+  cannot be changed. `connect()` then succeeds at once for servers with a
+  known cookie even if they are down: the error comes with the first
+  `send()`/`recv()`. Use it for web browsing, not for everything.
+
+Middleboxes that drop SYNs with data or unknown options are detected: a
+SYN with the option that times out is retried without it, the server is
+marked (after two such losses in a row no TFO to it for 1 minute,
+doubling), and three lost TFO SYNs in a row switch TFO off for
+`fastopen_blackhole` seconds. `TCP_INFO` sets `tcpi_options` bit 32 when
+the server acknowledged data in the SYN. Not offered: the server side
+(`TCP_FASTOPEN` on a listener gives `EOPNOTSUPP`).
+
+**TIME_WAIT and ports.** The side that closes first keeps the connection
+in TIME_WAIT for 60 s. With `tw_reuse` 1 (Riptide's default; Linux uses
+2, loopback only) `connect()` reuses such a port and address pair when
+both ends use timestamps (PAWS keeps old segments out) and at least a
+second has passed, so programs that open many short connections to one
+server do not run out of ephemeral ports. The test suite makes 3000
+connections in a row to one port without an error.
+
+**Keepalive.** `SO_KEEPALIVE` with `TCP_KEEPIDLE`, `TCP_KEEPINTVL` (seconds)
+and `TCP_KEEPCNT` (BSD numbers 0x100, 0x200, 0x400; Linux uses 4, 5 and 6):
+after IDLE seconds without traffic a probe goes out, then one every
+INTERVAL seconds while unanswered; after COUNT unanswered probes the
+connection fails with `ETIMEDOUT`. An answered probe restarts the idle
+time (but the next one comes no sooner than INTERVAL). Home NAT routers
+forget idle TCP connections after minutes to hours, so telnet, IRC or SSH
+sessions of programs that never ask for keepalive die silently;
+`keepalive_all 120` (with `keepintvl 30`, say) keeps them open. An
+explicit `SO_KEEPALIVE` off wins over it.
+
+**Nagle, `TCP_NODELAY`, `TCP_CORK`.** As in Linux: Nagle's algorithm holds
+a small segment while an earlier small one is unacknowledged;
+`TCP_NODELAY` (1) turns that off and sends what was held at once.
+`TCP_CORK` (3, Linux) holds partial segments until it is cleared, at most
+200 ms; full segments always go. `TCP_NOPUSH` (4, BSD) is the same without
+the 200 ms timer (with nothing in flight the window probe timer sends it
+after an RTO, as Linux does). `send()` with `MSG_MORE` (0x8000, Linux)
+holds that call's tail the same way until a `send()` without it. A
+`shutdown(SHUT_WR)` of a Fast Open socket whose handshake is still going
+sends its FIN after the handshake (other sockets abort a connect, as BSD
+and Linux do).
+
+`netstat -s` counts Fast Open (data in the SYN, data not acknowledged,
+cookie requests, lost SYNs, switch-offs), connects that timed out or
+ended on ICMP unreachable, corked segments sent by the 200 ms limit,
+keepalive probes and reused TIME_WAIT connections. `nc -F` connects with
+Fast Open and `nc -K SECS` turns keepalive on.
+
 ### Time and .local names
 
 **NTP.** `ntp pool.ntp.org` (or up to four names or addresses) starts the
@@ -846,7 +953,9 @@ timeout in seconds.
   `-m GROUP` joins an IPv4 multicast group first (on the interface with
   address `-I ADDR`). When sending, `-T ttl`, `-I ADDR` and `-L` set
   `IP_MULTICAST_TTL`, `IP_MULTICAST_IF` and `IP_MULTICAST_LOOP` 0:
-  `nc -u -T 4 239.1.2.3 5000 <file`.
+  `nc -u -T 4 239.1.2.3 5000 <file`. `-F` connects with TCP Fast Open
+  (`TCP_FASTOPEN_CONNECT`), `-K SECS` sets `SO_KEEPALIVE` with
+  `TCP_KEEPIDLE` and `TCP_KEEPINTVL` SECS.
 
 ### ftp
 
@@ -1665,6 +1774,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
+| `tests/t_tcpopt_tun.c` (host, root) | Against the Linux kernel over TUN, the Linux end in a network namespace with `tcp_fastopen=3` and iptables rules as middleboxes: Fast Open (cookie request, data in the SYN with `TCP_FASTOPEN_CONNECT` and `sendto(MSG_FASTOPEN)` as seen by Linux's `TCP_INFO`, a deferred connect that reads or waits first, a server without TFO, SYN-data dropped once and twice, three lost at three servers switching TFO off, `fastopen 0`), the connect timeout and the SYN backoff (times and SYN counts), ICMP host/port unreachable with each `syn_icmp_abort`, `TCP_KEEPINIT`, `SO_SNDTIMEO`, TIME_WAIT with 20 ports (`EADDRNOTAVAIL` without reuse, 20 reused with it) and 3000 short connections, keepalive probes and a silently dead peer, `keepalive_all` and an explicit `SO_KEEPALIVE` 0, and segment counts for Nagle, `TCP_NODELAY`, `TCP_CORK` with its 200 ms limit, `TCP_NOPUSH` and `MSG_MORE` (bytes checked at Linux). |
+| `tests/amiga/run_fsuae_tcpopt.sh build/amiga` | The same through bsdsocket.library on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtf0`/`rtf1`, 192.168.101.0/24, or `TF_IF`, `TF_PEER`, `TF_NET`; the Linux end in a namespace with `tests/amiga/tcpopt_peer.py`): `nc -F` three times (the second and third requests arrive in the SYN), `net.inet.tcp.fastopen_cache`, a connect timed out by `connect_timeout`, one ended by ICMP host unreachable, `nc -K 1` keepalive probes, and the `netstat -s` counters. |
 | `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root; `BR_IF`, `BR_PEER`, `BR_NET` choose other veth names and another /24 than `rtbr0`, `rtbr1`, `192.168.77`): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |

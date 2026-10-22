@@ -610,7 +610,8 @@ static int show_stats(void)
 	}
 	if (all || opt_t) {
 		struct rt_tcp_stats *t;
-		if (!(d = stat_dump(RT_CTL_TCPSTAT, sizeof(*t))))
+		/* stacks before 0.15 have a shorter record */
+		if (!(d = stat_dump(RT_CTL_TCPSTAT, offsetof(struct rt_tcp_stats, TCPFastOpenActive))))
 			return CL_FAIL;
 		t = (struct rt_tcp_stats *)((u8 *)d + sizeof(struct rt_ctl_hdr));
 		cl_puts("Tcp:\n");
@@ -644,6 +645,19 @@ static int show_stats(void)
 		P("%lu connections reset due to early user close", t->TCPAbortOnClose);
 		P("%lu connections aborted due to timeout", t->TCPAbortOnTimeout);
 		P("%lu packets queued out of order", t->TCPOFOQueue);
+		P("%lu keepalive probes sent", t->TCPKeepAlive);
+		P("%lu TIME_WAIT connections reused", t->TimeWaitRecycled);
+		/* Riptide 0.15 counters: only from a stack that has them */
+		if (((struct rt_ctl_hdr *)d)->recsize >= sizeof(*t)) {
+			P("%lu connects with data in the SYN (TCP Fast Open)", t->TCPFastOpenActive);
+			P("%lu TCP Fast Open SYN data not acknowledged", t->TCPFastOpenActiveFail);
+			P("%lu TCP Fast Open cookie requests", t->TCPFastOpenCookieReqd);
+			P("%lu TCP Fast Open SYNs lost", t->TCPFastOpenSynLost);
+			P("%lu times TCP Fast Open switched off (SYNs lost in a row)", t->TCPFastOpenBlackhole);
+			P("%lu connects timed out", t->TCPConnectTimeouts);
+			P("%lu connects ended by ICMP unreachable", t->TCPConnectUnreach);
+			P("%lu corked segments sent by the 200 ms limit", t->TCPCorkFlush);
+		}
 		FreeVec(d);
 	}
 	if (all || opt_u) {

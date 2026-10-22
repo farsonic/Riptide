@@ -38,6 +38,13 @@ struct rt_tcp_stats {
 	    TCPHPHits, TCPPureAcks, TCPHPAcks, TCPZeroWindowDrop, TCPWinProbe,
 	    TCPKeepAlive, TCPRackLoss, TCPECNMarks, TimeWaitRecycled,
 	    TCPMTUPFail, TCPMTUPSuccess;
+	/* Riptide 0.15 (appended: older readers check the record size):
+	 * Fast Open (Linux TCPFastOpenActive[Fail], TCPFastOpenCookieReqd),
+	 * lost TFO SYNs, global TFO switch-offs, connects ended by the
+	 * connect timeout / by ICMP unreachable, TCP_CORK ceiling flushes */
+	u32 TCPFastOpenActive, TCPFastOpenActiveFail, TCPFastOpenCookieReqd,
+	    TCPFastOpenSynLost, TCPFastOpenBlackhole, TCPConnectTimeouts,
+	    TCPConnectUnreach, TCPCorkFlush;
 };
 
 struct rt_igmp_stats {

@@ -630,7 +630,9 @@ static int sock_sendit(struct rt_socket *so, const struct rt_iov *iov0, int iovc
 			return -RT_ENOBUFS;
 		if (iov != local)
 			alloc = iov;
-		to = NULL;             /* ignored on connected streams */
+		/* ignored on streams, but for TCP Fast Open's connect-and-send */
+		if (!(flags & RT_MSG_FASTOPEN) || (so->state & (RT_SS_ISCONNECTED | RT_SS_ISCONNECTING)))
+			to = NULL;
 	}
 	for (;;) {
 		r = so->ops->send(so, iov, cnt, flags, to);
@@ -1480,6 +1482,9 @@ static int sel_scan(struct rt_sockctx *c, int nfds, u32 *rd, u32 *wr, u32 *ex, i
 		so = c->fds[fd];
 		if (!so || so == SOCK_RESERVED)
 			return -RT_EBADF;
+		if (ir && (so->state & RT_SS_DEFERCONN) && so->ops->ioctl) {
+			so->ops->ioctl(so, RT_SIOC_KICKCONN, NULL);
+		}
 		m = sock_poll(so);
 		if (ir && !(m & (RT_POLLIN | RT_POLLERR | RT_POLLHUP)))
 			ir = 0;
