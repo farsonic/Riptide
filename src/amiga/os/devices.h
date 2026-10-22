@@ -30,6 +30,19 @@ struct timerequest {
 
 extern struct Device *TimerBase;
 
+/* ---- locale.library (the GMT offset only) ---- */
+struct Locale {
+	STRPTR loc_LocaleName;
+	STRPTR loc_LanguageName;
+	STRPTR loc_PrefLanguages[10];
+	ULONG  loc_Flags;
+	ULONG  loc_CodeSet;
+	ULONG  loc_CountryCode;
+	ULONG  loc_TelephoneCode;
+	LONG   loc_GMTOffset;        /* minutes west of GMT */
+	/* more fields follow; only ever read through OpenLocale()'s pointer */
+};
+
 #include "sana2.h"
 
 #endif

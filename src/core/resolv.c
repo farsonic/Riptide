@@ -835,6 +835,101 @@ static int is_localhost(const char *name)
 	return !rt_strcasecmp(name, "localhost") || !rt_strcasecmp(name, "localhost.");
 }
 
+/* ---- .local names: multicast DNS (RFC 6762 5.1 one-shot queries) ---- */
+
+#define MDNS_WAIT_MS 1000        /* per attempt, two attempts */
+
+static int is_mdns_name(const char *name)
+{
+	u32 l = (u32)strlen(name);
+
+	if (l && name[l - 1] == '.')
+		l--;
+	return l > 6 && !rt_strncasecmp(name + l - 6, ".local", 6);
+}
+
+/* our own .local name: the interface addresses (lock held) */
+static int mdns_self(const char *name, u32 *a4, rt_in6_addr *a6, int max)
+{
+	const char *h = rt_mdns_hostname();
+	u32 hl = (u32)strlen(h);
+	struct rt_netif *nif;
+	struct rt_in6_ifaddr_info ai[8];
+	int n = 0, i, na;
+
+	if (!hl || rt_strncasecmp(name, h, hl) || !is_mdns_name(name) || name[hl] != '.' ||
+	    (name[hl + 6] && name[hl + 6] != '.'))
+		return 0;
+	if (!a6) {
+		for (nif = rt_netif_list(); nif && n < max; nif = nif->next)
+			if (nif->addr && !(nif->flags & RT_IFF_LOOPBACK))
+				a4[n++] = nif->addr;
+		return n;
+	}
+	na = rt_in6_addr_list(NULL, ai, 8);
+	for (i = 0; i < na && i < 8 && n < max; i++)
+		if (ai[i].scope == RT_IN6_SCOPE_GLOBAL &&
+		    !(ai[i].flags & (RT_IN6_IFF_TENTATIVE | RT_IN6_IFF_DUPLICATED)))
+			a6[n++] = ai[i].addr;
+	return n;
+}
+
+static int mdns_resolve(struct dns_work *w, const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6,
+                        int max, u32 *ttl)
+{
+	struct rt_sockaddr_in sin;
+	int fd, att, r, qlen, result = -RT_HOST_NOT_FOUND;
+
+	fd = rt_api_socket(&w->ctx, RT_AF_INET, RT_SOCK_DGRAM, 0);
+	if (fd < 0)
+		return -RT_TRY_AGAIN;
+	for (att = 0; att < 2; att++) {
+		u16 id = (u16)rt_random32();
+		u32 start = rt_now_ms();
+		qlen = dns_build_query(w->q, sizeof(w->q), id, name, qtype);
+		if (qlen < 0) {
+			result = -RT_NO_RECOVERY;
+			break;
+		}
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_len = sizeof(sin);
+		sin.sin_family = RT_AF_INET;
+		sin.sin_port = rt_htons(5353);
+		sin.sin_addr = rt_htonl(0xe00000fbu);
+		r = rt_api_sendto(&w->ctx, fd, w->q, (u32)qlen, 0, &sin, sizeof(sin));
+		if (r < 0) {
+			result = -RT_TRY_AGAIN;
+			break;
+		}
+		RT_DBG(RT_DBG_DNS, "mdns query %s type %u, attempt %d", name, (unsigned)qtype, att + 1);
+		for (;;) {
+			struct rt_sockaddr_in from;
+			u32 el = rt_now_ms() - start, fl = sizeof(from), set = 1u << fd;
+			if (el >= MDNS_WAIT_MS)
+				break;
+			r = rt_api_select(&w->ctx, fd + 1, &set, NULL, NULL, (s32)(MDNS_WAIT_MS - el), NULL);
+			if (r == -RT_EINTR) {
+				att = 2;
+				result = -RT_TRY_AGAIN;
+				break;
+			}
+			if (r <= 0)
+				break;
+			r = rt_api_recvfrom(&w->ctx, fd, w->a, sizeof(w->a), RT_MSG_DONTWAIT, &from, &fl);
+			if (r < 0 || from.sin_port != rt_htons(5353))
+				continue;
+			r = mdns_parse_answer(w->a, (u32)r, id, name, qtype, a4, a6, max, ttl);
+			if (r > 0) {
+				result = r;
+				att = 2;
+				break;
+			}
+		}
+	}
+	rt_api_close(&w->ctx, fd);
+	return result;
+}
+
 /* Forward lookup of qtype A (a4) or AAAA (a6). */
 static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int max,
                    char *canon, u32 canonlen)
@@ -858,6 +953,8 @@ static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int ma
 			a4[0] = RT_INADDR_LOOPBACK;
 		n = 1;
 	}
+	if (n == 0)
+		n = mdns_self(name, a4, a6, max);
 	if (n == 0 && (c = cache_find(name, qtype)) != NULL) {
 		n = RT_MIN(max, (int)c->naddr);
 		for (i = 0; i < n; i++) {
@@ -883,6 +980,18 @@ static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int ma
 	if (!w)
 		return -RT_TRY_AGAIN;
 	w->res.addrs6 = a6;
+	if (is_mdns_name(name)) {
+		u32 ttl = 0;
+		r = mdns_resolve(w, name, qtype, a4, a6, max, &ttl);
+		if (r > 0) {
+			rt_lock();
+			cache_add(name, name, qtype, a4, a6, r, ttl);
+			rt_unlock();
+			put_canon(canon, canonlen, name);
+		}
+		work_free(w);
+		return r;
+	}
 	for (i = 0; i < (int)nl; i++)
 		dots += name[i] == '.';
 	/* candidates (ndots:1): absolute first if the name has a dot */

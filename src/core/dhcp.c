@@ -43,6 +43,7 @@
 #define OPT_HOSTNAME   12
 #define OPT_DOMAIN     15
 #define OPT_MTU        26
+#define OPT_NTP        42
 #define OPT_REQIP      50
 #define OPT_LEASE      51
 #define OPT_MSGTYPE    53
@@ -64,6 +65,8 @@ struct dhcp_opts {
 	u32 mask, router, server, lease, t1, t2;
 	u32 dns[DHCP_MAX_DNS];
 	u8  ndns;
+	u32 ntp[4];
+	u8  nntp;
 	u16 mtu;
 	char domain[64];
 	char hostname[64];
@@ -149,7 +152,7 @@ static u8 *opt_put(u8 *p, u8 code, u8 len, const void *data)
 static struct rt_buf *dhcp_build(struct dhcp_client *c, u8 type, u32 ciaddr)
 {
 	static const u8 params[] = { OPT_MASK, OPT_ROUTER, OPT_DNS, OPT_HOSTNAME, OPT_DOMAIN,
-	                             OPT_MTU, OPT_LEASE, OPT_SERVERID, OPT_T1, OPT_T2 };
+	                             OPT_MTU, OPT_NTP, OPT_LEASE, OPT_SERVERID, OPT_T1, OPT_T2 };
 	struct rt_buf *b = rt_buf_alloc(RT_BUF_HEADROOM, DHCP_MAX_LEN);
 	u8 *m, *p, v8[17];
 	u32 secs, len, hl;
@@ -300,6 +303,7 @@ static void unconfigure(struct dhcp_client *c)
 		rt_dns_remove_server(c->dns[i]);
 	if (c->set_domain)
 		rt_domainname[0] = 0;
+	rt_ntp_dhcp_servers(c->nif, NULL, 0);
 	if (c->nif->addr == c->addr)
 		rt_netif_set_addr(c->nif, 0, 0, 0);
 	c->addr = c->router = 0;
@@ -383,6 +387,7 @@ static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts
 		rt_dns_set_search(o->domain);
 		c->set_domain = 1;
 	}
+	rt_ntp_dhcp_servers(nif, o->ntp, o->nntp);
 	if (o->hostname[0] && !rt_hostname[0])
 		rt_strlcpy(rt_hostname, o->hostname, sizeof(rt_hostname));
 
@@ -493,13 +498,16 @@ static void parse_options(const u8 *p, u32 len, struct dhcp_opts *o)
 		case OPT_T1:       if (l == 4) o->t1 = rt_get_be32(v); break;
 		case OPT_T2:       if (l == 4) o->t2 = rt_get_be32(v); break;
 		case OPT_MTU:      if (l == 2) o->mtu = rt_get_be16(v); break;
-		case OPT_DNS: {
-			u32 k;
-			for (k = 0; k + 4 <= l && o->ndns < DHCP_MAX_DNS; k += 4) {
+		case OPT_DNS:
+		case OPT_NTP: {
+			u32 k, *out = code == OPT_DNS ? o->dns : o->ntp;
+			u8 *n = code == OPT_DNS ? &o->ndns : &o->nntp;
+			u32 max = code == OPT_DNS ? DHCP_MAX_DNS : 4;
+			for (k = 0; k + 4 <= l && *n < max; k += 4) {
 				u32 a;
 				memcpy(&a, v + k, 4);
 				if (a && a != RT_INADDR_BROADCAST)
-					o->dns[o->ndns++] = a;
+					out[(*n)++] = a;
 			}
 			break;
 		}

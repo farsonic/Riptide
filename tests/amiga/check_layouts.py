@@ -64,6 +64,7 @@ NDK_STRUCTS = (
     S('timeval', 'tv_secs', 'tv_micro', ref='timeval') +
     S('EClockVal', 'ev_hi', 'ev_lo') +
     S('timerequest', 'tr_node', 'tr_time') +
+    S('Locale', 'loc_Flags', 'loc_CountryCode', 'loc_GMTOffset')[1:] +   # partial: no sizeof
     S('TagItem', 'ti_Tag', 'ti_Data') +
     S('Hook', 'h_Entry', 'h_SubEntry', 'h_Data') +
     S('DateStamp', 'ds_Days', 'ds_Minute', 'ds_Tick') +
@@ -257,7 +258,7 @@ def check_lvos(table, lib, fd, rename=None, allow_extra=()):
     ref = parse_fd(fd)
     n = 0
     for f in libs[lib].funcs:
-        if f.bias <= 24 or f.name in allow_extra:
+        if (f.bias <= 24 and 'resource' not in libs[lib].opts) or f.name in allow_extra:
             continue
         name = rename(f.name) if rename else f.name
         if name not in ref:
@@ -286,7 +287,7 @@ def main():
         inc = os.path.join(ndk, 'Include_H')
         ok &= check_against(tmp, 'ndk', NDK_STRUCTS, NDK_CONSTS, ['exec.h', 'dos.h', 'devices.h'],
                             ['exec/types.h', 'exec/execbase.h', 'exec/semaphores.h', 'exec/io.h', 'exec/devices.h',
-                             'exec/memory.h', 'exec/errors.h', 'devices/timer.h', 'dos/dos.h',
+                             'exec/memory.h', 'exec/errors.h', 'devices/timer.h', 'libraries/locale.h', 'dos/dos.h',
                              'dos/dosextens.h', 'dos/dosasl.h', 'dos/var.h', 'dos/dostags.h', 'utility/tagitem.h', 'utility/hooks.h'],
                             [inc])
         sana = os.path.join(ndk, 'SANA+RoadshowTCP-IP', 'include')
@@ -335,7 +336,8 @@ def main():
         ok &= check_lvos(os.path.join(ROOT, 'src/amiga/lib_lvos.txt'), 'riptide',
                          os.path.join(ROOT, 'sdk/fd/riptide_lib.fd'))
         t = os.path.join(ROOT, 'src/amiga/os/os_lvos.txt')
-        for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd')):
+        for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd'),
+                         ('locale', 'locale_lib.fd'), ('battclock', 'battclock_lib.fd')):
             ok &= check_lvos(t, lib, os.path.join(ndk, 'FD', fdn))
     print('ALL OK' if ok else 'MISMATCHES FOUND')
     return 0 if ok else 1

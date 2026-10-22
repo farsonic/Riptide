@@ -20,6 +20,7 @@
 #include "rt_stats.h"
 #include "rt_ctl.h"
 #include "rt_diag.h"
+#include "rt_netsvc.h"
 
 #define RIPTIDE_VERSION_STRING "0.12"
 

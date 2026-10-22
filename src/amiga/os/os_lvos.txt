@@ -43,6 +43,7 @@
 474 BYTE WaitIO(struct IORequest* ioRequest a1)
 480 void AbortIO(struct IORequest* ioRequest a1)
 534 ULONG TypeOfMem(const APTR address a1)
+498 APTR OpenResource(CONST_STRPTR resName a1)
 552 struct Library* OpenLibrary(CONST_STRPTR libName a1, ULONG version d0)
 558 void InitSemaphore(struct SignalSemaphore* sigSem a0)
 564 void ObtainSemaphore(struct SignalSemaphore* sigSem a0)
@@ -99,3 +100,10 @@
 54  LONG CmpTime(const struct timeval* dest a0, const struct timeval* src a1)
 60  ULONG ReadEClock(struct EClockVal* dest a0)
 66  void GetSysTime(struct timeval* dest a0)
+
+@lib locale LocaleBase basetype=LocaleBase
+42  void CloseLocale(struct Locale* locale a0)
+156 struct Locale* OpenLocale(CONST_STRPTR name a0)
+
+@lib battclock BattClockBase resource=1
+18  void WriteBattClock(ULONG time d0)

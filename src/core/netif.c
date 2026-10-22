@@ -81,6 +81,8 @@ void rt_netif_remove(struct rt_netif *nif)
 	rt_dhcp_stop(nif);
 	rt_netif_down(nif);
 	rt_ip6_ifenable(nif, 0);
+	rt_mdns_if_gone(nif);
+	rt_ip_mc_flush(nif);
 	rt_route_flush_if(nif);
 	rt_arp_flush(nif, 0);
 	for (pp = &netif_list; *pp; pp = &(*pp)->next) {

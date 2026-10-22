@@ -28,6 +28,8 @@ u32  rt_now_ms(void);
 u64  rt_now_us(void);
 /* Wall clock seconds since 1970 (for DHCP lease logging etc); may be 0. */
 u32  rt_wallclock(void);
+/* The same with microseconds (UTC); for NTP. */
+void rt_wallclock_tv(u32 *sec, u32 *usec);
 
 void *rt_malloc(size_t n);
 void *rt_zalloc(size_t n);
