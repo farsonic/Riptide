@@ -57,6 +57,64 @@ static void *bench_alloc(int *chip)
 	return p;
 }
 
+/* What one call costs (us, with two decimals): the OS services the stack
+ * uses per packet. Not in Forbid(): the timer request needs the device. */
+enum { C_ECLOCK, C_NOW_MS, C_NOW_US, C_SYSTIME, C_LOCK, C_ALLOC, C_BUF, C_TIMER, C_COUNT };
+static const char *const call_names[C_COUNT] = {
+	"ReadEClock", "rt_now_ms", "rt_now_us", "GetSysTime", "rt_lock+unlock", "AllocVec+Free",
+	"rt_buf_alloc+free", "timer SendIO+Abort"
+};
+
+static void bench_calls(u32 freq)
+{
+	struct EClockVal t0, t1, ev;
+	struct timeval tv;
+	struct MsgPort *port = CreateMsgPort();
+	struct timerequest *tr = port ? (struct timerequest *)CreateIORequest(port, sizeof(*tr)) : NULL;
+	int w, have_tr = tr && OpenDevice((CONST_STRPTR)"timer.device", UNIT_MICROHZ, &tr->tr_node, 0) == 0;
+	char line[80];
+
+	amiga_out("cost per call (us):\n");
+	for (w = 0; w < C_COUNT; w++) {
+		u32 n = w == C_TIMER || w == C_ALLOC ? 500u : 5000u, i, ticks, cus;
+		if (w == C_TIMER && !have_tr)
+			continue;
+		ReadEClock(&t0);
+		for (i = 0; i < n; i++) {
+			switch (w) {
+			case C_ECLOCK:  ReadEClock(&ev); break;
+			case C_NOW_MS:  bench_sink += rt_now_ms(); break;
+			case C_NOW_US:  bench_sink += (u32)rt_now_us(); break;
+			case C_SYSTIME: GetSysTime(&tv); break;
+			case C_LOCK:    rt_lock(); rt_unlock(); break;
+			case C_ALLOC:   FreeVec(AllocVec(1792, MEMF_PUBLIC)); break;
+			case C_BUF:     rt_lock(); rt_buf_free(rt_buf_alloc(64, 1504)); rt_unlock(); break;
+			case C_TIMER:
+				tr->tr_node.io_Command = TR_ADDREQUEST;
+				tr->tr_time.tv_secs = 10;
+				tr->tr_time.tv_micro = 0;
+				SendIO(&tr->tr_node);
+				AbortIO(&tr->tr_node);
+				WaitIO(&tr->tr_node);
+				break;
+			}
+		}
+		ReadEClock(&t1);
+		ticks = eclock_ticks(&t0, &t1);
+		/* hundredths of a microsecond per call, in 32 bits */
+		cus = (u32)(((u64)ticks * 100000000u / freq) / n);
+		rt_snprintf(line, sizeof(line), "  %-20s %6lu.%02lu\n", call_names[w], (unsigned long)(cus / 100u),
+		            (unsigned long)(cus % 100u));
+		amiga_out("%s", line);
+	}
+	if (have_tr)
+		CloseDevice(&tr->tr_node);
+	if (tr)
+		DeleteIORequest((struct IORequest *)tr);
+	if (port)
+		DeleteMsgPort(port);
+}
+
 int amiga_bench(void)
 {
 	static const u32 sizes[] = { 64, 128, 256, 576, 1460, 8192 };
@@ -111,6 +169,7 @@ int amiga_bench(void)
 		}
 		amiga_out("%s\n", line);
 	}
+	bench_calls(freq);
 	FreeVec(sa);
 	FreeVec(da);
 	return 0;

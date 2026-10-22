@@ -30,6 +30,7 @@ struct rt_buf {
 	u16  flags;         /* RT_BUFF_* */
 	u16  l3_proto;      /* ethertype of the payload, host order */
 	u32  tstamp_ms;     /* free for owner (e.g. reassembly / queue time) */
+	u32  csum;          /* RT_BUFF_CSUM_PART: partial sum of data[0, len) */
 	union {
 		u8  b[64];
 		u32 w[16];
@@ -41,6 +42,11 @@ struct rt_buf {
 #define RT_BUFF_MCAST   0x0002  /* received as link multicast */
 #define RT_BUFF_CSUM_OK 0x0004  /* transport checksum already verified */
 #define RT_BUFF_LOOP    0x0008  /* came through the loopback interface */
+/* The driver summed the frame while copying it in: 'csum' is the one's
+ * complement partial sum of data[0, len). It survives pulling a header
+ * whose own sum is zero (a valid IPv4 header); every other change to the
+ * covered bytes must adjust it or clear the flag (rt_buf_trim() does). */
+#define RT_BUFF_CSUM_PART 0x0010
 
 /* Allocate a buffer with 'headroom' bytes in front and room for 'size'
  * bytes of data; data == head + headroom, len == 0. NULL if out of memory.
@@ -70,7 +76,13 @@ static inline u8 *rt_buf_push(struct rt_buf *b, u32 n) { b->data -= n; b->len +=
 static inline u8 *rt_buf_pull(struct rt_buf *b, u32 n) { b->data += n; b->len -= n; return b->data; }
 /* Append n bytes at the tail; caller guarantees tailroom. Returns old tail. */
 static inline u8 *rt_buf_put(struct rt_buf *b, u32 n) { u8 *t = b->data + b->len; b->len += n; return t; }
-static inline void rt_buf_trim(struct rt_buf *b, u32 len) { if (len < b->len) b->len = len; }
+static inline void rt_buf_trim(struct rt_buf *b, u32 len)
+{
+	if (len < b->len) {
+		b->len = len;
+		b->flags &= (u16)~RT_BUFF_CSUM_PART;
+	}
+}
 
 /* Statistics of the allocator (for netstat -m). */
 struct rt_buf_stats {

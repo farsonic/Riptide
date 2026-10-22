@@ -223,6 +223,7 @@ struct IOStdReq {
 struct ExecBase;
 #define EXECBASE_LIBLIST_OFS   378   /* struct List LibList */
 #define EXECBASE_PORTLIST_OFS  392   /* struct List PortList */
+#define EXECBASE_THISTASK_OFS  276   /* struct Task *ThisTask */
 #define EXECBASE_ATTNFLAGS_OFS 296   /* UWORD AttnFlags */
 #define EXECBASE_ECLOCK_OFS    568   /* ULONG ex_EClockFrequency */
 static inline struct List *exec_liblist(struct ExecBase *eb)

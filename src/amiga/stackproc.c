@@ -17,6 +17,8 @@ static struct MsgPort *tport;
 static struct timerequest *treq;
 static int timer_pending;
 static u32 timer_deadline;
+static struct timerequest *ireq;    /* the idle tick, apart from treq */
+static int idle_pending;
 static int quit_requested;
 
 struct amiga_if *amiga_if_find(const char *name)
@@ -436,14 +438,35 @@ int amiga_status_text(char *buf, u32 len)
 
 /* ---- main loop ---- */
 
+static void send_timer(struct timerequest *t, u32 ms)
+{
+	t->tr_node.io_Command = TR_ADDREQUEST;
+	t->tr_time.tv_secs = ms / 1000u;
+	t->tr_time.tv_micro = (ms % 1000u) * 1000u;
+	SendIO(&t->tr_node);
+}
+
+/* The idle tick (lets QUIT re-check users) has a request of its own: on
+ * the one request, every delayed ACK timer after an idle spell would
+ * abort the 10 s tick (AbortIO + WaitIO + SendIO, half a millisecond on a
+ * 68020). Requests that turn out early only cost a spurious wakeup. */
 static void arm_timer(u32 ms)
 {
-	u32 now = rt_now_ms(), deadline;
+	u32 now, deadline;
 
 	if (!treq)
 		return;
-	if (ms == RT_TIMER_NONE)
-		ms = 10000;          /* idle tick: lets QUIT re-check users */
+	if (ms == RT_TIMER_NONE) {
+		if (timer_pending || idle_pending)
+			return;
+		if (ireq) {
+			send_timer(ireq, 10000);
+			idle_pending = 1;
+			return;
+		}
+		ms = 10000;
+	}
+	now = rt_now_ms();
 	deadline = now + ms;
 	if (timer_pending) {
 		if ((s32)(deadline - timer_deadline) >= 0)
@@ -452,10 +475,7 @@ static void arm_timer(u32 ms)
 		WaitIO(&treq->tr_node);
 		timer_pending = 0;
 	}
-	treq->tr_node.io_Command = TR_ADDREQUEST;
-	treq->tr_time.tv_secs = ms / 1000u;
-	treq->tr_time.tv_micro = (ms % 1000u) * 1000u;
-	SendIO(&treq->tr_node);
+	send_timer(treq, ms);
 	timer_pending = 1;
 	timer_deadline = deadline;
 }
@@ -590,6 +610,11 @@ int amiga_stack_start(const char *config, int selftest)
 		treq = NULL;
 		return -1;
 	}
+	ireq = (struct timerequest *)CreateIORequest(tport, sizeof(*ireq));
+	if (ireq) {
+		ireq->tr_node.io_Device = treq->tr_node.io_Device;
+		ireq->tr_node.io_Unit = treq->tr_node.io_Unit;
+	}
 	pub_port = CreateMsgPort();
 	if (!pub_port)
 		return -1;
@@ -620,9 +645,13 @@ void amiga_stack_loop(void)
 
 		rt_lock();
 		RT_PROF_ENTER(RT_PROF_STACK);
+		/* the frames every driver has for us form one receive batch:
+		 * one ACK per connection and one reader wakeup at its end */
+		rt_rx_batch_begin();
 		for (ai = amiga_ifs; ai; ai = ai->next)
 			if (ai->poll)
 				ai->poll(ai);
+		rt_rx_batch_end();
 		ms = rt_stack_poll();
 		RT_PROF_EXIT(RT_PROF_STACK);
 		rt_unlock();
@@ -651,6 +680,10 @@ void amiga_stack_loop(void)
 		if (timer_pending && CheckIO(&treq->tr_node)) {
 			WaitIO(&treq->tr_node);
 			timer_pending = 0;
+		}
+		if (idle_pending && CheckIO(&ireq->tr_node)) {
+			WaitIO(&ireq->tr_node);
+			idle_pending = 0;
 		}
 		if (pub_port && (sigs & (1UL << pub_port->mp_SigBit)))
 			handle_port();
@@ -719,6 +752,15 @@ void amiga_stack_stop(void)
 		ai->close(ai);
 	}
 	amiga_ifs = NULL;
+	if (ireq) {
+		if (idle_pending) {
+			AbortIO(&ireq->tr_node);
+			WaitIO(&ireq->tr_node);
+			idle_pending = 0;
+		}
+		DeleteIORequest((struct IORequest *)ireq);
+		ireq = NULL;
+	}
 	if (treq) {
 		if (timer_pending) {
 			AbortIO(&treq->tr_node);

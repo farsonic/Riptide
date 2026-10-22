@@ -176,8 +176,9 @@ SCRIPT
 	echo 'DH0:C/ping -c 2 -i 0.5 -q 127.0.0.1 >NIL:'
 	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/ftpscript >DH0:out/ftp1'
 	echo 'DH0:C/ftp -v -n 127.0.0.1 2121 <DH0:S/badlogin >DH0:out/badlogin'
+	# 64 KB: a 256 KB ring may find no room in 2 MB of fragmented Chip RAM
 	echo 'DH0:C/Riptide CAPTURE start iface=nope >DH0:out/cap_bad'
-	echo 'DH0:C/Riptide CAPTURE start proto=tcp host=127.0.0.1 snaplen=96 file=DH0:cap.pcap >DH0:out/cap_start'
+	echo 'DH0:C/Riptide CAPTURE start proto=tcp host=127.0.0.1 snaplen=96 size=64 file=DH0:cap.pcap >DH0:out/cap_start'
 	echo 'DH0:C/ftp -o DH0:local/url.dat ftp://user:pw@127.0.0.1:2121/sub/a.dat >DH0:out/url_get'
 	echo 'DH0:C/Riptide CAPTURE status >DH0:out/cap_status'
 	echo 'DH0:C/Riptide CAPTURE stop >DH0:out/cap_stop'

@@ -26,6 +26,8 @@
 #   BASELINE   JSON to compare with, TOLERANCE percent (default 10)
 #   TIMEOUT    seconds per FS-UAE boot (default 1200); UPTIME seconds
 #              until the stack must be up (default 240)
+#   NB_IF, NB_PEER, NB_NET  veth names and /24 (default rtnb0, rtnb1,
+#              192.168.79), so several runs can share a host
 #   KICKSTART  a Kickstart ROM image instead of FS-UAE's AROS ROM
 #              (KICKSTART_EXT: its extension ROM, if any)
 # Needs root (veth, packet capture), python3, ethtool (optional).
@@ -45,7 +47,9 @@ OUT=${OUT:-$BUILD/netbench}
 TIMEOUT=${TIMEOUT:-1200}
 TOLERANCE=${TOLERANCE:-10}
 UPTIME=${UPTIME:-240}
-NET=192.168.79
+NB_IF=${NB_IF:-rtnb0}
+NB_PEER=${NB_PEER:-rtnb1}
+NET=${NB_NET:-192.168.79}
 PORT=9100
 
 [ -n "${FSUAE_PCAP:-}" ] && [ -x "$FSUAE_PCAP" ] || { echo "SKIP: set FSUAE_PCAP to a patched fs-uae (tools/fs-uae)"; exit 0; }
@@ -73,22 +77,22 @@ cpu_cfg() {
 	esac
 }
 
-ip link del rtnb0 2>/dev/null
-ip link add rtnb0 type veth peer name rtnb1 2>/dev/null || { echo "SKIP: cannot create a veth pair"; exit 0; }
+ip link del $NB_IF 2>/dev/null
+ip link add $NB_IF type veth peer name $NB_PEER 2>/dev/null || { echo "SKIP: cannot create a veth pair"; exit 0; }
 xpid=
 hpid=
 cleanup() {
 	[ -n "$hpid" ] && kill "$hpid" 2>/dev/null
 	[ -n "$xpid" ] && kill "$xpid" 2>/dev/null
-	ip link del rtnb0 2>/dev/null
+	ip link del $NB_IF 2>/dev/null
 }
 trap cleanup EXIT
-ip link set rtnb0 up
-ip link set rtnb1 up
-ip addr add $NET.1/24 dev rtnb1
+ip link set $NB_IF up
+ip link set $NB_PEER up
+ip addr add $NET.1/24 dev $NB_PEER
 # no offloads: the capture must see real frames with real checksums
 if command -v ethtool >/dev/null 2>&1; then
-	for d in rtnb0 rtnb1; do ethtool -K $d tso off gso off gro off tx off rx off >/dev/null 2>&1; done
+	for d in $NB_IF $NB_PEER; do ethtool -K $d tso off gso off gro off tx off rx off >/dev/null 2>&1; done
 fi
 if [ -z "${DISPLAY:-}" ]; then
 	command -v Xvfb >/dev/null 2>&1 || { echo "SKIP: no DISPLAY and no Xvfb"; exit 0; }
@@ -186,7 +190,7 @@ run_one() {
 		automatic_input_grab = 0
 		video_sync = off
 		uae_sana2 = 1
-		uaenet_pcap = rtnb0
+		uaenet_pcap = $NB_IF
 		base_dir = $work/fsuae
 		CFG
 		[ -n "${KICKSTART:-}" ] && echo "kickstart_file = $KICKSTART"

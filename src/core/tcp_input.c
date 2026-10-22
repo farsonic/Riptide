@@ -449,6 +449,35 @@ static void tcp_event_data_recv(struct tcp_sock *tp, const struct rt_buf *b)
 		tcp_grow_window(tp, b->len);
 }
 
+/* ---- receive batches (rt_rx_batch_begin/end) ---- */
+#define TCP_BATCH_ACK  1
+#define TCP_BATCH_WAKE 2
+static int rx_batch_depth;
+static struct tcp_sock *batch_list;
+
+static void tcp_batch_add(struct tcp_sock *tp, u8 what)
+{
+	if (!tp->batch) {
+		tp->batch_next = batch_list;
+		batch_list = tp;
+	}
+	tp->batch |= what;
+}
+
+void tcp_batch_forget(struct tcp_sock *tp)
+{
+	struct tcp_sock **pp;
+
+	if (!tp->batch)
+		return;
+	for (pp = &batch_list; *pp; pp = &(*pp)->batch_next)
+		if (*pp == tp) {
+			*pp = tp->batch_next;
+			break;
+		}
+	tp->batch = 0;
+}
+
 /* Linux __tcp_ack_snd_check(): ACK every net.inet.tcp.delack_segs (2)
  * full segments, in quickack mode, or when requested; otherwise delay. */
 static void __tcp_ack_snd_check(struct tcp_sock *tp, int ofo_possible)
@@ -460,6 +489,13 @@ static void __tcp_ack_snd_check(struct tcp_sock *tp, int ofo_possible)
 		        tcp_in_quickack_mode(tp) ? ", quickack" : "",
 		        (tp->ack.pending & ICSK_ACK_NOW) ? ", requested" : "",
 		        sysctl_tcp_quickack ? ", quickack sysctl" : "");
+		/* in a receive batch: one ACK at its end, but stretch it over
+		 * no more than 2 * delack_segs segments */
+		if (rx_batch_depth && !(tp->ack.pending & ICSK_ACK_NOW) &&
+		    tp->rcv_nxt - tp->rcv_wup < (u32)(2 * sysctl_tcp_delack_segs) * tp->ack.rcv_mss) {
+			tcp_batch_add(tp, TCP_BATCH_ACK);
+			return;
+		}
 		tcp_send_ack(tp);
 		return;
 	}
@@ -1036,10 +1072,42 @@ static int tcp_try_rmem_schedule(struct tcp_sock *tp, u32 size)
 	return -1;
 }
 
-static void tcp_data_ready(struct tcp_sock *tp)
+static void tcp_data_ready_now(struct tcp_sock *tp)
 {
 	if (tp->so && tp->rcvq_bytes >= RT_MAX(tp->so->rcvlowat, 1u))
 		rt_sock_wakeup(tp->so, RT_SEV_READ);
+}
+
+static void tcp_data_ready(struct tcp_sock *tp)
+{
+	if (rx_batch_depth)
+		tcp_batch_add(tp, TCP_BATCH_WAKE);
+	else
+		tcp_data_ready_now(tp);
+}
+
+void rt_rx_batch_begin(void)
+{
+	rx_batch_depth++;
+}
+
+void rt_rx_batch_end(void)
+{
+	if (--rx_batch_depth || !batch_list)
+		return;
+	tcp_api_enter();
+	while (batch_list) {
+		struct tcp_sock *tp = batch_list;
+		u8 what = tp->batch;
+		batch_list = tp->batch_next;
+		tp->batch = 0;
+		/* not if a segment we sent meanwhile carried it */
+		if ((what & TCP_BATCH_ACK) && (tp->ack.pending & ICSK_ACK_SCHED))
+			tcp_send_ack(tp);
+		if (what & TCP_BATCH_WAKE)
+			tcp_data_ready_now(tp);
+	}
+	tcp_api_exit();
 }
 
 /* Linux tcp_fin() */
@@ -2070,7 +2138,7 @@ static void tcp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 		goto drop;
 	if (!(b->flags & (RT_BUFF_CSUM_OK | RT_BUFF_LOOP))) {
 		u32 sum = rt_csum_pseudo(saddr, daddr, RT_IPPROTO_TCP, (u16)b->len);
-		if (rt_csum_fold(rt_csum_partial(th, b->len, sum)) != 0) {
+		if (rt_csum_fold(rt_buf_csum(b, sum)) != 0) {
 			rt_tcpstat.InCsumErrors++;
 			goto bad;
 		}
@@ -2111,7 +2179,7 @@ static void tcp_input6_body(struct rt_buf *b, const struct rt_ip6hdr *ip6)
 		goto drop;
 	if (!(b->flags & (RT_BUFF_CSUM_OK | RT_BUFF_LOOP))) {
 		u32 sum = rt_csum_pseudo6(&ip6->src, &ip6->dst, RT_IPPROTO_TCP, b->len);
-		if (rt_csum_fold(rt_csum_partial(th, b->len, sum)) != 0) {
+		if (rt_csum_fold(rt_buf_csum(b, sum)) != 0) {
 			rt_tcpstat.InCsumErrors++;
 			goto bad;
 		}

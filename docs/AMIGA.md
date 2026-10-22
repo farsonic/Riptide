@@ -140,7 +140,7 @@ Riptide NTP [STATUS|SYNC|...] | MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
 | `STATUS` | Ask the running Riptide for a summary: interfaces, addresses, packet counters, driver and DHCP state, NTP and mDNS state, the routing table, DNS servers and library users. |
 | `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
-| `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and exit. Needs timer.device, so not under vamos. |
+| `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and what one call of the OS services the stack uses per packet costs, and exit. Needs timer.device, so not under vamos. |
 | `CAPTURE ...` | Packet capture in the running stack; the rest of the line is the command (see "Packet capture"). |
 | `PROFILE ...` | Control the running stack's profiler (see "Profiling and debug log"). |
 | `DEBUG ...` | With a word instead of a number: control the running stack's debug log (see "Profiling and debug log"). A number is still the log level of a new instance. |
@@ -220,7 +220,12 @@ so two runs of the same download can be compared without restarting:
 `delack_segs` counts like Linux: an ACK goes out once more than N-1
 segments are unacknowledged, but only if the window it advertises is not
 smaller than the last one; otherwise the ACK waits until the application
-reads (or for the delayed ACK timer). The SANA-II read count is changed
+reads (or for the delayed ACK timer). Frames that arrive together are
+handled as one batch: the ACKs `delack_segs` calls for within it go out as
+one at its end, covering at most `2 * delack_segs` segments (duplicate
+ACKs are never held). A reader that empties the window by small reads
+gets a window update once the window can open by four segments (or a
+quarter of the buffer) or the queue is empty, not after every read. The SANA-II read count is changed
 with `ip link set NAME reads N` (see below). `netstat -T` shows the effect
 on each connection.
 
@@ -360,7 +365,13 @@ uses its name.
 `device=DEVS:Networks/a2065.device`.
 
 * Riptide opens the driver with buffer-management callbacks that copy
-  straight into its packet buffers. It then runs `S2_DEVICEQUERY` (MTU,
+  straight into its packet buffers (summing each received frame in the
+  same pass, so TCP and UDP do not read it again). Drivers that support
+  the SANA-II R3 DMA callbacks (`S2_DMACopyToBuff32`,
+  `S2_DMACopyFromBuff32`) get the packet buffer's address instead and move
+  the frame themselves, without a CPU copy; Riptide's buffers are 32-bit
+  aligned and hold the largest frame, and where one is not suitable the
+  callback returns NULL and the driver copies. It then runs `S2_DEVICEQUERY` (MTU,
   hardware type, address size), `S2_GETSTATIONADDRESS`,
   `S2_CONFIGINTERFACE` with the factory address, and `S2_ONLINE`.
 * On Ethernet-like devices (hardware type Ethernet or IEEE 802) Riptide
@@ -1062,10 +1073,10 @@ not in Riptide              2213.0   15.5
 | `ip input`, `ip6 input` | IPv4/IPv6 input up to the transport |
 | `tcp input`, `udp input` | transport input (the ACKs and data it sends count as `tcp output`) |
 | `tcp output` | building segments and IP output (the driver call excluded) |
-| `checksum` | checksums that are not combined with a copy |
+| `checksum` | checksums that are not combined with a copy (headers are summed inline and not counted) |
 | `copy to app`, `copy from app` | copying between the application's buffer and Riptide |
 | `driver send` | the `SendIO()` / `MNI_Send()` call |
-| `driver rx copy` | the SANA-II driver's `CopyToBuff` callback (driver context) |
+| `driver rx copy` | the SANA-II driver's `CopyToBuff` callback, which also sums the frame (driver context; nothing with DMA) |
 | `lock wait app`, `lock wait rt` | time applications / the Riptide process waited for the stack lock |
 | `idle` | the Riptide process waiting for work in `Wait()` |
 
@@ -1509,8 +1520,9 @@ no FPU, Blitter or Copper code):
 * `csum_020` is an unrolled `addx.l` loop (16 longs per iteration, entered
   by a computed jump for the remainder). `copy_020` aligns the destination
   and runs 16 `move.l` per iteration. `csum_copy_020` copies and sums in
-  one pass; TCP uses it to build each segment it sends and UDP to take
-  the payload from the program.
+  one pass; TCP uses it to build each segment it sends, UDP to take
+  the payload from the program, and the SANA-II `CopyToBuff` callback to
+  take each received frame.
 * There is no separate 68060 checksum: the emulators give no 68060 timing
   that could justify one, so `csum_020` serves every CPU. On the 68060
   plain `move.l` copies are used for any memory, as on the 68020.
@@ -1563,6 +1575,23 @@ emulated A1200 (68020, cycle exact, Fast RAM), 1460-byte buffers:
 
 Emulator timing is not real hardware timing; the 68030/40/60 models of
 FS-UAE are not cycle exact at all. Measure on the real machine.
+
+`BENCH` then times single calls (µs per call, outside the stack lock).
+On the emulated A1200 with its AROS Kickstart:
+
+| Call | µs |
+|---|---|
+| `ReadEClock()` | 67 |
+| `rt_now_ms()` / `rt_now_us()` (EClock and divisions) | 111 / 138 |
+| `GetSysTime()` | 118 |
+| `rt_lock()` + `rt_unlock()` (uncontended semaphore) | 155 |
+| `AllocVec()` + `FreeVec()`, 1792 bytes | 1972 |
+| `rt_buf_alloc()` + `rt_buf_free()` (cached), with the lock | 232 |
+| timer.device `SendIO()` + `AbortIO()` + `WaitIO()` | 593 |
+
+A received segment used to read the clock about nine times; the holder of
+the stack lock now reads it once per hold. Commodore's Kickstart may be
+cheaper per call than AROS's; the counts matter either way.
 
 ## Building
 
@@ -1624,7 +1653,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_speedtest.sh build/amiga` | speedtest against three `httpd-test` servers on FS-UAE (plain, chunked with redirects, redirecting to https://): `--server-url`, `--mirror`, all output formats, byte counts against the servers' counters, errors and Ctrl-C. |
 | `tests/t_speedtest_*.c` (host) | speedtest's XML, URL and HTTP parsers (every split point, random input), distances; end to end against `tools/speedtest_mock.py` over Linux sockets and over Riptide through TUN. |
 | `tests/amiga/run_fsuae_bench.sh build/amiga` | `Riptide BENCH` on FS-UAE (A1200; `FSUAE_MODEL=A4000/040 FSUAE_EXTRA="cpu = 68060"` and so on for other CPUs). |
-| `tests/amiga/run_fsuae_netbench.sh build/amiga` | The speed lab: TCP download and upload throughput (2 MB, median of 3) on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtnb0`/`rtnb1`, 192.168.79.0/24) for four cycle-exact CPU presets (A1200 68020/14, 68030/25, A4000 68040/25, 68060/50; `CPUS=`), with `tests/amiga/netbench.c` on the Amiga (data discarded or generated, no disk) and `tests/amiga/netbench_host.py` on the host; a profiled transfer each way (`Riptide PROFILE`) and ping. Writes `results.md` and `results.json`; `BASELINE=tests/amiga/netbench-baseline.json` fails a run more than 10 % (`TOLERANCE=`) slower. `AMITCP_DIR=` adds AmiTCP 3.0b2 (see `docs/COMPARISON.md` 11). |
+| `tests/amiga/run_fsuae_netbench.sh build/amiga` | The speed lab: TCP download and upload throughput (2 MB, median of 3) on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtnb0`/`rtnb1`, 192.168.79.0/24, or `NB_IF`, `NB_PEER`, `NB_NET`) for four cycle-exact CPU presets (A1200 68020/14, 68030/25, A4000 68040/25, 68060/50; `CPUS=`), with `tests/amiga/netbench.c` on the Amiga (data discarded or generated, no disk) and `tests/amiga/netbench_host.py` on the host; a profiled transfer each way (`Riptide PROFILE`) and ping. Writes `results.md` and `results.json`; `BASELINE=tests/amiga/netbench-baseline.json` fails a run more than 10 % (`TOLERANCE=`) slower. `AMITCP_DIR=` adds AmiTCP 3.0b2 (see `docs/COMPARISON.md` 11). |
 | `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, RiptidePrefs in `SYS:Prefs`, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
 | `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply. |
 | `tests/amiga/run_vamos_prefs.sh build/amiga/RiptidePrefs` | (in `make -f Makefile.amiga check`) `RiptidePrefs FROM ... SAVE` / `USE` without a window under vamos: the files in `ENVARC:`/`ENV:` equal the input, the second Save leaves `riptide.conf.bak`, error return codes. |
@@ -1632,7 +1661,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
-| `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
+| `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root; `BR_IF`, `BR_PEER`, `BR_NET` choose other veth names and another /24 than `rtbr0`, `rtbr1`, `192.168.77`): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |

@@ -180,6 +180,13 @@ void rt_netif_down(struct rt_netif *nif);
  * flags: RT_BUFF_BCAST/MCAST. Must be called with the stack lock held. */
 void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
                     const u8 *srchw, u16 flags);
+/* A receive batch (lock held, may nest): frames that arrived together are
+ * input between begin and end. TCP holds back the in-order ACKs the frames
+ * call for and wakes each reader once, then end sends one ACK per
+ * connection (if still due) and does the wakeups. Dup ACKs, ACKs asked
+ * for explicitly and everything else go out at once as usual. */
+void rt_rx_batch_begin(void);
+void rt_rx_batch_end(void);
 
 /* Stack -> link: send an IP packet to next hop 'nexthop' (network order)
  * on 'nif'. Resolves ARP on ethernet-like links (queueing while

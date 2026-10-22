@@ -44,11 +44,16 @@ void rt_lock(void)
 	            rt_prof_ticks() - t0);
 }
 
+static u32 clk_ok;    /* see eclock_read() */
+
 void rt_unlock(void)
 {
-	/* no profiled section spans a lock release */
-	if (rt_prof_depth && stack_sem.ss_NestCount == 1)
-		rt_prof_unwind();
+	if (stack_sem.ss_NestCount == 1) {
+		clk_ok = 0;
+		/* no profiled section spans a lock release */
+		if (rt_prof_depth)
+			rt_prof_unwind();
+	}
 	ReleaseSemaphore(&stack_sem);
 }
 
@@ -66,14 +71,29 @@ int rt_lock_held(void)
  * divided by the EClock frequency changes only when ev_hi does (every 100
  * minutes or so); it is cached, and the sequence check keeps concurrent
  * callers (any task may read the clock) from mixing two cache entries.
+ *
+ * A packet reads the clock about nine times (TCP's clocks, timers, the
+ * route and neighbour caches), each a ReadEClock() and divisions: around
+ * a millisecond per packet on a 68020. So the holder of the stack lock
+ * reads it once per hold: the time is that of the lock's first clock read
+ * until its outermost rt_unlock(), like a jiffies counter that ticks
+ * between the stack's polls (holds take milliseconds). Other tasks, and
+ * code outside the lock, read the EClock every time.
  */
 static volatile u32 ec_hi = 0xffffffffu, ec_hq, ec_hr;
+static u32 clk_q, clk_r;
 
 static void eclock_read(u32 *q, u32 *r)
 {
 	struct EClockVal ev;
 	u32 h, hq, hr, lq, lr;
+	int owner = stack_sem.ss_Owner == RT_AMIGA_THISTASK(SysBase);
 
+	if (owner && clk_ok) {
+		*q = clk_q;
+		*r = clk_r;
+		return;
+	}
 	ReadEClock(&ev);
 	h = ec_hi;
 	hq = ec_hq;
@@ -95,6 +115,11 @@ static void eclock_read(u32 *q, u32 *r)
 	}
 	*q = hq + lq;
 	*r = lr;
+	if (owner) {
+		clk_q = *q;
+		clk_r = lr;
+		clk_ok = 1;
+	}
 }
 
 u32 rt_now_ms(void)

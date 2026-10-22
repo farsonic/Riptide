@@ -64,6 +64,7 @@ static struct rt_buf *ip_realign(struct rt_buf *b)
 		rt_copy_buf(rt_buf_put(c, b->len), b->data, b->len);
 		c->netif = b->netif;
 		c->flags = b->flags;
+		c->csum = b->csum;
 		c->l3_proto = b->l3_proto;
 		memcpy(&c->cb, &b->cb, sizeof(c->cb));
 	}
@@ -206,7 +207,7 @@ int rt_ip_output(struct rt_buf *b, const struct rt_ip_out *o)
 	ip->check = 0;
 	ip->saddr = saddr;
 	ip->daddr = o->daddr;
-	ip->check = rt_inet_csum(ip, 20);
+	ip->check = rt_csum_fold(rt_csum_hdr(ip, 20, 0));
 	if (rt_ip_is_multicast(o->daddr)) {
 		if (!o->mcast_noloop)
 			ip_mc_loop(b, &nh);
@@ -259,7 +260,7 @@ int rt_ip_output_raw(struct rt_buf *b, int dontroute)
 	if (!ip->saddr)
 		ip->saddr = nh.src;
 	ip->check = 0;
-	ip->check = rt_inet_csum(ip, hlen);
+	ip->check = rt_csum_fold(rt_csum_hdr(ip, hlen, 0));
 	if (rt_ip_is_multicast(ip->daddr))
 		ip_mc_loop(b, &nh);
 	return rt_ip_send_routed(b, &nh);
@@ -305,7 +306,7 @@ static void ip_forward(struct rt_netif *inif, struct rt_buf *b)
 	}
 	ip->ttl--;
 	ip->check = 0;
-	ip->check = rt_inet_csum(ip, hlen);
+	ip->check = rt_csum_fold(rt_csum_hdr(ip, hlen, 0));
 	b->flags = 0;
 	b->netif = NULL;
 	rt_ipstat.ForwDatagrams++;
@@ -377,9 +378,11 @@ static void ip_input_body(struct rt_netif *nif, struct rt_buf *b)
 	tot = rt_ntohs(ip->tot_len);
 	if (tot < hlen || tot > b->len)
 		goto hdrerr;
-	if (!(b->flags & RT_BUFF_LOOP) && rt_inet_csum(ip, hlen) != 0)
+	if (!(b->flags & RT_BUFF_LOOP) && rt_csum_fold(rt_csum_hdr(ip, hlen, 0)) != 0)
 		goto hdrerr;
-	rt_buf_trim(b, tot);       /* strip link padding */
+	/* strip link padding; a valid header sums to zero, so a driver's
+	 * RT_BUFF_CSUM_PART sum stays the transport's when it is pulled */
+	rt_buf_trim(b, tot);
 
 	saddr = ip->saddr;
 	daddr = ip->daddr;
@@ -408,6 +411,7 @@ static void ip_input_body(struct rt_netif *nif, struct rt_buf *b)
 	}
 
 	if (ip->frag_off & rt_htons(RT_IP_MF | RT_IP_OFFMASK)) {
+		b->flags &= (u16)~RT_BUFF_CSUM_PART;
 		b = rt_ipfrag_reass(b);
 		if (!b)
 			return;
