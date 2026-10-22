@@ -142,6 +142,7 @@ static void raw_close(struct rt_socket *so)
 			break;
 		}
 	}
+	rt_inet_mc_drop_all(&pcb->opt);
 	rt_bufq_purge(&so->rcvq);
 	so->pcb = NULL;
 	rt_free(pcb);
@@ -321,7 +322,15 @@ static int raw_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 		o.saddr = pcb->laddr;
 		o.daddr = daddr;
 		o.proto = pcb->proto ? pcb->proto : RT_IPPROTO_RAW;
-		o.ttl = rt_ip_is_multicast(daddr) ? pcb->opt.mcast_ttl : pcb->opt.ttl;
+		o.ttl = pcb->opt.ttl;
+		if (rt_ip_is_multicast(daddr)) {
+			o.ttl = pcb->opt.mcast_ttl ? pcb->opt.mcast_ttl : 1;
+			o.mcast_ttl0 = pcb->opt.mcast_ttl == 0;
+			o.mcast_noloop = !pcb->opt.mcast_loop;
+			o.oif = rt_inet_mc_oif(&pcb->opt);
+			if (!o.oif)
+				o.oif = rt_ip_mc_default_if(daddr);
+		}
 		o.tos = pcb->opt.tos;
 		o.dontroute = (u8)dontroute;
 		o.allow_broadcast = (so->options & RT_SO_BROADCAST) != 0;

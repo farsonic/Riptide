@@ -4,7 +4,7 @@
  * SLAAC and multicast are exercised against a real independent stack.
  * The kernel side sees every frame Riptide sends and delivers every frame
  * it routes to the TAP device; Riptide keeps a hardware multicast filter
- * (nif->mcast: the groups the IPv6 layer joined) like a NIC would.
+ * (nif->mcast: the groups IPv4 and IPv6 joined) like a NIC would.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #define _GNU_SOURCE
@@ -107,8 +107,6 @@ static int mc_wanted(const struct tap_dev *t, const u8 *dst)
 
 	if (t->nif.flags & (RT_IFF_ALLMULTI | RT_IFF_PROMISC))
 		return 1;
-	if (dst[0] == 0x01 && dst[1] == 0x00 && dst[2] == 0x5e)
-		return 1;                  /* IPv4 multicast: no IGMP filter in Riptide */
 	for (i = 0; i < t->nmc; i++)
 		if (!memcmp(t->mc[i], dst, 6))
 			return 1;

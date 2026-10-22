@@ -203,6 +203,26 @@ int rt_ip6_mc_joined(const struct rt_netif *nif, const rt_in6_addr *g)
 	return m && m->refcnt;
 }
 
+int rt_ip6_mc_list(const struct rt_netif *nif, rt_in6_addr *grp, u32 *refcnt, int max)
+{
+	const struct ip6_if *ifp = ip6_ifp(nif);
+	const struct in6_multi *m;
+	int n = 0;
+
+	if (!ifp)
+		return 0;
+	for (m = ifp->mcast; m; m = m->next) {
+		if (!m->refcnt)
+			continue;
+		if (n < max) {
+			grp[n] = m->grp;
+			refcnt[n] = m->refcnt;
+		}
+		n++;
+	}
+	return n;
+}
+
 static void mld_schedule_change(struct ip6_if *ifp)
 {
 	if (!ifp->nd || !(ifp->nif->flags & RT_IFF_UP))

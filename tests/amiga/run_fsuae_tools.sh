@@ -110,6 +110,8 @@ netstat_l|netstat -l -n
 netstat_r|netstat -rn
 netstat_i|netstat -i
 netstat_s|netstat -s
+netstat_g|netstat -g
+ip_maddr|ip maddr
 netstat_T|netstat -Tn
 netstat_T6l|netstat -T -6 -ln
 sysctl_delack|sysctl -w net.inet.tcp.delack_segs=1
@@ -366,7 +368,9 @@ reject ip_tcpwin_off_show 'tcpwindow'
 reject netstat_l 'ESTABLISHED'
 expect netstat_r '^Kernel IP routing table' '^0\.0\.0\.0 +10\.0\.2\.2 '
 expect netstat_i '^Kernel Interface table' '^eth0 +1500 ' '^lo0 '
-expect netstat_s '^Ip:' 'total packets received' '^Icmp:' 'echo replies' '^Tcp:' '^Udp:'
+expect netstat_s '^Ip:' 'total packets received' '^Icmp:' 'echo replies' '^Igmp:' '^Tcp:' '^Udp:'
+expect netstat_g '^IPv6/IPv4 Group Memberships' '^eth0 +1 +224\.0\.0\.1' '^lo0 +1 +224\.0\.0\.1'
+expect ip_maddr '^1:	lo0' '^2:	eth0' '	link  01:00:5e:00:00:01' '	inet  224\.0\.0\.1' '	inet6 ff02::1'
 expect nc_out '^hostname aros-test'
 expect ip_link_after '^eth1 '
 reject ip_link_del2 '^eth1 '

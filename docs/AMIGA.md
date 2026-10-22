@@ -452,7 +452,9 @@ Where the data comes from:
 
 iproute2 syntax and output; objects and commands can be abbreviated (`ip
 a`, `ip r`, `ip n`, `ip l`). Options: `-s` statistics, `-d` details (shows
-the driver), `-br` brief, `-4`.
+the driver), `-br` brief, `-4`. `ip maddr [show [dev IF]]` lists the
+multicast memberships of each interface (link layer, IPv4 and IPv6
+groups, `users N` when shared; `-d` adds the IGMP version spoken).
 
 ```
 1> ip a
@@ -589,7 +591,8 @@ Flags: `C` complete, `M` permanent. Proxy ARP (`pub`) is not supported.
 `netstat [-a] [-n] [-t] [-u] [-w] [-l] [-e] [-c]` lists sockets (default:
 connected ones; `-a` all, `-l` listening; `-e` adds RTT, cwnd and
 retransmissions of TCP), `-r` the routing table, `-i` the interface
-counters, `-s` the protocol statistics, `-T` (`--tcp-info`) the details
+counters, `-s` the protocol statistics (with an `Igmp:` section), `-g`
+(`--groups`) the multicast group memberships, `-T` (`--tcp-info`) the details
 of each TCP connection; `-c` repeats every second until Ctrl-C.
 
 ```
@@ -698,7 +701,12 @@ timeout in seconds.
   connection): a minimal netcat for testing. Standard input is sent first,
   then the reply is copied to standard output (AmigaDOS input cannot be
   waited on together with a socket); `-d` sends nothing; `-u` sends stdin
-  as one UDP datagram.
+  as one UDP datagram. `nc -u -l [-v] [-w secs] [-c count] PORT` prints
+  received datagrams (until `-w` seconds of silence or `count` of them);
+  `-m GROUP` joins an IPv4 multicast group first (on the interface with
+  address `-I ADDR`). When sending, `-T ttl`, `-I ADDR` and `-L` set
+  `IP_MULTICAST_TTL`, `IP_MULTICAST_IF` and `IP_MULTICAST_LOOP` 0:
+  `nc -u -T 4 239.1.2.3 5000 <file`.
 
 ### ftp
 
@@ -1044,6 +1052,8 @@ byte order, everything else in host order; there are no pointers.
 | 18 | `net.riptide.tcpinfo` | `struct rt_ctl_tcpinfo`: every TCP socket of both families with RTT, windows, buffers, queues, loss and ACK counters, 64-bit byte counts and time spent busy, window/buffer limited, with unread data and with a zero window (`netstat -T`) |
 | 19 | `net.riptide.profile` | `struct rt_ctl_prof`: the profiler (`profile start`): record 0 the run (wall-clock time, bytes received), then one per section and counter (calls, total and longest time) |
 | 20 | `net.riptide.drivers` | `struct rt_ctl_driver`, one per driver interface (SANA-II, MNI): receive queues (reads configured/queued, lowest, times empty), frames per wakeup, buffer shortages, errors by code, transmits in flight, the `S2_DEVICEQUERY` values and the driver's own `S2_GETGLOBALSTATS`/`S2_GETSPECIALSTATS` |
+| 30 | `net.riptide.mcast` | `struct rt_ctl_mcast`: multicast memberships of both families: interface, group, link layer address, users, IGMP version and reporter flag (`ip maddr`, `netstat -g`) |
+| 31 | `net.riptide.igmpstat` | one `struct rt_igmp_stats` |
 
 Use BSD sysctl semantics: call with `oldp = NULL` to get the size,
 allocate a bit more (a table can grow in between) and call again. If it
@@ -1089,6 +1099,56 @@ cannot hang the stack. Only `interface` lines take a moment while the
 driver opens. Messages still queued at shutdown are replied with
 `ESHUTDOWN`. Version 1 messages (`mn_Length` without the reply buffer
 fields, as sent by Riptide 0.9) are still understood.
+
+## IPv4 multicast
+
+Riptide is a multicast host (RFC 1112): it joins groups, reports them
+with IGMP and sends and receives multicast datagrams; it does not route
+multicast.
+
+**IGMP.** IGMPv3 (RFC 3376) by default, in its simplest form: every group
+is in EXCLUDE mode with an empty source list. Joins and leaves go out as
+state change reports at once and once more within a second (Robustness 2,
+or the querier's QRV), general queries are answered with one report of all
+groups after a random delay up to the Maximum Response Time,
+group-and-source queries with the queried sources. When an IGMPv2 or v1
+querier is heard the interface falls back to that version (v1/v2 reports
+to the group with report suppression, v2 leaves to 224.0.0.2) until the
+older querier has been silent for 260 s (400 s for v1).
+`net.inet.igmp.version` (0 = automatic, 1..3) caps the version. Messages
+carry the Router Alert option, TTL 1 and TOS 0xc0. 224.0.0.1 is joined on
+every multicast interface and never reported. Groups are announced again
+when an interface comes up or gets a new address.
+
+**Sockets.** The 4.4BSD/AmiTCP option numbers at level `IPPROTO_IP`:
+
+| option | value | argument |
+|---|---|---|
+| `IP_MULTICAST_IF` | 9 | `struct in_addr`: the interface with that address, `INADDR_ANY` = the route to the group (else the first multicast interface; no default route needed). Also `struct ip_mreqn` (12 bytes, index wins) |
+| `IP_MULTICAST_TTL` | 10 | `u_char` (or `int`), default 1; 0 delivers only to members on this host |
+| `IP_MULTICAST_LOOP` | 11 | `u_char` (or `int`), default 1: members on this host get a copy |
+| `IP_ADD_MEMBERSHIP` | 12 | `struct ip_mreq` (group, interface address or `INADDR_ANY`); also `struct ip_mreqn`. At most 20 per socket; `EADDRINUSE` when already joined |
+| `IP_DROP_MEMBERSHIP` | 13 | as above; `EADDRNOTAVAIL` when not joined |
+
+UDP and raw sockets take them. As in BSD, a UDP datagram for a group is
+delivered to every socket bound to the port (several with `SO_REUSEADDR`
+or `SO_REUSEPORT`) that joined the group on the receiving interface;
+224.0.0.1 goes to every socket on the port, and sockets may bind to the
+group address. Closing a socket leaves its groups. Source-specific
+options (`IP_ADD_SOURCE_MEMBERSHIP`, `IP_BLOCK_SOURCE`) are not offered:
+their numbers differ between systems and the AmiTCP SDK has none.
+
+**Drivers.** A group is programmed into the driver's filter as
+01:00:5e plus the low 23 bits of the group (`S2_ADDMULTICASTADDRESS` on
+SANA-II, `AddMulticast()` on MNI), once per link layer address however
+many groups and sockets share it. A SANA-II driver without a multicast
+filter may not deliver the groups at all.
+
+**Inside the stack.** Other modules join with `rt_ip_mc_join(netif,
+group)` and `rt_ip_mc_leave()` (reference counted, lock held,
+`include/rt/rt_ip.h`); `rt_ip_mc_default_if(group)` picks the interface.
+Such a join makes the interface accept the group; sockets still receive
+its datagrams only after `IP_ADD_MEMBERSHIP`.
 
 ## IPv6
 
@@ -1170,7 +1230,7 @@ used:
   do not list IPv6 sockets.
 
 **Drivers.** SANA-II devices get CMD_READs for type 0x86DD, and the
-multicast groups IPv6 needs are programmed with
+multicast groups IPv6 needs (and the IPv4 ones) are programmed with
 `S2_ADDMULTICASTADDRESS`/`S2_DELMULTICASTADDRESS`. A driver without a
 multicast filter (it answers `S2ERR_NOT_SUPPORTED`, logged once) may not
 deliver neighbour solicitations, and then IPv6 cannot resolve neighbours
@@ -1438,6 +1498,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 | `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
+| `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
 | `tests/amiga/run_fsuae_bsdsocktest.sh build/amiga` | [bsdsocktest](https://github.com/tbdye/bsdsocktest), an independent bsdsocket.library conformance suite (`BSDSOCKTEST=` its Amiga binary from the release archive), on FS-UAE: its loopback tests (socket lifecycle, send/recv, options, WaitSelect, signals, DNS, utility calls, descriptor transfer, errno, ICMP, throughput). Passes when every test that ran passed; 0.12: 130 of 130, 12 skipped (they need a host helper or a network). |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real

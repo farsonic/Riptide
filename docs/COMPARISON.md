@@ -39,7 +39,7 @@ SDK may be missing here.
 | Kernel | 4.4BSD-Lite derived (RE-NOTES 5) | BSD derived, see 2.1 | New clean-room core; TCP modelled on Linux |
 | TCP | Reno/NewReno, early SACK, IW 1, 500 ms ticks, T/TCP on | 4.4BSD-style tunables (RFC 1323 switches, `tcp.rttdflt`) [RS-DOC]; modern loss recovery not documented | CUBIC+HyStart, SACK/D-SACK, RACK-TLP, PRR, F-RTO, IW 10, 200 ms RTO min |
 | IPv6 | No | Not documented (unverified, see 4) | Yes: dual-stack host (SLAAC, MLDv2, stateless DHCPv6, RDNSS; see 4) |
-| Multicast | Yes (multicast routing tools in the package) | Yes [RS-README], [RS-DOC] `-ip-` | IPv6 only (MLDv2, `IPV6_JOIN_GROUP`); no IGMP |
+| Multicast | Yes (multicast routing tools in the package) | Yes [RS-README], [RS-DOC] `-ip-` | Host side: IGMPv3 (v2/v1 fallback) and MLDv2; no multicast routing |
 | PPP | Built in (dialer, PPP, PPPoE/PPTP/L2TP) | PPP and PPPoE drivers included [RS-README] | No; needs a SANA-II PPP driver |
 | Firewall/NAT | Yes (IPFW, IP-NAT) | "IP packet filter/network address translation (firewall)" [RS-README] | No |
 | GUI | MUI/plain GUI, setup wizard | None; text configuration [RS-README] | None; text configuration |
@@ -178,7 +178,7 @@ slightly between runs (seeded but timing dependent).
 | | MiamiDx | Roadshow | Riptide |
 |---|---|---|---|
 | IPv6 | No (`MiamiSupportsIPV6()` returns 0) | Not mentioned in the product description [RS-README] or the autodoc's protocol sections [RS-DOC]; users asking for it in 2016-2017 got no roadmap [RS-IPv6]. No IPv6 as far as we can tell (**unverified**) | Yes, host side: SLAAC with RFC 7217 stable and RFC 8981 temporary addresses, DAD, NDP (RFC 4861 states), MLDv2, RA routes/MTU/RDNSS/DNSSL, stateless DHCPv6, RFC 6724 address selection, PMTU, fragments (RFC 5722/7112); dual-stack sockets (`IPV6_V6ONLY` 0 by default), KAME-numbered API, `getaddrinfo()` with AAAA. No stateful DHCPv6, no ancillary data |
-| Multicast / IGMP | Yes; multicast routing tools (mrouted, mtrace) in the package | Yes; `IP_ADD_MEMBERSHIP` etc. documented [RS-DOC], "Multicast support" [RS-README] | IPv4: **no** (options exist in the headers, not implemented); IPv6: MLDv2 and `IPV6_JOIN_GROUP` |
+| Multicast / IGMP | Yes; multicast routing tools (mrouted, mtrace) in the package | Yes; `IP_ADD_MEMBERSHIP` etc. documented [RS-DOC], "Multicast support" [RS-README] | Host side. IPv4: IGMPv3 (RFC 3376, exclude mode without source lists) falling back to IGMPv2/v1 queriers, `IP_ADD_MEMBERSHIP`/`IP_DROP_MEMBERSHIP` (BSD per-socket delivery), `IP_MULTICAST_IF`/`TTL`/`LOOP`; no source-specific options. IPv6: MLDv2 and `IPV6_JOIN_GROUP`. No multicast routing |
 | Fragment reassembly | Not analysed | **Unverified** | 30 s timeout, at most 64 queues, 64 fragments each, 256 KB memory high-water mark |
 | ICMP rate limiting | Not analysed | Echo and timestamp replies can be switched off (`icmp.processecho`, `icmp.procesststamp`) [RS-DOC] | Linux model: global token bucket plus per-destination limit (`net.inet.icmp.ratelimit`, `msgs_per_sec`, `msgs_burst`) |
 | Raw sockets | Yes | Yes, with `IP_HDRINCL` [RS-DOC] | Yes (ICMP, `IP_HDRINCL`) |
@@ -256,9 +256,11 @@ Riptide is younger and narrower. Be aware of these before choosing it:
   its built-in PPP, PPPoE, PPTP and L2TP. Roadshow includes PPP and PPPoE
   drivers. Riptide has no PPP of its own; it relies on a SANA-II PPP
   driver configured as a point-to-point interface.
-* **No IPv4 multicast/IGMP** (both others have it). IPv6, which neither
-  of the others has, is there, but only host-side: no stateful DHCPv6, no
-  RFC 3542 ancillary data, and SANA-II drivers need a multicast filter.
+* **No multicast routing** (MiamiDx ships mrouted and friends); IPv4
+  multicast is host side only (IGMP, no source filters). IPv6, which
+  neither of the others has, is there, but only host-side: no stateful
+  DHCPv6, no RFC 3542 ancillary data, and SANA-II drivers need a
+  multicast filter.
 * **No firewall, NAT or packet filter hooks**, no BPF/tcpdump, no SOCKS,
   no SSL (`RiptideOpenSSL()` returns NULL), no inetd, no `TCP:` handler,
   no ZeroConf, no IDN.

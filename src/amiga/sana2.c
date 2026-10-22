@@ -8,7 +8,8 @@
  * may run in the driver's interrupt code, so they only copy. Ethernet-like
  * devices get CMD_READs for IPv4, ARP and IPv6 (S2_READS_IP6); point-to-point
  * devices (PPP, SLIP: HardwareType != Ethernet) the IPv4 and IPv6 ones.
- * IPv6 multicast groups (solicited-node, all-nodes, MLD joins) are passed to
+ * Multicast groups (IPv6 solicited-node, all-nodes, MLD joins; IPv4 groups
+ * joined with IGMP, 01:00:5e:xx:xx:xx) are passed to
  * the driver with S2_ADDMULTICASTADDRESS / S2_DELMULTICASTADDRESS; the core
  * asks under the stack lock from any task, so the requests are queued and
  * issued by the Riptide process in sana2_poll. Cooked mode is
@@ -28,7 +29,7 @@
 #define S2_READS_IP_MAX 128
 #define S2_READS_ARP  4
 #define S2_READS_IP6  24           /* a 32 KB window of IPv6 segments */
-#define S2_MCQ        16             /* queued multicast filter changes */
+#define S2_MCQ        32             /* queued multicast filter changes */
 #define S2_MAX_WRITES 32
 #define S2_RX_HEADROOM 64
 #define ETH_HLEN 14

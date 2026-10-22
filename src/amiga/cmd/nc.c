@@ -5,7 +5,14 @@
  *   nc [-46] [-v] [-d] -l [-p] PORT          accept one connection
  *   nc [-46] -u [-w secs] HOST PORT          send stdin as one UDP datagram,
  *                                            print the answers
+ *   nc -u -l [-v] [-w secs] [-c n] [-m group [-I ifaddr]] PORT
+ *                                            print received datagrams (until
+ *                                            -w seconds of silence or n of them),
+ *                                            after joining an IPv4 group with -m
  *
+ * IPv4 multicast: -T ttl (IP_MULTICAST_TTL), -I ifaddr (IP_MULTICAST_IF
+ * when sending, the interface to join on with -m), -L no local copy
+ * (IP_MULTICAST_LOOP 0).
  * IPv6 with -6 or an IPv6 literal HOST; "nc -6 -l" listens on [::] and,
  * being dual-stack, also accepts IPv4 clients. Host names resolve to IPv4
  * unless -6 is given.
@@ -23,8 +30,61 @@ struct tv { ULONG secs, micro; };
 
 static void usage(void)
 {
-	cl_puts("usage: nc [-46dvu] [-w secs] host port\n"
-	        "       nc [-46dv] -l [-p] port\n");
+	cl_puts("usage: nc [-46dvu] [-w secs] [-T ttl] [-I ifaddr] [-L] host port\n"
+	        "       nc [-46dv] -l [-p] port\n"
+	        "       nc -u -l [-v] [-w secs] [-c count] [-m group [-I ifaddr]] [-p] port\n");
+}
+
+static int mcast_opts(LONG s, u32 ifaddr, LONG ttl, int noloop)
+{
+	UBYTE b;
+
+	if (ifaddr && setsockopt(s, RT_IPPROTO_IP, RT_IP_MULTICAST_IF, &ifaddr, 4) < 0)
+		return -1;
+	b = (UBYTE)ttl;
+	if (ttl >= 0 && setsockopt(s, RT_IPPROTO_IP, RT_IP_MULTICAST_TTL, &b, 1) < 0)
+		return -1;
+	b = 0;
+	if (noloop && setsockopt(s, RT_IPPROTO_IP, RT_IP_MULTICAST_LOOP, &b, 1) < 0)
+		return -1;
+	return 0;
+}
+
+/* nc -u -l: print datagrams as they come */
+static int udp_listen(LONG s, int verbose, u32 wait_ms, u32 count, char *buf)
+{
+	u32 got = 0;
+
+	for (;;) {
+		struct rt_sockaddr_in6 from;
+		struct cl_addr peer;
+		LONG n, fl = sizeof(from);
+		u16 pp = 0;
+		char a[CL_ADDRSTRLEN];
+		ULONG rd[2] = { 0, 0 }, sigs = SIGBREAKF_CTRL_C;
+		struct tv tmo, *tp = NULL;
+
+		if (wait_ms) {
+			tmo.secs = wait_ms / 1000;
+			tmo.micro = (wait_ms % 1000) * 1000;
+			tp = &tmo;
+		}
+		rd[s / 32] |= 1UL << (s % 32);
+		if (WaitSelect(s + 1, rd, NULL, NULL, tp, &sigs) <= 0)
+			break;
+		n = recvfrom(s, buf, BUFSZ, 0, &from, &fl);
+		if (n < 0)
+			break;
+		if (verbose) {
+			cl_from_sockaddr(&from, &peer, &pp);
+			cl_printf("Received %ld bytes from %s %u\n", (long)n, cl_addr_str(&peer, a), (unsigned)pp);
+			cl_flush();
+		}
+		Write(Output(), buf, n);
+		if (count && ++got >= count)
+			break;
+	}
+	return CL_OK;
 }
 
 static int nc_main(int argc, char **argv)
@@ -34,11 +94,13 @@ static int nc_main(int argc, char **argv)
 	struct cl_addr addr;
 	u32 port = 0, wait_ms = 0, salen;
 	int c, listen_mode = 0, nostdin = 0, verbose = 0, udp = 0, s = -1, fd = -1, rc = CL_ERROR, family = 0;
-	LONG n, one = 1;
+	int noloop = 0;
+	u32 group = 0, ifaddr = 0, count = 0, v;
+	LONG n, one = 1, ttl = -1;
 	char *buf, a[CL_ADDRSTRLEN];
 
 	memset(&g, 0, sizeof(g));
-	while ((c = cl_getopt(argc, argv, "ldvuw:p:hn46", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "ldvuw:p:hn46m:I:T:Lc:", &g)) != -1) {
 		switch (c) {
 		case '4': family = 4; break;
 		case '6': family = 6; break;
@@ -49,6 +111,21 @@ static int nc_main(int argc, char **argv)
 		case 'n': break;
 		case 'w': if (cl_parse_ms(g.arg, &wait_ms) < 0) { usage(); return CL_ERROR; } break;
 		case 'p': if (cl_parse_uint(g.arg, 65535, &port) < 0) { usage(); return CL_ERROR; } break;
+		case 'm':
+			if (cl_parse_ip(g.arg, &group) < 0 || (rt_ntohl(group) >> 28) != 14) {
+				cl_error("%s: not an IPv4 multicast group", g.arg);
+				return CL_ERROR;
+			}
+			break;
+		case 'I':
+			if (cl_parse_ip(g.arg, &ifaddr) < 0) { usage(); return CL_ERROR; }
+			break;
+		case 'T':
+			if (cl_parse_uint(g.arg, 255, &v) < 0) { usage(); return CL_ERROR; }
+			ttl = (LONG)v;
+			break;
+		case 'L': noloop = 1; break;
+		case 'c': if (cl_parse_uint(g.arg, 0x7fffffff, &count) < 0) { usage(); return CL_ERROR; } break;
 		case 'h': usage(); return CL_OK;
 		default: usage(); return CL_ERROR;
 		}
@@ -84,6 +161,33 @@ static int nc_main(int argc, char **argv)
 	if (s < 0)
 		goto out;
 	salen = cl_sockaddr(&addr, (u16)port, &sa);
+	if (listen_mode && udp) {
+		setsockopt(s, RT_SOL_SOCKET, RT_SO_REUSEADDR, &one, sizeof(one));
+		if (bind(s, &sa, (LONG)salen) < 0) {
+			cl_error("cannot bind port %lu: %s", (unsigned long)port, cl_strerror((int)Errno()));
+			goto out;
+		}
+		if (group) {
+			struct rt_ip_mreq mr;
+			mr.imr_multiaddr = group;
+			mr.imr_interface = ifaddr;
+			if (setsockopt(s, RT_IPPROTO_IP, RT_IP_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0) {
+				cl_error("cannot join the group: %s", cl_strerror((int)Errno()));
+				goto out;
+			}
+		}
+		if (verbose)
+			cl_printf("Listening on %s %lu (udp)\n", addr.family == RT_AF_INET6 ? "::" : "0.0.0.0",
+			          (unsigned long)port);
+		cl_flush();
+		rc = udp_listen(s, verbose, wait_ms, count, buf);
+		goto out;
+	}
+	if (!listen_mode && udp && (ttl >= 0 || ifaddr || noloop) &&
+	    mcast_opts(s, ifaddr, ttl, noloop) < 0) {
+		cl_error("multicast options: %s", cl_strerror((int)Errno()));
+		goto out;
+	}
 	if (listen_mode) {
 		LONG l = sizeof(sa);
 		struct cl_addr peer;
