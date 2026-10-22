@@ -85,6 +85,15 @@ u32 rt_wallclock(void)
 	return (u32)time(NULL);
 }
 
+void rt_wallclock_tv(u32 *sec, u32 *usec)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_REALTIME, &ts);
+	*sec = (u32)ts.tv_sec;
+	*usec = (u32)ts.tv_nsec / 1000u;
+}
+
 /* profiling clock: microseconds (wraps after 71 minutes) */
 u32 rt_prof_ticks(void)
 {

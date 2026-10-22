@@ -422,6 +422,16 @@ int rt_ip_mc_joined(const struct rt_netif *nif, u32 group)
 	return m && m->refcnt;
 }
 
+int rt_ip_mc_member(const struct rt_netif *nif, u32 group)
+{
+	return group == rt_htonl(RT_INADDR_ALLHOSTS_GROUP) || rt_ip_mc_joined(nif, group);
+}
+
+void rt_ip_mc_flush(struct rt_netif *nif)
+{
+	rt_igmp_if_remove(nif);
+}
+
 struct rt_netif *rt_ip_mc_default_if(u32 group)
 {
 	struct rt_nexthop nh;

@@ -392,7 +392,7 @@ static void ip_input_body(struct rt_netif *nif, struct rt_buf *b)
 
 	if (rt_ip_is_multicast(daddr)) {
 		/* groups joined on this interface (224.0.0.1 always is) */
-		if (!rt_ip_mc_joined(nif, daddr) && daddr != rt_htonl(RT_INADDR_ALLHOSTS_GROUP))
+		if (!rt_ip_mc_member(nif, daddr))
 			goto discard;
 		b->flags |= RT_BUFF_MCAST;
 	} else if (!rt_ip_is_local(daddr)) {

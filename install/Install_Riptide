@@ -547,6 +547,7 @@
   (set #mask "255.255.255.0")
   (set #gw "10.0.2.2")
   (set #dns "10.0.2.3")
+  (set #ntp 1)
 
   (if (> @user-level 0)
   (
@@ -602,6 +603,17 @@
                             (help "For example your router or 1.1.1.1 (slirp: 10.0.2.3). Leave empty for none.")
                             (default #dns)))
     ))
+    (set #ntp
+      (askbool
+        (prompt "Set the Amiga's clock from the network (NTP)?")
+        (help (cat "Riptide then asks a time server two seconds after it starts "
+                   "and once an hour, and sets the clock when it is off by half "
+                   "a second or more. With DHCP the router's time servers are "
+                   "used when it announces any, otherwise pool.ntp.org.\n\n"
+                   "The time zone comes from the Locale preferences; a "
+                   "'timezone +10:00' line in the configuration overrides it."))
+        (choices "Yes" "No")
+        (default #ntp)))
   ))
 
   (set #c-if
@@ -651,6 +663,13 @@
          "# --- names ---------------------------------------------------------\n"
          "# Static host entries (more in ENV:Riptide/hosts)\n"
          "host " #hostname " 127.0.0.1\n\n"
+         "# --- time and .local names ------------------------------------------\n"
+         (if #ntp "ntp on                    # the lease's time servers, else pool.ntp.org\n"
+                  "#ntp on                   # set the clock from the network (NTP)\n")
+         "#ntp pool.ntp.org          # or name up to four servers\n"
+         "#ntp battclock on          # also set the battery-backed clock\n"
+         "#timezone +10:00           # default: the Locale preferences\n"
+         "#mdns off                  # answering for " #hostname ".local on the LAN\n\n"
          "# --- optional TCP tuning (Linux-style defaults are already set) ----\n"
          "#sysctl net.inet.tcp.cc=cubic           # or reno\n"
          "#sysctl net.inet.tcp.recvspace=65536\n"

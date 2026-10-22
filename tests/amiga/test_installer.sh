@@ -97,6 +97,8 @@ grepf "$conf" '^#ifconfig  eth0 10.0.2.15/24 up$'
 grepf "$conf" '^#route     add default 10.0.2.2$'
 grepf "$conf" '^#nameserver 10.0.2.3$'
 grepf "$conf" '^host amiga 127.0.0.1$'
+grepf "$conf" '^ntp on '
+grepf "$conf" '^#timezone '
 cmp -s "$conf" "$root/ENV/Riptide/riptide.conf" || fail "novice: ENV: copy of riptide.conf differs"
 grepf "$root/ENVARC/Riptide/hosts" '^127.0.0.1 localhost$'
 has "$root/ENV/Riptide/hosts"

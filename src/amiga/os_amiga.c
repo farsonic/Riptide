@@ -11,6 +11,8 @@
 #include "amiga_priv.h"
 
 struct Device *TimerBase;
+struct LocaleBase *LocaleBase;
+struct Library *BattClockBase;
 
 static struct SignalSemaphore stack_sem;
 static struct timerequest *clock_req;    /* keeps timer.device open */
@@ -137,15 +139,82 @@ u32 rt_prof_hz(void)
 	return amiga_virtual_clock || !TimerBase || !eclock_freq ? 1000u : eclock_freq;
 }
 
-u32 rt_wallclock(void)
+/* AmigaOS keeps local time since 1.1.1978: 2922 days after 1970 */
+#define AMIGA_EPOCH 252460800u
+
+void rt_wallclock_tv(u32 *sec, u32 *usec)
 {
 	struct timeval tv;
 
-	if (amiga_virtual_clock || !TimerBase)
-		return 0;
+	if (amiga_virtual_clock || !TimerBase) {
+		*sec = *usec = 0;
+		return;
+	}
 	GetSysTime(&tv);
-	/* AmigaOS counts from 1.1.1978: add the 2922 days since 1970 */
-	return tv.tv_secs + 252460800u;
+	*sec = tv.tv_secs + AMIGA_EPOCH - (u32)rt_tz_offset;
+	*usec = tv.tv_micro;
+}
+
+u32 rt_wallclock(void)
+{
+	u32 s, u;
+
+	rt_wallclock_tv(&s, &u);
+	return s;
+}
+
+/* NTP steps the clock (the stack process; a private request, as clock_req
+ * belongs to the task that ran amiga_os_init()) */
+static int amiga_set_clock(u32 sec, u32 usec)
+{
+	struct MsgPort *port;
+	struct timerequest *tr;
+	u32 local = sec - AMIGA_EPOCH + (u32)rt_tz_offset;
+	int r = -RT_EIO;
+
+	if (amiga_virtual_clock || (s32)local < 0)
+		return -RT_EINVAL;
+	port = CreateMsgPort();
+	if (!port)
+		return -RT_ENOMEM;
+	tr = (struct timerequest *)CreateIORequest(port, sizeof(*tr));
+	if (tr && OpenDevice((CONST_STRPTR)"timer.device", UNIT_MICROHZ, &tr->tr_node, 0) == 0) {
+		tr->tr_node.io_Command = TR_SETSYSTIME;
+		tr->tr_time.tv_secs = local;
+		tr->tr_time.tv_micro = usec;
+		if (DoIO(&tr->tr_node) == 0)
+			r = 0;
+		CloseDevice(&tr->tr_node);
+	}
+	if (tr)
+		DeleteIORequest((struct IORequest *)tr);
+	DeleteMsgPort(port);
+	if (r == 0 && rt_ntp_battclock) {
+		if (!BattClockBase)
+			BattClockBase = (struct Library *)OpenResource((CONST_STRPTR)"battclock.resource");
+		if (BattClockBase)
+			WriteBattClock(local);
+	}
+	return r;
+}
+
+/* the time zone from the Locale preferences (loc_GMTOffset: minutes west) */
+static void amiga_locale_tz(void)
+{
+	struct Locale *loc;
+
+	LocaleBase = (struct LocaleBase *)OpenLibrary((CONST_STRPTR)"locale.library", 38);
+	if (!LocaleBase)
+		return;
+	loc = OpenLocale(NULL);
+	if (loc) {
+		rt_tz_system = -(s32)loc->loc_GMTOffset * 60;
+		if (!rt_tz_configured)
+			rt_tz_offset = rt_tz_system;
+		CloseLocale(loc);
+	}
+	CloseLibrary((struct Library *)LocaleBase);
+	LocaleBase = NULL;
 }
 
 /* ---- memory ---- */
@@ -617,6 +686,8 @@ int amiga_os_init(void)
 		}
 		if (eclock_freq == 0)
 			eclock_freq = 709379;
+		amiga_locale_tz();
+		rt_set_wallclock_hook = amiga_set_clock;
 	}
 	return 0;
 }

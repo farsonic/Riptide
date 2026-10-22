@@ -168,6 +168,10 @@ void rt_ip_input(struct rt_netif *nif, struct rt_buf *b);
 int  rt_ip_mc_join(struct rt_netif *nif, u32 group);
 int  rt_ip_mc_leave(struct rt_netif *nif, u32 group);   /* -RT_EADDRNOTAVAIL: not joined */
 int  rt_ip_mc_joined(const struct rt_netif *nif, u32 group);
+/* Does IP input accept 'group' on nif (joined, or 224.0.0.1)? */
+int  rt_ip_mc_member(const struct rt_netif *nif, u32 group);
+/* The interface is going away: forget its groups (rt_netif_remove). */
+void rt_ip_mc_flush(struct rt_netif *nif);
 /* The interface for sending to / joining 'group' when the user names
  * none: the route to the group (default route), else the first up
  * multicast capable interface other than loopback. NULL if none. */

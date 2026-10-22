@@ -13,5 +13,7 @@
 #include "gen/exec_calls.h"
 #include "gen/dos_calls.h"
 #include "gen/timer_calls.h"
+#include "gen/locale_calls.h"
+#include "gen/battclock_calls.h"
 
 #endif
