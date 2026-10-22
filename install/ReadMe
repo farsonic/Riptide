@@ -17,6 +17,7 @@ The installer
     speedtest) to C: (Expert users can pick another drawer),
   * installs the documentation in <Work: or SYS:>Riptide/Docs and,
     if you ask for it, the SDK in <Work: or SYS:>Riptide/SDK,
+  * copies RiptidePrefs, the settings editor, to SYS:Prefs,
   * writes ENVARC:Riptide/riptide.conf (and copies it to ENV:Riptide/)
     for the emulator's uaenet.device with DHCP, or for another SANA-II
     device and a static address,
@@ -52,6 +53,10 @@ Manual installation
   2. Put a configuration in ENVARC:Riptide/riptide.conf and
      ENV:Riptide/riptide.conf (Docs/riptide-uaenet.conf is an example).
   3. Start it with "Run >NIL: Riptide", e.g. from S:User-Startup.
+
+RiptidePrefs (in SYS:Prefs, or in this drawer) edits riptide.conf: "Save"
+writes ENVARC: and ENV:, "Use" ENV: only, "Apply" passes host name,
+name servers, time and TCP settings to the running stack.
 
 Docs/AMIGA.md is the manual. Riptide is free software under the GNU
 General Public License version 2 (Docs/LICENSE).

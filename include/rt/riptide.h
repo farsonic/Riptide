@@ -22,7 +22,7 @@
 #include "rt_diag.h"
 #include "rt_netsvc.h"
 
-#define RIPTIDE_VERSION_STRING "0.12"
+#include "rt_version.h"
 
 /* Initialise every module and create lo0. Call once, without the lock. */
 int  rt_init(void);

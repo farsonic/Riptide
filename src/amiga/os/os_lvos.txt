@@ -107,3 +107,35 @@
 
 @lib battclock BattClockBase resource=1
 18  void WriteBattClock(ULONG time d0)
+
+# RiptidePrefs (GadTools GUI)
+@lib intuition IntuitionBase basetype=IntuitionBase
+72  void CloseWindow(struct Window* window a0)
+276 void SetWindowTitles(struct Window* window a0, CONST_STRPTR windowTitle a1, CONST_STRPTR screenTitle a2)
+432 void RefreshGList(struct Gadget* gadgets a0, struct Window* window a1, APTR requester a2, LONG numGad d0)
+438 UWORD AddGList(struct Window* window a0, struct Gadget* gadget a1, ULONG position d0, LONG numGad d1, APTR requester a2)
+444 UWORD RemoveGList(struct Window* remPtr a0, struct Gadget* gadget a1, LONG numGad d0)
+462 LONG ActivateGadget(struct Gadget* gadgets a0, struct Window* window a1, APTR requester a2)
+510 struct Screen* LockPubScreen(CONST_STRPTR name a0)
+516 void UnlockPubScreen(CONST_STRPTR name a0, struct Screen* screen a1)
+588 LONG EasyRequestArgs(struct Window* window a0, const struct EasyStruct* easyStruct a1, ULONG* idcmpPtr a2, const APTR args a3)
+606 struct Window* OpenWindowTagList(const APTR newWindow a0, const struct TagItem* tagList a1)
+
+@lib gadtools GadToolsBase basetype=Library
+30  struct Gadget* CreateGadgetA(ULONG kind d0, struct Gadget* gad a0, const struct NewGadget* ng a1, const struct TagItem* taglist a2)
+36  void FreeGadgets(struct Gadget* gad a0)
+42  void GT_SetGadgetAttrsA(struct Gadget* gad a0, struct Window* win a1, APTR req a2, const struct TagItem* taglist a3)
+72  struct IntuiMessage* GT_GetIMsg(struct MsgPort* iport a0)
+78  void GT_ReplyIMsg(struct IntuiMessage* imsg a1)
+84  void GT_RefreshWindow(struct Window* win a0, APTR req a1)
+90  void GT_BeginRefresh(struct Window* win a0)
+96  void GT_EndRefresh(struct Window* win a0, LONG complete d0)
+114 struct Gadget* CreateContext(struct Gadget** glistptr a0)
+126 APTR GetVisualInfoA(struct Screen* screen a0, const struct TagItem* taglist a1)
+132 void FreeVisualInfo(APTR vi a0)
+174 LONG GT_GetGadgetAttrsA(struct Gadget* gad a0, struct Window* win a1, APTR req a2, const struct TagItem* taglist a3)
+
+@lib graphics GfxBase basetype=GfxBase
+54  WORD TextLength(struct RastPort* rp a1, CONST_STRPTR string a0, ULONG count d0)
+306 void RectFill(struct RastPort* rp a1, LONG xMin d0, LONG yMin d1, LONG xMax d2, LONG yMax d3)
+342 void SetAPen(struct RastPort* rp a1, ULONG pen d0)
