@@ -1324,6 +1324,14 @@ int rt_api_ioctl(struct rt_sockctx *c, int fd, u32 req, void *arg)
 			r = 0;
 		}
 		break;
+	case RT_FIONWRITE:
+		r = so->ops->ioctl ? so->ops->ioctl(so, req, arg) : -RT_EINVAL;
+		if (r == -RT_EINVAL && so->type != RT_SOCK_STREAM) {
+			v = 0;          /* datagrams leave at once */
+			memcpy(arg, &v, sizeof(v));
+			r = 0;
+		}
+		break;
 	case RT_SIOCATMARK:
 		r = so->ops->ioctl ? so->ops->ioctl(so, req, arg) : -RT_EINVAL;
 		if (r == -RT_EINVAL) {

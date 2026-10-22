@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -123,6 +125,17 @@ static int px_conn_error(void *ctx, int fd)
 	if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &len) < 0)
 		e = errno;
 	return e ? st_posix_errno(e) : 0;
+}
+
+/* SIOCOUTQ: sent but unacknowledged bytes */
+static int px_unsent(void *ctx, int fd)
+{
+	int v = 0;
+
+	(void)ctx;
+	if (ioctl(fd, SIOCOUTQ, &v) < 0)
+		return -1;
+	return v;
 }
 
 static int px_send(void *ctx, int fd, const void *p, u32 n)
@@ -264,5 +277,5 @@ static const char *px_strerror(void *ctx, int e)
 const struct st_sys st_posix_sys = {
 	NULL, px_resolve, px_connect, px_conn_error, px_send, px_recv, px_close, px_wait,
 	px_now_us, px_unix_time, px_brk, px_raise_brk, px_out, px_flush, px_alloc, px_free,
-	px_strerror, 256, "Linux"
+	px_strerror, 256, "Linux", px_unsent
 };

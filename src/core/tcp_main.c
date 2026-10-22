@@ -2011,6 +2011,12 @@ static int tcp_v4_ioctl(struct rt_socket *so, u32 req, void *arg)
 		memcpy(arg, &v, sizeof(v));
 		return 0;
 	}
+	if (req == RT_FIONWRITE) {
+		/* written but not acknowledged yet (Linux SIOCOUTQ) */
+		v = tp->state == RT_TCPS_LISTEN ? 0 : (s32)(tp->write_seq - tp->snd_una);
+		memcpy(arg, &v, sizeof(v));
+		return 0;
+	}
 	if (req == RT_SIOCATMARK) {
 		v = tp->urg_data && tp->urg_seq == tp->copied_seq;
 		memcpy(arg, &v, sizeof(v));

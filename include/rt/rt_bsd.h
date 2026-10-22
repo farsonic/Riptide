@@ -185,6 +185,7 @@ struct rt_ipv6_mreq {
 #define RT_FIOASYNC   RT_IOW('f', 125, 4)
 #define RT_FIOSETOWN  RT_IOW('f', 124, 4)
 #define RT_FIOGETOWN  RT_IOR('f', 123, 4)
+#define RT_FIONWRITE  RT_IOR('f', 119, 4)   /* FreeBSD: bytes sent but not yet acknowledged */
 #define RT_SIOCATMARK RT_IOR('s', 7, 4)
 #define RT_SIOCSPGRP  RT_IOW('s', 8, 4)
 #define RT_SIOCGPGRP  RT_IOR('s', 9, 4)

@@ -494,9 +494,19 @@ static int run(struct st *st, int nconn, u32 limit_ms, next_fn next, done_fn don
 			u32 el = (now - t0) / 1000UL;
 			if (el >= limit_ms) {
 				st->stop = 1;
-				for (i = 0; i < nconn; i++)
-					if (st->conn[i].state != C_IDLE)
-						conn_close(st, &st->conn[i]);
+				for (i = 0; i < nconn; i++) {
+					struct st_conn *c = &st->conn[i];
+					if (c->state == C_IDLE)
+						continue;
+					/* an upload counts what send() took; what still sits
+					 * in the stack's send queue never reached the server */
+					if (st->phase == PH_UPLOAD && st->sys->unsent && c->state != C_CONNECT) {
+						int u = st->sys->unsent(st->ctx, c->fd);
+						if (u > 0)
+							st->bytes -= RT_MIN((u64)u, st->bytes);
+					}
+					conn_close(st, c);
+				}
 				return RUN_LIMIT;
 			}
 			if (limit_ms - el < wait_ms)

@@ -25,7 +25,8 @@
 # Options for testing the client: --chunked (chunked bodies with odd chunk
 # sizes), --redirect (configuration and list via 302), --https-redirect
 # (they move to https://, which the client cannot follow), --delay MS (every
-# response), --rate KBYTES (per connection), --close (no keep-alive),
+# response), --rate KBYTES (per connection), --upload-rate KBYTES (reads
+# upload bodies that slowly), --close (no keep-alive),
 # --size-div N (smaller images), --servers N (more entries; 5000 makes a
 # list of about a megabyte).
 # SPDX-License-Identifier: GPL-2.0-only
@@ -286,8 +287,16 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 left = int(self.headers.get("Content-Length", "0"))
                 first = True
+                urate = self.server.opts.upload_rate * 1024
+                t0 = time.monotonic()
                 while left:
-                    d = self.rfile.read(min(left, 65536))
+                    if urate:
+                        # read no faster than --upload-rate: the client's
+                        # send queue fills, as behind a slow uplink
+                        ahead = n / urate - (time.monotonic() - t0)
+                        if ahead > 0:
+                            time.sleep(ahead)
+                    d = self.rfile.read(min(left, 4096 if urate else 65536))
                     if not d:
                         raise ConnectionResetError
                     if first and not d.startswith(b"content1="[:len(d)]):
@@ -335,6 +344,8 @@ def main():
     ap.add_argument("--no-static", action="store_true", help="404 for speedtest-servers-static.php")
     ap.add_argument("--delay", type=int, default=0, help="milliseconds before every response")
     ap.add_argument("--rate", type=int, default=0, help="KB/s per connection for images (0: unlimited)")
+    ap.add_argument("--upload-rate", type=int, default=0,
+                    help="KB/s per connection read from upload bodies (0: unlimited)")
     ap.add_argument("--close", action="store_true", help="Connection: close on every response")
     ap.add_argument("-v", "--verbose", action="store_true")
     o = ap.parse_args()

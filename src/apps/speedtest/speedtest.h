@@ -57,6 +57,9 @@ struct st_sys {
 	const char *(*strerror)(void *ctx, int err);
 	int  maxfd;                          /* descriptors must be below this (<= 256) */
 	const char *ua;                      /* User-Agent platform: "AmigaOS; m68k" */
+	/* bytes written to fd that the peer has not acknowledged yet, or -1
+	 * when the stack cannot tell (NULL: never) */
+	int  (*unsent)(void *ctx, int fd);
 };
 
 /* Run the speedtest command line (argv[0] is the program name). */

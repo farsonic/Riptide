@@ -71,6 +71,14 @@ static int r_send(void *ctx, int fd, const void *p, u32 n)
 	return rt_api_send(&sctx, fd, p, n, 0);
 }
 
+static int r_unsent(void *ctx, int fd)
+{
+	s32 v = 0;
+
+	(void)ctx;
+	return rt_api_ioctl(&sctx, fd, RT_FIONWRITE, &v) < 0 ? -1 : (int)v;
+}
+
 static int r_recv(void *ctx, int fd, void *p, u32 n)
 {
 	(void)ctx;
@@ -167,6 +175,7 @@ int main(int argc, char **argv)
 	test_sys.recv = r_recv;
 	test_sys.close = r_close;
 	test_sys.wait = r_wait;
+	test_sys.unsent = r_unsent;
 	test_sys.brk = r_brk;
 	test_sys.raise_brk = r_raise_brk;
 	test_sys.maxfd = 64;

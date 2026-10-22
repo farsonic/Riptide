@@ -14,6 +14,7 @@
  */
 #include "cmdlib.h"
 #include "gen/bsdsocket_calls.h"
+#include "gen/riptide_calls.h"
 #include "../../apps/speedtest/speedtest.h"
 
 struct st_tv { ULONG secs, micro; };
@@ -163,11 +164,64 @@ static const char *a_strerror(void *ctx, int e)
 	return st_strerror(e);
 }
 
+/* FIONWRITE (Riptide 0.15, FreeBSD): unacknowledged bytes; -1 on other stacks */
+static int a_unsent(void *ctx, int fd)
+{
+	LONG v = 0;
+
+	if (IoctlSocket(fd, RT_FIONWRITE, &v) < 0)
+		return -1;
+	return (int)v;
+}
+
 static const struct st_sys amiga_sys = {
 	NULL, a_resolve, a_connect, a_conn_error, a_send, a_recv, a_close, a_wait,
 	a_now_us, a_unix_time, a_brk, a_raise_brk, a_out, a_flush, a_alloc, a_free,
-	a_strerror, 256, "AmigaOS; m68k"
+	a_strerror, 256, "AmigaOS; m68k", a_unsent
 };
+
+/* An interface with a TCP window limit (tcpwindow=, the workaround for
+ * FS-UAE's frame drops on unpatched uaenet.device/slirp) caps downloads:
+ * say so, or the result looks like a slow line. */
+static void note_tcpwindow(int argc, char **argv)
+{
+	struct rt_ctl_hdr h;
+	LONG mib[3], len = 0;
+	u8 *d;
+	u32 i;
+
+	for (i = 1; i < (u32)argc; i++)
+		if (!strcmp(argv[i], "--json") || !strcmp(argv[i], "--csv") || !strcmp(argv[i], "--simple") ||
+		    !strcmp(argv[i], "--list"))
+			return;
+	/* quietly: another stack has no riptide.library */
+	if (!RiptideBase)
+		RiptideBase = OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, RIPTIDE_LIB_VERSION);
+	if (!RiptideBase)
+		return;
+	mib[0] = 4;             /* CTL_NET */
+	mib[1] = RT_CTL_MIB_RIPTIDE;
+	mib[2] = RT_CTL_IFACES;
+	if (RiptideSysCtl(mib, 3, NULL, &len, NULL, 0) != 0)
+		return;
+	len += 1024;
+	d = AllocVec((ULONG)len, MEMF_ANY | MEMF_CLEAR);
+	if (!d)
+		return;
+	if (RiptideSysCtl(mib, 3, d, &len, NULL, 0) != 0 || (memcpy(&h, d, sizeof(h)), h.version != RT_CTL_VERSION)) {
+		FreeVec(d);
+		return;
+	}
+	for (i = 0; i < h.count; i++) {
+		const struct rt_ctl_iface *f = cl_rec(d, &h, i);
+		if ((f->flags & RT_IFF_UP) && !(f->flags & RT_IFF_LOOPBACK) && f->tcp_window)
+			cl_printf("Note: %s has tcpwindow=%lu (the FS-UAE slirp workaround): downloads over it\n"
+			          "      are limited to about one window per round trip. Remove it on a\n"
+			          "      patched FS-UAE or another emulator.\n",
+			          f->name, (unsigned long)f->tcp_window);
+	}
+	FreeVec(d);
+}
 
 static int speedtest_main(int argc, char **argv)
 {
@@ -181,6 +235,7 @@ static int speedtest_main(int argc, char **argv)
 	}
 	if (cl_need_socket() < 0 || cl_need_timer() < 0)
 		return CL_FAIL;
+	note_tcpwindow(argc, argv);
 	return st_main(argc, argv, &amiga_sys);
 }
 
