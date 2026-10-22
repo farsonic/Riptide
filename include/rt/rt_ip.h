@@ -120,6 +120,13 @@ struct rt_nexthop {
 };
 /* Longest-prefix lookup. Returns 0 or -RT_ENETUNREACH / -RT_EHOSTUNREACH. */
 int  rt_ip_route(u32 dst, struct rt_nexthop *nh);
+/* IPv4 multicast group membership on an interface (reference counted;
+ * programs the driver's multicast filter). 224.0.0.1 is always a member.
+ * Lock held. */
+int  rt_ip_mc_join(struct rt_netif *nif, u32 grp);
+void rt_ip_mc_leave(struct rt_netif *nif, u32 grp);
+int  rt_ip_mc_member(const struct rt_netif *nif, u32 grp);
+void rt_ip_mc_flush(const struct rt_netif *nif);
 /* PMTU discovery (RFC 1191): record a smaller MTU for dst (expires after
  * net.inet.ip.mtu_expires). */
 void rt_ip_pmtu_update(u32 dst, u32 mtu);

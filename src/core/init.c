@@ -42,6 +42,7 @@ int rt_init(void)
 	if (r < 0)
 		return r;
 	rt_resolv_init();
+	rt_netsvc_init();
 	rt_initialised = 1;
 	return 0;
 }

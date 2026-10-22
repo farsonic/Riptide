@@ -88,6 +88,100 @@ int rt_ip_send_routed(struct rt_buf *b, const struct rt_nexthop *nh)
 	return rt_netif_output_ip(nh->netif, b, nh->nexthop);
 }
 
+/* ---- IPv4 multicast groups ----
+ * Groups joined on an interface, reference counted; ip_input accepts their
+ * datagrams and the driver's filter receives their Ethernet group address.
+ * 224.0.0.1 (all hosts) is always accepted. Used by mDNS (224.0.0.251);
+ * no IGMP here (link-local groups 224.0.0.0/24 are never pruned). */
+#define IP_MC_MAX 16
+static struct {
+	struct rt_netif *nif;
+	u32 grp;                 /* network order */
+	u16 refs;
+} ip_mc[IP_MC_MAX];
+
+static void ip_mc_mac(u32 grp, u8 *mac)
+{
+	u32 h = rt_ntohl(grp);
+
+	mac[0] = 0x01; mac[1] = 0x00; mac[2] = 0x5e;
+	mac[3] = (u8)((h >> 16) & 0x7f); mac[4] = (u8)(h >> 8); mac[5] = (u8)h;
+}
+
+int rt_ip_mc_join(struct rt_netif *nif, u32 grp)
+{
+	int i, free_slot = -1;
+	u8 mac[6];
+
+	if (!nif || !rt_ip_is_multicast(grp))
+		return -RT_EINVAL;
+	for (i = 0; i < IP_MC_MAX; i++) {
+		if (ip_mc[i].refs && ip_mc[i].nif == nif && ip_mc[i].grp == grp) {
+			ip_mc[i].refs++;
+			return 0;
+		}
+		if (!ip_mc[i].refs && free_slot < 0)
+			free_slot = i;
+	}
+	if (free_slot < 0)
+		return -RT_ENOBUFS;
+	ip_mc[free_slot].nif = nif;
+	ip_mc[free_slot].grp = grp;
+	ip_mc[free_slot].refs = 1;
+	if (nif->mcast) {
+		ip_mc_mac(grp, mac);
+		nif->mcast(nif, mac, 1);
+	}
+	return 0;
+}
+
+void rt_ip_mc_leave(struct rt_netif *nif, u32 grp)
+{
+	int i, j;
+	u8 mac[6];
+
+	for (i = 0; i < IP_MC_MAX; i++) {
+		if (!ip_mc[i].refs || ip_mc[i].nif != nif || ip_mc[i].grp != grp)
+			continue;
+		if (--ip_mc[i].refs)
+			return;
+		ip_mc_mac(grp, mac);
+		for (j = 0; j < IP_MC_MAX; j++) {   /* another group with the same MAC */
+			u8 m2[6];
+			if (j == i || !ip_mc[j].refs || ip_mc[j].nif != nif)
+				continue;
+			ip_mc_mac(ip_mc[j].grp, m2);
+			if (!memcmp(m2, mac, 6))
+				return;
+		}
+		if (nif->mcast)
+			nif->mcast(nif, mac, 0);
+		return;
+	}
+}
+
+int rt_ip_mc_member(const struct rt_netif *nif, u32 grp)
+{
+	int i;
+
+	if (grp == rt_htonl(0xe0000001u))
+		return 1;
+	for (i = 0; i < IP_MC_MAX; i++)
+		if (ip_mc[i].refs && ip_mc[i].nif == nif && ip_mc[i].grp == grp)
+			return 1;
+	return 0;
+}
+
+/* an interface went away: forget its groups (no driver to tell) */
+void rt_ip_mc_flush(const struct rt_netif *nif)
+{
+	int i;
+
+	for (i = 0; i < IP_MC_MAX; i++)
+		if (ip_mc[i].nif == nif)
+			ip_mc[i].refs = 0;
+}
+
 /* SO_DONTROUTE: the destination must be on a directly attached network. */
 static int route_direct(u32 dst, struct rt_nexthop *nh)
 {
@@ -362,8 +456,7 @@ static void ip_input_body(struct rt_netif *nif, struct rt_buf *b)
 		goto addrerr;
 
 	if (rt_ip_is_multicast(daddr)) {
-		/* No group membership support: only all-hosts is ours. */
-		if (daddr != rt_htonl(0xe0000001u))
+		if (!rt_ip_mc_member(nif, daddr))
 			goto discard;
 		b->flags |= RT_BUFF_MCAST;
 	} else if (!rt_ip_is_local(daddr)) {

@@ -52,7 +52,7 @@ CFLAGS  := -m68020 -mtune=68020-60 -DRT_ARCH_M68K_ASM -O2 -std=gnu99 -ffreestand
            -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter \
            -Isrc/amiga/include -Isrc/amiga -Isrc/amiga/os -I$(BUILD) -Iinclude -Iinclude/rt
 LDFLAGS := -T src/amiga/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments
-GEN_H   := $(foreach l,exec dos timer,$(BUILD)/gen/$(l)_calls.h) \
+GEN_H   := $(foreach l,exec dos timer locale battclock,$(BUILD)/gen/$(l)_calls.h) \
            $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC) src/amiga/libc.c) \

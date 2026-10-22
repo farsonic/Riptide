@@ -379,6 +379,14 @@ int amiga_status_text(char *buf, u32 len)
 			}
 		}
 	}
+	{
+		char sv[160];
+		rt_ntp_status(sv, sizeof(sv));
+		if (sv[0])
+			ADD("%s\n", sv);
+		rt_mdns_status(sv, sizeof(sv));
+		ADD("%s\n", sv);
+	}
 	ADD("Routes:\n");
 	for (r = rt_route_list(); r; r = r->next) {
 		if (r->flags & RT_RTF_PMTU)
@@ -564,6 +572,10 @@ int amiga_stack_start(const char *config, int selftest)
 	rt_lock();
 	rt_sysctl_set_text("net.inet.tcp.recvspace", "32768");
 	rt_sysctl_set_text("net.inet.tcp.rmem_max", "65536");
+	if (!selftest) {
+		char e[64];
+		rt_config_line("mdns on", e, sizeof(e), NULL);   /* "mdns off" overrides */
+	}
 	rt_unlock();
 	if (amiga_load_config(config) < 0 && config)
 		return -1;

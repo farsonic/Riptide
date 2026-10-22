@@ -35,6 +35,10 @@ int dns_build_query_class(u8 *buf, u32 buflen, u16 id, const char *name, u16 qcl
 int dns_expand(const u8 *msg, u32 len, u32 off, char *out, u32 outlen, u32 *next);
 int dns_expand_ex(const u8 *msg, u32 len, u32 off, char *out, u32 outlen, u32 *next,
                   int lenient);
+/* mdns.c: A/AAAA records for name in a reply to our legacy unicast query
+ * (count, *ttl the smallest TTL; DNS_IGNORE when it is not one) */
+int mdns_parse_answer(const u8 *m, u32 len, u16 id, const char *name, u16 qtype, u32 *a4,
+                      rt_in6_addr *a6, int max, u32 *ttl);
 int dns_parse_response(const u8 *msg, u32 len, u16 id, const char *qname, u16 qtype,
                        struct dns_result *res);
 
