@@ -73,4 +73,6 @@ RiptideSetFdCallback(cbptr,cputype)(a0,d0)
 RiptideReserved23()()
 ##bias 522
 RiptideReserved53()()
+##public
+RiptideConnectName(host,port,tags)(a0,d0,a1)
 ##end

@@ -23,6 +23,9 @@ static void usage(void)
 	        "  ifconfig <interface> [<address>[/<bits>]] [netmask <address>] [broadcast <address>]\n"
 	        "           [pointopoint <address>] [mtu <NN>] [metric <NN>] [[-]promisc] [[-]arp]\n"
 	        "           [[-]allmulti] [del <address>] [up|down]\n"
+	        "  ifconfig <interface> alias <address>[/<bits>] [netmask <address>] [broadcast <address>]\n"
+	        "  ifconfig <interface>:<n> <address>[/<bits>] ...  (the same: a further address)\n"
+	        "  ifconfig <interface> -alias <address>\n"
 	        "  ifconfig <interface> inet6 {add|del} <address>[/<prefixlen>]\n");
 }
 
@@ -123,8 +126,25 @@ static void print_driver(const struct rt_ctl_driver *r)
 	          (unsigned long)r->tx_inflight_max, (unsigned long)r->tx_full);
 }
 
+/* the further IPv4 addresses (net.riptide.addrs4, Riptide 0.15) */
+static void print_inet4_extra(const struct rt_ctl_iface *f, void *d4, const struct rt_ctl_hdr *h4)
+{
+	char a[16], b[16], c[16];
+	u32 k;
+
+	for (k = 0; d4 && k < h4->count; k++) {
+		const struct rt_ctl_addr4 *x = cl_rec(d4, h4, k);
+		if (x->ifindex != f->index || (x->flags & RT_CTL_A4_PRIMARY))
+			continue;
+		cl_printf("        inet %s  netmask %s", cl_ip(x->addr, a), cl_ip(x->netmask, b));
+		if (x->broadaddr)
+			cl_printf("  broadcast %s", cl_ip(x->broadaddr, c));
+		cl_puts("  (alias)\n");
+	}
+}
+
 static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6,
-                     const struct rt_ctl_driver *dr)
+                     void *d4, const struct rt_ctl_hdr *h4, const struct rt_ctl_driver *dr)
 {
 	char fl[128], a[16], b[16], c[16], h[24];
 	u32 overruns = 0;
@@ -140,6 +160,7 @@ static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl
 			cl_printf("  broadcast %s", cl_ip(f->broadaddr, c));
 		cl_puts("\n");
 	}
+	print_inet4_extra(f, d4, h4);
 	print_inet6(f, d6, h6);
 	if (f->type == RT_IFT_ETHER)
 		cl_printf("        ether %s  txqueuelen 1000  (Ethernet)\n", cl_mac(f->hwaddr, 6, fl));
@@ -187,14 +208,15 @@ static void print_short(const struct rt_ctl_iface *f)
 
 static int list(int all, int shortfmt, const char *only)
 {
-	struct rt_ctl_hdr h, h6, dh;
-	void *d = cl_dump(RT_CTL_IFACES, &h), *d6, *dd;
+	struct rt_ctl_hdr h, h6, dh, h4;
+	void *d = cl_dump(RT_CTL_IFACES, &h), *d6, *dd, *d4;
 	u32 k;
 
 	if (!d)
 		return CL_FAIL;
 	d6 = shortfmt ? NULL : cl_dump(RT_CTL_ADDRS6, &h6);
 	dd = shortfmt ? NULL : cl_dump(RT_CTL_DRIVERS, &dh);
+	d4 = shortfmt ? NULL : cl_dump_quiet(RT_CTL_ADDRS4, &h4);
 	if (only && !cl_find_iface(d, &h, only)) {
 		cl_printf("%s: error fetching interface information: Device not found\n", only);
 		FreeVec(d);
@@ -209,9 +231,11 @@ static int list(int all, int shortfmt, const char *only)
 		if (shortfmt)
 			print_short(f);
 		else
-			print_if(f, d6, &h6, find_driver(f, dd, &dh));
+			print_if(f, d6, &h6, d4, &h4, find_driver(f, dd, &dh));
 	}
 	FreeVec(d);
+	if (d4)
+		FreeVec(d4);
 	if (d6)
 		FreeVec(d6);
 	if (dd)
@@ -242,7 +266,7 @@ static int fail(const char *what, int e)
 	return CL_ERROR;
 }
 
-static int configure(int fd, const char *ifn, int argc, char **argv, int i)
+static int configure(int fd, const char *ifn, int argc, char **argv, int i, int alias)
 {
 	struct rt_ifreq r;
 	u32 addr = 0, mask = 0, brd = 0, peer = 0, del = 0, v;
@@ -258,6 +282,7 @@ static int configure(int fd, const char *ifn, int argc, char **argv, int i)
 		else if (!strcmp(k, "arp") || !strcmp(k, "-arp")) arp = k[0] != '-';
 		else if (!strcmp(k, "allmulti") || !strcmp(k, "-allmulti")) allmulti = k[0] != '-';
 		else if (!strcmp(k, "inet")) continue;
+		else if (!strcmp(k, "alias") || !strcmp(k, "add")) alias = 1;
 		else if ((!strcmp(k, "netmask")) && n) {
 			if (cl_parse_ip(n, &mask) < 0) goto bad;
 			i++;
@@ -275,7 +300,7 @@ static int configure(int fd, const char *ifn, int argc, char **argv, int i)
 			if (cl_parse_uint(n, 0x7fffffff, &v) < 0) goto bad;
 			metric = (long)v;
 			i++;
-		} else if (!strcmp(k, "del") && n) {
+		} else if ((!strcmp(k, "del") || !strcmp(k, "-alias")) && n) {
 			if (cl_parse_prefix(n, &del, &bits) < 0) goto bad;
 			i++;
 		} else if (!have_addr && cl_parse_prefix(k, &addr, &bits) == 0) {
@@ -296,7 +321,25 @@ static int configure(int fd, const char *ifn, int argc, char **argv, int i)
 		if ((e = cl_ioctl(fd, RT_SIOCDIFADDR, &r)) != 0)
 			return fail("SIOCDIFADDR", e);
 	}
-	if (have_addr) {
+	if (have_addr && !alias) {
+		/* the (primary) address is replaced, as net-tools does */
+		ifr_name(&r, ifn);
+		ifr_addr(&r, addr);
+		if ((e = cl_ioctl(fd, RT_SIOCSIFADDR, &r)) != 0)
+			return fail("SIOCSIFADDR", e);
+		ifr_name(&r, ifn);
+		/* a new address without a netmask gets the classful one (Linux) */
+		ifr_addr(&r, mask ? mask : cl_classful(addr));
+		if ((e = cl_ioctl(fd, RT_SIOCSIFNETMASK, &r)) != 0)
+			return fail("SIOCSIFNETMASK", e);
+		if (brd || peer) {
+			ifr_name(&r, ifn);
+			ifr_addr(&r, peer ? peer : brd);
+			if ((e = cl_ioctl(fd, peer ? RT_SIOCSIFDSTADDR : RT_SIOCSIFBRDADDR, &r)) != 0)
+				return fail(peer ? "SIOCSIFDSTADDR" : "SIOCSIFBRDADDR", e);
+		}
+	} else if (have_addr) {
+		/* a further address (BSD SIOCAIFADDR) */
 		struct rt_ifaliasreq ra;
 		struct rt_sockaddr_in sin;
 
@@ -315,7 +358,7 @@ static int configure(int fd, const char *ifn, int argc, char **argv, int i)
 			memcpy(&ra.ifra_broadaddr, &sin, sizeof(sin));
 		}
 		if ((e = cl_ioctl(fd, RT_SIOCAIFADDR, &ra)) != 0)
-			return fail("SIOCSIFADDR", e);
+			return fail("SIOCAIFADDR", e);
 	} else {
 		if (mask) {
 			ifr_name(&r, ifn);
@@ -393,8 +436,9 @@ static int inet6_cmd(const char *ifn, int argc, char **argv, int i)
 
 static int ifconfig_main(int argc, char **argv)
 {
-	int i = 1, all = 0, shortfmt = 0, fd;
+	int i = 1, all = 0, shortfmt = 0, fd, alias = 0;
 	struct rt_ifreq r;
+	char ifn[RT_IFNAMSIZ + 8], *colon;
 
 	for (; i < argc && argv[i][0] == '-'; i++) {
 		if (!strcmp(argv[i], "-a"))
@@ -413,19 +457,26 @@ static int ifconfig_main(int argc, char **argv)
 	}
 	if (i >= argc)
 		return list(all, shortfmt, NULL);
+	/* "eth0:1" (Linux alias label): a further address of eth0 */
+	rt_strlcpy(ifn, argv[i], sizeof(ifn));
+	colon = strchr(ifn, ':');
+	if (colon) {
+		*colon = 0;
+		alias = 1;
+	}
 	if (i + 1 >= argc)
-		return list(1, shortfmt, argv[i]);
+		return list(1, shortfmt, ifn);
 	fd = cl_socket(RT_SOCK_DGRAM, 0);
 	if (fd < 0)
 		return CL_FAIL;
-	ifr_name(&r, argv[i]);
+	ifr_name(&r, ifn);
 	if (cl_ioctl(fd, RT_SIOCGIFFLAGS, &r) != 0) {
-		cl_printf("%s: ERROR while getting interface flags: No such device\n", argv[i]);
+		cl_printf("%s: ERROR while getting interface flags: No such device\n", ifn);
 		return CL_ERROR;
 	}
 	if (i + 1 < argc && !strcmp(argv[i + 1], "inet6"))
-		return inet6_cmd(argv[i], argc, argv, i + 2);
-	return configure(fd, argv[i], argc, argv, i + 1);
+		return inet6_cmd(ifn, argc, argv, i + 2);
+	return configure(fd, ifn, argc, argv, i + 1, alias);
 }
 
 CL_MAIN(ifconfig_main, "ifconfig")

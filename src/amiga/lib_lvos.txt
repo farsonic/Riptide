@@ -119,6 +119,8 @@
 342 LONG RiptideReserved23() = null
 # The table extends to -522 like the historical API; reserved vectors return 0.
 522 LONG RiptideReserved53() = null
+# riptide.library 2 (Riptide 0.15): beyond the historical table
+528 LONG RiptideConnectName(CONST_STRPTR host a0, ULONG port d0, APTR tags a1)
 
 @lib usergroup UserGroupBase prefix=ug_
 6   ULONG LibOpen(ULONG version d0) = ug_libopen

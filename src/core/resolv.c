@@ -563,6 +563,9 @@ struct dns_work {
 	char qname[DNS_NAMEBUF];
 	u8 q[DNS_QBUF];
 	u8 a[DNS_ABUF];
+	/* dns_exchange46(): the AAAA query and its result */
+	struct dns_result res6;
+	u8 q6[DNS_QBUF];
 };
 
 static struct dns_work *work_alloc(u32 *addrs, int max)
@@ -861,9 +864,15 @@ static int mdns_self(const char *name, u32 *a4, rt_in6_addr *a6, int max)
 	    (name[hl + 6] && name[hl + 6] != '.'))
 		return 0;
 	if (!a6) {
-		for (nif = rt_netif_list(); nif && n < max; nif = nif->next)
-			if (nif->addr && !(nif->flags & RT_IFF_LOOPBACK))
-				a4[n++] = nif->addr;
+		for (nif = rt_netif_list(); nif && n < max; nif = nif->next) {
+			struct rt_ifaddr4 ia[1 + RT_IF_MAXADDR4];
+			int k, c;
+			if (nif->flags & RT_IFF_LOOPBACK)
+				continue;
+			c = rt_netif_addrs(nif, ia, 1 + RT_IF_MAXADDR4);
+			for (k = 0; k < c && n < max; k++)
+				a4[n++] = ia[k].addr;
+		}
 		return n;
 	}
 	na = rt_in6_addr_list(NULL, ai, 8);
@@ -930,19 +939,16 @@ static int mdns_resolve(struct dns_work *w, const char *name, u16 qtype, u32 *a4
 	return result;
 }
 
-/* Forward lookup of qtype A (a4) or AAAA (a6). */
-static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int max,
-                   char *canon, u32 canonlen)
+/* Answers without the network: the hosts table, localhost, our own .local
+ * name, the cache. Count, 0 for none, or -RT_HOST_NOT_FOUND when DNS is
+ * disallowed (RiptideDisallowDNS) and nothing local matched. */
+static int resolve_local(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int max,
+                         char *canon, u32 canonlen)
 {
-	struct dns_work *w;
 	struct cache_ent *c;
-	u32 nl;
-	int n, r, i, dots = 0, ncand, best = -RT_HOST_NOT_FOUND, disallowed;
+	int n, i, disallowed;
 	char search[64];
 
-	nl = (u32)strlen(name);
-	if (nl == 0 || nl > 254)
-		return -RT_HOST_NOT_FOUND;
 	rt_lock();
 	rt_strlcpy(search, dns_search, sizeof(search));
 	n = hosts_lookup(name, search, a4, a6, max);
@@ -973,8 +979,51 @@ static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int ma
 		put_canon(canon, canonlen, name);
 		return n;
 	}
-	if (disallowed)
+	return disallowed ? -RT_HOST_NOT_FOUND : 0;
+}
+
+/* the names to ask for (ndots:1, one search domain): 1 or 2 candidates */
+static int candidates(struct dns_work *w, const char *name)
+{
+	u32 nl = (u32)strlen(name);
+
+	return (name[nl - 1] == '.' || !w->search[0]) ? 1 : 2;
+}
+
+/* candidate i of name into w->qname; 0, or -1 when it does not fit */
+static int candidate(struct dns_work *w, const char *name, int i, int ncand)
+{
+	u32 nl = (u32)strlen(name), dots = 0, k;
+	int with_search;
+
+	for (k = 0; k < nl; k++)
+		dots += name[k] == '.';
+	/* absolute first if the name has a dot */
+	with_search = ncand == 2 && (dots ? i == 1 : i == 0);
+	if (with_search) {
+		if (nl + 1 + strlen(w->search) >= DNS_NAMEBUF)
+			return -1;
+		rt_snprintf(w->qname, sizeof(w->qname), "%s.%s", name, w->search);
+	} else {
+		rt_strlcpy(w->qname, name, sizeof(w->qname));
+	}
+	return 0;
+}
+
+/* Forward lookup of qtype A (a4) or AAAA (a6). */
+static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int max,
+                   char *canon, u32 canonlen)
+{
+	struct dns_work *w;
+	u32 nl;
+	int n, r, i, ncand, best = -RT_HOST_NOT_FOUND;
+
+	nl = (u32)strlen(name);
+	if (nl == 0 || nl > 254)
 		return -RT_HOST_NOT_FOUND;
+	n = resolve_local(name, qtype, a4, a6, max, canon, canonlen);
+	if (n != 0)
+		return n;
 
 	w = work_alloc(a4, max);
 	if (!w)
@@ -992,19 +1041,10 @@ static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int ma
 		work_free(w);
 		return r;
 	}
-	for (i = 0; i < (int)nl; i++)
-		dots += name[i] == '.';
-	/* candidates (ndots:1): absolute first if the name has a dot */
-	ncand = (name[nl - 1] == '.' || !w->search[0]) ? 1 : 2;
+	ncand = candidates(w, name);
 	for (i = 0; i < ncand; i++) {
-		int with_search = ncand == 2 && (dots ? i == 1 : i == 0);
-		if (with_search) {
-			if (nl + 1 + strlen(w->search) >= DNS_NAMEBUF)
-				continue;
-			rt_snprintf(w->qname, sizeof(w->qname), "%s.%s", name, w->search);
-		} else {
-			rt_strlcpy(w->qname, name, sizeof(w->qname));
-		}
+		if (candidate(w, name, i, ncand) < 0)
+			continue;
 		r = dns_query(w, w->qname, qtype);
 		if (r > 0) {
 			rt_lock();
@@ -1021,6 +1061,230 @@ static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int ma
 	}
 	work_free(w);
 	return best;
+}
+
+/* ---- A and AAAA at once (Happy Eyeballs v2, RFC 8305 3) ---- */
+
+s32 rt_he_resolution_delay = 50;
+
+#define R_PENDING (-2000)
+
+/* is r a final answer for its type (data, no data, no such name)? */
+static int final(int r)
+{
+	return r >= 0 || r == -RT_HOST_NOT_FOUND;
+}
+
+/* Both queries for w->qname to each server in turn: A into w->res, AAAA
+ * into w->res6. Done when both have a final answer, or the A records are
+ * in and the AAAA answer is rt_he_resolution_delay ms late (RFC 8305 3:
+ * a slow AAAA must not hold up IPv4); a positive AAAA answer waits for the
+ * A answer as usual (the IPv4 fallback needs it). */
+static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
+{
+	int fd4 = -1, fd6 = -1, att, s, r;
+	u16 id4 = (u16)rt_random32(), id6 = (u16)(id4 ^ 0x5a5a);
+	int l4 = dns_build_query(w->q, sizeof(w->q), id4, w->qname, DNS_TYPE_A);
+	int l6 = dns_build_query(w->q6, sizeof(w->q6), id6, w->qname, DNS_TYPE_AAAA);
+
+	*r4 = *r6 = R_PENDING;
+	if (l4 < 0 || l6 < 0 || w->nservers == 0) {
+		*r4 = *r6 = l4 < 0 || l6 < 0 ? -RT_NO_RECOVERY : -RT_TRY_AGAIN;
+		return;
+	}
+	for (att = 0; att < DNS_ATTEMPTS; att++) {
+		for (s = 0; s < w->nservers; s++) {
+			const struct dns_server *sv = &w->servers[s];
+			int v6 = !rt_in6_is_v4mapped(&sv->addr), k;
+			u32 start = rt_now_ms(), got4 = 0;
+			int fd = dns_socket(w, v6, v6 ? &fd6 : &fd4);
+			struct rt_sockaddr_in6 to6;
+			struct rt_sockaddr_in to4;
+			if (fd < 0)
+				continue;
+			memset(&to6, 0, sizeof(to6));
+			memset(&to4, 0, sizeof(to4));
+			to6.sin6_len = sizeof(to6);
+			to6.sin6_family = RT_AF_INET6;
+			to6.sin6_port = rt_htons(DNS_PORT);
+			to6.sin6_addr = sv->addr;
+			to6.sin6_scope_id = sv->ifindex;
+			to4.sin_len = sizeof(to4);
+			to4.sin_family = RT_AF_INET;
+			to4.sin_port = rt_htons(DNS_PORT);
+			to4.sin_addr = rt_in6_v4(&sv->addr);
+			/* AAAA first, as RFC 8305 3 asks */
+			for (k = 0; k < 2; k++) {
+				int *rr = k ? r4 : r6;
+				const u8 *q = k ? w->q : w->q6;
+				u32 ql = (u32)(k ? l4 : l6);
+				if (final(*rr))
+					continue;
+				*rr = R_PENDING;
+				if (v6)
+					rt_api_sendto(&w->ctx, fd, q, ql, 0, &to6, sizeof(to6));
+				else
+					rt_api_sendto(&w->ctx, fd, q, ql, 0, &to4, sizeof(to4));
+			}
+			RT_DBG(RT_DBG_DNS, "query %s A+AAAA to server %d, attempt %d", w->qname, s + 1, att + 1);
+			for (;;) {
+				struct rt_sockaddr_in6 from;
+				u32 now = rt_now_ms(), el = now - start, limit = DNS_TIMEOUT_MS, fl = sizeof(from), set;
+				int ok;
+				if (final(*r4) && final(*r6))
+					goto out;
+				if (*r4 > 0 && got4 && !final(*r6) && *r6 == R_PENDING &&
+				    got4 - start + (u32)rt_he_resolution_delay < limit)
+					limit = got4 - start + (u32)rt_he_resolution_delay;
+				if (el >= limit) {
+					if (*r4 > 0)
+						goto out;   /* AAAA late: go with the A records */
+					break;
+				}
+				set = 1u << fd;
+				r = rt_api_select(&w->ctx, fd + 1, &set, NULL, NULL, (s32)(limit - el), NULL);
+				if (r == -RT_EINTR)
+					goto out;
+				if (r <= 0)
+					continue;
+				memset(&from, 0, sizeof(from));
+				r = rt_api_recvfrom(&w->ctx, fd, w->a, sizeof(w->a), RT_MSG_DONTWAIT, &from, &fl);
+				if (r < 12)
+					continue;
+				if (v6) {
+					ok = rt_in6_eq(&from.sin6_addr, &sv->addr) && from.sin6_port == rt_htons(DNS_PORT);
+				} else {
+					const struct rt_sockaddr_in *f4 = (const struct rt_sockaddr_in *)(const void *)&from;
+					ok = f4->sin_addr == rt_in6_v4(&sv->addr) && f4->sin_port == rt_htons(DNS_PORT);
+				}
+				if (!ok)
+					continue;
+				if (rt_get_be16(w->a) == id4 && *r4 == R_PENDING) {
+					int x = dns_parse_response(w->a, (u32)r, id4, w->qname, DNS_TYPE_A, &w->res);
+					if (x != DNS_IGNORE) {
+						*r4 = x;
+						if (x > 0)
+							got4 = rt_now_ms();
+					}
+				} else if (rt_get_be16(w->a) == id6 && *r6 == R_PENDING) {
+					int x = dns_parse_response(w->a, (u32)r, id6, w->qname, DNS_TYPE_AAAA, &w->res6);
+					if (x != DNS_IGNORE)
+						*r6 = x;
+				}
+				/* SERVFAIL & co. for both: the next server */
+				if (*r4 != R_PENDING && *r6 != R_PENDING && !(final(*r4) && final(*r6)) &&
+				    !(*r4 > 0))
+					break;
+			}
+			if (*r4 > 0 || *r6 > 0)
+				goto out;
+		}
+	}
+out:
+	if (*r4 == R_PENDING)
+		*r4 = -RT_TRY_AGAIN;
+	if (*r6 == R_PENDING)
+		*r6 = -RT_TRY_AGAIN;
+	RT_DBG(RT_DBG_DNS, "query %s: A %d, AAAA %d", w->qname, *r4, *r6);
+	if (fd4 >= 0)
+		rt_api_close(&w->ctx, fd4);
+	if (fd6 >= 0)
+		rt_api_close(&w->ctx, fd6);
+}
+
+/* the stronger of two failures (getaddrinfo's EAI_* mapping) */
+static int worse(int a, int b)
+{
+	if (a == -RT_TRY_AGAIN || b == -RT_TRY_AGAIN)
+		return -RT_TRY_AGAIN;
+	if (a == -RT_NO_RECOVERY || b == -RT_NO_RECOVERY)
+		return -RT_NO_RECOVERY;
+	if (a == 0 || b == 0 || a == -RT_NO_DATA || b == -RT_NO_DATA)
+		return -RT_NO_DATA;
+	return -RT_HOST_NOT_FOUND;
+}
+
+int rt_resolve_name46(const char *name, rt_in6_addr *addrs, int max, int family, char *canon, u32 canonlen)
+{
+	u32 a4[8], nl;
+	rt_in6_addr a6[8];
+	int n4 = 0, n6 = 0, e4 = -RT_NO_DATA, e6 = -RT_NO_DATA, n = 0, i;
+	int want4 = family != RT_AF_INET6, want6 = family != RT_AF_INET;
+	struct dns_work *w;
+	char c4[DNS_NAMEBUF];
+
+	if (!name || !addrs || max <= 0)
+		return -RT_NO_RECOVERY;
+	nl = (u32)strlen(name);
+	if (nl == 0 || nl > 254)
+		return -RT_HOST_NOT_FOUND;
+	c4[0] = 0;
+	if (canon && canonlen)
+		canon[0] = 0;
+	if (want6) {
+		n6 = resolve_local(name, DNS_TYPE_AAAA, NULL, a6, 8, canon, canonlen);
+		if (n6 < 0)
+			want6 = 0, e6 = n6, n6 = 0;
+	}
+	if (want4) {
+		n4 = resolve_local(name, DNS_TYPE_A, a4, NULL, 8, c4, sizeof(c4));
+		if (n4 < 0)
+			want4 = 0, e4 = n4, n4 = 0;
+	}
+	if (n6 > 0)
+		want6 = 0;
+	if (n4 > 0)
+		want4 = 0;
+	if (want4 && want6 && !is_mdns_name(name)) {
+		/* nothing local: both queries in parallel */
+		w = work_alloc(a4, 8);
+		if (!w)
+			return -RT_TRY_AGAIN;
+		w->res6.addrs6 = a6;
+		w->res6.max = 8;
+		e4 = e6 = -RT_HOST_NOT_FOUND;
+		{
+			int ncand = candidates(w, name), r4, r6;
+			for (i = 0; i < ncand; i++) {
+				if (candidate(w, name, i, ncand) < 0)
+					continue;
+				dns_exchange46(w, &r4, &r6);
+				if (r4 > 0 || r6 > 0) {
+					rt_lock();
+					if (r4 > 0)
+						cache_add(name, w->res.canon, DNS_TYPE_A, a4, NULL, r4, w->res.ttl);
+					if (r6 > 0)
+						cache_add(name, w->res6.canon, DNS_TYPE_AAAA, NULL, a6, r6, w->res6.ttl);
+					rt_unlock();
+					n4 = r4 > 0 ? r4 : 0;
+					n6 = r6 > 0 ? r6 : 0;
+					put_canon(c4, sizeof(c4), r6 > 0 ? w->res6.canon : w->res.canon);
+					break;
+				}
+				e4 = worse(e4, r4);
+				e6 = worse(e6, r6);
+			}
+		}
+		work_free(w);
+	} else {
+		if (want6) {
+			n6 = resolve(name, DNS_TYPE_AAAA, NULL, a6, 8, canon, canonlen);
+			if (n6 < 0)
+				e6 = n6, n6 = 0;
+		}
+		if (want4) {
+			n4 = resolve(name, DNS_TYPE_A, a4, NULL, 8, c4, sizeof(c4));
+			if (n4 < 0)
+				e4 = n4, n4 = 0;
+		}
+	}
+	for (i = 0; i < n6 && n < max; i++)
+		addrs[n++] = a6[i];
+	for (i = 0; i < n4 && n < max; i++)
+		rt_in6_set_v4mapped(&addrs[n++], a4[i]);
+	if (canon && canonlen && !canon[0])
+		rt_strlcpy(canon, c4[0] ? c4 : name, canonlen);
+	return n ? n : worse(e4, e6);
 }
 
 int rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 canonlen)

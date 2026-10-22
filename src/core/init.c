@@ -37,6 +37,7 @@ int rt_init(void)
 	rt_socket_init();
 	rt_ctl_init();
 	rt_qos_init();
+	rt_he_init();
 	rt_diag_init();
 	rt_lock();
 	r = rt_loopback_init();

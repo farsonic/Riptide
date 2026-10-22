@@ -1104,6 +1104,8 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		return cfg_ipv4(argc, argv, err, errlen);
 	if (!strcmp(k, "qos"))
 		return rt_qos_command(argc, argv, err, errlen);
+	if (!strcmp(k, "happy_eyeballs") || !strcmp(k, "happyeyeballs"))
+		return rt_he_command(argc, argv, err, errlen);
 	if (!strcmp(k, "ntp"))
 		return rt_ntp_command(argc, argv, err, errlen);
 	if (!strcmp(k, "timezone"))

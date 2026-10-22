@@ -110,6 +110,34 @@ extern int rt_dns_disallowed;   /* RiptideDisallowDNS() */
  * servers of either family (IPv4 servers are kept IPv4-mapped; servers
  * learned from RAs or DHCPv6 expire). */
 int  rt_resolve_name6(const char *name, rt_in6_addr *addrs, int max, char *canon, u32 canonlen);
+/* A and AAAA in parallel (RFC 8305 3: an A answer waits at most
+ * rt_he_resolution_delay ms for the AAAA one): AAAA results first, then
+ * IPv4 ones IPv4-mapped, unsorted. family RT_AF_UNSPEC, RT_AF_INET or
+ * RT_AF_INET6. Count or the error of rt_resolve_name(). No lock held. */
+int  rt_resolve_name46(const char *name, rt_in6_addr *addrs, int max, int family, char *canon, u32 canonlen);
+
+/* ---- Happy Eyeballs v2 (src/core/happy.c, RFC 8305) ---- */
+extern s32 rt_he_enable, rt_he_attempt_delay, rt_he_resolution_delay, rt_he_prefer, rt_he_aaaa_filter;
+struct rt_he_result {
+	rt_in6_addr addr;         /* the address that answered (IPv4-mapped for IPv4) */
+	u32 ms;                   /* time to connect, lookups included */
+	u16 naddrs;               /* addresses the name had */
+	u16 attempts;             /* connection attempts started */
+	u16 index;                /* the winner's position in the order tried */
+};
+/* Connect a new socket of 'type' (0 = stream) in context c to host:port
+ * (host order port; host a name or a literal), racing IPv6 and IPv4.
+ * family RT_AF_UNSPEC, RT_AF_INET or RT_AF_INET6; timeout_ms 0 = 75 s.
+ * Returns the connected descriptor (blocking mode) or -errno; res may be
+ * NULL. Called without the lock. */
+int  rt_he_connect(struct rt_sockctx *c, const char *host, u16 port, int family, int type, u32 timeout_ms,
+                   struct rt_he_result *res);
+/* IPv6 can reach global addresses (a route and a source); lock held */
+int  rt_he_v6_usable(void);
+/* "happy_eyeballs on|off | delay MS | resolution_delay MS |
+ *  prefer auto|ipv6|ipv4 | aaaa_filter on|off | status" */
+int  rt_he_command(int argc, char **argv, char *out, u32 outlen);
+void rt_he_init(void);
 int  rt_resolve_addr6(const rt_in6_addr *addr, char *name, u32 namelen);
 int  rt_hosts_add6(const char *name, const rt_in6_addr *addr);
 /* All servers (IPv4-mapped for IPv4), in order; returns the total. */

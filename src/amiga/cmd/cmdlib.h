@@ -120,6 +120,11 @@ u32  cl_sockaddr(const struct cl_addr *a, u16 port, void *sa);
 void cl_from_sockaddr(const void *sa, struct cl_addr *out, u16 *port);
 /* cl_connect for either family */
 int  cl_connect_addr(int fd, const struct cl_addr *a, u16 port, u32 ms);
+/* A TCP socket connected to host:port: with riptide.library 2 IPv6 and
+ * IPv4 raced (Happy Eyeballs, RFC 8305), otherwise the first address.
+ * family 0 any, 4 or 6. The descriptor, or -errno (RT_EHOSTUNREACH when
+ * the name does not resolve; a message was printed then). */
+int  cl_connect_name(const char *host, u16 port, int family, u32 ms, struct cl_addr *peer);
 char *cl_ip6(const u8 *a16, char *buf);                /* buf >= RT_INET6_ADDRSTRLEN */
 /* interface name of an index ("" if unknown), static buffer */
 const char *cl_ifname(u32 index);
@@ -129,6 +134,7 @@ u32  cl_classful(u32 addr);
 /* Fetch a net.riptide.* dump (RT_CTL_*). Returns an AllocVec'd buffer
  * (free with FreeVec) and the header, or NULL (message printed). */
 void *cl_dump(int what, struct rt_ctl_hdr *hdr);
+void *cl_dump_quiet(int what, struct rt_ctl_hdr *hdr);   /* NULL, no message, if missing */
 static inline void *cl_rec(void *dump, const struct rt_ctl_hdr *h, u32 i)
 {
 	return (u8 *)dump + sizeof(*h) + i * h->recsize;

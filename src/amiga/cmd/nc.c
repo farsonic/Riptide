@@ -98,6 +98,7 @@ static int nc_main(int argc, char **argv)
 	u32 group = 0, ifaddr = 0, count = 0, v;
 	LONG n, one = 1, ttl = -1;
 	char *buf, a[CL_ADDRSTRLEN];
+	const char *tcp_host = NULL;
 
 	memset(&g, 0, sizeof(g));
 	while ((c = cl_getopt(argc, argv, "ldvuw:p:hn46m:I:T:Lc:", &g)) != -1) {
@@ -144,9 +145,11 @@ static int nc_main(int argc, char **argv)
 			usage();
 			return CL_ERROR;
 		}
-		if (cl_resolve_af(argv[g.ind], family ? family :
-		                  (cl_parse_addr(argv[g.ind], &addr) == 0 && addr.family == RT_AF_INET6) ? 6 : 4,
-		                  &addr) < 0)
+		if (!udp)
+			tcp_host = argv[g.ind];    /* connected by name below */
+		else if (cl_resolve_af(argv[g.ind], family ? family :
+		                       (cl_parse_addr(argv[g.ind], &addr) == 0 && addr.family == RT_AF_INET6) ? 6 : 4,
+		                       &addr) < 0)
 			return CL_ERROR;
 	}
 	if (!port || cl_need_socket() < 0) {
@@ -157,6 +160,21 @@ static int nc_main(int argc, char **argv)
 	buf = AllocVec(BUFSZ, MEMF_ANY);
 	if (!buf)
 		return CL_FAIL;
+	if (tcp_host) {
+		/* IPv6 and IPv4 raced (Happy Eyeballs) with riptide.library 2 */
+		fd = cl_connect_name(tcp_host, (u16)port, family, wait_ms ? wait_ms : 75000, &addr);
+		if (fd < 0) {
+			if (fd != -RT_EHOSTUNREACH || cl_parse_addr(tcp_host, &addr) == 0)
+				cl_error("connect to %s port %lu (tcp) failed: %s", tcp_host, (unsigned long)port,
+				         cl_strerror(-fd));
+			fd = -1;
+			goto out;
+		}
+		if (verbose)
+			cl_printf("Connection to %s (%s) %lu port succeeded!\n", tcp_host, cl_addr_str(&addr, a),
+			          (unsigned long)port);
+		goto connected;
+	}
 	s = socket(addr.family, udp ? RT_SOCK_DGRAM : RT_SOCK_STREAM, 0);
 	if (s < 0)
 		goto out;
@@ -222,6 +240,7 @@ static int nc_main(int argc, char **argv)
 		fd = s;
 		s = -1;
 	}
+connected:
 	cl_flush();
 	if (!nostdin) {
 		u32 used = 0;

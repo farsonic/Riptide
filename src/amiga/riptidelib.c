@@ -414,6 +414,16 @@ LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR 
 	mapped = family == RT_AF_INET6 && (flags & AI_V4MAPPED);
 	want6 = family != RT_AF_INET;
 	want4 = family != RT_AF_INET6 || mapped;
+	/* no AAAA while IPv6 cannot reach anything (net.inet.he.aaaa_filter):
+	 * programs that try the first address only would wait for nothing */
+	if (family == RT_AF_UNSPEC && host && rt_he_aaaa_filter) {
+		int usable;
+		rt_lock();
+		usable = rt_he_v6_usable();
+		rt_unlock();
+		if (!usable)
+			want6 = 0;
+	}
 	if ((flags & AI_ADDRCONFIG) && host) {
 		int h4, h6;
 		rt_lock();
@@ -448,6 +458,14 @@ LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR 
 		return EAI_NONAME;
 	} else {
 		int r6 = -RT_NO_DATA, r4 = -RT_NO_DATA;
+		if (want6 && want4 && !mapped && rt_he_enable) {
+			/* both families: one parallel lookup (RFC 8305 3) */
+			r6 = rt_resolve_name46(host, addrs, GAI_MAX, RT_AF_UNSPEC, cname, sizeof(cname));
+			if (r6 > 0)
+				naddr = r6;
+			r4 = r6;
+			want4 = want6 = 0;
+		}
 		if (want6) {
 			r6 = rt_resolve_name6(host, addrs, GAI_MAX, cname, sizeof(cname));
 			if (r6 > 0)
@@ -685,6 +703,64 @@ LONG riptide_sockatmark(RTREG(a6) struct Library *base, RTREG(d0) LONG fd)
 	if (r < 0)
 		return fail(c, -r);
 	return v ? 1 : 0;
+}
+
+LONG riptide_RiptideConnectName(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR host,
+                                 RTREG(d0) ULONG port, RTREG(a1) APTR tags)
+{
+	CTX;
+	struct TagItem *t = tags;
+	struct RiptideConnectResult *out = NULL;
+	struct rt_he_result res;
+	LONG family = RT_AF_UNSPEC, type = RT_SOCK_STREAM;
+	ULONG timeout = 0;
+	int r;
+
+	while (t && t->ti_Tag != TAG_DONE) {
+		switch (t->ti_Tag) {
+		case TAG_IGNORE:
+			t++;
+			continue;
+		case TAG_MORE:
+			t = (struct TagItem *)t->ti_Data;
+			continue;
+		case TAG_SKIP:
+			t += 1 + t->ti_Data;
+			continue;
+		case RTCN_Family:
+			family = (LONG)t->ti_Data;
+			break;
+		case RTCN_Type:
+			type = (LONG)t->ti_Data;
+			break;
+		case RTCN_Timeout:
+			timeout = t->ti_Data;
+			break;
+		case RTCN_Result:
+			out = (struct RiptideConnectResult *)t->ti_Data;
+			break;
+		}
+		t++;
+	}
+	if (!host || port == 0 || port > 65535 ||
+	    (family != RT_AF_UNSPEC && family != RT_AF_INET && family != RT_AF_INET6) ||
+	    (type != RT_SOCK_STREAM && type != RT_SOCK_DGRAM))
+		return fail(c, RT_EINVAL);
+	r = rt_he_connect(&c->sc, (const char *)host, (u16)port, (int)family, (int)type, (u32)timeout, &res);
+	if (r < 0) {
+		bsd_set_errno(c, -r == RT_HOST_NOT_FOUND || -r == RT_NO_DATA || -r == RT_TRY_AGAIN ||
+		              -r == RT_NO_RECOVERY ? RT_EHOSTUNREACH : -r);
+		return -1;
+	}
+	if (out) {
+		memcpy(out->rcr_Addr, res.addr.b, 16);
+		out->rcr_Millis = res.ms;
+		out->rcr_Family = rt_in6_is_v4mapped(&res.addr) ? RT_AF_INET : RT_AF_INET6;
+		out->rcr_NumAddrs = res.naddrs;
+		out->rcr_Attempts = res.attempts;
+		out->rcr_Index = res.index;
+	}
+	return r;
 }
 
 void riptide_RiptideSupportedCPUs(RTREG(a6) struct Library *base, RTREG(a0) ULONG *apis,

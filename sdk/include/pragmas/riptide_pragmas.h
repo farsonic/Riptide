@@ -36,5 +36,6 @@
 #pragma libcall RiptideBase RiptideSupportedCPUs 144 a9803
 #pragma libcall RiptideBase RiptideGetFdCallback 14a 801
 #pragma libcall RiptideBase RiptideSetFdCallback 150 0802
+#pragma libcall RiptideBase RiptideConnectName 210 90803
 
 #endif /* PRAGMAS_RIPTIDE_PRAGMAS_H */
