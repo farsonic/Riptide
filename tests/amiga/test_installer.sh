@@ -8,7 +8,8 @@
 # answers every question with the default, so this exercises the script's
 # default paths at each user level against a fake Amiga tree:
 #
-#   novice    fresh install: files copied, config/hosts written, User-Startup
+#   novice    fresh install: files copied (RiptidePrefs to SYS:Prefs),
+#             config/hosts written, User-Startup
 #   novice    again: the existing config is kept, the block is replaced
 #   average   fresh install + pretend mode: nothing may be written
 #   expert    with a leftover LIBS:bsdsocket.library (renamed, not deleted)
@@ -34,7 +35,7 @@ fail() { echo "FAIL $*"; fails=$((fails + 1)); }
 setup() {
 	root=$work/$1
 	rm -rf "$root"
-	mkdir -p "$root/C" "$root/S" "$root/ENV" "$root/ENVARC" "$root/LIBS" "$root/SYS"
+	mkdir -p "$root/C" "$root/S" "$root/ENV" "$root/ENVARC" "$root/LIBS" "$root/SYS/Prefs"
 	cp -R "$PKG" "$root/SYS/Pkg"
 	printf 'Echo "user startup"\n' > "$root/S/User-Startup"
 }
@@ -88,6 +89,9 @@ has "$root/SYS/Riptide/Docs/AMIGA.md"
 has "$root/SYS/Riptide/Docs/AMIGA.md.info"
 has "$root/SYS/Riptide/Docs/LICENSE"
 hasnt "$root/SYS/Riptide/SDK"
+cmp -s "$root/SYS/Prefs/RiptidePrefs" "$PKG/RiptidePrefs" || fail "novice: SYS:Prefs/RiptidePrefs missing or different"
+has "$root/SYS/Prefs/RiptidePrefs.info"
+grepf "$root/ENVARC/Riptide/PrefsDir" "$root/SYS/Prefs"
 conf=$root/ENVARC/Riptide/riptide.conf
 has "$conf"
 grepf "$conf" '^interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440$'
@@ -153,6 +157,9 @@ root=$work/novice
 run uninstall 1 -e 's|^(set #mode 1) .*|(set #mode 0)|' -e 's|^  (set #mode$|  (set #mode-ignored|'
 for f in Riptide rtcheck $TOOLS $TOOLS6; do hasnt "$root/C/$f"; done
 hasnt "$root/SYS/Riptide/Docs/AMIGA.md"
+hasnt "$root/SYS/Prefs/RiptidePrefs"
+hasnt "$root/SYS/Prefs/RiptidePrefs.info"
+hasnt "$root/ENVARC/Riptide/PrefsDir"
 # the host build answers "yes" to "Also delete your configuration?"
 hasnt "$root/ENVARC/Riptide/riptide.conf"
 hasnt "$root/ENV/Riptide/riptide.conf"

@@ -8,14 +8,15 @@
 ;   * checks for a running stack, a leftover LIBS:bsdsocket.library and
 ;     emulator bsdsocket emulation (they stop Riptide from starting),
 ;   * copies Riptide, rtcheck and the network tools (default C:),
-;   * optionally the documentation, the SDK and the ftpd-test server,
+;   * optionally the documentation, the SDK, the ftpd-test server and
+;     RiptidePrefs, the settings editor (SYS:Prefs, else the Riptide drawer),
 ;   * writes ENVARC:Riptide/riptide.conf (copied to ENV:Riptide/) for the
 ;     emulator's uaenet.device with DHCP by default, and a hosts file,
 ;   * adds a ";BEGIN Riptide" block to S:User-Startup and can start the
 ;     stack at once.
 ;
 ; It can also uninstall Riptide again. The install locations are kept in
-; ENVARC:Riptide/BinDir, DocDir and SDKDir for that.
+; ENVARC:Riptide/BinDir, DocDir, SDKDir and PrefsDir for that.
 ;
 ; SPDX-License-Identifier: GPL-2.0-only
 
@@ -106,6 +107,7 @@
 (set #old-bin (P_GETREC "BinDir"))
 (set #old-doc (P_GETREC "DocDir"))
 (set #old-sdk (P_GETREC "SDKDir"))
+(set #old-prefs (P_GETREC "PrefsDir"))
 (if (= #old-bin "") (set #old-bin "C:"))
 (set #installed
   (OR (= (exists (tackon #old-bin "Riptide") (noreq)) 1)
@@ -123,6 +125,11 @@
   (set #old-doc (tackon #drawer "Docs")))
 (if (AND (= #old-sdk "") (= (exists (tackon #drawer "SDK/include/proto/riptide.h") (noreq)) 1))
   (set #old-sdk (tackon #drawer "SDK")))
+(if (= #old-prefs "")
+  (if (= (exists "SYS:Prefs/RiptidePrefs" (noreq)) 1)
+    (set #old-prefs "SYS:Prefs")
+    (if (= (exists (tackon #drawer "RiptidePrefs") (noreq)) 1)
+      (set #old-prefs #drawer))))
 
 ; ---------------------------------------------------------------------------
 ; Welcome
@@ -197,6 +204,11 @@
   (P_DEL (tackon #rm-bin "ping6"))
   (P_DEL (tackon #rm-bin "traceroute6"))
   (P_DEL (tackon #rm-bin "rtdiag"))
+  (if (NOT (= #old-prefs ""))
+  (
+    (P_DEL (tackon #old-prefs "RiptidePrefs"))
+    (P_DEL (tackon #old-prefs "RiptidePrefs.info"))
+  ))
   (complete 40)
 
   (if (NOT (= #old-doc ""))
@@ -258,6 +270,8 @@
   (P_DEL (tackon #envarc-dir "BinDir"))
   (P_DEL (tackon #envarc-dir "DocDir"))
   (P_DEL (tackon #envarc-dir "SDKDir"))
+  (P_DEL (tackon #envarc-dir "PrefsDir"))
+  (P_DEL "ENV:Riptide/PrefsDir")
   (P_DEL "ENV:Riptide/BinDir")
   (P_DEL "ENV:Riptide/DocDir")
   (P_DEL "ENV:Riptide/SDKDir")
@@ -387,7 +401,7 @@
       (default #old-bin)
       (newpath))))
 
-(set #opts 3)   ; tools + documentation
+(set #opts 19)  ; tools + documentation + RiptidePrefs
 (if (> @user-level 0)
   (set #opts
     (askoptions
@@ -401,10 +415,14 @@
                  "SDK: C headers and the FD file for programs that use "
                  "riptide.library.\n\n"
                  "ftpd-test: a minimal FTP server FOR TESTING ONLY. It "
-                 "accepts any user and password and has no access control."))
+                 "accepts any user and password and has no access control.\n\n"
+                 "RiptidePrefs: a settings editor for riptide.conf "
+                 "(interface, address, names, time, TCP), copied to "
+                 "SYS:Prefs."))
       (choices "Network tools" "Documentation" "SDK for developers"
-               "ftpd-test (test FTP server, insecure)")
-      (default 3))))
+               "ftpd-test (test FTP server, insecure)"
+               "RiptidePrefs (settings editor)")
+      (default 19))))
 
 (if (IN #opts 1 2)
 (
@@ -419,6 +437,10 @@
 ))
 (set #docdir (if (IN #opts 1) (tackon #drawer "Docs") ""))
 (set #sdkdir (if (IN #opts 2) (tackon #drawer "SDK") ""))
+; RiptidePrefs goes next to the system's preferences editors
+(set #prefsdir "")
+(if (IN #opts 4)
+  (set #prefsdir (if (= (exists "SYS:Prefs" (noreq)) 2) "SYS:Prefs" #drawer)))
 ; unpacked right there (e.g. the archive was unpacked to Work:): the
 ; documentation and the SDK are already in place
 (set #in-place (P_SAMEDIR #drawer #pkg))
@@ -507,6 +529,20 @@
     (dest #sdkdir)
     (all)
     (optional "force")))
+
+(if (IN #opts 4)
+(
+  (if (NOT (= (exists #prefsdir (noreq)) 2))
+    (makedir #prefsdir (prompt "Creating the Riptide drawer") (help @makedir-help)))
+  (copyfiles
+    (prompt "Copying RiptidePrefs")
+    (help @copyfiles-help)
+    (source #pkg)
+    (dest #prefsdir)
+    (choices "RiptidePrefs")
+    (infos)
+    (optional "force"))
+))
 (complete 60)
 
 ; ---- configuration --------------------------------------------------------
@@ -696,6 +732,7 @@
 (P_PUTREC "BinDir" #bindir)
 (P_PUTREC "DocDir" #docdir)
 (P_PUTREC "SDKDir" #sdkdir)
+(P_PUTREC "PrefsDir" #prefsdir)
 (complete 80)
 
 ; ---- start at boot --------------------------------------------------------
@@ -756,6 +793,7 @@
        "Configuration: " #conf-arc
        (if #write-conf "" " (kept)") "\n"
        (if (IN #opts 1) (cat "Manual: " (tackon #docdir "AMIGA.md") "\n") "")
+       (if (IN #opts 4) (cat "Settings editor: " (tackon #prefsdir "RiptidePrefs") "\n") "")
        (if #boot "It starts from S:User-Startup at boot.\n" "")
        (if (= #started 1) "\nRiptide is running now.\n" "")
        (if (= #started -1) "\nRiptide did not start; run it in a Shell to see why.\n" "")

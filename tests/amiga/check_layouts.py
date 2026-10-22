@@ -78,6 +78,33 @@ NDK_STRUCTS = (
      ('EXECBASE_ATTNFLAGS_OFS', '=', 'struct ExecBase', 'AttnFlags'),
      ('EXECBASE_ECLOCK_OFS', '=', 'struct ExecBase', 'ex_EClockFrequency')]
 )
+# intuition/gadtools/graphics/workbench (RiptidePrefs, src/amiga/os/intuition.h);
+# Screen and Window are declared only up to the last field used
+GUI_STRUCTS = (
+    [('struct Screen', f, 'struct Screen', f) for f in
+     ('Width', 'Height', 'BarHeight', 'WBorTop', 'WBorLeft', 'WBorRight', 'WBorBottom', 'Font', 'RastPort')] +
+    [('struct Window', f, 'struct Window', f) for f in
+     ('LeftEdge', 'Width', 'Height', 'WScreen', 'RPort', 'BorderLeft', 'BorderTop', 'BorderRight',
+      'BorderBottom', 'FirstGadget', 'IDCMPFlags', 'UserPort')] +
+    S('RastPort') +
+    S('TextAttr', 'ta_Name', 'ta_YSize', 'ta_Style', 'ta_Flags') +
+    S('IntuiMessage', 'Class', 'Code', 'Qualifier', 'IAddress', 'MouseX', 'MouseY', 'IDCMPWindow') +
+    S('Gadget', 'LeftEdge', 'TopEdge', 'Width', 'Height', 'Flags', 'SpecialInfo', 'GadgetID', 'UserData') +
+    S('NewGadget', 'ng_LeftEdge', 'ng_GadgetText', 'ng_TextAttr', 'ng_GadgetID', 'ng_Flags',
+      'ng_VisualInfo', 'ng_UserData') +
+    S('EasyStruct', 'es_Flags', 'es_Title', 'es_TextFormat', 'es_GadgetFormat') +
+    S('WBArg', 'wa_Lock', 'wa_Name') +
+    S('WBStartup', 'sm_Process', 'sm_NumArgs', 'sm_ArgList')
+)
+GUI_CONSTS = '''GFLG_SELECTED GFLG_DISABLED IDCMP_REFRESHWINDOW IDCMP_MOUSEBUTTONS IDCMP_MOUSEMOVE IDCMP_GADGETDOWN
+IDCMP_GADGETUP IDCMP_CLOSEWINDOW IDCMP_RAWKEY IDCMP_VANILLAKEY IDCMP_INTUITICKS WA_Left WA_Top WA_Width WA_Height
+WA_IDCMP WA_Gadgets WA_Title WA_InnerWidth WA_InnerHeight WA_PubScreen WA_DragBar WA_DepthGadget WA_CloseGadget
+WA_Activate WA_SimpleRefresh WA_SmartRefresh WA_AutoAdjust WA_NewLookMenus GA_Disabled GT_TagBase GTCB_Checked
+GTLV_Top GTLV_Labels GTTX_Text GTCY_Labels GTCY_Active GTST_String GTST_MaxChars GTIN_Number GTIN_MaxChars
+GTLV_ShowSelected GTLV_Selected GTTX_Border GT_Underscore GTCB_Scaled GTLV_MakeVisible BUTTON_KIND CHECKBOX_KIND
+INTEGER_KIND LISTVIEW_KIND CYCLE_KIND STRING_KIND TEXT_KIND ARROWIDCMP BUTTONIDCMP CHECKBOXIDCMP INTEGERIDCMP
+LISTVIEWIDCMP CYCLEIDCMP STRINGIDCMP TEXTIDCMP PLACETEXT_LEFT PLACETEXT_RIGHT PLACETEXT_ABOVE PLACETEXT_IN
+NG_HIGHLABEL'''.split()
 SANA_STRUCTS = (
     S('IOSana2Req', 'ios2_WireError', 'ios2_PacketType', 'ios2_SrcAddr', 'ios2_DstAddr',
       'ios2_DataLength', 'ios2_Data', 'ios2_StatData', 'ios2_BufferManagement') +
@@ -289,6 +316,10 @@ def main():
                              'exec/memory.h', 'exec/errors.h', 'devices/timer.h', 'dos/dos.h',
                              'dos/dosextens.h', 'dos/dosasl.h', 'dos/var.h', 'dos/dostags.h', 'utility/tagitem.h', 'utility/hooks.h'],
                             [inc])
+        ok &= check_against(tmp, 'ndk-gui', GUI_STRUCTS, GUI_CONSTS, ['exec.h', 'dos.h', 'intuition.h'],
+                            ['exec/types.h', 'intuition/intuition.h', 'intuition/screens.h',
+                             'libraries/gadtools.h', 'graphics/text.h', 'graphics/rastport.h',
+                             'workbench/startup.h'], [inc])
         sana = os.path.join(ndk, 'SANA+RoadshowTCP-IP', 'include')
         if os.path.isdir(sana):
             ok &= check_against(tmp, 'sana2', SANA_STRUCTS, SANA_CONSTS, ['exec.h', 'devices.h'],
@@ -335,7 +366,9 @@ def main():
         ok &= check_lvos(os.path.join(ROOT, 'src/amiga/lib_lvos.txt'), 'riptide',
                          os.path.join(ROOT, 'sdk/fd/riptide_lib.fd'))
         t = os.path.join(ROOT, 'src/amiga/os/os_lvos.txt')
-        for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd')):
+        for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd'),
+                         ('intuition', 'intuition_lib.fd'), ('gadtools', 'gadtools_lib.fd'),
+                         ('graphics', 'graphics_lib.fd')):
             ok &= check_lvos(t, lib, os.path.join(ndk, 'FD', fdn))
     print('ALL OK' if ok else 'MISMATCHES FOUND')
     return 0 if ok else 1

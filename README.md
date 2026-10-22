@@ -49,6 +49,8 @@ writes `ENVARC:Riptide/riptide.conf` for the emulator's `uaenet.device`
 with DHCP (or another SANA-II device and a static address), adds Riptide to
 `S:User-Startup` and can start it right away. It warns about other running
 stacks and emulator bsdsocket emulation, and can update or uninstall.
+`RiptidePrefs` (in `SYS:Prefs`), a GadTools settings editor, changes the
+configuration later and can apply some settings to the running stack.
 Under FS-UAE use `uae_sana2 = 1` and `network_card = a2065`. The manual
 steps are in `docs/AMIGA.md`, "Installation"; `make -f Makefile.amiga
 package` builds the package.
