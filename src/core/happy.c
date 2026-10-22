@@ -257,7 +257,8 @@ int rt_he_connect(struct rt_sockctx *c, const char *host, u16 port, int family, 
 	}
 	if (res)
 		res->naddrs = (u16)n;
-	delay = rt_he_enable ? (u32)rt_he_attempt_delay : timeout_ms;
+	/* off: one address after the other, each with its share of the time */
+	delay = rt_he_enable ? (u32)rt_he_attempt_delay : timeout_ms / (u32)n;
 	for (i = 0; i < HE_MAXADDR; i++)
 		fds[i] = -1;
 	for (;;) {
@@ -267,6 +268,16 @@ int rt_he_connect(struct rt_sockctx *c, const char *host, u16 port, int family, 
 			break;
 		/* the next attempt: on time, or now when nothing is pending */
 		if (started < n && (pending == 0 || (s32)(now - next_at) >= 0)) {
+			if (!rt_he_enable) {
+				/* sequential: the previous attempt gives up */
+				for (i = 0; i < started; i++)
+					if (fds[i] >= 0) {
+						rt_api_close(c, fds[i]);
+						fds[i] = -1;
+						pending--;
+						last_err = -RT_ETIMEDOUT;
+					}
+			}
 			r = he_start(c, &a[started], port, type, &done);
 			started++;
 			if (res)
