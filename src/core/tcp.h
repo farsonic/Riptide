@@ -204,6 +204,35 @@ struct tcp_congestion_ops {
 };
 #define TCP_CA_PRIV_U64 10
 
+/* ---- LEDBAT++ delay-based controller (tcp_ledbat.c): the sender's
+ * congestion window (TCP_CONGESTION "ledbat") and the receiver's window
+ * limit (rLEDBAT) share it. The window counts segments in 1/256. ---- */
+#define LEDBAT_BASE_N 4             /* minimum RTT of the last 4 minutes */
+#define LEDBAT_CUR_N  4             /* current delay: min of 4 samples */
+#define LEDBAT_ONE    256u          /* one segment */
+struct ledbat {
+	u32 wnd;                       /* window, segments * 256 */
+	u32 ssthresh;                  /* slow start ends here (~0: delay decides) */
+	u32 base[LEDBAT_BASE_N];       /* per-minute minimum RTT, µs (~0 empty) */
+	u32 cur[LEDBAT_CUR_N];         /* latest RTT samples, µs */
+	u32 base_ms;                   /* start of the current minute */
+	u32 round_end;                 /* ms: end of the current round (one RTT) */
+	u32 slow_start;                /* ms: start of the last slowdown */
+	u32 slow_end;                  /* ms: end of the slowdown's freeze */
+	u32 next_slow;                 /* ms: next slowdown (0: none planned) */
+	u32 saved;                     /* window before the slowdown */
+	u32 qdelay;                    /* queueing delay estimate, µs */
+	u32 acc;                       /* growth remainder (fixed point carry) */
+	u8  base_i, cur_i, cur_n;
+	u8  phase;                     /* LEDBAT_SS, _CA, _SLOW, _RAMP */
+	u8  dec_done;                  /* decreased in this round */
+	u8  pad[3];
+};
+#define LEDBAT_SS   0               /* initial slow start (reduced gain) */
+#define LEDBAT_CA   1
+#define LEDBAT_SLOW 2               /* periodic slowdown: 2 segments */
+#define LEDBAT_RAMP 3               /* slow start back to the saved window */
+
 struct tcp_sack_block {
 	u32 start_seq;
 	u32 end_seq;
@@ -292,6 +321,11 @@ struct tcp_sock {
 	u8  is_sack_reneg;
 	u8  is_cwnd_limited;
 	u8  batch;                     /* TCP_BATCH_*: held back for rt_rx_batch_end() */
+	u8  bg_prog;                   /* the creating program is a background one */
+	u8  bg_want;                   /* TCP_BG_RECV | TCP_BG_SEND wanted */
+	u8  bg_explicit;               /* set by TCP_BACKGROUND (rules do not apply) */
+	u8  ca_user;                   /* TCP_CONGESTION set by the program */
+	struct tcp_rledbat *rl;        /* receiver LEDBAT, NULL when off */
 	struct tcp_sock *batch_next;
 	u8  tlp_retrans;
 	u8  rcvbuf_locked, sndbuf_locked;
@@ -484,6 +518,24 @@ extern char sysctl_tcp_cc[16];
 #define TCP_RACK_STATIC_REO_WND 0x2
 #define TCP_RACK_NO_DUPTHRESH   0x4
 
+/* ---- tcp_mem.c: global socket buffer memory (Linux tcp_mem) ---- */
+#define TCP_MEM_RCV_MIN 8192u         /* every socket may always queue this much */
+#define TCP_MEM_SND_MIN 8192u
+extern s32 sysctl_tcp_mem_low, sysctl_tcp_mem_pressure, sysctl_tcp_mem_high;
+int  tcp_under_memory_pressure(void);
+int  tcp_mem_over_high(void);
+u32  tcp_mem_used(void);              /* bytes */
+u32  tcp_rmem_max_now(void);          /* net.inet.tcp.rmem_max, less under pressure */
+void tcp_mem_init(void);
+static inline int tcp_mem_rcv_blocked(const struct tcp_sock *tp, u32 size)
+{
+	return tp->rmem_alloc + size > TCP_MEM_RCV_MIN && tcp_mem_over_high();
+}
+static inline int tcp_mem_snd_blocked(const struct tcp_sock *tp)
+{
+	return tp->wmem_queued >= TCP_MEM_SND_MIN && tcp_mem_over_high();
+}
+
 extern u32 tcp_orphan_count;
 extern u32 tcp_tw_count;
 
@@ -543,7 +595,7 @@ static inline int tcp_stream_is_writeable(const struct tcp_sock *tp)
 	u32 used = tp->write_seq - tp->snd_una;
 	u32 freesp = used < tp->sndbuf ? tp->sndbuf - used : 0;
 	u32 lowat = RT_MAX(used >> 1, RT_MIN(tp->sndlowat, tp->sndbuf >> 1));
-	return freesp > 0 && freesp >= lowat;
+	return freesp > 0 && freesp >= lowat && !tcp_mem_snd_blocked(tp);
 }
 static inline int keepalive_time_when(const struct tcp_sock *tp)
 {
@@ -731,6 +783,31 @@ void tcp_reno_cong_avoid(struct tcp_sock *tp, u32 ack, u32 acked);
 void tcp_ca_event(struct tcp_sock *tp, int ev);
 void tcp_set_ca_state(struct tcp_sock *tp, u8 st);
 u32  tcp_cubic_root(u64 a);      /* exported for unit tests */
+
+/* ---- tcp_ledbat.c ---- */
+#define TCP_BG_RECV 1                /* limit the advertised window (rLEDBAT) */
+#define TCP_BG_SEND 2                /* LEDBAT++ congestion control */
+struct tcp_rledbat {
+	struct ledbat lb;
+};
+extern const struct tcp_congestion_ops tcp_ledbat;
+extern s32 sysctl_tcp_ledbat_target, sysctl_tcp_ledbat_slowdown, sysctl_tcp_bg_mode;
+void ledbat_init(struct ledbat *lb, u32 wnd, u32 now);
+void ledbat_rtt(struct ledbat *lb, u32 rtt_us, u32 now);
+void ledbat_acked(struct ledbat *lb, u32 acked, u32 now, int may_grow);
+void ledbat_loss(struct ledbat *lb, u32 now);
+u32  ledbat_base(const struct ledbat *lb);
+u32  ledbat_current(const struct ledbat *lb);
+void tcp_bg_attach(struct tcp_sock *tp);        /* socket created (program context) */
+void tcp_bg_classify(struct tcp_sock *tp);      /* ports known: apply the rules */
+void tcp_bg_set(struct tcp_sock *tp, u32 want); /* TCP_BACKGROUND */
+void tcp_rledbat_start(struct tcp_sock *tp);
+void tcp_rledbat_stop(struct tcp_sock *tp);
+void tcp_rledbat_rtt(struct tcp_sock *tp, u32 rtt_us);
+void tcp_rledbat_data(struct tcp_sock *tp, u32 len);
+void tcp_rledbat_loss(struct tcp_sock *tp);
+u32  tcp_rledbat_window(const struct tcp_sock *tp);
+void tcp_ledbat_init(void);
 
 /* ---- tcp_recovery.c ---- */
 struct tcp_sacktag_state {

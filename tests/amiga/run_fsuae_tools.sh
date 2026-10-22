@@ -96,6 +96,7 @@ ping_lo|ping -c 3 -i 0.2 127.0.0.1
 ping_amiga|ping 127.0.0.1 COUNT=2 INTERVAL=200 SIZE=100
 ping_ttl|ping -c 1 -t 5 -s 1000 testhost
 ping_unreach|ping -c 1 -W 5 10.0.2.9
+bg_rule|Riptide BACKGROUND program=nc
 BG|nc -d 127.0.0.1 7777
 traceroute|traceroute 127.0.0.1
 traceroute_n|traceroute -n -q 2 -w 2 127.0.0.1
@@ -114,6 +115,13 @@ netstat_g|netstat -g
 ip_maddr|ip maddr
 netstat_T|netstat -Tn
 netstat_T6l|netstat -T -6 -ln
+bg_show|Riptide BACKGROUND
+bg_clear|Riptide BACKGROUND clear
+sysctl_bg|sysctl net.inet.tcp.bg_programs
+sysctl_memhigh|sysctl net.inet.tcp.mem_high
+sysctl_memused|sysctl net.inet.tcp.mem_used
+sysctl_cc|sysctl -w net.inet.tcp.cc=ledbat
+sysctl_cc_back|sysctl -w net.inet.tcp.cc=cubic
 sysctl_delack|sysctl -w net.inet.tcp.delack_segs=1
 sysctl_delack_back|sysctl -w net.inet.tcp.delack_segs=2
 ip_reads|ip link set eth0 reads 64
@@ -352,6 +360,14 @@ expect netstat_T '^TCP connection details \(w/o servers\)' \
 	'^  rx [0-9]+ bytes, [0-9]+ segs' '^  acks out [0-9]+ \(delayed [0-9]+, dup 0' \
 	'^  retrans 0  fast recovery 0  rto 0' '^  time busy [0-9.]+m?s' '^       unread [0-9.]+m?s zero-wnd'
 reject netstat_T 'LISTEN'
+# the client nc started after "background program=nc": LEDBAT and rLEDBAT
+expect netstat_T '^  ledbat (open|disorder) age' '^  background receive send \(rule\)  rLEDBAT window [0-9]+'
+expect bg_show '^background: mode both, programs nc, ports -, local ports -; LEDBAT target 60 ms'
+expect sysctl_bg '^net\.inet\.tcp\.bg_programs = ?$'
+expect sysctl_memhigh '^net\.inet\.tcp\.mem_high = [1-9][0-9]+$'
+expect sysctl_memused '^net\.inet\.tcp\.mem_used = [0-9]+$'
+expect sysctl_cc '^net\.inet\.tcp\.cc = ledbat'
+expect netstat_s 'times socket memory came under pressure' 'segments dropped at the socket memory limit'
 expect netstat_T6l '^tcp6 :::7780 :::\* LISTEN' '^  syn queue 0  rcvbuf [0-9]+'
 reject netstat_T6l '^tcp '
 expect sysctl_delack '^net\.inet\.tcp\.delack_segs = 1'
@@ -377,6 +393,7 @@ reject ip_link_del2 '^eth1 '
 expect ip_r_down '^default via 10\.0\.2\.2 dev eth0 proto static linkdown'
 expect ip_help 'Usage: ip'
 expect ifconfig_bad 'No such device'
+expect status '^TCP memory: [0-9]+ KB in socket buffers \(pressure at [0-9]+ KB, limit [0-9]+ KB\)'
 expect status 'Routes:' 'default via 10\.0\.2\.2 dev eth0 proto static' 'DNS: 10\.0\.2\.3' \
 	'^Libraries: bsdsocket\.library 4, riptide\.library 1, usergroup\.library 4; compat alias: miami\.library 21$'
 # IPv6

@@ -27,6 +27,10 @@ void rt_host_unregister_fd(int fd);
 
 /* Tests: move rt_now_ms()/rt_now_us() forward by ms (lifetimes, timers). */
 void rt_host_advance_clock(u32 ms);
+/* rt_os_program_name() for the calling thread ("" by default): tests of
+ * per-program policies. Free memory reported to the core (0: unknown). */
+void rt_host_set_program(const char *name);
+void rt_host_set_mem_avail(u32 bytes, int chip_only);
 
 /* Memory accounting of rt_malloc() (outstanding blocks and bytes). */
 void rt_host_mem_stats(u32 *blocks, u32 *bytes);
@@ -42,6 +46,10 @@ void rt_host_mem_stats(u32 *blocks, u32 *bytes);
 struct rt_netif *rt_host_tun_open(const char *ifname, u32 local, u32 peer_or_0, u32 netmask);
 /* Linux name of the TUN device behind nif (valid for TUN netifs). */
 const char *rt_host_tun_name(const struct rt_netif *nif);
+/* Read at most kbit kbit/s from the TUN device (0: no limit): packets
+ * then queue in the kernel's tun queue (txqueuelen), a bottleneck queue
+ * a Linux sender fills (TCP Small Queues limit a qdisc on its own host). */
+void rt_host_tun_rx_rate(struct rt_netif *nif, u32 kbit);
 /* Open a Linux TAP device (IFF_TAP | IFF_NO_PI, Ethernet frames) named
  * 'ifname' ("" for a kernel chosen name) as an Ethernet interface with the
  * same name and MAC address 'mac'. Like rt_host_wire_open() it is down and

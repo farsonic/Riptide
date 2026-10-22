@@ -34,6 +34,15 @@ void rt_wallclock_tv(u32 *sec, u32 *usec);
 void *rt_malloc(size_t n);
 void *rt_zalloc(size_t n);
 void  rt_free(void *p);           /* rt_free(NULL) is a no-op */
+/* Memory free for socket buffers, in bytes (0: unknown). *chip_only is
+ * set when there is no Fast RAM (buffers then share Chip RAM with the
+ * display). For the TCP memory limits. */
+u32   rt_os_mem_avail(int *chip_only);
+
+/* The calling program's name (AmigaOS: the command a Shell runs, else
+ * the task name), "" when unknown. For per-program socket policies;
+ * called in the program's context. */
+void  rt_os_program_name(char *buf, u32 len);
 
 /* Entropy: should mix in a high resolution clock. Used for ISNs,
  * ephemeral ports, DNS ids, DHCP xids, hash secrets. */

@@ -51,6 +51,35 @@ int rt_lock_held(void)
 	return lock_owned && pthread_equal(lock_owner, pthread_self());
 }
 
+/* ---- program name and memory (policies, TCP memory limits) ---- */
+static __thread char program_name[32];
+static u32 host_mem_avail;
+static int host_chip_only;
+
+void rt_host_set_program(const char *name)
+{
+	snprintf(program_name, sizeof(program_name), "%s", name ? name : "");
+}
+
+void rt_os_program_name(char *buf, u32 len)
+{
+	if (len)
+		snprintf(buf, len, "%s", program_name);
+}
+
+void rt_host_set_mem_avail(u32 bytes, int chip_only)
+{
+	host_mem_avail = bytes;
+	host_chip_only = chip_only;
+}
+
+u32 rt_os_mem_avail(int *chip_only)
+{
+	if (chip_only)
+		*chip_only = host_chip_only;
+	return host_mem_avail;
+}
+
 /* ---- clocks ---- */
 
 /* rt_host_advance_clock(): unit tests jump ahead in time */

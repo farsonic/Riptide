@@ -282,6 +282,21 @@ static void show_tcpinfo_rec(const struct rt_ctl_tcpinfo *t, int v4)
 		cl_puts("-\n");
 	else
 		cl_printf("%lu\n", (unsigned long)t->ssthresh);
+	if (t->bg || t->ledbat_base_us) {
+		static const char *const ph[] = { "slow start", "normal", "slowdown", "ramp up" };
+		cl_printf("  background%s%s%s", t->bg & RT_CTL_TCPBG_RECV ? " receive" : "",
+		          t->bg & RT_CTL_TCPBG_SEND ? " send" : "", t->bg & RT_CTL_TCPBG_RULE ? " (rule)" : "");
+		if (t->bg & RT_CTL_TCPBG_RL_ON)
+			cl_printf("  rLEDBAT window %lu", (unsigned long)t->rledbat_wnd);
+		else if (t->bg & RT_CTL_TCPBG_RECV)
+			cl_puts("  rLEDBAT off (no timestamps)");
+		if (t->ledbat_base_us)
+			cl_printf("  delay %lu.%01lu ms over base %lu.%01lu ms, %s",
+			          (unsigned long)(t->ledbat_qdelay_us / 1000), (unsigned long)(t->ledbat_qdelay_us % 1000 / 100),
+			          (unsigned long)(t->ledbat_base_us / 1000), (unsigned long)(t->ledbat_base_us % 1000 / 100),
+			          ph[t->ledbat_phase & 3]);
+		cl_puts("\n");
+	}
 	cl_printf("  wnd snd %lu rcv %lu (limit %lu)  buf rcv %lu snd %lu\n", (unsigned long)t->snd_wnd,
 	          (unsigned long)t->rcv_wnd, (unsigned long)t->rcv_ssthresh, (unsigned long)t->rcvbuf,
 	          (unsigned long)t->sndbuf);
@@ -447,11 +462,14 @@ static int show_groups(void)
 	return CL_OK;
 }
 
+static u32 stat_recsize;          /* of the last stat_dump() */
+
 static void *stat_dump(int what, u32 size)
 {
 	struct rt_ctl_hdr h;
 	void *d = cl_dump(what, &h);
 
+	stat_recsize = d ? h.recsize : 0;
 	if (d && (h.count < 1 || h.recsize < size)) {
 		FreeVec(d);
 		cl_error("statistics table too short");
@@ -657,6 +675,9 @@ static int show_stats(void)
 			P("%lu connects timed out", t->TCPConnectTimeouts);
 			P("%lu connects ended by ICMP unreachable", t->TCPConnectUnreach);
 			P("%lu corked segments sent by the 200 ms limit", t->TCPCorkFlush);
+			P("%lu times socket memory came under pressure", t->TCPMemoryPressures);
+			P("%lu ms under memory pressure", t->TCPMemoryPressuresMs);
+			P("%lu segments dropped at the socket memory limit", t->TCPMemLimitDrops);
 		}
 		FreeVec(d);
 	}

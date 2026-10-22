@@ -131,13 +131,14 @@ Riptide CAPTURE start|stop|status|save FILE|clear [OPTIONS]
 Riptide PROFILE START|STOP|RESET|SHOW
 Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
 Riptide NTP [STATUS|SYNC|...] | MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
+Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=...] [target=MS]
 ```
 
 | Argument | Meaning |
 |---|---|
 | `CONFIG=file` | Use this configuration file instead of `ENV:Riptide/riptide.conf`. |
 | `DEBUG=n` | Log level: 0 = errors, 1 = warnings (the default), 2 = info, 3 = debug. |
-| `STATUS` | Ask the running Riptide for a summary: interfaces, addresses, packet counters, driver and DHCP state, NTP and mDNS state, the routing table, DNS servers and library users. |
+| `STATUS` | Ask the running Riptide for a summary: interfaces, addresses, packet counters, driver and DHCP state, NTP and mDNS state, socket buffer memory and background rules, the routing table, DNS servers and library users. |
 | `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
 | `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and what one call of the OS services the stack uses per packet costs, and exit. Needs timer.device, so not under vamos. |
@@ -145,8 +146,9 @@ Riptide NTP [STATUS|SYNC|...] | MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
 | `PROFILE ...` | Control the running stack's profiler (see "Profiling and debug log"). |
 | `DEBUG ...` | With a word instead of a number: control the running stack's debug log (see "Profiling and debug log"). A number is still the log level of a new instance. |
 | `NTP ...`, `MDNS ...`, `TIMEZONE ...` | The `ntp`, `mdns` and `timezone` keywords in the running stack, e.g. `Riptide NTP STATUS`, `Riptide NTP SYNC` (see "Time and .local names"). |
+| `BACKGROUND ...` | The `background` keyword in the running stack: which connections yield to others (see "Background transfers"). Without arguments it shows the rules. |
 
-`QUIT`, `STATUS`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS` and `TIMEZONE` talk to the running
+`QUIT`, `STATUS`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS`, `TIMEZONE` and `BACKGROUND` talk to the running
 stack through the public message port `RIPTIDE`. You can also signal the
 Riptide process directly:
 
@@ -215,7 +217,7 @@ so two runs of the same download can be compared without restarting:
 | `net.inet.tcp.delack_segs` | 2 | send an ACK every N full-sized segments (1 = every segment) |
 | `net.inet.tcp.delack_ms` | 200 | longest an ACK is delayed (ms) |
 | `net.inet.tcp.quickack` | 0 | 1 = never delay ACKs |
-| `net.inet.tcp.cc` | cubic | congestion control (`cubic`, `reno`) |
+| `net.inet.tcp.cc` | cubic | congestion control for new connections (`cubic`, `reno`, `ledbat`) |
 
 `delack_segs` counts like Linux: an ACK goes out once more than N-1
 segments are unacknowledged, but only if the window it advertises is not
@@ -396,6 +398,108 @@ Programs can also resolve `.local` names: `gethostbyname()` and
 name servers; answers are cached for their TTL. The stack's own
 `HOSTNAME.local` resolves to its interface addresses without traffic.
 Link-local IPv6 answers are skipped (a hostent has no zone).
+
+### Background transfers
+
+A big download (an archive from Aminet, a Usenet binary) fills the queue
+of the slowest link, usually the DSL or cable modem, and everything else,
+a web page, IRC, a Telnet session, waits behind it: hundreds of
+milliseconds per round trip. Riptide can run such transfers as
+**background** ones that yield:
+
+* **Downloads: rLEDBAT** (RFC 9840). The receiver limits the window it
+  advertises so that the queue it causes stays near a target delay
+  (`net.inet.tcp.ledbat_target`, 60 ms). It measures RTTs with TCP
+  timestamps (a server without timestamps is not limited) and runs the
+  LEDBAT++ controller: slow start with a reduced gain, a multiplicative
+  decrease when the delay passes the target, and every now and then two
+  RTTs at two segments to measure the base delay again (`ledbat_slowdown`).
+  Alone, a background download still uses most of the link; next to a
+  normal one it backs off to almost nothing. The window is never shrunk:
+  the smaller limit is reached by not opening it further.
+* **Uploads: LEDBAT++** (RFC 6817, draft-irtf-iccrg-ledbat-plus-plus), the
+  congestion control `ledbat`, the same controller on the sender's
+  congestion window.
+
+LEDBAT yields to traffic that builds a queue (CUBIC and Reno servers, the
+other computers' downloads). A server that keeps no standing queue itself
+(BBR) does not push it back much.
+
+Programs that know about it set the Riptide socket option
+`setsockopt(s, IPPROTO_TCP, TCP_BACKGROUND, &v, 4)` (0x5200, in
+`include/rt/rt_bsd.h`; v: 1 receive, 2 send, 3 both, 0 normal) or
+`TCP_CONGESTION` "ledbat" (send only). For all the others there are rules:
+
+```
+background program=AmiFTP,aget,wget*   # by the program that opens the connection
+background port=119,563,6881-6889       # by the remote port (Usenet, BitTorrent)
+background lport=21                     # by the local port (a server here)
+background mode=both                    # what the rules turn on: recv, send, both, off
+background target=60                    # LEDBAT target delay, ms (5..1000)
+background clear                        # no rules
+background                              # show them
+```
+
+A program is matched by the command name a Shell runs (without its path)
+or by its task name; `name*` matches a prefix, case does not matter. Each
+line replaces the list it names (`port=` alone empties it). Rules decide
+when a connection opens (the program when its socket is created); a
+connection the program configured itself is left alone. At run time:
+`Riptide BACKGROUND program=AmiFTP` (also `program AmiFTP`). The rules
+are the sysctls `net.inet.tcp.bg_programs`, `bg_ports`, `bg_lports` and
+`bg_mode`. `netstat -T` shows the background connections with the delay
+LEDBAT measures:
+
+```
+tcp  10.0.0.15:49153 192.0.2.7:119 ESTABLISHED
+  ledbat open age 42.1s  rtt 31.2/4.1 ms min 18.0 rto 232 ms backoff 0
+  ...
+  background receive send (rule)  rLEDBAT window 46336  delay 12.0 ms over base 18.0 ms, normal
+```
+
+| sysctl | default | |
+|---|---|---|
+| `net.inet.tcp.ledbat_target` | 60 | LEDBAT/rLEDBAT queueing delay target, ms (5..1000) |
+| `net.inet.tcp.ledbat_slowdown` | 1 | LEDBAT++ periodic slowdowns (0 = off) |
+| `net.inet.tcp.bg_mode` | 3 | what the rules turn on: 1 rLEDBAT, 2 LEDBAT, 3 both, 0 nothing |
+| `net.inet.tcp.bg_programs` | (empty) | programs, `name,name*,...` |
+| `net.inet.tcp.bg_ports` | (empty) | remote ports, `P,P-Q,...` |
+| `net.inet.tcp.bg_lports` | (empty) | local ports |
+
+### Socket memory limits
+
+Every connection grows its buffers with the transfer (receive buffer
+auto-tuning up to `net.inet.tcp.rmem_max`, the send buffer with the
+congestion window). A web browser with a dozen connections could take
+megabytes. Riptide counts the memory of all socket buffers (TCP receive,
+out-of-order and send queues, UDP and raw receive queues) against three
+limits, in KB, like Linux's `tcp_mem`:
+
+* above `net.inet.tcp.mem_pressure` the stack is under pressure until the
+  use falls below `mem_low`: buffers and windows stop growing and new
+  connections get a window scale for 64 KB only;
+* above `net.inet.tcp.mem_high` a connection that holds more than 8 KB in
+  a direction gets no more: data that arrives is dropped (the sender
+  sends it again later) and writers wait. Every connection keeps its 8
+  KB, so nothing stalls for good (and the use can pass the limit by that
+  much per connection).
+
+The defaults follow the free memory when Riptide starts: a quarter of it
+for `mem_high`, a sixth for `mem_pressure`, an eighth for `mem_low` (at
+least 192, 128 and 96 KB). Without Fast RAM the buffers share Chip RAM
+with the display, so 256 KB are left out first. `Riptide STATUS` shows the
+use (`TCP memory: 212 KB in socket buffers (pressure at 1365 KB, limit
+2048 KB)`), `sysctl net.inet.tcp.mem_used` and `mem_state` (0 normal, 1
+under pressure, 2 at the limit) too, and `netstat -s` counts the periods
+under pressure, their time and the dropped segments.
+
+| sysctl | default | |
+|---|---|---|
+| `net.inet.tcp.mem_low` | free / 8 | pressure ends below (KB) |
+| `net.inet.tcp.mem_pressure` | free / 6 | buffers stop growing above (KB) |
+| `net.inet.tcp.mem_high` | free / 4 | hard limit (KB) |
+| `net.inet.tcp.mem_used` | | in use now (KB, read only) |
+| `net.inet.tcp.mem_state` | | 0 normal, 1 under pressure, 2 at the limit (read only) |
 
 ### Packet capture
 
@@ -1760,7 +1864,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the SDK 2.11 of the historical API (`COMPAT_SDK`): the compat alias must keep its vector layout (riptide.library's names are mapped to the historical ones), and `sdk/fd/riptide_lib.fd` must match the table. Set `NDK=`, `COMPAT_SDK=` and `AMITCP_SDK=` to the unpacked archives. |
 | `tests/amiga/test_hunk.py FILES` | Loads the executables with amitools and checks their relocations. It also has elf2hunk unit tests: absolute, PC-relative and absolute-symbol relocations, rejecting 16-bit relocations, bss in the hunk size, and a run under vamos. |
 | `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback (127.0.0.1 and ::1, 24- and 28-byte `sockaddr_in6`, a dual-stack listener, the IPv6 resolver calls) with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
-| `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. IPv6: `ip -6` addr/route/neigh changes and listings, `ifconfig inet6`, `ping6`/`ping -6`, `traceroute6`, `host` AAAA and `ip6.arpa`, `nc -6` (also an IPv4 client of a dual-stack listener), `netstat -6`. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. |
+| `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. IPv6: `ip -6` addr/route/neigh changes and listings, `ifconfig inet6`, `ping6`/`ping -6`, `traceroute6`, `host` AAAA and `ip6.arpa`, `nc -6` (also an IPv4 client of a dual-stack listener), `netstat -6`. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. Background transfers: `Riptide BACKGROUND program=nc` makes the next `nc` client LEDBAT and rLEDBAT (`netstat -T`), the socket memory sysctls and the `STATUS` line. |
 | `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms; then IPv6 sessions with a dual-stack `ftpd-test -6` (EPSV, EPRT, `ftp://[::1]:2122/`) and an IPv4 client of the same server. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
 | `tests/t_arch_m68k.c` (host, `make CROSS=m68k-linux-gnu-`) | Every assembly routine against the C versions: all lengths 0..160 with every source/destination alignment 0..15, 3000 random lengths up to 4096, 64-128 KB and 4 MB buffers, initial sums 0, 0xffffffff and others, random/all-ones/zero data, guard bytes around every copy; odd-offset chaining, the TCP `rt_buf` copy + checksum, routine selection and the sysctls. Run it on each CPU: `RT_CPU=68040 qemu-m68k -cpu m68040 build/m68k-linux-gnu/tests/t_arch_m68k` (also `m68020`, `m68030`, `m68060`). qemu's 68060 model lacks MOVE16, so there the test turns MOVE16 off through the kill switch. It skips in other builds. |
 | `tests/amiga/run_fsuae_speedtest.sh build/amiga` | speedtest against three `httpd-test` servers on FS-UAE (plain, chunked with redirects, redirecting to https://): `--server-url`, `--mirror`, all output formats, byte counts against the servers' counters, errors and Ctrl-C. |
@@ -1780,6 +1884,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |
+| `tests/t_ledbat_unit.c` (host) | Background transfers and memory limits: the LEDBAT++ controller in a fluid model of a 12 Mbit/s link with 20 ms base RTT and 500 ms of buffer (alone: about 50 ms of queue at 97 % utilisation and periodic slowdowns; against Reno: under 1 % of the link; Reno alone: 400 ms of queue), loss handling; rLEDBAT's window on a bare connection; the `background` keyword in every form AmigaDOS hands it over, the sysctls, rules by program name (`rt_host_set_program()`) and local port, `TCP_BACKGROUND`, an explicit `TCP_CONGESTION` winning; socket memory: 12 connections nobody reads stay at the 1 MB limit (2 MB without), the data is intact once read, the defaults from the free memory. |
+| `tests/t_ledbat_tun.c` (host, root) | Background transfers against Linux CUBIC over TUN. Downloads: Riptide reads the TUN device at 8 Mbit/s (`rt_host_tun_rx_rate()`), so the kernel's tun queue (300 packets) is the bottleneck; a normal download fills it (about 270 ms RTT), a background one (rLEDBAT by a `lport` rule) keeps the RTT near 65 ms at 96 % of the link, and next to a normal one it gets about 1 %. Uploads: Riptide's transmit rate limit; LEDBAT alone 63 ms RTT (CUBIC 235 ms), against CUBIC about 1 %. |
 | `tests/amiga/run_fsuae_bsdsocktest.sh build/amiga` | [bsdsocktest](https://github.com/tbdye/bsdsocktest), an independent bsdsocket.library conformance suite (`BSDSOCKTEST=` its Amiga binary from the release archive), on FS-UAE: its loopback tests (socket lifecycle, send/recv, options, WaitSelect, signals, DNS, utility calls, descriptor transfer, errno, ICMP, throughput). Passes when every test that ran passed; 0.14: 130 of 130, 12 skipped (they need a host helper or a network). |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real

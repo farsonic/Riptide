@@ -176,6 +176,13 @@ void rt_buf_get_stats(struct rt_buf_stats *st)
 	*st = buf_stats;
 }
 
+/* every allocated buffer with its header, bytes: an upper bound of what
+ * the sockets hold (tcp_mem.c) */
+u32 rt_buf_bytes_total(void)
+{
+	return buf_stats.bytes + buf_stats.allocated * (u32)sizeof(struct rt_buf);
+}
+
 void rt_buf_set_limit(u32 bytes)
 {
 	buf_limit = bytes;

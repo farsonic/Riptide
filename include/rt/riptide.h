@@ -49,6 +49,11 @@ struct rt_pcb_info {
 };
 int rt_tcp_list(struct rt_pcb_info *out, int max);   /* returns total count */
 int rt_tcp_info_list(struct rt_ctl_tcpinfo *out, int max);  /* net.riptide.tcpinfo */
+/* "background ..." (configuration and RIPTIDE port), see tcp_ledbat.c */
+int rt_tcp_bg_command(int argc, char **argv, char *out, u32 outlen);
+void rt_tcp_bg_status(char *buf, u32 len);   /* "" without rules */
+/* one line on socket buffer memory for STATUS */
+void rt_tcp_mem_status(char *buf, u32 len);
 int rt_udp_list(struct rt_pcb_info *out, int max);
 int rt_raw_list(struct rt_pcb_info *out, int max);
 

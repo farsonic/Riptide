@@ -319,8 +319,11 @@ static void tcp_rcv_rtt_measure_ts(struct tcp_sock *tp, const struct rt_buf *b)
 	tp->rcv_rtt_last_tsecr = tp->rx_opt.rcv_tsecr;
 	if (TCP_SKB_CB(b)->end_seq - TCP_SKB_CB(b)->seq >= tp->ack.rcv_mss) {
 		s32 delta = tcp_rtt_tsopt_us(tp);
-		if (delta >= 0)
+		if (delta >= 0) {
 			tcp_rcv_rtt_update(tp, (u32)delta, 0);
+			if (tp->rl)
+				tcp_rledbat_rtt(tp, (u32)delta);
+		}
 	}
 }
 
@@ -364,9 +367,15 @@ static void tcp_grow_window(struct tcp_sock *tp, u32 len)
 {
 	u32 room = RT_MIN(tp->window_clamp, tcp_space(tp));
 
+	if (tcp_mem_over_high()) {
+		/* Linux tcp_clamp_window(): open no further than a few
+		 * segments (what was offered stays offered) */
+		tp->rcv_ssthresh = RT_MIN(tp->rcv_ssthresh, 4u * tp->advmss);
+		return;
+	}
 	if (room <= tp->rcv_ssthresh)
 		return;
-	if (tp->rmem_alloc > tcp_rmem_limit(tp) / 2)
+	if (tp->rmem_alloc > tcp_rmem_limit(tp) / 2 || tcp_under_memory_pressure())
 		return;
 	room -= tp->rcv_ssthresh;
 	tp->rcv_ssthresh += RT_MIN(room, 2u * tp->advmss + len);
@@ -461,6 +470,8 @@ static void tcp_event_data_recv(struct tcp_sock *tp, const struct rt_buf *b)
 	tcp_ecn_check_ce(tp, b);
 	if (b->len >= 128)
 		tcp_grow_window(tp, b->len);
+	if (tp->rl)
+		tcp_rledbat_data(tp, b->len);
 }
 
 /* ---- receive batches (rt_rx_batch_begin/end) ---- */
@@ -1075,6 +1086,14 @@ static int tcp_prune_ofo_queue(struct tcp_sock *tp)
 /* Linux tcp_try_rmem_schedule() + tcp_prune_queue() */
 static int tcp_try_rmem_schedule(struct tcp_sock *tp, u32 size)
 {
+	if (tcp_mem_rcv_blocked(tp, size)) {
+		/* socket memory at net.inet.tcp.mem_high: keep the minimum */
+		tcp_prune_ofo_queue(tp);
+		if (tcp_mem_rcv_blocked(tp, size)) {
+			rt_tcpstat.TCPMemLimitDrops++;
+			return -1;
+		}
+	}
 	if (tp->rmem_alloc + size <= tcp_rmem_limit(tp))
 		return 0;
 	tcp_collapse_rcvq(tp);
@@ -1223,6 +1242,9 @@ static void tcp_data_queue_ofo(struct tcp_sock *tp, struct rt_buf *b)
 	struct rt_buf *p, *n;
 
 	tcp_ecn_check_ce(tp, b);
+	/* a new hole: a loss for rLEDBAT (once per round) */
+	if (tp->rl && rt_bufq_empty(&tp->ofoq))
+		tcp_rledbat_loss(tp);
 	if (tcp_try_rmem_schedule(tp, tcp_buf_truesize(b))) {
 		rt_tcpstat.TCPOFODrop++;
 		rt_buf_free(b);
@@ -1482,6 +1504,8 @@ void tcp_init_transfer(struct tcp_sock *tp)
 	else
 		tp->pred_flags = 0;
 	tp->ever_connected = 1;
+	if (tp->bg_want & TCP_BG_RECV)
+		tcp_rledbat_start(tp);
 }
 
 /* Linux tcp_finish_connect() */
@@ -1834,7 +1858,8 @@ void tcp_rcv_established(struct tcp_sock *tp, struct rt_buf *b)
 		} else {
 			/* bulk receiver: in-order data */
 			u32 dlen = len - hdr;
-			if (dlen > tcp_space(tp) || tp->rmem_alloc + tcp_buf_truesize(b) > tcp_rmem_limit(tp))
+			if (dlen > tcp_space(tp) || tp->rmem_alloc + tcp_buf_truesize(b) > tcp_rmem_limit(tp) ||
+			    tcp_mem_rcv_blocked(tp, tcp_buf_truesize(b)))
 				goto step5;
 			if (hdr == TCP_HDR_LEN + TCPOLEN_TSTAMP_ALIGNED && tp->rcv_nxt == tp->rcv_wup)
 				tcp_store_ts_recent(tp);

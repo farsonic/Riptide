@@ -103,7 +103,9 @@ protocol engine: PPP dial-up, firewall, NAT, multicast, packet capture and
 
 | Feature | MiamiDx 1.0c (RE-NOTES 5, 6, 7) | Roadshow | Riptide (defaults; sysctl in brackets) |
 |---|---|---|---|
-| Congestion control | 4.4BSD Reno + NewReno | Not documented [RS-DOC] (**unverified**) | CUBIC with HyStart; NewReno selectable (`net.inet.tcp.cc`) |
+| Congestion control | 4.4BSD Reno + NewReno | Not documented [RS-DOC] (**unverified**) | CUBIC with HyStart; NewReno and LEDBAT++ selectable (`net.inet.tcp.cc`, `TCP_CONGESTION`) |
+| Background transfers | No | **Unverified** | LEDBAT++ (sender) and rLEDBAT (receiver window, RFC 9840), chosen per socket (`TCP_BACKGROUND`) or by rules on program name and ports (`background`) |
+| Socket memory limit | Not analysed | **Unverified** | Global watermarks like Linux `tcp_mem` (`net.inet.tcp.mem_low`/`mem_pressure`/`mem_high`, from the free memory at start) |
 | Initial window | 1 segment (`initwin` 1) | Not documented (**unverified**) | 10 segments, RFC 6928 (`net.inet.tcp.initcwnd`) |
 | SACK (RFC 2018) | Yes, early implementation, bitmask default 208 (SACK + NewReno + "modified fast retransmit") | No SACK switch among the documented tunables [RS-DOC] (**unverified**) | Yes, on (`net.inet.tcp.sack`) |
 | D-SACK (RFC 2883) | No | **Unverified** | Yes, on (`dsack`) |

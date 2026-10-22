@@ -388,6 +388,10 @@ int amiga_status_text(char *buf, u32 len)
 			ADD("%s\n", sv);
 		rt_mdns_status(sv, sizeof(sv));
 		ADD("%s\n", sv);
+		rt_tcp_mem_status(sv, sizeof(sv));
+		ADD("%s", sv);
+		rt_tcp_bg_status(sv, sizeof(sv));
+		ADD("%s", sv);
 	}
 	ADD("Routes:\n");
 	for (r = rt_route_list(); r; r = r->next) {

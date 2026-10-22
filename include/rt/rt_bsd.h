@@ -163,6 +163,10 @@ struct rt_ipv6_mreq {
  * not listening it does the same. */
 #define RT_TCP_FASTOPEN_CONNECT 30
 #define RT_TCP_FASTOPEN    0x401
+/* Riptide: a background connection that yields to others. int, bits:
+ * 1 receive side (rLEDBAT limits the advertised window), 2 send side
+ * (LEDBAT++ congestion control, as TCP_CONGESTION "ledbat"); 0 normal. */
+#define RT_TCP_BACKGROUND  0x5200
 
 /* ---- message flags ---- */
 #define RT_MSG_OOB       0x01

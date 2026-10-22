@@ -488,6 +488,11 @@ static int tcp_hash_connect(struct tcp_sock *tp)
 }
 
 /* ---- socket allocation / lifetime ---- */
+struct tcp_sock *tcp_first(void)
+{
+	return tcp_all;
+}
+
 struct tcp_sock *tcp_sock_alloc(void)
 {
 	struct tcp_sock *tp = rt_zalloc(sizeof(*tp));
@@ -562,6 +567,7 @@ void tcp_destroy_sock(struct tcp_sock *tp)
 		return;
 	tp->destroyed = 1;
 	tcp_batch_forget(tp);
+	tcp_rledbat_stop(tp);
 	tcp_unhash(tp);
 	tcp_clear_xmit_timers(tp);
 	tcp_delete_keepalive_timer(tp);
@@ -763,7 +769,7 @@ void tcp_rcv_space_adjust(struct tcp_sock *tp)
 	copied = tp->copied_seq - tp->rcvq_space.seq;
 	if (copied <= tp->rcvq_space.space)
 		goto new_measure;
-	if (sysctl_tcp_moderate_rcvbuf && !tp->rcvbuf_locked) {
+	if (sysctl_tcp_moderate_rcvbuf && !tp->rcvbuf_locked && !tcp_under_memory_pressure()) {
 		u32 rcvwin, grow, sp = RT_MAX(tp->rcvq_space.space, 1u);
 
 		rcvwin = (copied << 1) + 16u * tp->advmss;
@@ -830,7 +836,7 @@ void tcp_sndbuf_expand(struct tcp_sock *tp)
 {
 	u32 nr_segs, sndmem;
 
-	if (tp->sndbuf_locked)
+	if (tp->sndbuf_locked || tcp_under_memory_pressure())
 		return;
 	nr_segs = RT_MAX(RT_MAX((u32)sysctl_tcp_initcwnd, tp->snd_cwnd), tp->reordering + 1);
 	sndmem = 2u * nr_segs * RT_MAX((u32)tp->mss_cache, 536u);
@@ -892,6 +898,7 @@ static int tcp_v4_attach(struct rt_socket *so)
 	tp->so_rcvbuf_seen = so->rcvbuf;
 	tp->so_sndbuf_seen = so->sndbuf;
 	tp->sndlowat = so->sndlowat;
+	tcp_bg_attach(tp);
 	if (so->domain == RT_AF_INET6) {
 		tp->family = RT_AF_INET6;
 		tp->v6only = rt_ip6_v6only != 0;
@@ -1213,6 +1220,7 @@ static int tcp_v4_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *si
 	if (!tp->write_seq)
 		tp->write_seq = tcp_secure_seq(&tp->saddr, &tp->daddr, tp->sport, tp->dport);
 	tp->ts_offset = tcp_secure_ts_off(&tp->saddr, &tp->daddr);
+	tcp_bg_classify(tp);
 	tp->pmtu_cookie = (u16)(nh.mtu ? nh.mtu : v4 ? 576 : RT_IP6_MIN_MTU);
 	so->state |= RT_SS_ISCONNECTING | RT_SS_ISBOUND;
 	so->state &= ~(RT_SS_CANTRCVMORE | RT_SS_CANTSENDMORE);
@@ -1324,6 +1332,9 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 		u32 used = tp->write_seq - tp->snd_una;
 		u32 space = used < tp->sndbuf ? tp->sndbuf - used : 0;
 		u32 copy = 0;
+
+		if (tcp_mem_snd_blocked(tp))
+			space = 0;             /* socket memory at net.inet.tcp.mem_high */
 
 		if (space == 0) {
 			tcp_chrono_start(tp, TCP_CHRONO_SNDBUF);
@@ -1699,6 +1710,19 @@ static void tcp_fill_ctl_info(struct tcp_sock *tp, struct rt_ctl_tcpinfo *r)
 		r->last_data_sent_ago = tcp_ago(tp->lsndtime);
 	r->last_ack_recv_ago = tcp_ago(tp->rcv_tstamp);
 	rt_strlcpy(r->cc, tp->ca_ops ? tp->ca_ops->name : "", sizeof(r->cc));
+	r->bg = (u8)((tp->bg_want & TCP_BG_RECV ? RT_CTL_TCPBG_RECV : 0) |
+	             (tp->bg_want & TCP_BG_SEND ? RT_CTL_TCPBG_SEND : 0) |
+	             (tp->rl ? RT_CTL_TCPBG_RL_ON : 0) |
+	             (tp->bg_want && !tp->bg_explicit ? RT_CTL_TCPBG_RULE : 0));
+	if (tp->rl || tp->ca_ops == &tcp_ledbat) {
+		const struct ledbat *lb = tp->rl ? &tp->rl->lb : (const struct ledbat *)tp->ca_priv;
+		u32 base = ledbat_base(lb);
+		r->ledbat_phase = lb->phase;
+		r->ledbat_qdelay_us = lb->qdelay;
+		r->ledbat_base_us = base == 0xffffffffu ? 0 : base;
+		if (tp->rl)
+			r->rledbat_wnd = tcp_rledbat_window(tp);
+	}
 }
 
 /* net.riptide.tcpinfo (ctl.c): returns the total count */
@@ -1876,6 +1900,8 @@ static int tcp_v4_setsockopt(struct rt_socket *so, int level, int name, const vo
 		memcpy(nm, val, n);
 		nm[n] = 0;
 		err = tcp_ca_select(tp, nm);
+		if (!err)
+			tp->ca_user = 1;
 		goto out;
 	}
 	err = get_int(val, len, &v);
@@ -1970,6 +1996,12 @@ static int tcp_v4_setsockopt(struct rt_socket *so, int level, int name, const vo
 		}
 		tp->icsk_user_timeout = (u32)v;
 		break;
+	case RT_TCP_BACKGROUND:
+		if (v < 0 || v > 3)
+			err = -RT_EINVAL;
+		else
+			tcp_bg_set(tp, (u32)v);
+		break;
 	default:
 		err = -RT_ENOPROTOOPT;
 		break;
@@ -2033,6 +2065,7 @@ static int tcp_v4_getsockopt(struct rt_socket *so, int level, int name, void *va
 	case RT_TCP_KEEPINIT:  err = put_int(val, len, (s32)tp->keepinit); break;
 	case RT_TCP_QUICKACK:  err = put_int(val, len, !tp->pingpong); break;
 	case RT_TCP_USER_TIMEOUT: err = put_int(val, len, (s32)tp->icsk_user_timeout); break;
+	case RT_TCP_BACKGROUND: err = put_int(val, len, (s32)tp->bg_want); break;
 	case RT_TCP_CONGESTION: {
 		u32 n = (u32)strlen(tp->ca_ops->name) + 1;
 		if (!val || !len) {
@@ -2308,7 +2341,7 @@ static const struct rt_sysctl tcp_sysctls[] = {
 	INT_RW("net.inet.tcp.dsack", NO_MIB, sysctl_tcp_dsack, 0, 1, "RFC 2883 D-SACK"),
 	INT_RW("net.inet.tcp.ecn", NO_MIB, sysctl_tcp_ecn, 0, 2, "ECN: 1 request, 2 accept"),
 	{ "net.inet.tcp.cc", RT_SYSCTL_STRING, RT_SYSCTL_RW, NO_MIB, sysctl_tcp_cc, 0,
-	  sizeof(sysctl_tcp_cc), tcp_sysctl_cc, "Congestion control (cubic, reno)" },
+	  sizeof(sysctl_tcp_cc), tcp_sysctl_cc, "Congestion control (cubic, reno, ledbat)" },
 	INT_RW("net.inet.tcp.initcwnd", NO_MIB, sysctl_tcp_initcwnd, 1, 100, "Initial cwnd (RFC 6928)"),
 	INT_RW("net.inet.tcp.rto_min_ms", NO_MIB, sysctl_tcp_rto_min_ms, 10, 2000, "Minimum RTO"),
 	INT_RW("net.inet.tcp.syncookies", NO_MIB, sysctl_tcp_syncookies, 0, 2, "SYN cookies"),
@@ -2356,4 +2389,6 @@ void rt_tcp_init(void)
 	secs_now = 1;
 	rt_sysctl_register(tcp_sysctls, (int)RT_ARRAY_SIZE(tcp_sysctls));
 	tcp_fastopen_init();
+	tcp_ledbat_init();
+	tcp_mem_init();
 }

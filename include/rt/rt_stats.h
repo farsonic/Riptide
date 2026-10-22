@@ -45,6 +45,10 @@ struct rt_tcp_stats {
 	u32 TCPFastOpenActive, TCPFastOpenActiveFail, TCPFastOpenCookieReqd,
 	    TCPFastOpenSynLost, TCPFastOpenBlackhole, TCPConnectTimeouts,
 	    TCPConnectUnreach, TCPCorkFlush;
+	/* 0.15: socket memory limits (tcp_mem.c) */
+	u32 TCPMemoryPressures;    /* times the use crossed net.inet.tcp.mem_pressure */
+	u32 TCPMemoryPressuresMs;  /* time spent under pressure (ended periods) */
+	u32 TCPMemLimitDrops;      /* segments dropped above net.inet.tcp.mem_high */
 };
 
 struct rt_igmp_stats {
