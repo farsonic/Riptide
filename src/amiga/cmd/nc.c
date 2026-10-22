@@ -10,6 +10,10 @@
  *                                            -w seconds of silence or n of them),
  *                                            after joining an IPv4 group with -m
  *
+ * TCP: -F connects with TCP Fast Open (TCP_FASTOPEN_CONNECT: with a
+ * cookie from an earlier connection the first data goes in the SYN), -K
+ * secs turns keepalive on after secs idle, probing every secs (SO_KEEPALIVE,
+ * TCP_KEEPIDLE, TCP_KEEPINTVL).
  * IPv4 multicast: -T ttl (IP_MULTICAST_TTL), -I ifaddr (IP_MULTICAST_IF
  * when sending, the interface to join on with -m), -L no local copy
  * (IP_MULTICAST_LOOP 0).
@@ -30,7 +34,7 @@ struct tv { ULONG secs, micro; };
 
 static void usage(void)
 {
-	cl_puts("usage: nc [-46dvu] [-w secs] [-T ttl] [-I ifaddr] [-L] host port\n"
+	cl_puts("usage: nc [-46dvuF] [-w secs] [-K secs] [-T ttl] [-I ifaddr] [-L] host port\n"
 	        "       nc [-46dv] -l [-p] port\n"
 	        "       nc -u -l [-v] [-w secs] [-c count] [-m group [-I ifaddr]] [-p] port\n");
 }
@@ -94,13 +98,13 @@ static int nc_main(int argc, char **argv)
 	struct cl_addr addr;
 	u32 port = 0, wait_ms = 0, salen;
 	int c, listen_mode = 0, nostdin = 0, verbose = 0, udp = 0, s = -1, fd = -1, rc = CL_ERROR, family = 0;
-	int noloop = 0;
-	u32 group = 0, ifaddr = 0, count = 0, v;
+	int noloop = 0, fastopen = 0;
+	u32 group = 0, ifaddr = 0, count = 0, v, keepidle = 0;
 	LONG n, one = 1, ttl = -1;
 	char *buf, a[CL_ADDRSTRLEN];
 
 	memset(&g, 0, sizeof(g));
-	while ((c = cl_getopt(argc, argv, "ldvuw:p:hn46m:I:T:Lc:", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "ldvuw:p:hn46m:I:T:Lc:FK:", &g)) != -1) {
 		switch (c) {
 		case '4': family = 4; break;
 		case '6': family = 6; break;
@@ -125,6 +129,8 @@ static int nc_main(int argc, char **argv)
 			ttl = (LONG)v;
 			break;
 		case 'L': noloop = 1; break;
+		case 'F': fastopen = 1; break;
+		case 'K': if (cl_parse_uint(g.arg, 32767, &keepidle) < 0 || !keepidle) { usage(); return CL_ERROR; } break;
 		case 'c': if (cl_parse_uint(g.arg, 0x7fffffff, &count) < 0) { usage(); return CL_ERROR; } break;
 		case 'h': usage(); return CL_OK;
 		default: usage(); return CL_ERROR;
@@ -212,6 +218,14 @@ static int nc_main(int argc, char **argv)
 		if (verbose)
 			cl_printf("Connection received on %s %u\n", cl_addr_str(&peer, a), (unsigned)pp);
 	} else {
+		if (fastopen && setsockopt(s, RT_IPPROTO_TCP, RT_TCP_FASTOPEN_CONNECT, &one, sizeof(one)) < 0)
+			cl_error("TCP_FASTOPEN_CONNECT: %s", cl_strerror((int)Errno()));
+		if (keepidle) {
+			LONG ki = (LONG)keepidle;
+			setsockopt(s, RT_SOL_SOCKET, RT_SO_KEEPALIVE, &one, sizeof(one));
+			setsockopt(s, RT_IPPROTO_TCP, RT_TCP_KEEPIDLE, &ki, sizeof(ki));
+			setsockopt(s, RT_IPPROTO_TCP, RT_TCP_KEEPINTVL, &ki, sizeof(ki));
+		}
 		if (connect(s, &sa, (LONG)salen) < 0) {
 			cl_error("connect to %s port %lu (tcp) failed: %s", argv[g.ind], (unsigned long)port,
 			         cl_strerror((int)Errno()));

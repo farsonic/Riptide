@@ -22,6 +22,8 @@ int tcp_parse_options(const u8 *th, u32 hdr_len, struct tcp_rx_opt *opt, int est
 
 	opt->saw_tstamp = 0;
 	opt->sack_off = 0;
+	if (syn)
+		opt->fo_len = TCP_FASTOPEN_NONE;
 	while (length > 0) {
 		int opcode = *ptr++, opsize;
 
@@ -69,6 +71,18 @@ int tcp_parse_options(const u8 *th, u32 hdr_len, struct tcp_rx_opt *opt, int est
 				opt->sack_ok = 1;
 				opt->num_sacks = 0;
 				opt->dsack = 0;
+			}
+			break;
+		case TCPOPT_FASTOPEN:
+			/* RFC 7413: empty (cookie request) or a 4..16 byte cookie */
+			if (syn && !estab) {
+				int l = opsize - TCPOLEN_FASTOPEN_BASE;
+				if (l == 0) {
+					opt->fo_len = 0;
+				} else if (l >= TCP_FASTOPEN_COOKIE_MIN && l <= TCP_FASTOPEN_COOKIE_MAX) {
+					memcpy(opt->fo_cookie, ptr, (u32)l);
+					opt->fo_len = (u8)l;
+				}
 			}
 			break;
 		case TCPOPT_SACK:
@@ -1557,7 +1571,23 @@ static int tcp_rcv_synsent_state_process(struct tcp_sock *tp, struct rt_buf *b)
 		tcp_sync_mss(tp, tp->pmtu_cookie);
 		tcp_initialize_rcv_mss(tp);
 		tp->copied_seq = tp->rcv_nxt;
+		if ((tp->fo_flags & TCP_FO_SYN_DATA) && rt_seq_after(tp->snd_una, tp->iss + 1))
+			tp->fo_flags |= TCP_FO_DATA_ACKED;
 		tcp_finish_connect(tp);
+		if (tp->fo_flags & TCP_FO_OPT_SENT) {
+			/* Linux tcp_rcv_fastopen_synack(): keep the cookie; data
+			 * the server did not take in the SYN goes again now */
+			tcp_fastopen_synack(tp, &opt);
+			if ((tp->fo_flags & (TCP_FO_SYN_DATA | TCP_FO_DATA_ACKED)) == TCP_FO_SYN_DATA) {
+				struct rt_buf *d = tcp_rtx_head(tp);
+				if (d && !(TCP_SKB_CB(d)->tcp_flags & TCPHDR_SYN)) {
+					TCP_DBG(tp, "TFO: SYN data not acknowledged, sending it again");
+					tcp_retransmit_skb(tp, d);
+					tcp_rearm_rto(tp);
+				}
+			}
+		}
+		tcp_pending_fin(tp);
 		if (tp->pingpong) {
 			tp->ack.pending |= ICSK_ACK_SCHED;
 			tcp_enter_quickack_mode(tp, TCP_MAX_QUICKACKS);
@@ -1904,11 +1934,23 @@ static void tcp_err(const rt_in6_addr *saddr, u16 sport, const rt_in6_addr *dadd
 	}
 	if (!err)
 		goto out;
-	if ((tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED) && fatal) {
-		/* hard error while connecting: abort */
-		tcp_done(tp);
-		tcp_sock_error(tp, err);
-		goto out;
+	if (tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED) {
+		/* While connecting, hard errors abort. So do net/host
+		 * unreachable (soft in RFC 1122) by net.inet.tcp.syn_icmp_abort:
+		 * 2 at once (Linux), 1 once the SYN went out twice (a dead or
+		 * unresolvable host, a missing route: the connect() fails
+		 * within a second or two instead of after the full timeout),
+		 * 0 never (only when the connect times out). */
+		int abort = fatal || (sysctl_tcp_syn_icmp_abort == 2 && tp->state == RT_TCPS_SYN_SENT) ||
+		            (sysctl_tcp_syn_icmp_abort == 1 && tp->state == RT_TCPS_SYN_SENT &&
+		             (tp->icsk_retransmits || tp->err_soft));
+		if (abort) {
+			if (!fatal)
+				rt_tcpstat.TCPConnectUnreach++;
+			tcp_done(tp);
+			tcp_sock_error(tp, err);
+			goto out;
+		}
 	}
 	/* soft error: reported only if the connection times out */
 	tp->err_soft = err;

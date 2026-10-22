@@ -120,11 +120,13 @@ protocol engine: PPP dial-up, firewall, NAT, multicast, packet capture and
 | RFC 5961 (blind RST/SYN/ACK) | No | **Unverified** | Challenge ACKs with a rate limit |
 | ISNs | Not analysed (4.4BSD-Lite uses a predictable increment) | **Unverified** | RFC 6528 (SipHash of the 4-tuple and a secret) |
 | Ephemeral ports | 1024-5000 by default ("tiny and predictable", RE-NOTES 7.8) | **Unverified** | 49152-65535, RFC 6056 algorithm 4 (`net.inet.ip.portrange.*`) |
-| TIME_WAIT | 4.4BSD 2*MSL (inferred, not analysed) | **Unverified** | Mini-sockets, capped (`max_tw_buckets` 1024), `tw_reuse` for loopback/connect as Linux; orphan limit (`max_orphans`) |
+| TIME_WAIT | 4.4BSD 2*MSL (inferred, not analysed) | **Unverified** | Mini-sockets, capped (`max_tw_buckets` 1024); `connect()` reuses TIME_WAIT pairs with timestamps (`tw_reuse` 1; Linux: loopback only); orphan limit (`max_orphans`) |
 | Path MTU discovery | On | **Unverified** | On (RFC 1191), cached in `ip route show cache`, expires after `mtu_expires` 600 s |
-| Keepalive | 2 h idle, 75 s interval | Standard `SO_KEEPALIVE` [RS-DOC]; times **unverified** | 7200 s idle, 75 s interval, 9 probes (`keepidle`, `keepintvl`, `keepcnt`) |
+| Keepalive | 2 h idle, 75 s interval | Standard `SO_KEEPALIVE` [RS-DOC]; times **unverified** | 7200 s idle, 75 s interval, 9 probes (`keepidle`, `keepintvl`, `keepcnt`); per socket `TCP_KEEPIDLE`/`INTVL`/`CNT`; `keepalive_all` for programs that never ask (NAT routers) |
 | T/TCP (RFC 1644) | Implemented, on by default (`rfc1644` 1) | Not documented | Not implemented, on purpose: it is obsolete (moved to Historic by RFC 6247) and lets a spoofed SYN execute a transaction |
-| Socket options | BSD | `TCP_NODELAY` only: "TCP supports one socket option" [RS-DOC] | `TCP_NODELAY`, `TCP_MAXSEG` and Linux-style knobs (`rt_bsd.h`) |
+| Socket options | BSD | `TCP_NODELAY` only: "TCP supports one socket option" [RS-DOC] | `TCP_NODELAY`, `TCP_MAXSEG`, `TCP_NOPUSH`, `TCP_CORK`, `MSG_MORE`, `TCP_KEEPINIT`, `TCP_USER_TIMEOUT`, `TCP_FASTOPEN_CONNECT` and other Linux-style knobs (`rt_bsd.h`) |
+| TCP Fast Open (RFC 7413) | No | **Unverified** | Client: cookie cache, data in the SYN (`TCP_FASTOPEN_CONNECT`, `MSG_FASTOPEN`, or `fastopen_all`), middlebox detection |
+| Connecting to a dead host | 4.4BSD backoff, 75 s connection-establishment timer (not analysed) | **Unverified** | SYN after 1, 2, 4, 4 ... s, gives up after `connect_timeout` 20 s; ICMP host/net unreachable ends it after the second SYN |
 
 ### 3.2 What the modernisation does in practice
 

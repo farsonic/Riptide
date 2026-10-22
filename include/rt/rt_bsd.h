@@ -146,6 +146,7 @@ struct rt_ipv6_mreq {
  * Linux-style knobs Riptide adds. */
 #define RT_TCP_NODELAY     0x01
 #define RT_TCP_MAXSEG      0x02
+#define RT_TCP_CORK        0x03   /* Linux TCP_CORK: like NOPUSH, at most 200 ms */
 #define RT_TCP_NOPUSH      0x04   /* cork: send only full segments */
 #define RT_TCP_NOOPT       0x08
 #define RT_TCP_INFO        0x20   /* struct rt_tcp_info (read only) */
@@ -156,6 +157,12 @@ struct rt_ipv6_mreq {
 #define RT_TCP_KEEPCNT     0x400
 #define RT_TCP_QUICKACK    0x1000 /* Linux semantics */
 #define RT_TCP_USER_TIMEOUT 0x2000 /* ms, RFC 5482 / Linux semantics */
+/* TCP Fast Open client (RFC 7413). TCP_FASTOPEN_CONNECT has Linux's number
+ * (30, unused in BSD): connect() returns at once and the first send()
+ * goes in the SYN. TCP_FASTOPEN is FreeBSD's (1025): on a socket that is
+ * not listening it does the same. */
+#define RT_TCP_FASTOPEN_CONNECT 30
+#define RT_TCP_FASTOPEN    0x401
 
 /* ---- message flags ---- */
 #define RT_MSG_OOB       0x01
@@ -167,6 +174,12 @@ struct rt_ipv6_mreq {
 #define RT_MSG_WAITALL   0x40
 #define RT_MSG_DONTWAIT  0x80
 #define RT_MSG_EOF       0x100
+/* Linux values, unused in AmiTCP and Roadshow: MSG_MORE holds a partial
+ * segment for more data (at most 200 ms, as TCP_CORK); sendto() with
+ * MSG_FASTOPEN on an unconnected TCP socket connects with the data in the
+ * SYN (TCP Fast Open). */
+#define RT_MSG_MORE      0x8000
+#define RT_MSG_FASTOPEN  0x20000000
 
 /* ---- ioctls (4.4BSD encoding) ---- */
 #define RT_IOCPARM_MASK 0x1fff
@@ -285,7 +298,7 @@ struct rt_tcp_info {
 	u8  tcpi_state;          /* RT_TCPS_* */
 	u8  tcpi_ca_state;       /* 0 open 1 disorder 2 cwr 3 recovery 4 loss */
 	u8  tcpi_retransmits;
-	u8  tcpi_options;        /* 1 TS, 2 SACK, 4 WSCALE, 8 ECN */
+	u8  tcpi_options;        /* 1 TS, 2 SACK, 4 WSCALE, 8 ECN, 32 SYN data acknowledged (TFO) */
 	u8  tcpi_snd_wscale;
 	u8  tcpi_rcv_wscale;
 	u8  tcpi_backoff;

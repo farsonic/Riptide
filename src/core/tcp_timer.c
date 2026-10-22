@@ -10,12 +10,14 @@
 static void tcp_write_timer(void *arg);
 static void tcp_delack_timer(void *arg);
 static void tcp_keepalive_timer(void *arg);
+static void tcp_cork_timer(void *arg);
 
 void tcp_init_xmit_timers(struct tcp_sock *tp)
 {
 	rt_timer_init(&tp->retrans_timer, tcp_write_timer, tp);
 	rt_timer_init(&tp->delack_timer, tcp_delack_timer, tp);
 	rt_timer_init(&tp->keepalive_timer, tcp_keepalive_timer, tp);
+	rt_timer_init(&tp->cork_timer, tcp_cork_timer, tp);
 }
 
 void tcp_clear_xmit_timers(struct tcp_sock *tp)
@@ -24,6 +26,27 @@ void tcp_clear_xmit_timers(struct tcp_sock *tp)
 	tp->ack.pending = 0;
 	rt_timer_del(&tp->retrans_timer);
 	rt_timer_del(&tp->delack_timer);
+	rt_timer_del(&tp->cork_timer);
+}
+
+/* TCP_CORK and MSG_MORE hold a partial segment back at most
+ * TCP_CORK_MAX_MS (Linux tcp(7)): armed when such data stays queued */
+void tcp_arm_cork_timer(struct tcp_sock *tp)
+{
+	if (tp->send_head && !rt_timer_pending(&tp->cork_timer))
+		rt_timer_mod(&tp->cork_timer, tcp_jiffies() + TCP_CORK_MAX_MS);
+}
+
+static void tcp_cork_timer(void *arg)
+{
+	struct tcp_sock *tp = arg;
+
+	tcp_api_enter();
+	if (tp->send_head && (tp->state == RT_TCPS_ESTABLISHED || tp->state == RT_TCPS_CLOSE_WAIT)) {
+		rt_tcpstat.TCPCorkFlush++;
+		__tcp_push_pending_frames(tp, tcp_current_mss(tp), TCP_NAGLE_PUSH);
+	}
+	tcp_api_exit();
 }
 
 void tcp_reset_xmit_timer(struct tcp_sock *tp, int what, u32 when)
@@ -220,6 +243,15 @@ static void tcp_refresh_route(struct tcp_sock *tp)
 		tcp_sync_mss(tp, rt.mtu);
 }
 
+/* How long a connect may take (ms, 0 = only syn_retries): TCP_KEEPINIT,
+ * else net.inet.tcp.connect_timeout. TCP_USER_TIMEOUT wins over both. */
+static u32 tcp_connect_timeout(const struct tcp_sock *tp)
+{
+	if (tp->keepinit)
+		return tp->keepinit * 1000u;
+	return (u32)sysctl_tcp_connect_timeout * 1000u;
+}
+
 /* Linux tcp_write_timeout(): 1 if the connection was aborted */
 static int tcp_write_timeout(struct tcp_sock *tp)
 {
@@ -229,8 +261,15 @@ static int tcp_write_timeout(struct tcp_sock *tp)
 	if (tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED) {
 		retry_until = tp->syn_retries ? tp->syn_retries : (u32)sysctl_tcp_syn_retries;
 		expired = tp->icsk_retransmits >= retry_until;
-		if (tp->keepinit && !user_timeout)
-			user_timeout = tp->keepinit * 1000u;
+		if (!user_timeout)
+			user_timeout = tcp_connect_timeout(tp);
+		if (expired || retransmits_timed_out(tp, retry_until, user_timeout)) {
+			if (tp->state == RT_TCPS_SYN_SENT)
+				rt_tcpstat.TCPConnectTimeouts++;
+			tcp_write_err(tp);
+			return 1;
+		}
+		return 0;
 	} else {
 		/* black hole / route change: re-resolve the route and its
 		 * path MTU after retries1 timeouts (Linux dst_negative_advice) */
@@ -255,11 +294,14 @@ static int tcp_write_timeout(struct tcp_sock *tp)
 
 static u32 tcp_clamp_rto_to_user_timeout(const struct tcp_sock *tp)
 {
+	u32 ut = tp->icsk_user_timeout;
 	s32 remaining;
 
-	if (!tp->icsk_user_timeout || !tp->retrans_stamp)
+	if (!ut && (tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED))
+		ut = tcp_connect_timeout(tp);
+	if (!ut || !tp->retrans_stamp)
 		return tp->icsk_rto;
-	remaining = (s32)(tp->retrans_stamp + tp->icsk_user_timeout - tcp_jiffies());
+	remaining = (s32)(tp->retrans_stamp + ut - tcp_jiffies());
 	if (remaining <= 0)
 		return 1;
 	return RT_MIN(tp->icsk_rto, (u32)remaining);
@@ -296,6 +338,14 @@ static void tcp_retransmit_timer(struct tcp_sock *tp)
 	        (unsigned long)TCP_SKB_CB(b)->seq, (unsigned long)tp->snd_cwnd, (unsigned long)tp->packets_out);
 	if (tcp_write_timeout(tp))
 		return;
+	if (tp->state == RT_TCPS_SYN_SENT && tp->fo_len != TCP_FASTOPEN_NONE) {
+		/* The SYN with the TFO option was lost: further SYNs go
+		 * without it (a middlebox may drop it); the SYN-ACK of a
+		 * plain one then marks the destination (tcp_fastopen.c). */
+		if (tp->fo_flags & TCP_FO_OPT_SENT)
+			tp->fo_flags |= TCP_FO_SYN_LOST;
+		tp->fo_len = TCP_FASTOPEN_NONE;
+	}
 	tcp_enter_loss(tp);
 	tp->icsk_retransmits++;
 	b = tcp_rtx_head(tp);
@@ -305,7 +355,15 @@ static void tcp_retransmit_timer(struct tcp_sock *tp)
 	}
 out_reset_timer:
 	tp->icsk_backoff++;
-	tp->icsk_rto = RT_MIN(tp->icsk_rto << 1, TCP_RTO_MAX);
+	if (tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED) {
+		/* net.inet.tcp.syn_backoff: 1 doubles (RFC 6298), 0 adds the
+		 * initial RTO; either way at most syn_rto_max_ms */
+		u32 rto = sysctl_tcp_syn_backoff ? tp->icsk_rto << 1
+		                                 : tp->icsk_rto + (u32)sysctl_tcp_syn_rto_initial_ms;
+		tp->icsk_rto = RT_MIN(rto, (u32)sysctl_tcp_syn_rto_max_ms);
+	} else {
+		tp->icsk_rto = RT_MIN(tp->icsk_rto << 1, TCP_RTO_MAX);
+	}
 	tcp_reset_xmit_timer(tp, ICSK_TIME_RETRANS, tcp_clamp_rto_to_user_timeout(tp));
 }
 

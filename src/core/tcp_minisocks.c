@@ -340,6 +340,8 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->sndbuf_locked = lp->sndbuf_locked;
 	tp->sndlowat = so->sndlowat;
 	tp->keepopen = (so->options & RT_SO_KEEPALIVE) != 0;
+	if (!tp->keepopen && sysctl_tcp_keepalive_all)
+		tp->ka_auto = tp->keepopen = 1;      /* net.inet.tcp.keepalive_all */
 	tp->oobinline = (so->options & RT_SO_OOBINLINE) != 0;
 
 	tp->iss = req->snt_isn;

@@ -48,6 +48,11 @@ struct rt_iov {
 #define RT_SS_ASYNC          0x0200  /* FIOASYNC */
 #define RT_SS_ISLISTENING    0x0400
 #define RT_SS_ISBOUND        0x0800
+#define RT_SS_DEFERCONN      0x1000  /* TCP Fast Open: connect() returned, no SYN yet */
+
+/* Internal ioctl: a deferred connect is waited on for reading (WaitSelect),
+ * so the protocol sends its SYN now (the server may speak first). */
+#define RT_SIOC_KICKCONN     0x7f000001u
 
 /* Addresses between the socket layer and the protocols are always a
  * struct rt_sockaddr_in6 in normalised form: IPv4 addresses (AF_INET

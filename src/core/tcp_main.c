@@ -25,7 +25,7 @@ s32 sysctl_tcp_retries1 = 3;
 s32 sysctl_tcp_retries2 = 15;
 s32 sysctl_tcp_keepcnt = 9;
 s32 sysctl_tcp_fin_timeout = 60;
-s32 sysctl_tcp_tw_reuse = 2;
+s32 sysctl_tcp_tw_reuse = 1;
 s32 sysctl_tcp_frto = 2;
 s32 sysctl_tcp_recovery = TCP_RACK_LOSS_DETECTION;
 s32 sysctl_tcp_reordering = 3;
@@ -42,6 +42,15 @@ s32 sysctl_tcp_delack_segs = 2;
 s32 sysctl_tcp_delack_ms = TCP_DELACK_MAX;
 s32 sysctl_tcp_quickack = 0;
 char sysctl_tcp_cc[16] = "cubic";
+/* connecting: first SYN RTO, its growth and cap, and the whole connect
+ * (Linux: 1 s doubling to 120 s, 6 retries = 127 s; a desktop program
+ * blocked in connect() to a dead host should not hang that long) */
+s32 sysctl_tcp_syn_rto_initial_ms = 1000;
+s32 sysctl_tcp_syn_rto_max_ms = 4000;
+s32 sysctl_tcp_syn_backoff = 1;
+s32 sysctl_tcp_connect_timeout = 20;
+s32 sysctl_tcp_syn_icmp_abort = 1;
+s32 sysctl_tcp_keepalive_all = 0;
 
 u32 tcp_orphan_count;
 u32 tcp_tw_count;
@@ -520,6 +529,7 @@ void tcp_init_sock(struct tcp_sock *tp)
 	tp->ack.ato = 0;
 	tp->family = RT_AF_INET;
 	tp->net_hlen = 20;
+	tp->fo_len = TCP_FASTOPEN_NONE;
 	rt_inaddr_v4any(&tp->saddr);
 	rt_inaddr_v4any(&tp->daddr);
 }
@@ -710,7 +720,7 @@ void tcp_sync_rcvbuf(struct tcp_sock *tp)
 	}
 	tp->sndlowat = so->sndlowat;
 	tp->oobinline = (so->options & RT_SO_OOBINLINE) != 0;
-	keep = (so->options & RT_SO_KEEPALIVE) != 0;
+	keep = (so->options & RT_SO_KEEPALIVE) != 0 || tp->ka_auto;
 	if (keep != tp->keepopen) {
 		tp->keepopen = (u8)keep;
 		if (tp->state == RT_TCPS_ESTABLISHED || tp->state == RT_TCPS_CLOSE_WAIT ||
@@ -888,6 +898,10 @@ static int tcp_v4_attach(struct rt_socket *so)
 		memset(&tp->saddr, 0, sizeof(tp->saddr));
 		memset(&tp->daddr, 0, sizeof(tp->daddr));
 	}
+	/* net.inet.tcp.keepalive_all: keep idle connections of programs that
+	 * never ask for keepalive open through NAT routers */
+	if (sysctl_tcp_keepalive_all)
+		tp->ka_auto = tp->keepopen = 1;
 	return 0;
 }
 
@@ -912,6 +926,16 @@ static int tcp_close_state(struct tcp_sock *tp)
 	}
 	tcp_set_state(tp, ns);
 	return action;
+}
+
+/* a shutdown(SHUT_WR) that waited for the handshake */
+void tcp_pending_fin(struct tcp_sock *tp)
+{
+	if (!tp->fin_pending)
+		return;
+	tp->fin_pending = 0;
+	if (tcp_close_state(tp))
+		tcp_send_fin(tp);
 }
 
 static int tcp_need_reset(int state)
@@ -1083,6 +1107,24 @@ out:
 	return err;
 }
 
+/* Linux tcp_fastopen_defer_connect(): decide on the TFO option for the
+ * SYN (tp->fo_len). 1: a cookie is known and the socket asked for TFO, so
+ * the connect waits for data. */
+static int tcp_fastopen_prepare(struct tcp_sock *tp)
+{
+	u8 len = 0;
+	int r;
+
+	tp->fo_len = TCP_FASTOPEN_NONE;
+	if ((!(tp->fo_flags & TCP_FO_WANT) && !sysctl_tcp_fastopen_all) || tp->noopt)
+		return 0;
+	r = tcp_fastopen_lookup(&tp->daddr, tp->fo_cookie, &len, &tp->fo_mss);
+	if (r < 0)
+		return 0;
+	tp->fo_len = r ? len : 0;
+	return r > 0;
+}
+
 /* Linux tcp_v4_connect() */
 static int tcp_v4_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 {
@@ -1176,6 +1218,15 @@ static int tcp_v4_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *si
 	so->state &= ~(RT_SS_CANTRCVMORE | RT_SS_CANTSENDMORE);
 	tp->shutdown = 0;
 	tp->done = 0;
+	if (tcp_fastopen_prepare(tp)) {
+		/* TCP_FASTOPEN_CONNECT with a cookie: connect() returns, the
+		 * SYN waits for the first send() and carries its data */
+		tp->fo_flags |= TCP_FO_DEFER;
+		so->state &= ~RT_SS_ISCONNECTING;
+		so->state |= RT_SS_DEFERCONN;
+		err = 0;
+		goto out;
+	}
 	err = tcp_connect(tp);
 	if (err) {
 		so->state &= ~RT_SS_ISCONNECTING;
@@ -1188,13 +1239,42 @@ out:
 	return err;
 }
 
+/* Queue the SYN of a deferred connect (data queued behind it goes along
+ * when tcp_connect_xmit() sends it). 0 or -errno (connection failed). */
+static int tcp_fastopen_start(struct tcp_sock *tp)
+{
+	struct rt_socket *so = tp->so;
+	int err;
+
+	tp->fo_flags &= (u8)~TCP_FO_DEFER;
+	if (so) {
+		so->state &= ~RT_SS_DEFERCONN;
+		if (!(so->state & RT_SS_ISCONNECTED))
+			so->state |= RT_SS_ISCONNECTING;
+	}
+	err = tcp_connect_init(tp);
+	if (err) {
+		tcp_done(tp);
+		tcp_sock_error(tp, -err);
+	}
+	return err;
+}
+
+/* A deferred connect that is read from (or waited on for reading) before
+ * anything was sent: send a SYN without data (the server may speak first). */
+static void tcp_fastopen_kick(struct tcp_sock *tp)
+{
+	if ((tp->fo_flags & TCP_FO_DEFER) && !tcp_fastopen_start(tp))
+		tcp_connect_xmit(tp);
+}
+
 /* Linux tcp_sendmsg_locked(), non-blocking */
 static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
                        int flags, const struct rt_sockaddr_in6 *to)
 {
 	struct tcp_sock *tp = so->pcb;
 	u32 total, copied = 0, mss_now;
-	int err;
+	int err, fo_syn = 0;
 
 	if (!tp)
 		return -RT_ENOTCONN;
@@ -1205,20 +1285,36 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 		so->so_error = 0;
 		goto out;
 	}
+	if ((flags & RT_MSG_FASTOPEN) && to && tp->state == RT_TCPS_CLOSED && !tp->ever_connected) {
+		/* Linux tcp_sendmsg_fastopen(): connect with the data */
+		tp->fo_flags |= TCP_FO_WANT;
+		err = tcp_v4_connect(so, to);
+		if (err && err != -RT_EINPROGRESS)
+			goto out;
+	}
+	if (tp->fo_flags & TCP_FO_DEFER) {
+		/* the first send() of a deferred connect: SYN with this data */
+		err = tcp_fastopen_start(tp);
+		if (err)
+			goto out;
+		fo_syn = 1;
+	}
 	if (tp->shutdown & SEND_SHUTDOWN) {
 		err = -RT_EPIPE;
 		goto out;
 	}
-	if (tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED) {
+	if (!fo_syn && (tp->state == RT_TCPS_SYN_SENT || tp->state == RT_TCPS_SYN_RECEIVED)) {
 		err = -RT_EWOULDBLOCK;
 		goto out;
 	}
-	if (tp->state != RT_TCPS_ESTABLISHED && tp->state != RT_TCPS_CLOSE_WAIT) {
+	if (!fo_syn && tp->state != RT_TCPS_ESTABLISHED && tp->state != RT_TCPS_CLOSE_WAIT) {
 		err = tp->ever_connected ? -RT_EPIPE : -RT_ENOTCONN;
 		goto out;
 	}
 	total = rt_iov_total(iov, iovcnt);
 	if (total == 0) {
+		if (fo_syn)
+			tcp_connect_xmit(tp);
 		err = 0;
 		goto out;
 	}
@@ -1266,7 +1362,11 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 		tp->wq.bytes += copy;
 		copied += copy;
 	}
-	if (copied) {
+	if (fo_syn) {
+		/* the SYN goes now, with as much of the data as fits */
+		tcp_connect_xmit(tp);
+		err = copied ? (int)copied : -RT_EWOULDBLOCK;
+	} else if (copied) {
 		struct rt_buf *tail = tp->wq.tail;
 		int nonagle = tp->nodelay ? TCP_NAGLE_OFF : 0;
 
@@ -1276,11 +1376,14 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 			tcp_mark_push(tp, tail);
 		if (flags & RT_MSG_EOR)
 			TCP_SKB_CB(tail)->eor = 1;
-		if (tp->cork)
+		if (tp->cork || (flags & RT_MSG_MORE))
 			nonagle = TCP_NAGLE_CORK;
 		if (flags & RT_MSG_OOB)
 			nonagle = TCP_NAGLE_PUSH;
 		__tcp_push_pending_frames(tp, mss_now, nonagle);
+		/* TCP_CORK and MSG_MORE: a partial segment waits at most 200 ms */
+		if (nonagle == TCP_NAGLE_CORK && (tp->cork_linux || (flags & RT_MSG_MORE)))
+			tcp_arm_cork_timer(tp);
 		err = (int)copied;
 	} else {
 		tp->write_space_wanted = 1;
@@ -1345,6 +1448,7 @@ static int tcp_v4_recv(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 		err = -RT_ENOTCONN;
 		goto out;
 	}
+	tcp_fastopen_kick(tp);
 	if (flags & RT_MSG_OOB) {
 		err = tcp_recv_urg(tp, iov, iovcnt, flags, msgflags);
 		goto out;
@@ -1453,6 +1557,7 @@ static int tcp_v4_shutdown(struct rt_socket *so, int how)
 	if (how < 0 || how > 2)
 		return -RT_EINVAL;
 	tcp_enter();
+	tcp_fastopen_kick(tp);
 	if (tp->state == RT_TCPS_CLOSED || tp->state == RT_TCPS_LISTEN) {
 		if (tp->state == RT_TCPS_LISTEN && how != 1) {
 			/* Linux: shutdown of a listener stops it */
@@ -1470,7 +1575,12 @@ static int tcp_v4_shutdown(struct rt_socket *so, int how)
 	if (how == 1 || how == 2) {
 		tp->shutdown |= SEND_SHUTDOWN;
 		so->state |= RT_SS_CANTSENDMORE;
-		if (tp->state == RT_TCPS_SYN_SENT) {
+		if (tp->state == RT_TCPS_SYN_SENT && (tp->fo_flags & TCP_FO_WANT)) {
+			/* TCP Fast Open: connect() returned before the handshake
+			 * and the request may already be queued: the FIN follows
+			 * once the connection is up (tcp_finish_connect) */
+			tp->fin_pending = 1;
+		} else if (tp->state == RT_TCPS_SYN_SENT) {
 			tcp_write_queue_purge(tp);
 			tcp_done(tp);
 		} else if (tcp_close_state(tp)) {
@@ -1627,6 +1737,8 @@ static void tcp_get_info(struct tcp_sock *tp, struct rt_tcp_info *info)
 	}
 	if (tp->ecn_flags & TCP_ECN_OK)
 		info->tcpi_options |= 8;
+	if (tp->fo_flags & TCP_FO_DATA_ACKED)
+		info->tcpi_options |= 32;      /* Linux TCPI_OPT_SYN_DATA */
 	info->tcpi_rto_us = tp->icsk_rto * 1000u;
 	info->tcpi_snd_mss = tp->mss_cache;
 	info->tcpi_rcv_mss = tp->ack.rcv_mss;
@@ -1695,7 +1807,10 @@ static int tcp_v4_setsockopt(struct rt_socket *so, int level, int name, const vo
 		return -RT_EINVAL;
 	tcp_enter();
 	if (level == RT_SOL_SOCKET) {
-		/* The socket layer stored the value; react to it. */
+		/* The socket layer stored the value; react to it. An explicit
+		 * SO_KEEPALIVE replaces net.inet.tcp.keepalive_all. */
+		if (name == RT_SO_KEEPALIVE)
+			tp->ka_auto = 0;
 		tcp_sync_rcvbuf(tp);
 		goto out;
 	}
@@ -1773,9 +1888,29 @@ static int tcp_v4_setsockopt(struct rt_socket *so, int level, int name, const vo
 			tcp_push_pending_frames(tp);
 		break;
 	case RT_TCP_NOPUSH:
+	case RT_TCP_CORK:
 		tp->cork = v != 0;
-		if (!v)
+		tp->cork_linux = name == RT_TCP_CORK && v;
+		if (!v) {
+			rt_timer_del(&tp->cork_timer);
 			tcp_push_pending_frames(tp);
+		}
+		break;
+	case RT_TCP_FASTOPEN_CONNECT:
+	case RT_TCP_FASTOPEN:
+		/* TCP_FASTOPEN on a listener (the server side) is not offered */
+		if (tp->state == RT_TCPS_LISTEN) {
+			err = -RT_EOPNOTSUPP;
+			break;
+		}
+		if (tp->state != RT_TCPS_CLOSED) {
+			err = -RT_EISCONN;
+			break;
+		}
+		if (v)
+			tp->fo_flags |= TCP_FO_WANT;
+		else
+			tp->fo_flags &= (u8)~TCP_FO_WANT;
 		break;
 	case RT_TCP_NOOPT:
 		tp->noopt = v != 0;
@@ -1882,7 +2017,10 @@ static int tcp_v4_getsockopt(struct rt_socket *so, int level, int name, void *va
 		goto out;
 	switch (name) {
 	case RT_TCP_NODELAY:  err = put_int(val, len, tp->nodelay); break;
-	case RT_TCP_NOPUSH:   err = put_int(val, len, tp->cork); break;
+	case RT_TCP_NOPUSH:   err = put_int(val, len, tp->cork && !tp->cork_linux); break;
+	case RT_TCP_CORK:     err = put_int(val, len, tp->cork_linux); break;
+	case RT_TCP_FASTOPEN_CONNECT:
+	case RT_TCP_FASTOPEN: err = put_int(val, len, (tp->fo_flags & TCP_FO_WANT) != 0); break;
 	case RT_TCP_NOOPT:    err = put_int(val, len, tp->noopt); break;
 	case RT_TCP_MAXSEG:
 		err = put_int(val, len, tp->state == RT_TCPS_CLOSED || tp->state == RT_TCPS_LISTEN ?
@@ -1944,6 +2082,8 @@ static u32 tcp_v4_poll(struct rt_socket *so)
 	state = tp->state;
 	if (state == RT_TCPS_LISTEN)
 		return so->acceptq_head ? RT_POLLIN : 0;
+	if (tp->fo_flags & TCP_FO_DEFER)
+		return RT_POLLOUT;          /* deferred connect: waits for data */
 	/* Never connected (a connection that ended has shutdown set by
 	 * tcp_done(), a failed one so_error): BSD/AmiTCP soreadable() and
 	 * sowriteable() are false, so WaitSelect() reports nothing. Linux
@@ -1985,7 +2125,7 @@ static int tcp_v4_getname(struct rt_socket *so, struct rt_sockaddr_in6 *sin, int
 		return -RT_EINVAL;
 	if (peer) {
 		if (!tp->dport || tp->state == RT_TCPS_CLOSED || tp->state == RT_TCPS_LISTEN ||
-		    tp->state == RT_TCPS_SYN_SENT)
+		    (tp->state == RT_TCPS_SYN_SENT && !(tp->fo_flags & TCP_FO_DEFER)))
 			return -RT_ENOTCONN;
 		rt_sin_fill(so, sin, &tp->daddr, tp->dport, tp->scope);
 	} else {
@@ -2001,6 +2141,12 @@ static int tcp_v4_ioctl(struct rt_socket *so, u32 req, void *arg)
 
 	if (!tp)
 		return -RT_EINVAL;
+	if (req == RT_SIOC_KICKCONN) {
+		tcp_enter();
+		tcp_fastopen_kick(tp);
+		tcp_exit();
+		return 0;
+	}
 	if (req == RT_FIONREAD) {
 		if (tp->state == RT_TCPS_LISTEN)
 			return -RT_EINVAL;
@@ -2185,6 +2331,18 @@ static const struct rt_sysctl tcp_sysctls[] = {
 	INT_RW("net.inet.tcp.delack_segs", NO_MIB, sysctl_tcp_delack_segs, 1, 64, "ACK every N full segments"),
 	INT_RW("net.inet.tcp.delack_ms", NO_MIB, sysctl_tcp_delack_ms, 1, 500, "Max delayed ACK time (ms)"),
 	INT_RW("net.inet.tcp.quickack", NO_MIB, sysctl_tcp_quickack, 0, 1, "ACK every segment at once"),
+	INT_RW("net.inet.tcp.syn_rto_initial_ms", NO_MIB, sysctl_tcp_syn_rto_initial_ms, 200, 3000,
+	       "First SYN retransmission timeout (ms)"),
+	INT_RW("net.inet.tcp.syn_rto_max_ms", NO_MIB, sysctl_tcp_syn_rto_max_ms, 200, 120000,
+	       "Largest SYN retransmission timeout (ms)"),
+	INT_RW("net.inet.tcp.syn_backoff", NO_MIB, sysctl_tcp_syn_backoff, 0, 1,
+	       "SYN timeout growth: 1 doubling, 0 linear"),
+	INT_RW("net.inet.tcp.connect_timeout", NO_MIB, sysctl_tcp_connect_timeout, 0, 600,
+	       "Give up connecting after N s (0: syn_retries only)"),
+	INT_RW("net.inet.tcp.syn_icmp_abort", NO_MIB, sysctl_tcp_syn_icmp_abort, 0, 2,
+	       "Unreachable while connecting: 0 wait, 1 abort on the 2nd, 2 abort"),
+	INT_RW("net.inet.tcp.keepalive_all", NO_MIB, sysctl_tcp_keepalive_all, 0, 32767,
+	       "Keepalive on every connection after N s idle (0 off)"),
 };
 
 void rt_tcp_init(void)
@@ -2197,4 +2355,5 @@ void rt_tcp_init(void)
 	secs_last_ms = rt_now_ms();
 	secs_now = 1;
 	rt_sysctl_register(tcp_sysctls, (int)RT_ARRAY_SIZE(tcp_sysctls));
+	tcp_fastopen_init();
 }
