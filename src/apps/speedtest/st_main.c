@@ -1012,6 +1012,12 @@ static char *rate(struct st *st, char *buf, u64 bytes, u32 us)
 	return st_fmt_ratio(buf, 32, st->bytes_units ? bytes : bytes * 8, us, 2);
 }
 
+/* rate as "1234.5" KB/s (1024 bytes per second, as ftp shows it) */
+static char *kbs(char *buf, u64 bytes, u32 us)
+{
+	return st_fmt_ratio(buf, 32, bytes * 1000000u, (u64)us * 1024u, 1);
+}
+
 static void json_str(struct st *st, const char *key, const char *v, int comma)
 {
 	char *o = st->line;
@@ -1086,8 +1092,10 @@ static void report(struct st *st)
 	if (st->simple) {
 		const char *u = st->bytes_units ? "byte" : "bit";
 		say(st, "Ping: %s ms\n", ping);
-		say(st, "Download: %s M%s/s\n", rate(st, dl, st->dl_bytes, st->dl_us), u);
-		say(st, "Upload: %s M%s/s\n", rate(st, ul, st->ul_bytes, st->ul_us), u);
+		say(st, "Download: %s M%s/s (%s KB/s)\n", rate(st, dl, st->dl_bytes, st->dl_us), u,
+		    kbs(t2, st->dl_bytes, st->dl_us));
+		say(st, "Upload: %s M%s/s (%s KB/s)\n", rate(st, ul, st->ul_bytes, st->ul_us), u,
+		    kbs(t2, st->ul_bytes, st->ul_us));
 	} else if (st->csv) {
 		/* bits per second, as speedtest-cli */
 		st_fmt_ratio(dl, 40, st->dl_bytes * 8000000ULL, st->dl_us, 3);
@@ -1529,7 +1537,8 @@ static int st_run(struct st *st, int argc, char **argv)
 			return -2;
 		if (r < 0)
 			return ST_EXIT_ERROR;
-		info(st, "Download: %s M%s/s\n", rate(st, buf, st->dl_bytes, st->dl_us), st->bytes_units ? "byte" : "bit");
+		info(st, "Download: %s M%s/s (%s KB/s)\n", rate(st, buf, st->dl_bytes, st->dl_us),
+		     st->bytes_units ? "byte" : "bit", kbs(st->fbuf[6], st->dl_bytes, st->dl_us));
 	}
 	if (st->no_ul) {
 		info(st, "Skipping upload test\n");
@@ -1540,7 +1549,8 @@ static int st_run(struct st *st, int argc, char **argv)
 			return -2;
 		if (r < 0)
 			return ST_EXIT_ERROR;
-		info(st, "Upload: %s M%s/s\n", rate(st, buf, st->ul_bytes, st->ul_us), st->bytes_units ? "byte" : "bit");
+		info(st, "Upload: %s M%s/s (%s KB/s)\n", rate(st, buf, st->ul_bytes, st->ul_us),
+		     st->bytes_units ? "byte" : "bit", kbs(st->fbuf[6], st->ul_bytes, st->ul_us));
 	}
 	report(st);
 	return ST_EXIT_OK;

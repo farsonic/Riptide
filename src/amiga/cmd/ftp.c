@@ -95,10 +95,7 @@ static void usage(void)
 
 static u64 now_us(void)
 {
-	struct timeval t;
-
-	GetSysTime(&t);
-	return (u64)t.tv_secs * 1000000UL + (u64)t.tv_micro;
+	return cl_now_us64();
 }
 
 static const char *doserr(LONG err)

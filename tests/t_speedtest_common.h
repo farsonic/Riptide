@@ -316,9 +316,9 @@ static void scenarios(const char *ip, int full)
 	CHECK(re(out_buf, "^Selecting best server based on ping\\.\\.\\.$"));
 	CHECK(re(out_buf, "^Hosted by Riptide & Friends \\(Mock City\\) \\[55\\.[0-9]{2} km\\]: [0-9]+\\.[0-9]{3} ms$"));
 	CHECK(re(out_buf, "^Testing download speed\\.{30}$"));
-	CHECK(re(out_buf, "^Download: [0-9]+\\.[0-9]{2} Mbit/s$"));
+	CHECK(re(out_buf, "^Download: [0-9]+\\.[0-9]{2} Mbit/s \\([0-9]+\\.[0-9] KB/s\\)$"));
 	CHECK(re(out_buf, "^Testing upload speed\\.{6}$"));
-	CHECK(re(out_buf, "^Upload: [0-9]+\\.[0-9]{2} Mbit/s$"));
+	CHECK(re(out_buf, "^Upload: [0-9]+\\.[0-9]{2} Mbit/s \\([0-9]+\\.[0-9] KB/s\\)$"));
 	CHECK(err_len == 0);
 	mock_reset();
 	rc = run_st("--mirror %s --json --duration 60 " UL_ARGS, mirror);
@@ -340,9 +340,9 @@ static void scenarios(const char *ip, int full)
 
 	rc = run_st("--server-url %s --simple --duration 30 " UL_ARGS, surl);
 	CHECK(rc == 0);
-	CHECK(re(out_buf, "^Ping: [0-9]+\\.[0-9]{3} ms\nDownload: [0-9]+\\.[0-9]{2} Mbit/s\nUpload: [0-9]+\\.[0-9]{2} Mbit/s\n$"));
+	CHECK(re(out_buf, "^Ping: [0-9]+\\.[0-9]{3} ms\nDownload: [0-9]+\\.[0-9]{2} Mbit/s \\([0-9]+\\.[0-9] KB/s\\)\nUpload: [0-9]+\\.[0-9]{2} Mbit/s \\([0-9]+\\.[0-9] KB/s\\)\n$"));
 	rc = run_st("--server-url %s --simple --bytes --no-upload --duration 30 " UL_ARGS, surl);
-	CHECK(rc == 0 && re(out_buf, "^Download: [0-9]+\\.[0-9]{2} Mbyte/s\nUpload: 0\\.00 Mbyte/s$"));
+	CHECK(rc == 0 && re(out_buf, "^Download: [0-9]+\\.[0-9]{2} Mbyte/s \\([0-9]+\\.[0-9] KB/s\\)\nUpload: 0\\.00 Mbyte/s \\(0\\.0 KB/s\\)$"));
 	rc = run_st("--server-url %s --no-download " UL_ARGS, surl);
 	CHECK(rc == 0 && re(out_buf, "^Testing against http://.*/speedtest/upload.php\\.\\.\\.$") &&
 	      re(out_buf, "^Hosted by [0-9.]+:[0-9]+ \\(custom server\\): [0-9.]+ ms$") &&

@@ -7,8 +7,11 @@
 # --server-url and --mirror discovery, --simple/--json/--list output,
 # exact byte counts (checked against the server's counters, read with nc),
 # the HTTPS-only error, a refused server and Ctrl-C (raised by a test hook
-# while the download runs). The download and upload rates of the basic run
-# are printed: both ends share one emulated 68020, so they are CPU bound.
+# while the download runs), and runs during which the system clock is set
+# back and forward by an hour (tests/amiga/clkjump.c, built with vbcc when
+# it is there; as NTP sets it): the rates must not suffer. The download and
+# upload rates of the basic run are printed: both ends share one emulated
+# 68020, so they are CPU bound.
 #
 #   tests/amiga/run_fsuae_speedtest.sh [BUILDDIR] [TIMEOUT_SECONDS]
 # Environment: FSUAE_MODEL (default A1200), FSUAE_EXTRA (more fs-uae
@@ -25,6 +28,13 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/riptide-speedtest.XXXXXX")
 dh0=$work/dh0
 mkdir -p "$dh0/C" "$dh0/S" "$dh0/out"
 for f in Riptide rtcheck speedtest httpd-test ping nc; do cp "$BUILD/$f" "$dh0/C/"; done
+VBCC=${VBCC:-/opt/vbcc}
+NDK=${NDK:-/opt/ndk3.2}
+clk=0
+if [ -x "$VBCC/bin/vc" ] && PATH=$VBCC/bin:$PATH VBCC=$VBCC "$VBCC/bin/vc" +aos68k -O2 -I"$NDK/Include_H" \
+	-o "$dh0/C/clkjump" "$(dirname "$0")/clkjump.c" -lamiga >/dev/null 2>&1; then
+	clk=1
+fi
 
 cat > "$dh0/S/riptide.conf" <<'CONF'
 hostname aros-test
@@ -63,6 +73,14 @@ SMALL="--download-sizes 350,500 --upload-sizes 32,64 --count 2 --duration 60"
 	echo 'ENDIF'
 	echo 'DH0:C/nc 127.0.0.1 8080 <DH0:S/statsreq >DH0:out/stats1'
 	echo 'DH0:C/nc 127.0.0.1 8081 <DH0:S/statsreq >DH0:out/stats2'
+	if [ $clk = 1 ]; then
+		# the clock is set 3 s into the download (after the server counters
+		# were read)
+		for d in -3600 3600; do
+			echo "DH0:C/rtcheck START=\"DH0:C/clkjump 3 $d\" NOCHECK >NIL:"
+			echo "DH0:C/speedtest --server-url $U --simple --duration 8 >DH0:out/clock$d"
+		done
+	fi
 	echo 'Echo >DH0:out/zz_done "done"'
 } > "$dh0/S/Startup-Sequence"
 
@@ -139,10 +157,10 @@ expect version '^speedtest-riptide [0-9.]+$' 'speedtest-cli by Matt Martz \(Apac
 expect help '^usage: speedtest ' '--server-url URL'
 expect basic '^Testing against http://127\.0\.0\.1:8080/speedtest/upload\.php\.\.\.$' \
 	'^Hosted by 127\.0\.0\.1:8080 \(custom server\): [0-9]+\.[0-9]{3} ms$' \
-	'^Testing download speed\.+$' '^Download: [0-9]+\.[0-9]{2} Mbit/s$' \
-	'^Testing upload speed\.+$' '^Upload: [0-9]+\.[0-9]{2} Mbit/s$'
+	'^Testing download speed\.+$' '^Download: [0-9]+\.[0-9]{2} Mbit/s \([0-9]+\.[0-9] KB/s\)$' \
+	'^Testing upload speed\.+$' '^Upload: [0-9]+\.[0-9]{2} Mbit/s \([0-9]+\.[0-9] KB/s\)$'
 reject basic '^speedtest: '
-expect simple '^Ping: [0-9]+\.[0-9]{3} ms$' '^Download: [0-9]+\.[0-9]{2} Mbit/s$' '^Upload: [0-9]+\.[0-9]{2} Mbit/s$'
+expect simple '^Ping: [0-9]+\.[0-9]{3} ms$' '^Download: [0-9]+\.[0-9]{2} Mbit/s \([0-9]+\.[0-9] KB/s\)$' '^Upload: [0-9]+\.[0-9]{2} Mbit/s \([0-9]+\.[0-9] KB/s\)$'
 expect json '^\{"download": [0-9]+\.[0-9]{3}, "upload": [0-9]+\.[0-9]{3}, "ping": [0-9]+\.[0-9]{3}, "server": \{"url": "http://127\.0\.0\.1:8080/speedtest/upload\.php", .*"timestamp": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}\.000000Z", "bytes_sent": [0-9]+, "bytes_received": [0-9]+, "share": null, "client": \{.*\}\}$'
 eq "json bytes_received" "$(num json bytes_received)" $DL
 eq "json bytes_sent" "$(num json bytes_sent)" $UL
@@ -152,7 +170,7 @@ expect mirror '^Retrieving speedtest\.net configuration\.\.\.$' \
 	'^Testing from Amiga Loopback & Co \(127\.0\.0\.1\)\.\.\.$' '^Retrieving speedtest\.net server list\.\.\.$' \
 	'^Selecting best server based on ping\.\.\.$' \
 	'^Hosted by Riptide httpd-test \(Loopback\) \[55\.59 km\]: [0-9]+\.[0-9]{3} ms$' \
-	'^Download: [0-9]+\.[0-9]{2} Mbit/s$' '^Upload: [0-9]+\.[0-9]{2} Mbit/s$'
+	'^Download: [0-9]+\.[0-9]{2} Mbit/s \([0-9]+\.[0-9] KB/s\)$' '^Upload: [0-9]+\.[0-9]{2} Mbit/s \([0-9]+\.[0-9] KB/s\)$'
 expect chunked '"sponsor": "Riptide httpd-test", "id": "1001"' '"isp": "Amiga Loopback & Co"'
 eq "chunked bytes_received" "$(num chunked bytes_received)" $DL
 eq "chunked bytes_sent" "$(num chunked bytes_sent)" $UL
@@ -167,6 +185,16 @@ expect refused 'Connection refused' '^speedtest: Unable to connect to the server
 expect brk '^Testing download speed' '^Cancelling\.\.\.$' '^rc>=5$'
 reject brk '^rc>=10$'
 reject brk '^Download:'
+if [ $clk = 1 ]; then
+	# 0.13 timed with the system time: "Download: 0.00 Mbit/s"
+	for d in -3600 3600; do
+		expect clock$d '^Download: [0-9]+\.[0-9]{2} Mbit/s' '^Upload: [0-9]+\.[0-9]{2} Mbit/s'
+		reject clock$d '^Download: 0\.0[0-9] Mbit/s'
+		reject clock$d '^Upload: 0\.0[0-9] Mbit/s'
+	done
+else
+	echo "note: no vbcc, the clock-step runs are skipped"
+fi
 
 echo "---- loopback throughput (speedtest and httpd-test on the same emulated ${FSUAE_MODEL:-A1200} ${FSUAE_EXTRA:-})"
 grep -E '^(Hosted|Download|Upload):?' "$dh0/out/basic" | sed 's/^/  /'

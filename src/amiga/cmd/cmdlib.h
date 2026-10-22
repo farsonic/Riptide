@@ -56,6 +56,7 @@ int  cl_need_socket(void);       /* bsdsocket.library 4 */
 int  cl_need_riptide(void);      /* riptide.library (RiptideSysCtl) */
 int  cl_need_timer(void);        /* timer.device for cl_now_us() */
 u32  cl_now_us(void);            /* microseconds, wraps */
+u64  cl_now_us64(void);          /* microseconds (EClock: steady when the clock is set) */
 int  cl_socket(int type, int proto);   /* socket(AF_INET...) for ioctls */
 int  cl_ioctl(int fd, u32 req, void *arg); /* 0 or errno */
 /* Wait until fd is readable (wr = 0) or writable (wr = 1), at most ms

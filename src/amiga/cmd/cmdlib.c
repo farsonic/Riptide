@@ -347,12 +347,23 @@ int cl_need_timer(void)
 	return 0;
 }
 
+/* The EClock, not GetSysTime(): the system time jumps when it is set (by
+ * Riptide's NTP client, for one) and would spoil the measured times. */
+u64 cl_now_us64(void)
+{
+	struct EClockVal ev;
+	u32 f;
+	u64 t;
+
+	if (!TimerBase || !(f = ReadEClock(&ev)))
+		return 0;
+	t = ((u64)ev.ev_hi << 32) | ev.ev_lo;
+	return (t / f) * 1000000u + (t % f) * 1000000u / f;
+}
+
 u32 cl_now_us(void)
 {
-	struct timeval t;
-
-	GetSysTime(&t);
-	return (u32)t.tv_secs * 1000000UL + (u32)t.tv_micro;
+	return (u32)cl_now_us64();
 }
 
 #ifndef CL_BASIC

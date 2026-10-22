@@ -99,13 +99,10 @@ static void tool(const char *line)
 		Close(nil);
 }
 
-static u32 ticks_since(const struct DateStamp *a)
+/* 1/50 s since t0 (cl_now_us64(): steady when the clock is set, e.g. by NTP) */
+static u32 ticks_since(u64 t0)
 {
-	struct DateStamp b;
-
-	DateStamp((APTR)&b);
-	return (u32)((b.ds_Days - a->ds_Days) * 86400L * 50L + (b.ds_Minute - a->ds_Minute) * 3000L +
-	             (b.ds_Tick - a->ds_Tick));
+	return (u32)((cl_now_us64() - t0) / 20000u);
 }
 
 static const char *cpu_name(void)
@@ -121,7 +118,7 @@ static int rtdiag_main(int argc, char **argv)
 	struct cl_getopt g = { 1, 0, NULL };
 	const char *dir = "RAM:rtdiag", *iface = NULL;
 	static char cmd[CMDLEN], absdir[256];
-	struct DateStamp t0;
+	u64 t0;
 	u32 secs = 30, kb = 512, ticks, o = 0;
 	LONG rc = 0;
 	BPTR lock;
@@ -157,6 +154,8 @@ static int rtdiag_main(int argc, char **argv)
 		return CL_ERROR;
 	}
 
+	if (cl_need_timer() < 0)
+		return CL_ERROR;
 	/* is Riptide running, and does it have the diagnostics? */
 	c = cl_command("debug status", 0);
 	if (c < 0)
@@ -207,7 +206,7 @@ static int rtdiag_main(int argc, char **argv)
 		cl_puts("rtdiag: continuing without a packet capture\n");
 	port_cmd(NULL, "profile start");
 
-	DateStamp((APTR)&t0);
+	t0 = cl_now_us64();
 	if (cmd[0]) {
 		struct TagItem tags[3];
 		cl_printf("rtdiag: running \"%s\"\n", cmd);
@@ -223,10 +222,10 @@ static int rtdiag_main(int argc, char **argv)
 		cl_printf("rtdiag: recording for %lu seconds; start the transfer now (Ctrl-C stops)\n",
 		          (unsigned long)secs);
 		cl_flush();
-		while (ticks_since(&t0) < secs * 50u && !cl_break())
+		while (ticks_since(t0) < secs * 50u && !cl_break())
 			Delay(10);
 	}
-	ticks = ticks_since(&t0);
+	ticks = ticks_since(t0);
 
 	/* stop and collect */
 	port_cmd(NULL, "profile stop");

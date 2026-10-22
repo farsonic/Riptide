@@ -975,10 +975,14 @@ Retrieving speedtest.net server list...
 Selecting best server based on ping...
 Hosted by Example Sponsor (Sydney) [12.34 km]: 23.456 ms
 Testing download speed................................
-Download: 12.34 Mbit/s
+Download: 12.34 Mbit/s (1506.3 KB/s)
 Testing upload speed....................
-Upload: 1.23 Mbit/s
+Upload: 1.23 Mbit/s (150.1 KB/s)
 ```
+
+The figure in brackets is the same rate in KB/s (1024 bytes per second,
+as `ftp` shows it); `--json` and `--csv` report bits per second as
+speedtest-cli does.
 
 It reads `speedtest-config.php` and the server list (read as it arrives;
 distances in fixed point, no FPU needed), times three `latency.txt`
