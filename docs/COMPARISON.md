@@ -248,10 +248,12 @@ Riptide is younger and narrower. Be aware of these before choosing it:
   big-endian under qemu-m68k) and on AmigaOS only in emulation (vamos,
   FS-UAE with the AROS Kickstart). SANA-II receive on real hardware and MNI
   drivers are still to be verified.
-* **Performance on a 68020/68030** is not measured yet. Roadshow quotes
-  997 KB/s receive on an A3000T with a 40 MHz 68040 [RS-README]; Riptide
-  has no comparable figure. Its more complex TCP (SACK scoreboard, RACK,
-  CUBIC) costs CPU that a slow Amiga may notice.
+* **Performance on real hardware** is not measured yet. Roadshow quotes
+  997 KB/s receive on an A3000T with a 40 MHz 68040 [RS-README]. Riptide
+  has emulator figures only (section 11), which are not comparable with
+  that: the emulated network card costs the CPU almost nothing. Its more
+  complex TCP (SACK scoreboard, RACK, CUBIC) costs CPU that a slow Amiga
+  may notice.
 * **PPP and dial-up.** MiamiDx's main use case was modem/ISDN dial-up with
   its built-in PPP, PPPoE, PPTP and L2TP. Roadshow includes PPP and PPPoE
   drivers. Riptide has no PPP of its own; it relies on a SANA-II PPP
@@ -302,3 +304,85 @@ Riptide is tested in layers, all automated:
 
 What is missing is the most important layer for users: long-term use on
 real Amiga hardware with real SANA-II and MNI drivers.
+
+## 11. Measured throughput (emulated)
+
+`tests/amiga/run_fsuae_netbench.sh` (the speed lab) measures TCP bulk
+throughput on FS-UAE. The emulated Amiga runs `tests/amiga/netbench`, which
+uses only bsdsocket.library version 3 calls, so the same binary runs on any
+stack; it throws received data away and generates sent data, so no disk is
+in the path. The other end is `tests/amiga/netbench_host.py` on Linux. The
+two are connected by FS-UAE's uaenet.device bridged with libpcap
+(`tools/fs-uae`) to a veth pair, with checksum and segmentation offloads
+off: no slirp and no NAT in between.
+
+Per CPU preset, one boot runs a 64 KB warm-up, three 2 MB downloads and
+three 2 MB uploads (the table shows the medians), one more transfer each
+way under `Riptide PROFILE`, and five pings. Times are emulated time, from
+the request to the last byte (download) or to the host's confirmation that
+it has every byte (upload).
+
+| CPU preset | FS-UAE | Download KB/s | Upload KB/s | Ping ms |
+|---|---|---|---|---|
+| a1200-020 | A1200, 68020 14 MHz, 8 MB Fast RAM | 447.9 | 269.4 | 7.1 |
+| a1200-030 | A1200, 68030 25 MHz, 8 MB Fast RAM | 791.3 | 459.2 | 3.5 |
+| a4000-040 | A4000, 68040 25 MHz, 16 MB Zorro III RAM | 1574.2 | 900.6 | 5.7 |
+| a4000-060 | A4000, 68060 50 MHz, 16 MB Zorro III RAM | 2760.1 | 1539.8 | 7.7 |
+
+Riptide 0.12 (main d814867), 22 October 2026; KB = 1024 bytes. The three
+downloads spread by 1 % on the 68020 and 68030, 2.5 % on the 68040 and
+13 % on the 68060; the uploads by 5 % or less on every CPU. The 68060
+download is the least stable cell and the most likely to fail the
+baseline check by chance. `tests/amiga/netbench-baseline.json`
+holds every run; a speed lab run with
+`BASELINE=tests/amiga/netbench-baseline.json` fails when a median is more
+than 10 % below it.
+
+**How far to trust these numbers.**
+
+* They are emulator numbers. All four presets use FS-UAE's cycle-exact CPU
+  timing without JIT, so they do not depend on the speed of the host and
+  repeat well. The 68020 timing is close to a real A1200. For the 68040
+  and 68060, UAE approximates the caches and pipelines, so treat those
+  rows as a rough guide.
+* The network card is the emulator's uaenet.device. Moving a frame
+  through it costs the Amiga one copy and almost no bus time. A real
+  Zorro or PCMCIA Ethernet card costs much more: PIO through a slow bus,
+  interrupts, driver code. On real hardware the figures will be lower,
+  probably much lower on an A1200 with a PCMCIA card. They are not
+  comparable with Roadshow's 997 KB/s on a real A3000T [RS-README].
+* The upload is slower than the download on every CPU. The profile says
+  why: on the 68020, sending spends most of its time in TCP output and
+  waiting for the stack lock, while receiving is dominated by TCP input,
+  checksums and copies. That is where Phase 2's optimisation work starts.
+* MMU emulation is off. With FS-UAE's 68030 or 68060 MMU emulated, Riptide
+  hangs the machine at the first transfer over uaenet.device. The cause
+  is not yet known; it may be the emulator, the stack, or both.
+
+**Competitors.** We tried to run the same benchmark with other stacks on
+the same emulated machines:
+
+* **AmiTCP 3.0b2** (Aminet `comm/net/AmiTCP-bin-30b2.lha`, GPL-2.0) does not
+  run on the AROS ROM that FS-UAE includes. It needs `rexxsyslib.library`,
+  which the AROS ROM lacks (`netbench -R` adds a stub), and a few
+  configuration fixes. It then starts, but the emulated machine crashes and
+  reboots as soon as any program, AmiTCP's own `ifconfig` included, opens
+  its bsdsocket.library. AmiTCP needs a real Kickstart ROM. Kickstart is
+  copyrighted and not part of this repository; with one
+  (`KICKSTART=kick.rom AMITCP_DIR=... run_fsuae_netbench.sh`), the script
+  runs AmiTCP the same way. We have not run that combination. The script
+  never ships AmiTCP. It copies the files from `AMITCP_DIR` into the test
+  disk at run time.
+* **Roadshow**: the demo runs for 15 minutes ([RS-README]; long enough for a
+  run). It needs AmigaOS 3.x, which means a real Kickstart and Workbench
+  that we cannot use here. The official site returned HTTP 503 when we
+  checked, so we could not read the demo's licence terms. The script has
+  no Roadshow support yet.
+* **Miami** (the evaluation version, Aminet `comm/tcp/Miami21feval.lha`)
+  needs Kickstart 2.04 or later and MUI, and is set up through its GUI.
+  It is not suited to an unattended run without a real Kickstart and
+  Workbench, so we have not tried it.
+
+Until a stack runs under the same conditions, this section compares
+Riptide only with itself: the baseline exists to catch regressions and to
+measure the Phase 2 optimisations.
