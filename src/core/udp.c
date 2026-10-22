@@ -934,8 +934,7 @@ static void udp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 		goto err;
 	rt_buf_trim(b, ulen);
 	if ((uh[6] | uh[7]) && !(b->flags & RT_BUFF_CSUM_OK) &&
-	    rt_csum_fold(rt_csum_partial(uh, ulen,
-	                 rt_csum_pseudo(ip->saddr, ip->daddr, RT_IPPROTO_UDP, (u16)ulen))) != 0) {
+	    rt_csum_fold(rt_buf_csum(b, rt_csum_pseudo(ip->saddr, ip->daddr, RT_IPPROTO_UDP, (u16)ulen))) != 0) {
 		rt_udpstat.InCsumErrors++;
 		goto err;
 	}
@@ -984,8 +983,7 @@ static void udp_input6_body(struct rt_buf *b, const struct rt_ip6hdr *ip6)
 	if (!(uh[6] | uh[7]))
 		goto err;
 	if (!(b->flags & (RT_BUFF_CSUM_OK | RT_BUFF_LOOP)) &&
-	    rt_csum_fold(rt_csum_partial(uh, ulen,
-	                 rt_csum_pseudo6(&ip6->src, &ip6->dst, RT_IPPROTO_UDP, ulen))) != 0) {
+	    rt_csum_fold(rt_buf_csum(b, rt_csum_pseudo6(&ip6->src, &ip6->dst, RT_IPPROTO_UDP, ulen))) != 0) {
 		rt_udpstat.InCsumErrors++;
 		goto err;
 	}

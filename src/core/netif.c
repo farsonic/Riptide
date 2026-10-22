@@ -222,7 +222,7 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
 		return;
 	}
 	b->netif = nif;
-	b->flags = (u16)((b->flags & (RT_BUFF_LOOP | RT_BUFF_CSUM_OK)) |
+	b->flags = (u16)((b->flags & (RT_BUFF_LOOP | RT_BUFF_CSUM_OK | RT_BUFF_CSUM_PART)) |
 	                 (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST)));
 	b->l3_proto = ethertype;
 	switch (ethertype) {

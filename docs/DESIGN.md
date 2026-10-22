@@ -86,12 +86,17 @@ time:
 * Where they are used: TCP transmit copies the write-queue segment and sums
   its payload in one pass (`rt_buf_copy_csum()`), then adds the header sum;
   UDP send copies from the user's iov and sums in one pass
-  (`rt_iov_to_buf_csum()`); `send()`/`recv()` copies (`rt_iov_to_buf()`,
-  `rt_buf_to_iov()`) and the SANA-II `CopyToBuff`/`CopyFromBuff` callbacks
-  use `rt_copy()`; receive-queue coalescing and collapsing, `tcp_fragment`,
-  IP reassembly/fragmentation and raw/broadcast clones use
-  `rt_copy_buf()`. Received data is copied to the user with `rt_copy()`
-  only: its checksum was verified at input.
+  (`rt_iov_to_buf_csum()`); the SANA-II `CopyToBuff` callback copies and
+  sums each received frame in one pass (`RT_BUFF_CSUM_PART`, see "Receive
+  path"); `send()`/`recv()` copies (`rt_iov_to_buf()`, `rt_buf_to_iov()`)
+  and `CopyFromBuff` use `rt_copy()`; receive-queue coalescing and
+  collapsing, `tcp_fragment`, IP reassembly/fragmentation and
+  raw/broadcast clones use `rt_copy_buf()`. Received data is copied to the
+  user with `rt_copy()` only: its checksum was verified at input.
+* Headers (IPv4 headers, TCP headers of the segments we build) are summed
+  with `rt_csum_hdr()`: 16-bit adds inline, no call into `rt_arch`. For
+  20 to 60 bytes the bulk routine's call and set-up cost more than the
+  loop.
 * Checksum contract: a 32-bit partial sum whose `rt_csum_fold()` equals the
   C version's (implementations may return different but congruent 32-bit
   values, so compare only folded sums). Pieces at odd offsets are chained
@@ -146,6 +151,51 @@ time:
 
 The host build mirrors this. A stack thread polls TUN or wire file
 descriptors and runs timers, and test threads call `rt_api_*` directly.
+
+### Receive path
+
+On a 68020 a bulk download is CPU bound: the reader (nc, an FTP client)
+gets what Riptide leaves of the CPU. What a received segment costs, and
+what was done about it (`tests/t_rx_bench.c` counts instructions per
+segment under `qemu-m68k`; the profiler and `Riptide BENCH` measure on
+FS-UAE):
+
+* **No copy, or one pass.** A driver that offers SANA-II R3 DMA
+  (`S2_DMACopyToBuff32`/`S2_DMACopyFromBuff32`) gets the address of the
+  packet buffer and moves the frame itself; receive buffers are 32-bit
+  aligned and hold the largest frame, so the callback only refuses a
+  buffer that is not (it returns NULL and the driver copies through
+  `CopyToBuff`). Otherwise `CopyToBuff` copies and sums the frame in one
+  pass and sets `RT_BUFF_CSUM_PART` with the sum in `b->csum`. IPv4 keeps
+  that sum when it pulls its header (a valid header sums to zero); IPv6
+  subtracts the sum of its headers; `rt_buf_trim()` (link padding, UDP
+  length) and fragment reassembly drop the flag. TCP and UDP then verify
+  with `rt_buf_csum()` and the pseudo header, without reading the payload
+  again.
+* **Receive batches.** The Riptide process inputs everything the drivers
+  have between `rt_rx_batch_begin()` and `rt_rx_batch_end()`. Inside a
+  batch TCP holds back the in-order ACK that `delack_segs` calls for and
+  the reader's wakeup; the end sends one ACK per connection (unless a
+  segment we sent carried it) and wakes each reader once. A held-back ACK
+  never covers more than `2 * delack_segs` segments: the next one past
+  that goes out at once. Quick ACKs are held like the others (one per
+  batch); duplicate ACKs (out-of-order data) and ACKs asked for
+  explicitly (`ICSK_ACK_NOW`) are not.
+* **Window updates.** Linux sends a window update after a read that
+  doubles a nearly closed window. A reader slower than the link (2 KB
+  `recv()`s, the window at a segment or two) then costs one pure ACK per
+  read. Riptide also asks for the window to open by four segments (or a
+  quarter of the buffer, if smaller); the queue holds the rest of the
+  buffer for the reader meanwhile, so the sender is not starved.
+* **Clocks.** A segment reads the clock about nine times (TCP's clocks,
+  timers, caches). On AmigaOS each is a `ReadEClock()` and divisions (about
+  110 µs on the emulated A1200), so the holder of the stack lock reads it
+  once per hold (`os_amiga.c`): the time is that of the first read until
+  the outermost `rt_unlock()`. Code that waits releases the lock, so time
+  still moves for it; a hold lasts milliseconds.
+* **timer.device.** The idle tick (10 s, for `QUIT`) has its own request,
+  so arming the stack's next deadline after an idle spell does not abort
+  and resend the tick each time.
 
 ## IPv6
 

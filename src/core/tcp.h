@@ -273,6 +273,8 @@ struct tcp_sock {
 	u8  frto;
 	u8  is_sack_reneg;
 	u8  is_cwnd_limited;
+	u8  batch;                     /* TCP_BATCH_*: held back for rt_rx_batch_end() */
+	struct tcp_sock *batch_next;
 	u8  tlp_retrans;
 	u8  rcvbuf_locked, sndbuf_locked;
 	u8  tos, ttl;
@@ -624,6 +626,7 @@ void tcp_dbg(const struct tcp_sock *tp, const char *fmt, ...) RT_PRINTF(2, 3);
 int  tcp_transmit_skb(struct tcp_sock *tp, struct rt_buf *b, int clone);
 void tcp_send_ack(struct tcp_sock *tp);
 void tcp_send_delayed_ack(struct tcp_sock *tp);
+void tcp_batch_forget(struct tcp_sock *tp);
 void tcp_send_active_reset(struct tcp_sock *tp);
 void tcp_send_fin(struct tcp_sock *tp);
 int  tcp_send_synack(struct tcp_sock *tp);

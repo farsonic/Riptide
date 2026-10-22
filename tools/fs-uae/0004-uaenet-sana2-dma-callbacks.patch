@@ -1,0 +1,82 @@
+uaenet: SANA-II R3 DMA callbacks (S2_DMACopyToBuff32/S2_DMACopyFromBuff32)
+
+When the opener supplies them, ask it for the buffer address behind the
+ios2_Data cookie and move the frame directly; a NULL answer (or an
+address outside Amiga memory) falls back to CopyToBuff/CopyFromBuff.
+Not part of fs-uae-3.2.35-riptide.patch: it applies on top of it and is
+used to test the DMA path of SANA-II clients.
+
+--- a/src/sana2.cpp
++++ b/src/sana2.cpp
+@@ -225,6 +225,7 @@
+ 	uaecptr copytobuff;
+ 	uaecptr copyfrombuff;
+ 	uaecptr packetfilter;
++	uaecptr dmatobuff, dmafrombuff;
+ 	uaecptr tempbuf;
+ 
+ 	uaecptr timerbase;
+@@ -420,6 +421,7 @@
+ 	}
+ 
+ 	pdev->copyfrombuff = pdev->copytobuff = pdev->packetfilter = 0;
++	pdev->dmatobuff = pdev->dmafrombuff = 0;
+ 	pdev->tempbuf = 0;
+ 	if (get_word (ioreq + 0x12) >= SANA2_IOREQSIZE) {
+ 		buffermgmt = get_long (ioreq + 32 + 4 + 4 + SANA2_MAX_ADDR_BYTES * 2 + 4 + 4 + 4);
+@@ -451,6 +453,12 @@
+ 			case S2_PacketFilter:
+ 				pdev->packetfilter = val;
+ 				break;
++			case S2_DMACopyToBuff32:
++				pdev->dmatobuff = val;
++				break;
++			case S2_DMACopyFromBuff32:
++				pdev->dmafrombuff = val;
++				break;
+ 			}
+ 		}
+ 		if (log_net)
+@@ -798,6 +806,15 @@
+ 
+ 	if (pdev->packetfilter && cmd == CMD_READ && packetfilter (ctx, pdev->packetfilter, request, data2) == 0)
+ 		return 0;
++	if (pdev->dmatobuff) {
++		uaecptr p;
++		m68k_areg (regs, 0) = data;
++		p = CallFunc (ctx, pdev->dmatobuff);
++		if (p && valid_address (p, len)) {
++			memcpyha_safe (p, d + ((flags & SANA2IOF_RAW) ? 0 : ETH_HEADER_SIZE), len);
++			return 1;
++		}
++	}
+ 	if (!copytobuff (ctx, data2, data, len, pdev->copytobuff)) {
+ 		put_long (request + 32, S2WERR_BUFF_ERROR);
+ 		put_byte (request + 31, S2ERR_NO_RESOURCES);
+@@ -872,16 +889,23 @@
+ 
+ 	if (!pdev)
+ 		return NULL;
+-	if (!copyfrombuff (ctx, data, pdev->tempbuf, datalength, pdev->copyfrombuff))
++	uaecptr dma = 0;
++	if (pdev->dmafrombuff) {
++		m68k_areg (regs, 0) = data;
++		dma = CallFunc (ctx, pdev->dmafrombuff);
++		if (dma && !valid_address (dma, datalength))
++			dma = 0;
++	}
++	if (!dma && !copyfrombuff (ctx, data, pdev->tempbuf, datalength, pdev->copyfrombuff))
+ 		return NULL;
+ 	s2p = xcalloc (struct s2packet, 1);
+ 	s2p->data = xmalloc (uae_u8, pdev->td->mtu + ETH_HEADER_SIZE + 2);
+ 	if (flags & SANA2IOF_RAW) {
+-		memcpyah_safe (s2p->data, pdev->tempbuf, datalength);
++		memcpyah_safe (s2p->data, dma ? dma : pdev->tempbuf, datalength);
+ 		packettype = (s2p->data[2 * ADDR_SIZE + 0] << 8) | (s2p->data[2 * ADDR_SIZE + 1]);
+ 		s2p->len = datalength;
+ 	} else {
+-		memcpyah_safe (s2p->data + ETH_HEADER_SIZE, pdev->tempbuf, datalength);
++		memcpyah_safe (s2p->data + ETH_HEADER_SIZE, dma ? dma : pdev->tempbuf, datalength);
+ 		memcpy (s2p->data + ADDR_SIZE, pdev->td->mac, ADDR_SIZE);
+ 		memcpyah_safe (s2p->data, dstaddr, ADDR_SIZE);
+ 		s2p->data[2 * ADDR_SIZE + 0] = packettype >> 8;

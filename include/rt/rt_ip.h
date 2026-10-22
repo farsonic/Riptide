@@ -70,6 +70,33 @@ u32 rt_csum_pseudo(u32 saddr, u32 daddr, u8 proto, u16 len);
  * compatible: store with memcpy / as computed over network order data). */
 #ifndef RT_TOOL_BUILD  /* tools (src/amiga/cmd) link without the core */
 static inline u16 rt_inet_csum(const void *data, u32 len) { return rt_csum_fold(rt_csum_partial(data, len, 0)); }
+/* Partial sum of a header (at most 60 bytes, even address and length):
+ * 16-bit adds inline, without the call and set-up of the bulk routine.
+ * Same contract as rt_csum_partial(). */
+#if defined(__GNUC__)
+typedef u16 __attribute__((may_alias)) rt_u16_alias;
+#else
+typedef u16 rt_u16_alias;
+#endif
+static inline u32 rt_csum_hdr(const void *data, u32 len, u32 sum)
+{
+	const rt_u16_alias *w = (const rt_u16_alias *)data;
+	u32 acc = 0;
+
+	if (((uintptr_t)data & 1) || (len & 1) || len > 60)
+		return rt_csum_partial(data, len, sum);
+	for (; len; len -= 2)
+		acc += *w++;
+	return rt_csum_add(sum, acc);
+}
+/* Partial sum of the whole of b's data added to 'sum': the one the driver
+ * computed while copying the frame in (RT_BUFF_CSUM_PART), or a pass now. */
+static inline u32 rt_buf_csum(const struct rt_buf *b, u32 sum)
+{
+	if (b->flags & RT_BUFF_CSUM_PART)
+		return rt_csum_add(sum, b->csum);
+	return rt_csum_partial(b->data, b->len, sum);
+}
 #endif
 
 /* ---- routing ---- */

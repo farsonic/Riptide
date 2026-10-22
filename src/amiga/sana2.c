@@ -95,7 +95,10 @@ S2CB ULONG s2_copy_to_buff(RTREG(a0) APTR to, RTREG(a1) APTR from, RTREG(d0) ULO
 
 	if (!b || n > rt_buf_tailroom(b) + b->len)
 		return FALSE;
-	rt_copy(b->data, from, n);   /* reentrant; never MOVE16 (driver memory) */
+	/* one pass copies and sums the frame (reentrant; never MOVE16 on
+	 * driver memory): TCP/UDP then verify without reading it again */
+	b->csum = rt_csum_copy(b->data, from, n, 0);
+	b->flags |= RT_BUFF_CSUM_PART;
 	b->len = n;
 	RT_PROF_ADD(RT_PROF_DRV_RX, t0);
 	return TRUE;
@@ -111,14 +114,47 @@ S2CB ULONG s2_copy_from_buff(RTREG(a0) APTR to, RTREG(a1) APTR from, RTREG(d0) U
 	return TRUE;
 }
 
+/* SANA-II R3 DMA (S2_DMACopyToBuff32 / S2_DMACopyFromBuff32): a driver
+ * that can transfer frames itself asks for the address of the buffer
+ * behind the cookie (a0) and moves the frame without a CPU copy through
+ * the callbacks above. The buffer must be 32-bit aligned, its size a
+ * multiple of 4 and at least the frame's length; we return 0 (NULL) to
+ * make the driver use CopyToBuff/CopyFromBuff instead. For a read the
+ * frame's length is not known yet: every receive buffer has room for the
+ * largest frame of its interface (s2_dma_rx_room, rounded up). */
+static u32 s2_dma_rx_room;
+
+S2CB ULONG s2_dma_to_buff(RTREG(a0) APTR cookie)
+{
+	struct rt_buf *b = cookie;
+
+	if (!b || ((uintptr_t)b->data & 3) || rt_buf_tailroom(b) + b->len < s2_dma_rx_room)
+		return 0;
+	return (ULONG)(uintptr_t)b->data;
+}
+
+S2CB ULONG s2_dma_from_buff(RTREG(a0) APTR cookie)
+{
+	struct rt_buf *b = cookie;
+
+	if (!b || ((uintptr_t)b->data & 3) || rt_buf_tailroom(b) + b->len < ((b->len + 3u) & ~3u))
+		return 0;
+	return (ULONG)(uintptr_t)b->data;
+}
+
 #if defined(__VBCC__)
-#define CB_TO   ((ULONG)s2_copy_to_buff)
-#define CB_FROM ((ULONG)s2_copy_from_buff)
+#define CB_TO       ((ULONG)s2_copy_to_buff)
+#define CB_FROM     ((ULONG)s2_copy_from_buff)
+#define CB_DMA_TO   ((ULONG)s2_dma_to_buff)
+#define CB_DMA_FROM ((ULONG)s2_dma_from_buff)
 #else
 /* gcc_thunks.S: register -> stack argument thunks */
 extern char s2_copy_to_buff_thunk[], s2_copy_from_buff_thunk[];
-#define CB_TO   ((ULONG)s2_copy_to_buff_thunk)
-#define CB_FROM ((ULONG)s2_copy_from_buff_thunk)
+extern char s2_dma_to_buff_thunk[], s2_dma_from_buff_thunk[];
+#define CB_TO       ((ULONG)s2_copy_to_buff_thunk)
+#define CB_FROM     ((ULONG)s2_copy_from_buff_thunk)
+#define CB_DMA_TO   ((ULONG)s2_dma_to_buff_thunk)
+#define CB_DMA_FROM ((ULONG)s2_dma_from_buff_thunk)
 #endif
 
 /* ---- helpers ---- */
@@ -173,6 +209,7 @@ static int s2_submit_read(struct s2if *si, struct s2req *r)
 		}
 	}
 	r->b->len = 0;
+	r->b->flags &= (u16)~RT_BUFF_CSUM_PART;
 	r->io.ios2_Req.io_Command = CMD_READ;
 	r->io.ios2_Req.io_Flags = si->raw ? SANA2IOF_RAW : 0;
 	r->io.ios2_Req.io_Error = 0;
@@ -225,8 +262,10 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 			rt_timer_after(&si->retry, 1000);
 		return;
 	}
-	if (b->len == 0 || b->len > rx_size(si))
+	if (b->len == 0 || b->len > rx_size(si)) {
 		b->len = RT_MIN(r->io.ios2_DataLength, rx_size(si));
+		b->flags &= (u16)~RT_BUFF_CSUM_PART;
+	}
 	rt_drv_rx_done(nif, r->q, b->len, 0);
 	if (si->raw && si->ether) {
 		if (b->len < ETH_HLEN) {
@@ -236,6 +275,8 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 		}
 		src = b->data + 6;
 		type = rt_get_be16(b->data + 12);
+		if (b->flags & RT_BUFF_CSUM_PART)
+			b->csum = rt_csum_add(b->csum, rt_csum_fold(rt_csum_partial(b->data, ETH_HLEN, 0)));
 		rt_buf_pull(b, ETH_HLEN);
 	}
 	if (r->io.ios2_Req.io_Flags & SANA2IOF_BCAST)
@@ -664,7 +705,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 {
 	struct s2if *si;
 	struct Sana2DeviceQuery q;
-	struct TagItem bm[3];
+	struct TagItem bm[5];
 	struct rt_netif *nif;
 	struct s2req *r;
 	int i, nreads;
@@ -700,8 +741,12 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	bm[0].ti_Data = CB_TO;
 	bm[1].ti_Tag = S2_CopyFromBuff;
 	bm[1].ti_Data = CB_FROM;
-	bm[2].ti_Tag = TAG_DONE;
-	bm[2].ti_Data = 0;
+	bm[2].ti_Tag = S2_DMACopyToBuff32;
+	bm[2].ti_Data = CB_DMA_TO;
+	bm[3].ti_Tag = S2_DMACopyFromBuff32;
+	bm[3].ti_Data = CB_DMA_FROM;
+	bm[4].ti_Tag = TAG_DONE;
+	bm[4].ti_Data = 0;
 	si->ctl->ios2_BufferManagement = bm;
 	e = OpenDevice((CONST_STRPTR)device, unit, (struct IORequest *)si->ctl, 0);
 	if (e) {
@@ -776,6 +821,9 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		reads = S2_READS_IP_DEF;
 	reads = RT_MAX(S2_READS_IP_MIN, RT_MIN(reads, S2_READS_IP_MAX));
 	si->reads = reads;
+	/* receive buffers offered for DMA hold the largest frame */
+	if (((rx_size(si) + 3u) & ~3u) > s2_dma_rx_room)
+		s2_dma_rx_room = (rx_size(si) + 3u) & ~3u;
 	nreads = reads + (si->ether ? S2_READS_ARP : 0);
 	for (i = 0; i < nreads; i++) {
 		r = s2_newreq(si, REQ_READ);

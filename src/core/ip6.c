@@ -423,6 +423,7 @@ static void ip6_deliver(struct rt_buf *b, int tentative)
 				hl = 8;             /* atomic fragment (RFC 6946) */
 				break;
 			}
+			b->flags &= (u16)~RT_BUFF_CSUM_PART;
 			b = ip6frag_reass(b, off, prev);
 			if (!b)
 				return;
@@ -445,6 +446,8 @@ upper:
 		    (b->data[off] != RT_ND_NEIGHBOR_SOLICIT && b->data[off] != RT_ND_NEIGHBOR_ADVERT))
 			goto drop;
 	}
+	if (b->flags & RT_BUFF_CSUM_PART)    /* subtract the headers' sum */
+		b->csum = rt_csum_add(b->csum, rt_csum_fold(rt_csum_partial(b->data, off, 0)));
 	rt_buf_pull(b, off);
 	nraw = rt_raw6_input(b, ip6, nxt);
 	switch (nxt) {

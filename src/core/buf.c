@@ -140,6 +140,7 @@ struct rt_buf *rt_buf_copy_expand(const struct rt_buf *b, u32 headroom)
 	c->flags = b->flags;
 	c->l3_proto = b->l3_proto;
 	c->tstamp_ms = b->tstamp_ms;
+	c->csum = b->csum;
 	memcpy(&c->cb, &b->cb, sizeof(c->cb));
 	/* Callers sometimes need to look back at the IP header that sits in the
 	 * headroom (e.g. transport input); keep those bytes too. */
@@ -160,6 +161,7 @@ struct rt_buf *rt_buf_copy_csum(const struct rt_buf *b, u32 *sum)
 	c->flags = b->flags;
 	c->l3_proto = b->l3_proto;
 	c->tstamp_ms = b->tstamp_ms;
+	c->csum = b->csum;
 	memcpy(&c->cb, &b->cb, sizeof(c->cb));
 	return c;
 }

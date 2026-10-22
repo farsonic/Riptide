@@ -551,6 +551,7 @@ void tcp_destroy_sock(struct tcp_sock *tp)
 	if (tp->destroyed)
 		return;
 	tp->destroyed = 1;
+	tcp_batch_forget(tp);
 	tcp_unhash(tp);
 	tcp_clear_xmit_timers(tp);
 	tcp_delete_keepalive_timer(tp);
@@ -795,7 +796,14 @@ void tcp_cleanup_rbuf(struct tcp_sock *tp, int copied)
 		u32 rcv_window_now = tcp_receive_window(tp);
 		if (2 * rcv_window_now <= tp->window_clamp) {
 			u32 new_window = __tcp_select_window(tp);
-			if (new_window && new_window >= 2 * rcv_window_now)
+			/* Unlike Linux, not for every small read that doubles a
+			 * nearly closed window: a reader slower than the link
+			 * (nc's 2 KB recv()s on a 68020) would cost a window
+			 * update per read. Open it by 4 segments (or a quarter
+			 * of the buffer) at a time; the queue still holds the
+			 * rest of the buffer for the reader meanwhile. */
+			if (new_window && new_window >= 2 * rcv_window_now &&
+			    new_window - rcv_window_now >= RT_MIN(tp->window_clamp / 4, 4u * tp->ack.rcv_mss))
 				time_to_ack = 1;
 		}
 	}

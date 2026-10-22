@@ -368,7 +368,7 @@ static void tcp_fill_csum_hdr(struct rt_buf *b, const rt_in6_addr *saddr, const 
 	u16 c;
 
 	b->data[16] = b->data[17] = 0;
-	sum = rt_csum_add(rt_csum_partial(b->data, hdr_len, sum), dsum);
+	sum = rt_csum_add(rt_csum_hdr(b->data, hdr_len, sum), dsum);
 	c = rt_csum_fold(sum);
 	memcpy(b->data + 16, &c, 2);
 }
@@ -394,7 +394,7 @@ static int tcp_transmit_skb_body(struct tcp_sock *tp, struct rt_buf *skb, int cl
 			return -RT_ENOBUFS;
 	} else {
 		b = skb;
-		dsum = rt_csum_partial(b->data, b->len, 0);
+		dsum = b->len ? rt_csum_partial(b->data, b->len, 0) : 0;
 	}
 	data_len = b->len;
 	memset(&opts, 0, sizeof(opts));

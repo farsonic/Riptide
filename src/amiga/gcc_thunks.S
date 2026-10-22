@@ -23,6 +23,21 @@ s2_copy_from_buff_thunk:
 	lea	12(%sp),%sp
 	rts
 
+| SANA-II R3 DMA: ULONG fn(a0 cookie), the buffer address or 0 in d0
+	.globl	s2_dma_to_buff_thunk
+s2_dma_to_buff_thunk:
+	move.l	%a0,-(%sp)
+	jsr	s2_dma_to_buff
+	addq.l	#4,%sp
+	rts
+
+	.globl	s2_dma_from_buff_thunk
+s2_dma_from_buff_thunk:
+	move.l	%a0,-(%sp)
+	jsr	s2_dma_from_buff
+	addq.l	#4,%sp
+	rts
+
 | LONG amiga_call_d0d1(APTR fn, LONG d0, LONG d1): call fn with d0/d1
 	.globl	amiga_call_d0d1
 amiga_call_d0d1:
