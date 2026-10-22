@@ -31,6 +31,8 @@ struct rt_buf {
 	u16  l3_proto;      /* ethertype of the payload, host order */
 	u32  tstamp_ms;     /* free for owner (e.g. reassembly / queue time) */
 	u32  csum;          /* RT_BUFF_CSUM_PART: partial sum of data[0, len) */
+	u8   prio;          /* output: socket priority + 1 (rt_qos.h), 0 = none */
+	u8   resv[3];
 	union {
 		u8  b[64];
 		u32 w[16];

@@ -854,7 +854,7 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 	o.dst = daddr;
 	o.proto = RT_IPPROTO_UDP;
 	if (v4) {
-		o.tos = pcb->opt.tos;
+		o.tos = rt_qos_sock_tos(so, pcb->opt.tos);
 		if (rt_ip_is_multicast(rt_in6_v4(&daddr))) {
 			o.ttl = pcb->opt.mcast_ttl ? pcb->opt.mcast_ttl : 1;
 			o.mcast_ttl0 = pcb->opt.mcast_ttl == 0;
@@ -868,11 +868,12 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 		                                : pcb->opt.hlim;
 		if (o.ttl == 0)
 			o.ttl = -1;          /* hop limit 0 is not supported */
-		o.tos = pcb->opt.tclass;
+		o.tos = rt_qos_sock_tos(so, pcb->opt.tclass);
 		o.df = pcb->opt.dontfrag;
 		o.mcast_noloop = !pcb->opt.mcast_loop6;
 		o.scope = scope;
 	}
+	b->prio = rt_qos_sock_prio(so);
 	o.dontroute = (so->options & RT_SO_DONTROUTE) || (flags & RT_MSG_DONTROUTE);
 	o.allow_broadcast = (so->options & RT_SO_BROADCAST) != 0;
 	r = rt_inet_output(b, &o);

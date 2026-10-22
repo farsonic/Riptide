@@ -84,6 +84,80 @@ static void fill_iface(struct rt_ctl_iface *r, const struct rt_netif *n)
 	r->dhcp_left_s = di.left_s;
 	rt_strlcpy(r->descr, n->descr, sizeof(r->descr));
 	r->tcp_window = n->tcp_window;
+	r->ip4_off = n->ip4_disabled;
+	r->ip6_off = n->ip6 == NULL;
+	r->naddr4 = (u8)rt_netif_addrs(n, NULL, 0);
+	r->qos = n->qos != NULL;
+}
+
+/* ---- IPv4 addresses ---- */
+
+static int h_addrs4(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_netif *n;
+	struct rt_ctl_addr4 *recs;
+	struct rt_ifaddr4 a[1 + RT_IF_MAXADDR4];
+	struct rt_dhcp_info di;
+	u32 count = 0, i = 0;
+	int r, j, k;
+
+	for (n = rt_netif_list(); n; n = n->next)
+		count += (u32)rt_netif_addrs(n, NULL, 0);
+	if (!old)
+		return dump_emit(NULL, oldlen, sizeof(*recs), count, NULL);
+	recs = count ? rt_zalloc(count * sizeof(*recs)) : NULL;
+	if (count && !recs)
+		return -RT_ENOMEM;
+	for (n = rt_netif_list(); n; n = n->next) {
+		int dhcp = rt_dhcp_get_info(n, &di) >= RT_DHCPS_BOUND;
+		k = rt_netif_addrs(n, a, 1 + RT_IF_MAXADDR4);
+		for (j = 0; j < k && i < count; j++, i++) {
+			u32 m = rt_ntohl(a[j].netmask);
+			memcpy(recs[i].ifname, n->name, sizeof(recs[i].ifname));
+			recs[i].ifname[sizeof(recs[i].ifname) - 1] = 0;
+			recs[i].ifindex = n->index;
+			recs[i].addr = a[j].addr;
+			recs[i].netmask = a[j].netmask;
+			recs[i].broadaddr = a[j].broadaddr;
+			while (m & 0x80000000u) {
+				recs[i].prefixlen++;
+				m <<= 1;
+			}
+			if (a[j].addr == n->addr) {
+				recs[i].flags |= RT_CTL_A4_PRIMARY;
+				if (dhcp)
+					recs[i].flags |= RT_CTL_A4_DHCP;
+			}
+		}
+	}
+	r = dump_emit(old, oldlen, sizeof(*recs), i, recs);
+	rt_free(recs);
+	return r;
+}
+
+/* ---- transmit priority bands ---- */
+
+static int h_qos(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_netif *n;
+	struct rt_ctl_qos *recs;
+	u32 count = 0, i = 0;
+	int r;
+
+	for (n = rt_netif_list(); n; n = n->next)
+		if (n->qos)
+			count++;
+	if (!old)
+		return dump_emit(NULL, oldlen, sizeof(*recs), count, NULL);
+	recs = count ? rt_zalloc(count * sizeof(*recs)) : NULL;
+	if (count && !recs)
+		return -RT_ENOMEM;
+	for (n = rt_netif_list(); n && i < count; n = n->next)
+		if (n->qos)
+			rt_qos_fill(n, &recs[i++]);
+	r = dump_emit(old, oldlen, sizeof(*recs), i, recs);
+	rt_free(recs);
+	return r;
 }
 
 static int h_ifaces(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
@@ -577,6 +651,8 @@ static const struct rt_sysctl ctl_sysctls[] = {
 	DUMP("drivers", RT_CTL_DRIVERS, h_drivers, "rt_ctl_hdr + struct rt_ctl_driver[]"),
 	DUMP("mcast", RT_CTL_MCAST, h_mcast, "rt_ctl_hdr + struct rt_ctl_mcast[]"),
 	STATS("igmpstat", RT_CTL_IGMPSTAT, rt_igmpstat),
+	DUMP("addrs4", RT_CTL_ADDRS4, h_addrs4, "rt_ctl_hdr + struct rt_ctl_addr4[]"),
+	DUMP("qos", RT_CTL_QOS, h_qos, "rt_ctl_hdr + struct rt_ctl_qos[]"),
 };
 
 void rt_ctl_init(void)

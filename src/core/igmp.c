@@ -219,7 +219,7 @@ static void igmp_send(struct igmp_if *ifp, struct rt_buf *b, u32 dst)
 	ip->ttl = 1;
 	ip->protocol = RT_IPPROTO_IGMP;
 	ip->check = 0;
-	ip->saddr = nif->addr;
+	ip->saddr = rt_netif_src(nif, dst, 0);
 	ip->daddr = dst;
 	ip->check = rt_inet_csum(ip, 24);
 	rt_ipstat.OutRequests++;

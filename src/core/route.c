@@ -328,12 +328,13 @@ lookup:
 			 * interface that is up (and, for multicast, configured). */
 			for (nif = rt_netif_list(); nif; nif = nif->next)
 				if ((nif->flags & (RT_IFF_UP | RT_IFF_BROADCAST)) ==
-				    (RT_IFF_UP | RT_IFF_BROADCAST) && (!llmc || nif->addr))
+				    (RT_IFF_UP | RT_IFF_BROADCAST) && !nif->ip4_disabled &&
+				    (!llmc || nif->addr || nif->nalias))
 					break;
 			if (nif) {
 				nh->netif = nif;
 				nh->nexthop = dst;
-				nh->src = nif->addr;
+				nh->src = rt_netif_src(nif, dst, 0);
 				nh->mtu = nif->mtu;
 				nh->flags = RT_RTF_UP;
 				return 0;
@@ -351,7 +352,7 @@ lookup:
 	 * gateway. */
 	nh->nexthop = (best->flags & RT_RTF_GATEWAY) && dst != RT_INADDR_BROADCAST ?
 	              best->gateway : dst;
-	nh->src = nif->addr;
+	nh->src = rt_netif_src(nif, dst, nh->nexthop);
 	nh->mtu = nif->mtu;
 	if (best->mtu && best->mtu < nh->mtu)
 		nh->mtu = best->mtu;

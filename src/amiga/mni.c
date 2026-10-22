@@ -288,12 +288,13 @@ static void mni_poll(struct amiga_if *ai)
 		t = (struct mni_tx *)((UBYTE *)t - offsetof(struct mni_tx, node));
 		if (t->pkt.status < 0)
 			nif->stats.oerrors++;
-		rt_drv_tx_done(nif, t->pkt.status < 0 ? (s32)t->pkt.status : 0);
 		rt_buf_free(t->b);
 		t->b = NULL;
 		t->busy = 0;
 		t->node.mln_Succ = (struct MinNode *)mi->tx_free;
 		mi->tx_free = t;
+		/* last: it may send the next queued frame (QoS) */
+		rt_drv_tx_done(nif, t->pkt.status < 0 ? (s32)t->pkt.status : 0);
 	}
 	if (mi->want_online >= 0) {
 		int want = mi->want_online;

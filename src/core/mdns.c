@@ -20,8 +20,14 @@
 #define MDNS_PORT     5353
 #define MDNS_TTL      120              /* RFC 6762 10: records with host names */
 #define MDNS_IFS      4
+#define MDNS_V4       4                /* IPv4 addresses per interface */
 #define MDNS_V6       4                /* IPv6 addresses per interface */
-#define MDNS_NREC     (2 + 2 * MDNS_V6)
+#define MDNS_NREC     (2 * MDNS_V4 + 2 * MDNS_V6)
+/* record numbers k: A, AAAA, PTR (v4), PTR (v6) of each address */
+#define K_A           0
+#define K_AAAA        MDNS_V4
+#define K_P4          (MDNS_V4 + MDNS_V6)
+#define K_P6          (2 * MDNS_V4 + MDNS_V6)
 #define TYPE_ANY      255
 #define CLASS_FLUSH   0x8000           /* cache flush (answers) / QU (questions) */
 
@@ -44,16 +50,17 @@ static struct mdns_if {
 	struct rt_netif *nif;
 	u8  v4, v6;               /* groups joined */
 	u32 last_mc;              /* rt_now_ms() of the last multicast answer */
-	/* records: bit 0 A, 1..4 AAAA, 5 PTR (v4), 6..9 PTR (v6) */
-	u32 a4;
+	/* records: bits K_A.. A, K_AAAA.. AAAA, K_P4.. PTR (v4), K_P6.. PTR (v6) */
+	int n4;
+	u32 a4[MDNS_V4];
 	int n6;
 	rt_in6_addr a6[MDNS_V6];
 } mif[MDNS_IFS];
 
-#define REC_A     0x001u
-#define REC_AAAA  0x01eu
-#define REC_PTR4  0x020u
-#define REC_PTR6  0x3c0u
+#define REC_A     (((1u << MDNS_V4) - 1) << K_A)
+#define REC_AAAA  (((1u << MDNS_V6) - 1) << K_AAAA)
+#define REC_PTR4  (((1u << MDNS_V4) - 1) << K_P4)
+#define REC_PTR6  (((1u << MDNS_V6) - 1) << K_P6)
 
 static struct rt_socket *mdns_so;
 static struct sock_upcall mdns_upcall;
@@ -70,13 +77,13 @@ static u32 mdns_grp4(void)
 
 static void rev_name(const struct mdns_if *f, int k, char *out, u32 len)
 {
-	if (k == 5) {
-		u32 h = rt_ntohl(f->a4);
+	if (k < K_P6) {
+		u32 h = rt_ntohl(f->a4[k - K_P4]);
 		rt_snprintf(out, len, "%lu.%lu.%lu.%lu.in-addr.arpa", (unsigned long)(h & 255),
 		            (unsigned long)(h >> 8 & 255), (unsigned long)(h >> 16 & 255), (unsigned long)(h >> 24));
 	} else {
 		static const char hex[] = "0123456789abcdef";
-		const u8 *a = f->a6[k - 6].b;
+		const u8 *a = f->a6[k - K_P6].b;
 		char *p = out;
 		int i;
 		for (i = 15; i >= 0; i--) {
@@ -120,7 +127,7 @@ static u32 w_name(u8 *b, u32 off, u32 max, const char *name, u16 *hoff)
 
 static u16 rec_type(int k)
 {
-	return k == 0 ? DNS_TYPE_A : k <= 4 ? DNS_TYPE_AAAA : DNS_TYPE_PTR;
+	return k < K_AAAA ? DNS_TYPE_A : k < K_P4 ? DNS_TYPE_AAAA : DNS_TYPE_PTR;
 }
 
 static u32 w_rec(u8 *b, u32 off, u32 max, const struct mdns_if *f, int k, u32 ttl, int flush, u16 *hoff)
@@ -128,24 +135,24 @@ static u32 w_rec(u8 *b, u32 off, u32 max, const struct mdns_if *f, int k, u32 tt
 	char rn[80];
 	u32 rd;
 
-	if (k >= 5)
+	if (k >= K_P4)
 		rev_name(f, k, rn, sizeof(rn));
-	off = w_name(b, off, max, k >= 5 ? rn : md.fqdn, hoff);
+	off = w_name(b, off, max, k >= K_P4 ? rn : md.fqdn, hoff);
 	if (!off || off + 10 > max)
 		return 0;
 	rt_put_be16(b + off, rec_type(k));
 	rt_put_be16(b + off + 2, (u16)(DNS_CLASS_IN | (flush ? CLASS_FLUSH : 0)));
 	rt_put_be32(b + off + 4, ttl);
 	rd = off + 10;
-	if (k == 0) {
+	if (k < K_AAAA) {
 		if (rd + 4 > max)
 			return 0;
-		memcpy(b + rd, &f->a4, 4);
+		memcpy(b + rd, &f->a4[k - K_A], 4);
 		rd += 4;
-	} else if (k <= 4) {
+	} else if (k < K_P4) {
 		if (rd + 16 > max)
 			return 0;
-		memcpy(b + rd, f->a6[k - 1].b, 16);
+		memcpy(b + rd, f->a6[k - K_AAAA].b, 16);
 		rd += 16;
 	} else {
 		rd = w_name(b, rd, max, md.fqdn, hoff);
@@ -179,10 +186,10 @@ static u32 recs_of(const struct mdns_if *f)
 	u32 m = 0;
 	int i;
 
-	if (f->a4)
-		m |= REC_A | REC_PTR4;
+	for (i = 0; i < f->n4; i++)
+		m |= (1u << (K_A + i)) | (1u << (K_P4 + i));
 	for (i = 0; i < f->n6; i++)
-		m |= (0x002u | 0x040u) << i;
+		m |= (1u << (K_AAAA + i)) | (1u << (K_P6 + i));
 	return m;
 }
 
@@ -237,8 +244,13 @@ static u32 if_sync(void)
 			f = &mif[i];
 			f->nif = n;
 		}
-		f->a4 = n->addr;
-		if (n->addr && !f->v4 && mc4(n, 1) == 0)
+		{
+			struct rt_ifaddr4 a4[MDNS_V4];
+			f->n4 = RT_MIN(rt_netif_addrs(n, a4, MDNS_V4), MDNS_V4);
+			for (j = 0; j < f->n4; j++)
+				f->a4[j] = a4[j].addr;
+		}
+		if (f->n4 && !f->v4 && mc4(n, 1) == 0)
 			f->v4 = 1;
 		f->n6 = 0;
 		if (rt_ip6_ifenabled(n)) {
@@ -249,7 +261,9 @@ static u32 if_sync(void)
 				if (!(ai[j].flags & (RT_IN6_IFF_TENTATIVE | RT_IN6_IFF_DUPLICATED | RT_IN6_IFF_TEMPORARY)))
 					f->a6[f->n6++] = ai[j].addr;
 		}
-		sig = sig * 31u + n->index + rt_ntohl(f->a4);
+		sig = sig * 31u + n->index;
+		for (j = 0; j < f->n4; j++)
+			sig = sig * 31u + rt_ntohl(f->a4[j]);
 		for (j = 0; j < f->n6; j++)
 			for (k = 0; k < 4; k++)
 				sig = sig * 31u + f->a6[j].w[k];
@@ -266,7 +280,7 @@ static void xmit(struct mdns_if *f, const rt_in6_addr *dst, u16 dport, const u8 
 	u16 ck;
 	int v4 = rt_in6_is_v4mapped(dst);
 
-	if (v4 ? !f->a4 : !f->v6)
+	if (v4 ? !f->n4 : !f->v6)
 		return;
 	b = rt_buf_alloc(RT_BUF_HEADROOM, 8 + len);
 	if (!b)
@@ -280,7 +294,7 @@ static void xmit(struct mdns_if *f, const rt_in6_addr *dst, u16 dport, const u8 
 	if (v4) {
 		struct rt_ip_out o;
 		memset(&o, 0, sizeof(o));
-		o.saddr = f->a4;
+		o.saddr = rt_netif_src(f->nif, rt_in6_v4(dst), 0);
 		o.daddr = rt_in6_v4(dst);
 		o.proto = RT_IPPROTO_UDP;
 		o.ttl = 255;
@@ -497,7 +511,7 @@ static void mdns_tick(void *arg)
 	}
 	sig = if_sync();
 	for (i = 0; i < MDNS_IFS; i++)
-		if (mif[i].nif && (mif[i].v4 && mif[i].a4 ? 1 : mif[i].n6))
+		if (mif[i].nif && (mif[i].v4 && mif[i].n4 ? 1 : mif[i].n6))
 			any = 1;
 	base_name(b, sizeof(b));
 	if (strcmp(b, md.base)) {                 /* new host name */
@@ -553,8 +567,9 @@ static int our_addr(u16 type, const u8 *rd, u16 rdlen)
 	for (i = 0; i < MDNS_IFS; i++) {
 		if (!mif[i].nif)
 			continue;
-		if (type == DNS_TYPE_A && rdlen == 4 && mif[i].a4 && !memcmp(rd, &mif[i].a4, 4))
-			return 1;
+		for (j = 0; type == DNS_TYPE_A && rdlen == 4 && j < mif[i].n4; j++)
+			if (!memcmp(rd, &mif[i].a4[j], 4))
+				return 1;
 		for (j = 0; type == DNS_TYPE_AAAA && rdlen == 16 && j < mif[i].n6; j++)
 			if (!memcmp(rd, mif[i].a6[j].b, 16))
 				return 1;
@@ -611,7 +626,7 @@ static u32 rec_match(const struct mdns_if *f, const char *name, u16 type)
 		if (type == DNS_TYPE_AAAA || type == TYPE_ANY)
 			m |= REC_AAAA;
 	} else if (type == DNS_TYPE_PTR || type == TYPE_ANY) {
-		for (k = 5; k < MDNS_NREC; k++)
+		for (k = K_P4; k < MDNS_NREC; k++)
 			if ((have >> k) & 1) {
 				rev_name(f, k, rn, sizeof(rn));
 				if (dns_name_eq(name, rn))
@@ -633,9 +648,9 @@ static u32 known(const struct mdns_if *f, const u8 *m, u32 len, const struct rr 
 	for (k = 0; k < MDNS_NREC; k++) {
 		if (!((c >> k) & 1))
 			continue;
-		if ((k == 0 && r->rdlen == 4 && !memcmp(m + r->rd, &f->a4, 4)) ||
-		    (k >= 1 && k <= 4 && r->rdlen == 16 && !memcmp(m + r->rd, f->a6[k - 1].b, 16)) ||
-		    (k >= 5 && dns_expand(m, len, r->rd, tmp, sizeof(tmp), &nx) >= 0 && dns_name_eq(tmp, md.fqdn)))
+		if ((k < K_AAAA && r->rdlen == 4 && !memcmp(m + r->rd, &f->a4[k - K_A], 4)) ||
+		    (k >= K_AAAA && k < K_P4 && r->rdlen == 16 && !memcmp(m + r->rd, f->a6[k - K_AAAA].b, 16)) ||
+		    (k >= K_P4 && dns_expand(m, len, r->rd, tmp, sizeof(tmp), &nx) >= 0 && dns_name_eq(tmp, md.fqdn)))
 			return 1u << k;
 	}
 	return 0;
@@ -678,10 +693,10 @@ static void check_probe(struct mdns_if *f, const u8 *m, u32 len)
 			    (r->type != DNS_TYPE_A && r->type != DNS_TYPE_AAAA) || our_addr(r->type, m + r->rd, r->rdlen))
 				continue;
 			/* compare our first record with theirs: type, then rdata */
-			if (f->a4) {
+			if (f->n4) {
 				ot = DNS_TYPE_A;
 				ol = 4;
-				memcpy(ours, &f->a4, 4);
+				memcpy(ours, &f->a4[0], 4);
 			} else {
 				ot = DNS_TYPE_AAAA;
 				ol = 16;
@@ -702,7 +717,7 @@ static int on_link(const struct mdns_if *f, const rt_in6_addr *a)
 {
 	if (!rt_in6_is_v4mapped(a))
 		return 1;       /* IPv6: hop limit / link-local scope is the check */
-	return f->a4 && ((rt_in6_v4(a) ^ f->a4) & f->nif->netmask) == 0;
+	return f->n4 && rt_netif_on_link(f->nif, rt_in6_v4(a));
 }
 
 static void answer_query(struct mdns_if *f, const u8 *m, u32 len, const struct rt_dgram_cb *cb)

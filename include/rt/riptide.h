@@ -21,6 +21,7 @@
 #include "rt_ctl.h"
 #include "rt_diag.h"
 #include "rt_netsvc.h"
+#include "rt_qos.h"
 
 #include "rt_version.h"
 

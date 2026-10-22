@@ -55,6 +55,14 @@ struct rt_netif_stats {
 	u32 ibytes, obytes, imcasts, omcasts, iqdrops, noproto;
 };
 
+/* An additional IPv4 address of an interface (network byte order). */
+#define RT_IF_MAXADDR4 8         /* additional addresses per interface */
+struct rt_ifaddr4 {
+	u32 addr;
+	u32 netmask;
+	u32 broadaddr;           /* broadcast (ETHER), 0 = none */
+};
+
 struct rt_netif {
 	struct rt_netif *next;
 	char  name[RT_IFNAMSIZ];
@@ -93,6 +101,14 @@ struct rt_netif {
 	 * connections routed over this interface (bytes, 0 = no limit; Linux
 	 * "ip route ... window N" per interface) */
 	u32   tcp_window;
+	/* additional IPv4 addresses ("ip addr add", "ifconfig IF alias");
+	 * addr/netmask/broadaddr above are the primary one */
+	struct rt_ifaddr4 alias[RT_IF_MAXADDR4];
+	u8    nalias;
+	/* "ipv4 off" / "interface ... ipv4=off": no IPv4 (or ARP) here */
+	u8    ip4_disabled;
+	/* transmit priority queue (src/core/qos.c), NULL while not in use */
+	void *qos;
 };
 
 /* ---- driver counters (src/core/drvstats.c) ----
@@ -168,6 +184,30 @@ struct rt_netif *rt_netif_by_addr(u32 addr);
 /* Is 'addr' one of our addresses or a broadcast address of an interface? */
 int  rt_ip_is_local(u32 addr);
 int  rt_ip_is_broadcast(u32 addr, const struct rt_netif *nif);
+
+/* Additional IPv4 addresses. rt_netif_addr_add() makes 'addr' the primary
+ * address when the interface has none, updates the mask/broadcast of an
+ * address it has, and otherwise adds it (at most RT_IF_MAXADDR4) with its
+ * connected route. rt_netif_addr_del() removes one; deleting the primary
+ * promotes the first additional address (Linux promote_secondaries). Both
+ * -errno or 0; lock held. */
+int  rt_netif_addr_add(struct rt_netif *nif, u32 addr, u32 netmask, u32 bcast);
+int  rt_netif_addr_del(struct rt_netif *nif, u32 addr);
+/* Is addr the primary or an additional address of nif? */
+int  rt_netif_has_addr(const struct rt_netif *nif, u32 addr);
+/* Source address on nif for a packet to 'dst' (via 'nexthop', 0 = dst):
+ * the address whose prefix holds the next hop or the destination, else
+ * the primary, else the first additional address; 0 if none. */
+u32  rt_netif_src(const struct rt_netif *nif, u32 dst, u32 nexthop);
+/* Is dst on the subnet of one of nif's addresses? */
+int  rt_netif_on_link(const struct rt_netif *nif, u32 dst);
+/* Every IPv4 address of nif, primary first; returns the count. */
+int  rt_netif_addrs(const struct rt_netif *nif, struct rt_ifaddr4 *out, int max);
+/* ipv4 on|off for one interface: off removes its addresses, stops DHCP
+ * and drops IPv4 and ARP input. */
+int  rt_netif_ip4_enable(struct rt_netif *nif, int on);
+/* "ipv4 off" without an interface: default for interfaces added later */
+extern int rt_ip4_auto_enable;
 
 /* Sets addr/mask/broadcast-or-peer and installs the connected route.
  * For PTP interfaces 'peer' is the remote address; otherwise the

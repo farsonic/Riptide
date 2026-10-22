@@ -242,7 +242,8 @@ static int raw_send6(struct raw_pcb *pcb, struct rt_buf *b, const rt_in6_addr *d
 	o.ttl = rt_in6_is_mcast(dst) ? (pcb->opt.mcast_hops >= 0 ? pcb->opt.mcast_hops : 1) : pcb->opt.hlim;
 	if (o.ttl == 0)
 		o.ttl = -1;
-	o.tos = pcb->opt.tclass;
+	o.tos = rt_qos_sock_tos(pcb->so, pcb->opt.tclass);
+	b->prio = rt_qos_sock_prio(pcb->so);
 	o.df = pcb->opt.dontfrag;
 	o.dontroute = (u8)dontroute;
 	o.mcast_noloop = !pcb->opt.mcast_loop6;
@@ -331,7 +332,8 @@ static int raw_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 			if (!o.oif)
 				o.oif = rt_ip_mc_default_if(daddr);
 		}
-		o.tos = pcb->opt.tos;
+		o.tos = rt_qos_sock_tos(pcb->so, pcb->opt.tos);
+		b->prio = rt_qos_sock_prio(pcb->so);
 		o.dontroute = (u8)dontroute;
 		o.allow_broadcast = (so->options & RT_SO_BROADCAST) != 0;
 		r = rt_ip_output(b, &o);
