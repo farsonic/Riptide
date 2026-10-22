@@ -135,6 +135,21 @@ static int ip_route_out(u32 daddr, struct rt_netif *oif, int dontroute, struct r
 	return r;
 }
 
+/* IP_MULTICAST_LOOP: a copy of a multicast datagram (data at the IP
+ * header) for the members on this host, unless it goes out on loopback
+ * anyway. */
+static void ip_mc_loop(const struct rt_buf *b, const struct rt_nexthop *nh)
+{
+	const struct rt_iphdr *ip = (const struct rt_iphdr *)b->data;
+	struct rt_buf *c;
+
+	if ((nh->netif->flags & RT_IFF_LOOPBACK) || !rt_ip_mc_joined(nh->netif, ip->daddr))
+		return;
+	c = rt_buf_copy(b);
+	if (c)
+		rt_loopback_mcast(nh->netif, c);
+}
+
 int rt_ip_output(struct rt_buf *b, const struct rt_ip_out *o)
 {
 	struct rt_nexthop nh;
@@ -193,6 +208,14 @@ int rt_ip_output(struct rt_buf *b, const struct rt_ip_out *o)
 	ip->saddr = saddr;
 	ip->daddr = o->daddr;
 	ip->check = rt_csum_fold(rt_csum_hdr(ip, 20, 0));
+	if (rt_ip_is_multicast(o->daddr)) {
+		if (!o->mcast_noloop)
+			ip_mc_loop(b, &nh);
+		if (o->mcast_ttl0) {     /* IP_MULTICAST_TTL 0: this host only */
+			rt_buf_free(b);
+			return 0;
+		}
+	}
 	return rt_ip_send_routed(b, &nh);
 fail:
 	rt_ipstat.OutDiscards++;
@@ -238,6 +261,8 @@ int rt_ip_output_raw(struct rt_buf *b, int dontroute)
 		ip->saddr = nh.src;
 	ip->check = 0;
 	ip->check = rt_csum_fold(rt_csum_hdr(ip, hlen, 0));
+	if (rt_ip_is_multicast(ip->daddr))
+		ip_mc_loop(b, &nh);
 	return rt_ip_send_routed(b, &nh);
 fail:
 	rt_ipstat.OutDiscards++;
@@ -314,6 +339,10 @@ static void ip_deliver(struct rt_buf *b)
 		rt_ipstat.InDelivers++;
 		rt_icmp_input(b, ip);
 		return;
+	case RT_IPPROTO_IGMP:
+		rt_ipstat.InDelivers++;
+		rt_igmp_input(b, ip);
+		return;
 	}
 	if (nraw) {
 		rt_ipstat.InDelivers++;
@@ -365,8 +394,8 @@ static void ip_input_body(struct rt_netif *nif, struct rt_buf *b)
 		goto addrerr;
 
 	if (rt_ip_is_multicast(daddr)) {
-		/* No group membership support: only all-hosts is ours. */
-		if (daddr != rt_htonl(0xe0000001u))
+		/* groups joined on this interface (224.0.0.1 always is) */
+		if (!rt_ip_mc_member(nif, daddr))
 			goto discard;
 		b->flags |= RT_BUFF_MCAST;
 	} else if (!rt_ip_is_local(daddr)) {

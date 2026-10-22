@@ -153,6 +153,8 @@ struct rt_netif *rt_in6_addr_owner(const rt_in6_addr *a, int any);
  * nif may be NULL for unicast checks)? */
 int  rt_ip6_is_local(const rt_in6_addr *a);
 int  rt_ip6_mc_joined(const struct rt_netif *nif, const rt_in6_addr *g);
+/* The joined groups of nif (refcnt > 0): fills up to max, returns the count. */
+int  rt_ip6_mc_list(const struct rt_netif *nif, rt_in6_addr *grp, u32 *refcnt, int max);
 /* Group membership (refcounted, sends MLD reports). Lock held. */
 int  rt_ip6_mc_join(struct rt_netif *nif, const rt_in6_addr *g);
 int  rt_ip6_mc_leave(struct rt_netif *nif, const rt_in6_addr *g);

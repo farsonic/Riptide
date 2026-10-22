@@ -31,6 +31,7 @@ int rt_init(void)
 	rt_inet_init();
 	rt_icmp_init();
 	rt_udp_init();
+	rt_igmp_init();
 	rt_raw_init();
 	rt_tcp_init();
 	rt_socket_init();
@@ -42,6 +43,7 @@ int rt_init(void)
 	if (r < 0)
 		return r;
 	rt_resolv_init();
+	rt_netsvc_init();
 	rt_initialised = 1;
 	return 0;
 }

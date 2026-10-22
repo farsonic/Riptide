@@ -53,6 +53,8 @@
 #define RT_CTL_TCPINFO   18       /* net.riptide.tcpinfo   struct rt_ctl_tcpinfo[] (TCP, both families) */
 #define RT_CTL_PROFILE   19       /* net.riptide.profile   struct rt_ctl_prof[] ("profile") */
 #define RT_CTL_DRIVERS   20       /* net.riptide.drivers   struct rt_ctl_driver[] */
+#define RT_CTL_MCAST     30       /* net.riptide.mcast     struct rt_ctl_mcast[] (IPv4 and IPv6 groups) */
+#define RT_CTL_IGMPSTAT  31       /* net.riptide.igmpstat  one struct rt_igmp_stats */
 
 struct rt_ctl_hdr {
 	u16 version;              /* RT_CTL_VERSION */
@@ -171,6 +173,19 @@ struct rt_ctl_prof {
 	u32  total_us;            /* the same in microseconds (saturates at 0xffffffff) */
 	u32  max_us;              /* longest single call (sections: including nested sections) */
 	u32  rx_bytes;            /* WALL record only */
+};
+
+/* ---- multicast group memberships (ip maddr, netstat -g) ---- */
+struct rt_ctl_mcast {
+	char ifname[16];
+	u32  ifindex;
+	u8   family;              /* RT_AF_INET / RT_AF_INET6 */
+	u8   igmp;                /* IPv4: IGMP version spoken on the interface (1..3); IPv6: 0 */
+	u8   reporter;            /* IPv4, IGMPv1/v2: we sent the last report */
+	u8   hwlen;
+	u32  refcnt;              /* users: socket memberships and internal joins */
+	u8   group[16];           /* IPv4 as ::ffff:a.b.c.d */
+	u8   hwaddr[8];           /* link layer address of the group (Ethernet) */
 };
 
 /* ---- resolver configuration ---- */

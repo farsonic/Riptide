@@ -5,12 +5,13 @@
 # Table format (src/amiga/os/os_lvos.txt, src/amiga/lib_lvos.txt,
 # src/amiga/mni_lvos.txt):
 #
-#   @lib NAME BASEVAR [prefix=PFX] [basetype=STRUCTNAME] [callprefix=PFX]
+#   @lib NAME BASEVAR [prefix=PFX] [basetype=STRUCTNAME] [callprefix=PFX] [resource=1]
 #   BIAS RETTYPE FUNC(TYPE ARG REG, ...) [= CNAME]
 #
 # BIAS is the positive library vector offset (LVO = -BIAS). REG is one of
 # d0-d7/a0-a5. '#' starts a comment. BASEVAR '-' means the callers pass the
 # library base explicitly as the first argument (drivers with many bases).
+# resource=1: a resource (no standard library vectors; bias 6 is a call).
 #
 # Usage:
 #   gen_lvos.py call CC TABLE LIB OUT.h
@@ -107,7 +108,7 @@ def gen_call(lib, cc, out):
         o.append('extern %s%s;' % (base_decl(lib), lib.basevar))
     pfx = lib.opts.get('callprefix', '')
     for f in lib.funcs:
-        if f.bias <= 24:
+        if f.bias <= 24 and 'resource' not in lib.opts:
             continue
         name = pfx + f.name
         names = [n for t, n, r in f.args]

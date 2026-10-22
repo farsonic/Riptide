@@ -19,6 +19,9 @@ Riptide is a TCP/IP stack for AmigaOS 3.x on the 68020 to 68060.
 * Linux style tools: ip, ifconfig, route, arp, netstat, ping,
   traceroute, host, sysctl, hostname, nc, an ftp client, speedtest
   (a speedtest.net bandwidth test after speedtest-cli) and rtdiag
+* RiptidePrefs, a settings editor (GadTools) for riptide.conf: interface,
+  DHCP or static address, names, DNS, time, TCP; keeps comments and
+  lines it does not know
 * diagnostics for slow transfers: packet capture to pcap files,
   profiler, debug log, per-connection TCP details (netstat -T), driver
   counters (ip -s link) and rtdiag, which collects all of it

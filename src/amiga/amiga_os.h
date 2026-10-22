@@ -40,6 +40,9 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/timer.h>
+#include <libraries/locale.h>
+#include <proto/locale.h>
+#include <proto/battclock.h>
 #include "os/sana2.h"
 
 #define RTREG(r) __reg(#r)

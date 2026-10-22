@@ -1048,6 +1048,12 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		return rt_dbg_command(argc, argv, err, errlen);
 	if (!strcmp(k, "ipv6"))
 		return cfg_ipv6(argc, argv, err, errlen);
+	if (!strcmp(k, "ntp"))
+		return rt_ntp_command(argc, argv, err, errlen);
+	if (!strcmp(k, "timezone"))
+		return rt_tz_command(argc, argv, err, errlen);
+	if (!strcmp(k, "mdns"))
+		return rt_mdns_command(argc, argv, err, errlen);
 	if (!strcmp(k, "dhcp")) {
 		/* dhcp IFNAME [start|stop|release|renew] */
 		struct rt_netif *nif;

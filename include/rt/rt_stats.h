@@ -40,9 +40,16 @@ struct rt_tcp_stats {
 	    TCPMTUPFail, TCPMTUPSuccess;
 };
 
+struct rt_igmp_stats {
+	u32 InMsgs, InErrors, InQueriesV1, InQueriesV2, InQueriesV3, InBadQueries,
+	    InReports, InOurReports, InLeaves, OutMsgs, OutReportsV1, OutReportsV2,
+	    OutReportsV3, OutLeaves;
+};
+
 extern struct rt_ip_stats   rt_ipstat;
 extern struct rt_icmp_stats rt_icmpstat;
 extern struct rt_udp_stats  rt_udpstat;
 extern struct rt_tcp_stats  rt_tcpstat;
+extern struct rt_igmp_stats rt_igmpstat;
 
 #endif

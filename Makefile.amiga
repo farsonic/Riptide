@@ -21,7 +21,7 @@ AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/ami
              src/amiga/usergroup.c src/amiga/sana2.c src/amiga/mni.c src/amiga/stackproc.c \
              src/amiga/main.c src/amiga/selftest.c src/amiga/bench.c
 LIBS      := bsdsocket riptide usergroup
-HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h \
+HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h src/amiga/prefs/*.h \
                src/apps/speedtest/*.h) tests/amiga/rtcheck_body.h
 # network tools (src/amiga/cmd), each linked with cmdlib.o
 NETTOOLS  := ping ip ifconfig route arp netstat traceroute host sysctl hostname nc ftp rtdiag
@@ -31,6 +31,8 @@ ST_SRC    := st_main st_xml st_http st_util
 # test programs linked like the tools (tests/amiga): a minimal FTP server for
 # the ftp test, a minimal speedtest HTTP server for the speedtest test
 TESTTOOLS := ftpd-test httpd-test
+# RiptidePrefs (src/amiga/prefs): GadTools preferences editor for riptide.conf
+PREFS_SRC := riptideprefs conf_edit
 
 # IPv6 variants of ping and traceroute (ping6.c / traceroute6.c include
 # ping.c / traceroute.c); NETTOOLS is the list of tools linked with cmdlib
@@ -52,7 +54,7 @@ CFLAGS  := -m68020 -mtune=68020-60 -DRT_ARCH_M68K_ASM -O2 -std=gnu99 -ffreestand
            -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter \
            -Isrc/amiga/include -Isrc/amiga -Isrc/amiga/os -I$(BUILD) -Iinclude -Iinclude/rt
 LDFLAGS := -T src/amiga/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments
-GEN_H   := $(foreach l,exec dos timer,$(BUILD)/gen/$(l)_calls.h) \
+GEN_H   := $(foreach l,exec dos timer locale battclock intuition gadtools graphics,$(BUILD)/gen/$(l)_calls.h) \
            $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC) src/amiga/libc.c) \
@@ -60,7 +62,7 @@ RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIG
 RC_OBJ  := $(BUILD)/startup.o $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o
 TOOL_LIB := $(BUILD)/startup.o $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o $(BUILD)/amiga/libc.o $(BUILD)/core/inet6_text.o
 
-all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS))
+all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS)) $(BUILD)/RiptidePrefs
 
 $(BUILD)/gen/%_calls.h: src/amiga/os/os_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
@@ -104,6 +106,9 @@ $(BUILD)/ftpd-test.elf: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
 $(BUILD)/httpd-test.elf: $(BUILD)/tests/httpd_test.o $(TOOL_LIB) src/amiga/link.ld
 	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $< $(LIBGCC)
+PREFS_OBJ := $(patsubst %,$(BUILD)/amiga/prefs/%.o,$(PREFS_SRC))
+$(BUILD)/RiptidePrefs.elf: $(PREFS_OBJ) $(TOOL_LIB) src/amiga/link.ld
+	$(LD) $(LDFLAGS) -o $@ $(TOOL_LIB) $(PREFS_OBJ) $(LIBGCC)
 $(BUILD)/%: $(BUILD)/%.elf tools/elf2hunk.py
 	$(PYTHON) tools/elf2hunk.py -v $< $@
 
@@ -119,7 +124,7 @@ RT_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(BUILD)/ar
 RC_OBJ  := $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o
 TOOL_LIB := $(BUILD)/amiga/cmd/cmdlib.o $(BUILD)/core/printf.o $(BUILD)/core/inet6_text.o
 
-all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS))
+all: $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS)) $(BUILD)/RiptidePrefs
 
 $(BUILD)/gen/mni_calls.h: src/amiga/mni_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
@@ -159,6 +164,9 @@ $(BUILD)/ftpd-test: $(BUILD)/tests/ftpd_test.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
 $(BUILD)/httpd-test: $(BUILD)/tests/httpd_test.o $(TOOL_LIB)
 	$(VC) -o $@ $< $(TOOL_LIB) -lamiga
+PREFS_OBJ := $(patsubst %,$(BUILD)/amiga/prefs/%.o,$(PREFS_SRC))
+$(BUILD)/RiptidePrefs: $(PREFS_OBJ) $(TOOL_LIB)
+	$(VC) -o $@ $(PREFS_OBJ) $(TOOL_LIB) -lamiga
 
 # a client built only from the SDK in sdk/ and the NDK
 all: $(BUILD)/sdk_test
@@ -184,13 +192,14 @@ sdk-check:
 
 # ------------------------------------------------------------- tests ----
 check: all sdk-check
-	$(PYTHON) tests/amiga/test_hunk.py $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS)) $(SDK_BIN)
+	$(PYTHON) tests/amiga/test_hunk.py $(BUILD)/Riptide $(BUILD)/rtcheck $(addprefix $(BUILD)/,$(TOOLS) $(TESTTOOLS)) $(BUILD)/RiptidePrefs $(SDK_BIN)
 	tests/amiga/run_vamos.sh $(BUILD)/Riptide
+	tests/amiga/run_vamos_prefs.sh $(BUILD)/RiptidePrefs
 
 # ------------------------------------------------------------ package ----
 # build/package/Riptide/ (Install_Riptide, icons, C/, Docs/, SDK/, ReadMe),
 # build/riptide-<version>.lha (or .zip without an LHA writer) and .adf
-VERSION := $(shell sed -n 's/^\#define RIPTIDE_VERSION_STRING "\(.*\)"/\1/p' include/rt/riptide.h)
+VERSION := $(shell sed -n 's/^\#define RIPTIDE_VERSION_STRING "\(.*\)"/\1/p' include/rt/rt_version.h)
 package: all
 	PYTHON=$(PYTHON) tools/mkpackage.sh $(BUILD) build $(VERSION)
 

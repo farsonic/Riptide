@@ -61,7 +61,8 @@ The script does what the manual steps below describe:
    startup block. `ftpd-test` is only installed when you select it.
 3. **Copies the documentation** to `Riptide/Docs` in the Installer's default
    place (`Work:` if you have it, else `SYS:`) and, if selected, the SDK
-   to `Riptide/SDK`.
+   to `Riptide/SDK`. [RiptidePrefs](#riptideprefs), the settings editor,
+   goes to `SYS:Prefs` (selected by default).
 4. **Writes the configuration** `ENVARC:Riptide/riptide.conf` and copies it
    to `ENV:Riptide/`. The default is the emulator's `uaenet.device`, unit
    0, with DHCP, as in `examples/riptide-uaenet.conf` (the static slirp
@@ -83,8 +84,8 @@ The script does what the manual steps below describe:
    and, if you agree, starts it at once (through `rtcheck START=...
    NOCHECK`, which waits until the libraries are there).
 
-The install locations are kept in `ENVARC:Riptide/BinDir`, `DocDir` and
-`SDKDir`. Run the installer again to update Riptide (your configuration is
+The install locations are kept in `ENVARC:Riptide/BinDir`, `DocDir`,
+`SDKDir` and `PrefsDir`. Run the installer again to update Riptide (your configuration is
 kept unless you replace it) or to uninstall it: uninstalling deletes the
 programs, the documentation and the SDK, empties the `;BEGIN Riptide`
 block (the Installer cannot delete a block, only replace it) and deletes
@@ -129,21 +130,23 @@ Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
 Riptide CAPTURE start|stop|status|save FILE|clear [OPTIONS]
 Riptide PROFILE START|STOP|RESET|SHOW
 Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
+Riptide NTP [STATUS|SYNC|...] | MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
 ```
 
 | Argument | Meaning |
 |---|---|
 | `CONFIG=file` | Use this configuration file instead of `ENV:Riptide/riptide.conf`. |
 | `DEBUG=n` | Log level: 0 = errors, 1 = warnings (the default), 2 = info, 3 = debug. |
-| `STATUS` | Ask the running Riptide for a summary: interfaces, addresses, packet counters, driver and DHCP state, the routing table, DNS servers and library users. |
+| `STATUS` | Ask the running Riptide for a summary: interfaces, addresses, packet counters, driver and DHCP state, NTP and mDNS state, the routing table, DNS servers and library users. |
 | `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
 | `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and what one call of the OS services the stack uses per packet costs, and exit. Needs timer.device, so not under vamos. |
 | `CAPTURE ...` | Packet capture in the running stack; the rest of the line is the command (see "Packet capture"). |
 | `PROFILE ...` | Control the running stack's profiler (see "Profiling and debug log"). |
 | `DEBUG ...` | With a word instead of a number: control the running stack's debug log (see "Profiling and debug log"). A number is still the log level of a new instance. |
+| `NTP ...`, `MDNS ...`, `TIMEZONE ...` | The `ntp`, `mdns` and `timezone` keywords in the running stack, e.g. `Riptide NTP STATUS`, `Riptide NTP SYNC` (see "Time and .local names"). |
 
-`QUIT`, `STATUS`, `CAPTURE`, `PROFILE` and `DEBUG` talk to the running
+`QUIT`, `STATUS`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS` and `TIMEZONE` talk to the running
 stack through the public message port `RIPTIDE`. You can also signal the
 Riptide process directly:
 
@@ -181,6 +184,10 @@ capture start [OPTIONS] | capture stop | capture status | capture save FILE | ca
                                    # packet capture, see "Packet capture"
 profile start|stop|reset|show      # the profiler (see "Profiling and debug log")
 debug CATEGORY[,...]|all|none [size=KB] | debug show [N] | debug clear | debug dump FILE
+ntp SERVER [SERVER...] | ntp on|off|sync|status    # SNTP client, see "Time and .local names"
+ntp interval SECONDS | ntp step MS | ntp battclock on|off
+timezone [+|-]HH[:MM] | timezone auto              # local time = UTC + offset
+mdns on|off|status                 # the multicast DNS responder for HOSTNAME.local
 ```
 
 The short forms of older versions (`route add default 10.0.2.2`,
@@ -221,6 +228,67 @@ gets a window update once the window can open by four segments (or a
 quarter of the buffer), not after every read. The SANA-II read count is changed
 with `ip link set NAME reads N` (see below). `netstat -T` shows the effect
 on each connection.
+
+### Time and .local names
+
+**NTP.** `ntp pool.ntp.org` (or up to four names or addresses) starts the
+SNTP client (RFC 4330, the client side of NTPv4): the first query goes out
+two seconds after the stack starts, then once an hour (`ntp interval
+SECONDS`, 64 to 604800). `ntp on` without servers uses the NTP servers of
+the DHCP lease (option 42, requested automatically), or `pool.ntp.org`
+when the lease has none. Names are looked up through the configured name
+servers, A records first, then AAAA; each address gets two seconds to
+answer, and the first valid reply wins. Replies are checked (our
+originate stamp, mode, version, stratum 1-15, leap indicator, root
+delay/dispersion under 16 s, a non-zero transmit stamp, a round trip under
+10 s); a kiss-o'-death `RATE` doubles the interval, `DENY`/`RSTR` skip that
+server. After a failed sync the client tries again after 30 s, 60 s, 120 s
+... (at most the interval). `ntp sync` syncs now, `ntp off` stops.
+
+The offset is computed from the four time stamps
+(`((T2-T1) + (T3-T4)) / 2`, the delay `(T4-T1) - (T3-T2)`) without 64-bit
+divisions, and NTP time stamps are converted with 32-bit wrap-around, so the
+client keeps working through the NTP era change in February 2036 (up to
+2106). When the clock is off by at least `ntp step` milliseconds (500 by
+default) Riptide sets the system time with timer.device `TR_SETSYSTIME`;
+AmigaOS cannot slew, so smaller offsets are only reported. With `ntp
+battclock on` the battery-backed clock (battclock.resource) is set too.
+
+**Time zone.** AmigaOS keeps local time. Riptide converts with the
+offset from the Locale preferences (`loc_GMTOffset`, read when the stack
+starts); `timezone +10:00` (or `-5`, `+5:30`) overrides it and `timezone
+auto` goes back to the Locale value. `Riptide TIMEZONE` shows the offset in
+use. Daylight saving time is not tracked: change the Locale preferences (or
+the `timezone` line) when it starts and ends.
+
+`Riptide NTP STATUS` and `Riptide STATUS` show the last sync:
+
+```
+NTP: pool.ntp.org, stratum 2, offset +3.214 s (clock set), delay 41 ms, 12 s ago, next in 3588 s
+```
+
+**mDNS.** Riptide answers multicast DNS (RFC 6762) for `HOSTNAME.local`
+(the first label of `hostname`, `amiga` when none is set) on every
+Ethernet-like interface with an address, over IPv4 (224.0.0.251) and IPv6
+(ff02::fb) port 5353: A and AAAA records of that interface (120 s TTL) and
+the reverse `in-addr.arpa`/`ip6.arpa` PTR names of its addresses. At start,
+when an interface or address appears and when the host name changes, the
+name is probed three times 250 ms apart and announced twice one second
+apart; if another host already uses it Riptide picks `NAME-2.local`,
+`NAME-3.local`, ... (the log says so, and `Riptide MDNS STATUS` shows the
+name in use). Questions with the unicast-response bit are answered by
+unicast, others by multicast at most once a second per interface, known
+answers are suppressed, and queries from other ports than 5353 get the
+"legacy unicast" answer of RFC 6762 6.7. On by default; `mdns off` in the
+configuration (or `Riptide MDNS OFF`) turns it off and says goodbye (TTL 0).
+DNS-SD service records are not published.
+
+Programs can also resolve `.local` names: `gethostbyname()` and
+`getaddrinfo()` send a one-shot mDNS query for names ending in `.local`
+(to 224.0.0.251, two tries of one second) instead of asking the unicast
+name servers; answers are cached for their TTL. The stack's own
+`HOSTNAME.local` resolves to its interface addresses without traffic.
+Link-local IPv6 answers are skipped (a hostent has no zone).
 
 ### Packet capture
 
@@ -437,6 +505,67 @@ network card.
 `#` comments. Its entries go into the static host table, which is checked
 before DNS.
 
+## RiptidePrefs
+
+`RiptidePrefs` is a preferences editor for `riptide.conf` in the style of
+the system's prefs editors: a GadTools window (no MUI) on the Workbench
+screen or another public screen, for AmigaOS 2.04/3.x and AROS. The
+layout follows the screen font. Start it from its icon (`SYS:Prefs`) or
+from a Shell:
+
+```
+RiptidePrefs [FROM=file] [EDIT] [USE] [SAVE] [PUBSCREEN=name]
+```
+
+It edits `ENV:Riptide/riptide.conf` (`ENVARC:` when `ENV:` has none, or
+the `FROM` file). The window has a **Page** cycle gadget and these pages:
+
+| Page | Settings | Lines in riptide.conf |
+|---|---|---|
+| Interface | interface name, device, unit, MTU, TCP window, reads, IPv6 on/off | the first `interface NAME device=...` line (other options such as `raw` or `options=` are kept), `ipv6 on\|off` |
+| Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway | `dhcp IF`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
+| Names | host name, domain, up to three DNS servers | `hostname`, `domain`, `nameserver` |
+| Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
+| TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=` |
+| Other lines | a list of the lines RiptidePrefs does not edit itself (e.g. `compat ...`, extra interfaces, routes); a line can be edited, replaced, added or deleted | as typed |
+
+A screenshot of the first page shows the window titled "Riptide
+Preferences": the Page cycle gadget at the top, the labelled fields of
+the page below it (string gadgets, a check box for IPv6), a hint line
+("Interface changes need a restart of Riptide") and the buttons **Save**,
+**Use**, **Apply** and **Cancel** along the bottom.
+
+* **Save** writes `ENVARC:Riptide/riptide.conf` (the old one becomes
+  `riptide.conf.bak`) and `ENV:Riptide/riptide.conf`; **Use** writes only
+  `ENV:`. **Cancel** (or the close gadget, or Esc) changes nothing.
+* **Apply** sends what a running Riptide can change at once through the
+  RIPTIDE port: host name, domain, name servers (`nameserver flush` and
+  `nameserver add`), NTP, time zone, mDNS and the sysctls. It says which
+  changes (interface, address, IPv6) need a restart of Riptide. After
+  Save or Use, RiptidePrefs offers the same when Riptide is running.
+* The file is changed only where you changed a setting: comments, blank
+  lines, unknown keywords, the order of lines, trailing `# comments` on
+  edited lines and CRLF line ends stay as they were, so an unchanged file
+  is written back byte for byte. New settings are added after related
+  lines (a domain after the host name, name servers after `dhcp` or
+  `ifconfig`) or at the end.
+* Input is checked before anything is written; a requester names the
+  field (e.g. "Address: enter an IPv4 address ...") and the cursor goes
+  there. Empty number fields mean "Riptide's default" and leave the
+  keyword out of the file.
+* Keyboard: the underlined letter of a field activates it (or toggles a
+  check box or cycle gadget; with Shift backwards), `p`/`P` switch pages,
+  `s`, `u`, `a`, `c` are the buttons, Esc cancels. On the Other lines
+  page `l` edits the line, `d` adds it, `r` replaces and `e` deletes the
+  selected one.
+* `USE` or `SAVE` on the command line copies the file without opening the
+  window (`RiptidePrefs FROM=RAM:test.conf SAVE`, or `RiptidePrefs USE`
+  to copy `ENVARC:` to `ENV:`).
+
+Only the first `interface` line with `device=` and its `dhcp`/`ifconfig`/
+`route add default` lines are on the Interface and Address pages; other
+interfaces and routes appear under Other lines.
+
 ## Tools
 
 Riptide comes with the usual Linux network commands, written for AmigaOS:
@@ -463,7 +592,9 @@ Where the data comes from:
 
 iproute2 syntax and output; objects and commands can be abbreviated (`ip
 a`, `ip r`, `ip n`, `ip l`). Options: `-s` statistics, `-d` details (shows
-the driver), `-br` brief, `-4`.
+the driver), `-br` brief, `-4`. `ip maddr [show [dev IF]]` lists the
+multicast memberships of each interface (link layer, IPv4 and IPv6
+groups, `users N` when shared; `-d` adds the IGMP version spoken).
 
 ```
 1> ip a
@@ -600,7 +731,8 @@ Flags: `C` complete, `M` permanent. Proxy ARP (`pub`) is not supported.
 `netstat [-a] [-n] [-t] [-u] [-w] [-l] [-e] [-c]` lists sockets (default:
 connected ones; `-a` all, `-l` listening; `-e` adds RTT, cwnd and
 retransmissions of TCP), `-r` the routing table, `-i` the interface
-counters, `-s` the protocol statistics, `-T` (`--tcp-info`) the details
+counters, `-s` the protocol statistics (with an `Igmp:` section), `-g`
+(`--groups`) the multicast group memberships, `-T` (`--tcp-info`) the details
 of each TCP connection; `-c` repeats every second until Ctrl-C.
 
 ```
@@ -709,7 +841,12 @@ timeout in seconds.
   connection): a minimal netcat for testing. Standard input is sent first,
   then the reply is copied to standard output (AmigaDOS input cannot be
   waited on together with a socket); `-d` sends nothing; `-u` sends stdin
-  as one UDP datagram.
+  as one UDP datagram. `nc -u -l [-v] [-w secs] [-c count] PORT` prints
+  received datagrams (until `-w` seconds of silence or `count` of them);
+  `-m GROUP` joins an IPv4 multicast group first (on the interface with
+  address `-I ADDR`). When sending, `-T ttl`, `-I ADDR` and `-L` set
+  `IP_MULTICAST_TTL`, `IP_MULTICAST_IF` and `IP_MULTICAST_LOOP` 0:
+  `nc -u -T 4 239.1.2.3 5000 <file`.
 
 ### ftp
 
@@ -1055,6 +1192,8 @@ byte order, everything else in host order; there are no pointers.
 | 18 | `net.riptide.tcpinfo` | `struct rt_ctl_tcpinfo`: every TCP socket of both families with RTT, windows, buffers, queues, loss and ACK counters, 64-bit byte counts and time spent busy, window/buffer limited, with unread data and with a zero window (`netstat -T`) |
 | 19 | `net.riptide.profile` | `struct rt_ctl_prof`: the profiler (`profile start`): record 0 the run (wall-clock time, bytes received), then one per section and counter (calls, total and longest time) |
 | 20 | `net.riptide.drivers` | `struct rt_ctl_driver`, one per driver interface (SANA-II, MNI): receive queues (reads configured/queued, lowest, times empty), frames per wakeup, buffer shortages, errors by code, transmits in flight, the `S2_DEVICEQUERY` values and the driver's own `S2_GETGLOBALSTATS`/`S2_GETSPECIALSTATS` |
+| 30 | `net.riptide.mcast` | `struct rt_ctl_mcast`: multicast memberships of both families: interface, group, link layer address, users, IGMP version and reporter flag (`ip maddr`, `netstat -g`) |
+| 31 | `net.riptide.igmpstat` | one `struct rt_igmp_stats` |
 
 Use BSD sysctl semantics: call with `oldp = NULL` to get the size,
 allocate a bit more (a table can grow in between) and call again. If it
@@ -1100,6 +1239,58 @@ cannot hang the stack. Only `interface` lines take a moment while the
 driver opens. Messages still queued at shutdown are replied with
 `ESHUTDOWN`. Version 1 messages (`mn_Length` without the reply buffer
 fields, as sent by Riptide 0.9) are still understood.
+
+## IPv4 multicast
+
+Riptide is a multicast host (RFC 1112): it joins groups, reports them
+with IGMP and sends and receives multicast datagrams; it does not route
+multicast.
+
+**IGMP.** IGMPv3 (RFC 3376) by default, in its simplest form: every group
+is in EXCLUDE mode with an empty source list. Joins and leaves go out as
+state change reports at once and once more within a second (Robustness 2,
+or the querier's QRV), general queries are answered with one report of all
+groups after a random delay up to the Maximum Response Time,
+group-and-source queries with the queried sources. When an IGMPv2 or v1
+querier is heard the interface falls back to that version (v1/v2 reports
+to the group with report suppression, v2 leaves to 224.0.0.2) until the
+older querier has been silent for 260 s (400 s for v1).
+`net.inet.igmp.version` (0 = automatic, 1..3) caps the version. Messages
+carry the Router Alert option, TTL 1 and TOS 0xc0. 224.0.0.1 is joined on
+every multicast interface and never reported. Groups are announced again
+when an interface comes up or gets a new address.
+
+**Sockets.** The 4.4BSD/AmiTCP option numbers at level `IPPROTO_IP`:
+
+| option | value | argument |
+|---|---|---|
+| `IP_MULTICAST_IF` | 9 | `struct in_addr`: the interface with that address, `INADDR_ANY` = the route to the group (else the first multicast interface; no default route needed). Also `struct ip_mreqn` (12 bytes, index wins) |
+| `IP_MULTICAST_TTL` | 10 | `u_char` (or `int`), default 1; 0 delivers only to members on this host |
+| `IP_MULTICAST_LOOP` | 11 | `u_char` (or `int`), default 1: members on this host get a copy |
+| `IP_ADD_MEMBERSHIP` | 12 | `struct ip_mreq` (group, interface address or `INADDR_ANY`); also `struct ip_mreqn`. At most 20 per socket; `EADDRINUSE` when already joined |
+| `IP_DROP_MEMBERSHIP` | 13 | as above; `EADDRNOTAVAIL` when not joined |
+
+UDP and raw sockets take them. As in BSD, a UDP datagram for a group is
+delivered to every socket bound to the port (several with `SO_REUSEADDR`
+or `SO_REUSEPORT`) that joined the group on the receiving interface;
+224.0.0.1 goes to every socket on the port, and sockets may bind to the
+group address. Closing a socket leaves its groups. Source-specific
+options (`IP_ADD_SOURCE_MEMBERSHIP`, `IP_BLOCK_SOURCE`) are not offered:
+their numbers differ between systems and the AmiTCP SDK has none.
+
+**Drivers.** A group is programmed into the driver's filter as
+01:00:5e plus the low 23 bits of the group (`S2_ADDMULTICASTADDRESS` on
+SANA-II, `AddMulticast()` on MNI), once per link layer address however
+many groups and sockets share it. A SANA-II driver without a multicast
+filter may not deliver the groups at all.
+
+**Inside the stack.** Other modules join with `rt_ip_mc_join(netif,
+group)` and `rt_ip_mc_leave()` (reference counted, lock held,
+`include/rt/rt_ip.h`); `rt_ip_mc_member()` is what IP input accepts and
+`rt_ip_mc_default_if(group)` picks the interface. Such a join makes the
+interface accept the group; sockets still receive its datagrams only
+after `IP_ADD_MEMBERSHIP`, so the mDNS responder joins 224.0.0.251
+through its kernel socket.
 
 ## IPv6
 
@@ -1181,7 +1372,7 @@ used:
   do not list IPv6 sockets.
 
 **Drivers.** SANA-II devices get CMD_READs for type 0x86DD, and the
-multicast groups IPv6 needs are programmed with
+multicast groups IPv6 needs (and the IPv4 ones) are programmed with
 `S2_ADDMULTICASTADDRESS`/`S2_DELMULTICASTADDRESS`. A driver without a
 multicast filter (it answers `S2ERR_NOT_SUPPORTED`, logged once) may not
 deliver neighbour solicitations, and then IPv6 cannot resolve neighbours
@@ -1417,8 +1608,8 @@ make -f Makefile.amiga package    # Installer package, see below
 
 `make -f Makefile.amiga package` (`tools/mkpackage.sh`) assembles
 `build/package/Riptide/`: `Install_Riptide` (from `install/`), `ReadMe`,
-the Aminet readme `Riptide.readme`, `C/` with all programs, `Docs/` and
-`SDK/`, with icons made by `tools/mkicon.py` (classic OS 2.x/3.x
+the Aminet readme `Riptide.readme`, `RiptidePrefs`, `C/` with all
+programs, `Docs/` and `SDK/`, with icons made by `tools/mkicon.py` (classic OS 2.x/3.x
 `.info` files; `tools/mkicon.py dump FILE.info` prints one). From that it
 makes `build/riptide-<version>.lha` with an LHA archiver that can write
 archives ("LHa for UNIX" `lha`, or `jlha` from Debian/Ubuntu's
@@ -1462,11 +1653,17 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_speedtest.sh build/amiga` | speedtest against three `httpd-test` servers on FS-UAE (plain, chunked with redirects, redirecting to https://): `--server-url`, `--mirror`, all output formats, byte counts against the servers' counters, errors and Ctrl-C. |
 | `tests/t_speedtest_*.c` (host) | speedtest's XML, URL and HTTP parsers (every split point, random input), distances; end to end against `tools/speedtest_mock.py` over Linux sockets and over Riptide through TUN. |
 | `tests/amiga/run_fsuae_bench.sh build/amiga` | `Riptide BENCH` on FS-UAE (A1200; `FSUAE_MODEL=A4000/040 FSUAE_EXTRA="cpu = 68060"` and so on for other CPUs). |
-| `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
+| `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, RiptidePrefs in `SYS:Prefs`, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
+| `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply. |
+| `tests/amiga/run_vamos_prefs.sh build/amiga/RiptidePrefs` | (in `make -f Makefile.amiga check`) `RiptidePrefs FROM ... SAVE` / `USE` without a window under vamos: the files in `ENVARC:`/`ENV:` equal the input, the second Save leaves `riptide.conf.bak`, error return codes. |
+| `tests/amiga/run_fsuae_prefs.sh build/amiga` | RiptidePrefs on FS-UAE (AROS): opens the window, walks every page (screenshots in OUTDIR), switches to a static address and saves to get the validation requester, edits host name, domain, DNS, NTP, mDNS and an Other line with the keyboard (xdotool), saves, and compares `ENVARC:` (exact expected file), `ENV:` and the `.bak`. Run it for `build/amiga-gcc` too. |
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 | `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root; `BR_IF`, `BR_PEER`, `BR_NET` choose other veth names and another /24 than `rtbr0`, `rtbr1`, `192.168.77`): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
+| `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
+| `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
+| `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |
 | `tests/amiga/run_fsuae_bsdsocktest.sh build/amiga` | [bsdsocktest](https://github.com/tbdye/bsdsocktest), an independent bsdsocket.library conformance suite (`BSDSOCKTEST=` its Amiga binary from the release archive), on FS-UAE: its loopback tests (socket lifecycle, send/recv, options, WaitSelect, signals, DNS, utility calls, descriptor transfer, errno, ICMP, throughput). Passes when every test that ran passed; 0.12: 130 of 130, 12 skipped (they need a host helper or a network). |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real

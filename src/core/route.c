@@ -321,12 +321,14 @@ lookup:
 		break;
 	}
 	if (!best) {
-		if (dst == RT_INADDR_BROADCAST) {
-			/* Limited broadcast without any route: first broadcast
-			 * capable interface that is up. */
+		int llmc = (rt_ntohl(dst) & 0xffffff00u) == 0xe0000000u;
+		if (dst == RT_INADDR_BROADCAST || llmc) {
+			/* Limited broadcast or link-local multicast (224.0.0.0/24,
+			 * e.g. mDNS) without any route: first broadcast capable
+			 * interface that is up (and, for multicast, configured). */
 			for (nif = rt_netif_list(); nif; nif = nif->next)
 				if ((nif->flags & (RT_IFF_UP | RT_IFF_BROADCAST)) ==
-				    (RT_IFF_UP | RT_IFF_BROADCAST))
+				    (RT_IFF_UP | RT_IFF_BROADCAST) && (!llmc || nif->addr))
 					break;
 			if (nif) {
 				nh->netif = nif;

@@ -2,6 +2,7 @@
 # Riptide - write classic Workbench icons (.info files, OS 2.x/3.x format).
 #
 #   tools/mkicon.py project OUT.info [--tool T] [--tooltype S]... [--stack N] [--image install|doc]
+#   tools/mkicon.py tool    OUT.info [--tooltype S]... [--stack N] [--image prefs|install]
 #   tools/mkicon.py drawer  OUT.info [--image drawer|docs] [--window X,Y,W,H]
 #                   (both also take --pos X,Y: the icon's place in its window)
 #   tools/mkicon.py dump    FILE.info        parse a .info file and print it
@@ -161,8 +162,24 @@ def image_drawer(label_wave=True):
     return c
 
 
+def image_prefs():
+    """A preferences window: title bar, two input fields, a wave below."""
+    c = Canvas(40, 24)
+    c.rect(2, 1, 37, 21, WHITE)
+    c.frame(2, 1, 37, 21, BLACK)
+    c.rect(3, 2, 36, 4, BLUE)
+    c.hline(3, 36, 5, BLACK)
+    for y in (8, 13):
+        c.hline(6, 12, y + 1, BLACK)
+        c.frame(15, y, 33, y + 3, BLACK)
+        c.hline(16, 32, y + 1, GREY)
+    c.wave(4, 35, 18, 1, 1.5, BLUE, thick=2)
+    c.hline(3, 38, 22, BLACK)
+    return c
+
+
 IMAGES = {"install": image_install, "doc": image_doc, "drawer": image_drawer,
-          "docs": lambda: image_drawer(True)}
+          "docs": lambda: image_drawer(True), "prefs": image_prefs}
 
 
 # ---------------------------------------------------------------- writer --

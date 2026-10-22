@@ -102,6 +102,23 @@ struct rt_timeval {
 #define RT_IP_MULTICAST_LOOP   11
 #define RT_IP_ADD_MEMBERSHIP   12
 #define RT_IP_DROP_MEMBERSHIP  13
+#define RT_IP_DEFAULT_MULTICAST_TTL  1
+#define RT_IP_DEFAULT_MULTICAST_LOOP 1
+#define RT_IP_MAX_MEMBERSHIPS        20   /* per socket (4.4BSD) */
+
+/* IP_ADD_MEMBERSHIP / IP_DROP_MEMBERSHIP (4.4BSD, AmiTCP SDK): addresses
+ * in network order; imr_interface 0 = the interface the group routes to.
+ * The 12 byte Linux struct ip_mreqn (third field: interface index, which
+ * wins when non-zero) is accepted too, also for IP_MULTICAST_IF. */
+struct rt_ip_mreq {
+	u32 imr_multiaddr;
+	u32 imr_interface;
+};
+struct rt_ip_mreqn {
+	u32 imr_multiaddr;
+	u32 imr_address;
+	s32 imr_ifindex;
+};
 
 /* ---- IPPROTO_IPV6 (41) options: KAME/RFC 3542 numbers. The Miami SDK
  * defines the first six with the same values (as aliases of the IPv4

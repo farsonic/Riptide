@@ -525,6 +525,24 @@ static int h_dns(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *
 	return dump_emit(old, oldlen, sizeof(d), 1, &d);
 }
 
+/* ---- multicast groups ---- */
+
+static int h_mcast(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_ctl_mcast *recs;
+	int count = rt_mcast_list(NULL, 0), r;
+
+	if (!old)
+		return dump_emit(NULL, oldlen, sizeof(*recs), (u32)count, NULL);
+	recs = count ? rt_malloc((u32)count * sizeof(*recs)) : NULL;
+	if (count && !recs)
+		return -RT_ENOMEM;
+	count = rt_mcast_list(recs, count);
+	r = dump_emit(old, oldlen, sizeof(*recs), (u32)count, recs);
+	rt_free(recs);
+	return r;
+}
+
 static int h_stats(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
 {
 	return dump_emit(old, oldlen, (u16)e->max, 1, e->ptr);
@@ -557,6 +575,8 @@ static const struct rt_sysctl ctl_sysctls[] = {
 	DUMP("ifaces6", RT_CTL_IFACES6, h_ifaces6, "rt_ctl_hdr + struct rt_ctl_iface6[]"),
 	DUMP("tcpinfo", RT_CTL_TCPINFO, h_tcpinfo, "rt_ctl_hdr + struct rt_ctl_tcpinfo[]"),
 	DUMP("drivers", RT_CTL_DRIVERS, h_drivers, "rt_ctl_hdr + struct rt_ctl_driver[]"),
+	DUMP("mcast", RT_CTL_MCAST, h_mcast, "rt_ctl_hdr + struct rt_ctl_mcast[]"),
+	STATS("igmpstat", RT_CTL_IGMPSTAT, rt_igmpstat),
 };
 
 void rt_ctl_init(void)

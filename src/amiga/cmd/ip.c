@@ -3,7 +3,7 @@
  * neighbour table with iproute2 syntax and output.
  *
  *   ip [-s] [-d] [-4 | -6] [-br] OBJECT [COMMAND [ARGS]]
- *   OBJECT := link | address | route | neigh | dhcp | dns   (abbreviations work)
+ *   OBJECT := link | address | maddress | route | neigh | dhcp | dns   (abbreviations work)
  *
  * Data comes from the net.riptide.* tables (RiptideSysCtl), changes go to
  * the running stack as configuration commands through the RIPTIDE port.
@@ -19,7 +19,7 @@ static int opt_family;           /* 0 both, 4, 6 (-4 / -6 / -f inet|inet6) */
 static void usage(void)
 {
 	cl_puts("Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n"
-	        "where  OBJECT := { link | address | route | neigh | dhcp | dns }\n"
+	        "where  OBJECT := { link | address | maddress | route | neigh | dhcp | dns }\n"
 	        "       OPTIONS := { -s[tatistics] | -d[etails] | -4 | -6 | -br[ief] | -V[ersion] }\n"
 	        "\n"
 	        "  ip link [show [dev] IF]\n"
@@ -38,6 +38,7 @@ static void usage(void)
 	        "           [via GW] [dev IF] [metric N] [mtu N]\n"
 	        "  ip route get ADDR | ip route flush { dev IF | cache | all }\n"
 	        "  ip -6 route [show] | ip -6 route { add | del } PREFIX|default [via GW] [dev IF]\n"
+	        "  ip maddr [show [dev IF]]\n"
 	        "  ip neigh [show [dev IF]]\n"
 	        "  ip neigh { add | replace } ADDR lladdr MAC [dev IF] [nud permanent]\n"
 	        "  ip neigh del ADDR [dev IF] | ip neigh flush [dev IF]\n"
@@ -1173,6 +1174,93 @@ static void neigh6_show(const char *dev)
 		FreeVec(d);
 }
 
+/* ip maddr: multicast addresses per interface (iproute2 layout) */
+static int do_maddr(int argc, char **argv, int i)
+{
+	const char *cmd = i < argc ? argv[i++] : "show";
+	const char *only = NULL;
+	struct rt_ctl_hdr hi, hm;
+	void *di, *dm;
+	u32 k, j, l;
+
+	if (!(cl_match(cmd, "show") || cl_match(cmd, "list") || !strcmp(cmd, "lst"))) {
+		if (!strcmp(cmd, "add") || !strcmp(cmd, "delete") || !strcmp(cmd, "del")) {
+			cl_error("ip maddr %s: not supported (join groups with IP_ADD_MEMBERSHIP)", cmd);
+			return CL_ERROR;
+		}
+		usage();
+		return CL_ERROR;
+	}
+	if (i < argc && !(only = dev_arg(argc, argv, &i))) {
+		usage();
+		return CL_ERROR;
+	}
+	di = cl_dump(RT_CTL_IFACES, &hi);
+	if (!di)
+		return CL_FAIL;
+	dm = cl_dump(RT_CTL_MCAST, &hm);
+	if (!dm) {
+		FreeVec(di);
+		return CL_FAIL;
+	}
+	if (only) {
+		for (k = 0; k < hi.count; k++)
+			if (!strcmp(((struct rt_ctl_iface *)cl_rec(di, &hi, k))->name, only))
+				break;
+		if (k == hi.count) {
+			FreeVec(di);
+			FreeVec(dm);
+			return no_dev(only);
+		}
+	}
+	for (k = 0; k < hi.count; k++) {
+		struct rt_ctl_iface *f = cl_rec(di, &hi, k);
+		if (only && strcmp(f->name, only))
+			continue;
+		cl_printf("%lu:\t%s\n", (unsigned long)f->index, f->name);
+		/* link layer addresses, each once, IPv4 groups' first */
+		for (j = 0; j < hm.count && !opt_family; j++) {
+			struct rt_ctl_mcast *m = cl_rec(dm, &hm, j);
+			if (m->ifindex != f->index || !m->hwlen)
+				continue;
+			for (l = 0; l < j; l++) {
+				struct rt_ctl_mcast *o = cl_rec(dm, &hm, l);
+				if (o->ifindex == f->index && o->hwlen == m->hwlen &&
+				    !memcmp(o->hwaddr, m->hwaddr, m->hwlen))
+					break;
+			}
+			if (l == j) {
+				char mac[3 * 8];
+				cl_printf("\tlink  %s\n", cl_mac(m->hwaddr, m->hwlen, mac));
+			}
+		}
+		for (l = 0; l < 2; l++) {
+			int fam = l ? 6 : 4;
+			if (opt_family && opt_family != fam)
+				continue;
+			for (j = 0; j < hm.count; j++) {
+				struct rt_ctl_mcast *m = cl_rec(dm, &hm, j);
+				struct cl_addr a;
+				char g[CL_ADDRSTRLEN];
+				if (m->ifindex != f->index || m->family != (fam == 4 ? RT_AF_INET : RT_AF_INET6))
+					continue;
+				memset(&a, 0, sizeof(a));
+				a.family = m->family;
+				memcpy(a.a.b, m->group, 16);
+				cl_printf("\t%s %s", fam == 4 ? "inet " : "inet6", cl_addr_str(&a, g));
+				if (m->refcnt > 1)
+					cl_printf(" users %lu", (unsigned long)m->refcnt);
+				if (opt_details && fam == 4 && m->igmp)
+					cl_printf(" igmpv%u%s", (unsigned)m->igmp, m->reporter ? " reporter" : "");
+				cl_puts("\n");
+			}
+		}
+	}
+	FreeVec(di);
+	FreeVec(dm);
+	return CL_OK;
+}
+
 static int do_neigh(int argc, char **argv, int i)
 {
 	const char *cmd = i < argc ? argv[i++] : "show";
@@ -1420,6 +1508,8 @@ static int ip_main(int argc, char **argv)
 		return do_link(argc, argv, i);
 	if (cl_match(obj, "route") || !strcmp(obj, "ro"))
 		return do_route(argc, argv, i);
+	if (cl_match(obj, "maddress") && strlen(obj) >= 2)
+		return do_maddr(argc, argv, i);
 	if (cl_match(obj, "neighbour") || cl_match(obj, "neighbor"))
 		return do_neigh(argc, argv, i);
 	if (cl_match(obj, "dhcp"))

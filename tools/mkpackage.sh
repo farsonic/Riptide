@@ -8,6 +8,7 @@
 #   Install_Riptide(.info)   Installer script and its icon
 #   ReadMe(.info)            short instructions
 #   Riptide.readme           Aminet readme
+#   RiptidePrefs(.info)      the preferences editor for riptide.conf
 #   C/                       Riptide, rtcheck, the network tools, ftpd-test
 #   Docs/(.info)             AMIGA.md, COMPARISON.md, README.md, LICENSE,
 #                            riptide-uaenet.conf (each with an icon)
@@ -35,7 +36,7 @@ TOOLS="$TOOLS ping6 traceroute6"      # IPv6 variants of ping and traceroute
 TOOLS="$TOOLS rtdiag"                 # diagnostics for bug reports
 mkicon="$PYTHON $top/tools/mkicon.py"
 
-for f in Riptide rtcheck $TOOLS ftpd-test; do
+for f in Riptide rtcheck $TOOLS ftpd-test RiptidePrefs; do
 	[ -f "$BUILD/$f" ] || { echo "mkpackage: $BUILD/$f is missing (build first)" >&2; exit 1; }
 done
 
@@ -49,6 +50,9 @@ for f in Riptide rtcheck $TOOLS ftpd-test; do
 	cp "$BUILD/$f" "$pkg/C/$f"
 	chmod 755 "$pkg/C/$f"
 done
+
+cp "$BUILD/RiptidePrefs" "$pkg/RiptidePrefs"
+chmod 755 "$pkg/RiptidePrefs"
 
 # installer, readmes
 cp "$top/install/Install_Riptide" "$pkg/Install_Riptide"
@@ -66,6 +70,7 @@ $mkicon project "$pkg/Install_Riptide.info" --image install --tool Installer --s
 	--tooltype APPNAME=Riptide --tooltype MINUSER=NOVICE --tooltype DEFUSER=AVERAGE
 $mkicon project "$pkg/ReadMe.info" --image doc --tool SYS:Utilities/MultiView --pos 150,10
 $mkicon drawer  "$pkg/Docs.info" --image docs --window 80,60,420,120 --pos 230,10
+$mkicon tool    "$pkg/RiptidePrefs.info" --image prefs --stack 16384 --pos 310,10
 x=10 y=8
 for f in AMIGA.md COMPARISON.md README.md LICENSE riptide-uaenet.conf; do
 	$mkicon project "$pkg/Docs/$f.info" --image doc --tool SYS:Utilities/MultiView --pos $x,$y

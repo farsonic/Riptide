@@ -10,7 +10,8 @@
  * straight into rt_bufs taken from a pre-filled pool. The callbacks only
  * move records between lists under Disable() and Signal() the Riptide
  * process, which feeds the stack under the lock (mni_poll). IPv6 is added
- * as a third packet type; its multicast groups go to the driver's hash
+ * as a third packet type; multicast groups (IPv6, and IPv4 ones joined
+ * with IGMP) go to the driver's hash
  * filter with AddMulticast/RemMulticast (-78/-84), called directly like
  * Send, under the stack lock.
  * SPDX-License-Identifier: GPL-2.0-only
