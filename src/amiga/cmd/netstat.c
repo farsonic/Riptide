@@ -6,6 +6,7 @@
  *   netstat -r [-n] [-e]          routing table
  *   netstat -i                    interfaces
  *   netstat -s                    protocol statistics
+ *   netstat -g [-46]              multicast group memberships
  *   netstat -T [-46anc]           TCP connection details (net.riptide.tcpinfo)
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -20,12 +21,13 @@ static void usage(void)
 {
 	cl_puts("usage: netstat [-veenNcCF] [<Af>] -r         netstat {-V|--version|-h|--help}\n"
 	        "       netstat [-vnNcaeol] [<Socket> ...]\n"
-	        "       netstat { [-veenNac] -i | [-cnNe] -M | -s [-6tuw] }\n"
+	        "       netstat { [-veenNac] -i | [-cnNe] -M | -s [-6tuw] | -g [-46] }\n"
 	        "       netstat -T [-46anlc]\n"
 	        "\n"
 	        "        -r, --route              display routing table\n"
 	        "        -i, --interfaces         display interface table\n"
 	        "        -s, --statistics         display networking statistics\n"
+	        "        -g, --groups             display multicast group memberships\n"
 	        "        -T, --tcp-info           display TCP connection details\n"
 	        "        -n, --numeric            don't resolve names\n"
 	        "        -e, --extend             display other/more information\n"
@@ -412,6 +414,39 @@ static int show_ifaces(void)
 	return CL_OK;
 }
 
+/* Linux net-tools: IPv6 groups first, then IPv4 (numeric) */
+static int show_groups(void)
+{
+	struct rt_ctl_hdr h;
+	void *d = cl_dump(RT_CTL_MCAST, &h);
+	u32 k;
+	int pass;
+
+	if (!d)
+		return CL_FAIL;
+	cl_puts("IPv6/IPv4 Group Memberships\n"
+	        "Interface       RefCnt Group\n"
+	        "--------------- ------ ---------------------\n");
+	for (pass = 0; pass < 2; pass++) {
+		u8 fam = pass ? RT_AF_INET : RT_AF_INET6;
+		if (opt_family && opt_family != (pass ? 4 : 6))
+			continue;
+		for (k = 0; k < h.count; k++) {
+			struct rt_ctl_mcast *m = cl_rec(d, &h, k);
+			struct cl_addr a;
+			char g[CL_ADDRSTRLEN];
+			if (m->family != fam)
+				continue;
+			memset(&a, 0, sizeof(a));
+			a.family = fam;
+			memcpy(a.a.b, m->group, 16);
+			cl_printf("%-15s %-6lu %s\n", m->ifname, (unsigned long)m->refcnt, cl_addr_str(&a, g));
+		}
+	}
+	FreeVec(d);
+	return CL_OK;
+}
+
 static void *stat_dump(int what, u32 size)
 {
 	struct rt_ctl_hdr h;
@@ -485,6 +520,32 @@ static void show_stats6(void)
 	}
 }
 
+static void show_stats_igmp(void)
+{
+	struct rt_igmp_stats *g;
+	void *d = stat_dump(RT_CTL_IGMPSTAT, sizeof(*g));
+
+	if (!d)
+		return;
+	g = (struct rt_igmp_stats *)((u8 *)d + sizeof(struct rt_ctl_hdr));
+	cl_puts("Igmp:\n");
+	P("%lu IGMP messages received", g->InMsgs);
+	P("%lu input IGMP messages failed", g->InErrors);
+	P("%lu V1 membership queries received", g->InQueriesV1);
+	P("%lu V2 membership queries received", g->InQueriesV2);
+	P("%lu V3 membership queries received", g->InQueriesV3);
+	P("%lu bad membership queries received", g->InBadQueries);
+	P("%lu membership reports received", g->InReports);
+	P("%lu membership reports received for groups we are in", g->InOurReports);
+	P("%lu leave messages received", g->InLeaves);
+	P("%lu IGMP messages sent", g->OutMsgs);
+	P("%lu V1 membership reports sent", g->OutReportsV1);
+	P("%lu V2 membership reports sent", g->OutReportsV2);
+	P("%lu V3 membership reports sent", g->OutReportsV3);
+	P("%lu leave messages sent", g->OutLeaves);
+	FreeVec(d);
+}
+
 static int show_stats(void)
 {
 	void *d;
@@ -543,6 +604,7 @@ static int show_stats(void)
 		if (c->OutDestUnreachs) P("    destination unreachable: %lu", c->OutDestUnreachs);
 		if (c->OutEchoReps) P("    echo replies: %lu", c->OutEchoReps);
 		FreeVec(d);
+		show_stats_igmp();
 		if (opt_family == 0)
 			show_stats6();
 	}
@@ -620,6 +682,7 @@ static int netstat_main(int argc, char **argv)
 		if (!strcmp(a, "--route")) argv[i] = "-r";
 		else if (!strcmp(a, "--interfaces")) argv[i] = "-i";
 		else if (!strcmp(a, "--statistics")) argv[i] = "-s";
+		else if (!strcmp(a, "--groups")) argv[i] = "-g";
 		else if (!strcmp(a, "--numeric")) argv[i] = "-n";
 		else if (!strcmp(a, "--all")) argv[i] = "-a";
 		else if (!strcmp(a, "--listening")) argv[i] = "-l";
@@ -633,7 +696,7 @@ static int netstat_main(int argc, char **argv)
 		else if (!strcmp(a, "--tcp-info")) argv[i] = "-T";
 	}
 	memset(&g, 0, sizeof(g));
-	while ((c = cl_getopt(argc, argv, "anNtuwlrisceveopF46CVTA:", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "anNtuwlrisgceveopF46CVTA:", &g)) != -1) {
 		switch (c) {
 		case 'a': opt_all = 1; break;
 		case 'n': case 'N': opt_n = 1; break;
@@ -646,7 +709,7 @@ static int netstat_main(int argc, char **argv)
 		case '4': opt_family = 4; break;
 		case '6': opt_family = 6; break;
 		case 'A': opt_family = !strcmp(g.arg, "inet6") ? 6 : !strcmp(g.arg, "inet") ? 4 : 0; break;
-		case 'r': case 'i': case 's': case 'T': mode = c; break;
+		case 'r': case 'i': case 's': case 'g': case 'T': mode = c; break;
 		case 'V': cl_puts("netstat (Riptide) 0.12\n"); return CL_OK;
 		case '?': usage(); return CL_ERROR;
 		default: break;
@@ -656,7 +719,7 @@ static int netstat_main(int argc, char **argv)
 		return CL_FAIL;
 	for (;;) {
 		rc = mode == 'r' ? show_routes() : mode == 'i' ? show_ifaces() : mode == 's' ? show_stats() :
-		     mode == 'T' ? show_tcpinfo() : show_sockets();
+		     mode == 'g' ? show_groups() : mode == 'T' ? show_tcpinfo() : show_sockets();
 		cl_flush();
 		if (!cont || rc)
 			return rc;

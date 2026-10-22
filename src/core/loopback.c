@@ -28,9 +28,25 @@ static int lo_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u1
 	b->l3_proto = ethertype;
 	/* Locally generated: transport checksums were computed by us. */
 	b->flags = RT_BUFF_LOOP | RT_BUFF_CSUM_OK;
+	b->cb.w[0] = 0;
 	rt_bufq_tail(&lo_queue, b);
 	rt_kick();
 	return 0;
+}
+
+/* Multicast copies travel on the same queue, tagged with the index of the
+ * interface they are received on (cb.w[0], 0 = lo0). */
+void rt_loopback_mcast(struct rt_netif *nif, struct rt_buf *b)
+{
+	if (lo_queue.qlen >= LOOP_QLEN_MAX) {
+		rt_buf_free(b);
+		return;
+	}
+	b->l3_proto = RT_ETH_P_IP;
+	b->flags = RT_BUFF_LOOP | RT_BUFF_CSUM_OK | RT_BUFF_MCAST;
+	b->cb.w[0] = nif->index;
+	rt_bufq_tail(&lo_queue, b);
+	rt_kick();
 }
 
 int rt_loopback_poll(void)
@@ -43,6 +59,16 @@ int rt_loopback_poll(void)
 		struct rt_buf *b = rt_bufq_dequeue(&lo_queue);
 		if (!b)
 			break;
+		if (b->cb.w[0]) {
+			struct rt_netif *nif = rt_netif_by_index(b->cb.w[0]);
+			if (!nif || !(nif->flags & RT_IFF_UP)) {
+				rt_buf_free(b);
+				continue;
+			}
+			b->netif = nif;
+			rt_ip_input(nif, b);
+			continue;
+		}
 		rt_netif_input(&lo_if, b, b->l3_proto, NULL, 0);
 	}
 	return !rt_bufq_empty(&lo_queue);

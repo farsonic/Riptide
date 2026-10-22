@@ -120,13 +120,6 @@ struct rt_nexthop {
 };
 /* Longest-prefix lookup. Returns 0 or -RT_ENETUNREACH / -RT_EHOSTUNREACH. */
 int  rt_ip_route(u32 dst, struct rt_nexthop *nh);
-/* IPv4 multicast group membership on an interface (reference counted;
- * programs the driver's multicast filter). 224.0.0.1 is always a member.
- * Lock held. */
-int  rt_ip_mc_join(struct rt_netif *nif, u32 grp);
-void rt_ip_mc_leave(struct rt_netif *nif, u32 grp);
-int  rt_ip_mc_member(const struct rt_netif *nif, u32 grp);
-void rt_ip_mc_flush(const struct rt_netif *nif);
 /* PMTU discovery (RFC 1191): record a smaller MTU for dst (expires after
  * net.inet.ip.mtu_expires). */
 void rt_ip_pmtu_update(u32 dst, u32 mtu);
@@ -142,6 +135,10 @@ struct rt_ip_out {
 	u8  dontroute;        /* SO_DONTROUTE / MSG_DONTROUTE */
 	u8  allow_broadcast;  /* SO_BROADCAST */
 	struct rt_netif *oif; /* force interface (multicast/broadcast), or NULL */
+	/* multicast only: no copy for local members (IP_MULTICAST_LOOP 0),
+	 * and TTL 0 (only the local copy, nothing on the wire) */
+	u8  mcast_noloop;
+	u8  mcast_ttl0;
 };
 /* b->data points at the transport header (payload of IP). IP pushes its
  * header, routes, fragments if needed (unless df) and transmits. Consumes b
@@ -158,6 +155,30 @@ u32  rt_ip_select_source(u32 dst);
 
 /* ---- IP input ---- */
 void rt_ip_input(struct rt_netif *nif, struct rt_buf *b);
+
+/* ---- IPv4 multicast group membership (src/core/igmp.c) ----
+ * Per interface and reference counted: every socket membership
+ * (IP_ADD_MEMBERSHIP) and every internal user (e.g. an mDNS responder)
+ * holds one. The first join programs the link layer filter (01:00:5e +
+ * low 23 bits) and reports the group with IGMP (v3, v2 or v1, whatever
+ * the network's querier speaks); the last leave reports the leave. IP
+ * input accepts datagrams for joined groups and 224.0.0.1; UDP delivers
+ * them to sockets that are members (BSD semantics). Lock held; groups in
+ * network order. */
+int  rt_ip_mc_join(struct rt_netif *nif, u32 group);
+int  rt_ip_mc_leave(struct rt_netif *nif, u32 group);   /* -RT_EADDRNOTAVAIL: not joined */
+int  rt_ip_mc_joined(const struct rt_netif *nif, u32 group);
+/* Does IP input accept 'group' on nif (joined, or 224.0.0.1)? */
+int  rt_ip_mc_member(const struct rt_netif *nif, u32 group);
+/* The interface is going away: forget its groups (rt_netif_remove). */
+void rt_ip_mc_flush(struct rt_netif *nif);
+/* The interface for sending to / joining 'group' when the user names
+ * none: the route to the group (default route), else the first up
+ * multicast capable interface other than loopback. NULL if none. */
+struct rt_netif *rt_ip_mc_default_if(u32 group);
+#define RT_INADDR_ALLHOSTS_GROUP  0xe0000001u   /* 224.0.0.1 (host order) */
+#define RT_INADDR_ALLRTRS_GROUP   0xe0000002u   /* 224.0.0.2 */
+#define RT_INADDR_IGMPV3_GROUP    0xe0000016u   /* 224.0.0.22 */
 
 /* ---- transport protocol entry points (called by IP input) ----
  * 'b->data' points at the transport header and b->len is the transport
@@ -208,6 +229,7 @@ void rt_icmp_send_error(const struct rt_buf *orig, u8 type, u8 code, u32 info);
 void rt_ip_init(void);
 void rt_icmp_init(void);
 void rt_udp_init(void);
+void rt_igmp_init(void);
 void rt_tcp_init(void);
 void rt_raw_init(void);
 void rt_arp_init(void);

@@ -97,6 +97,110 @@ static int opt_int(const void *val, u32 len, s32 *v)
 	return -RT_EINVAL;
 }
 
+/* ---- IPv4 multicast socket options ---- */
+
+/* The interface of IP_MULTICAST_IF / IP_ADD_MEMBERSHIP: struct in_addr
+ * (at 'off') or, with 12 bytes, struct ip_mreqn whose index wins.
+ * *n = NULL: none named (INADDR_ANY). */
+static int mreq_netif(const void *val, u32 len, u32 off, struct rt_netif **n)
+{
+	struct rt_ip_mreqn mr;
+	u32 a;
+
+	*n = NULL;
+	if (!val)
+		return -RT_EFAULT;
+	if (len < off + 4)
+		return -RT_EINVAL;
+	if (len >= sizeof(mr)) {
+		memcpy(&mr, val, sizeof(mr));
+		if (mr.imr_ifindex) {
+			*n = rt_netif_by_index((u32)mr.imr_ifindex);
+			return *n ? 0 : -RT_ENXIO;
+		}
+	}
+	memcpy(&a, (const u8 *)val + off, 4);
+	if (a == RT_INADDR_ANY)
+		return 0;
+	*n = rt_netif_by_addr(a);
+	return *n ? 0 : -RT_EADDRNOTAVAIL;
+}
+
+static int inet_mc_group(struct rt_inet_opts *o, int join, const void *val, u32 len)
+{
+	struct rt_netif *n;
+	u32 grp;
+	int i, r;
+
+	if (!val)
+		return -RT_EFAULT;
+	if (len < sizeof(struct rt_ip_mreq))
+		return -RT_EINVAL;
+	memcpy(&grp, val, 4);
+	if (!rt_ip_is_multicast(grp))
+		return -RT_EINVAL;
+	r = mreq_netif(val, len, 4, &n);
+	if (r < 0)
+		return r;
+	if (!n && !(n = rt_ip_mc_default_if(grp)))
+		return -RT_EADDRNOTAVAIL;
+	for (i = 0; i < o->nmships; i++)
+		if (o->mships[i].grp == grp && o->mships[i].ifindex == n->index)
+			break;
+	if (!join) {
+		if (i >= o->nmships)
+			return -RT_EADDRNOTAVAIL;
+		rt_ip_mc_leave(n, grp);
+		o->mships[i] = o->mships[--o->nmships];
+		return 0;
+	}
+	if (i < o->nmships)
+		return -RT_EADDRINUSE;
+	if (o->nmships >= RT_IP_MAX_MEMBERSHIPS)
+		return -RT_ETOOMANYREFS;
+	if (!o->mships) {
+		o->mships = rt_malloc(RT_IP_MAX_MEMBERSHIPS * sizeof(*o->mships));
+		if (!o->mships)
+			return -RT_ENOBUFS;
+	}
+	r = rt_ip_mc_join(n, grp);
+	if (r < 0)
+		return r;
+	o->mships[o->nmships].grp = grp;
+	o->mships[o->nmships].ifindex = n->index;
+	o->nmships++;
+	return 0;
+}
+
+void rt_inet_mc_drop_all(struct rt_inet_opts *o)
+{
+	int i;
+
+	for (i = 0; i < o->nmships; i++) {
+		struct rt_netif *n = rt_netif_by_index(o->mships[i].ifindex);
+		if (n)
+			rt_ip_mc_leave(n, o->mships[i].grp);
+	}
+	o->nmships = 0;
+	rt_free(o->mships);
+	o->mships = NULL;
+}
+
+int rt_inet_mc_member(const struct rt_inet_opts *o, u32 grp, u32 ifindex)
+{
+	int i;
+
+	for (i = 0; i < o->nmships; i++)
+		if (o->mships[i].grp == grp && o->mships[i].ifindex == ifindex)
+			return 1;
+	return 0;
+}
+
+struct rt_netif *rt_inet_mc_oif(const struct rt_inet_opts *o)
+{
+	return o->mcast_ifindex ? rt_netif_by_index(o->mcast_ifindex) : NULL;
+}
+
 void rt_inet_opts_init(struct rt_inet_opts *o, int domain)
 {
 	memset(o, 0, sizeof(*o));
@@ -116,13 +220,17 @@ int rt_inet_setopt(struct rt_inet_opts *o, int name, const void *val, u32 len, i
 	if (name == RT_IP_OPTIONS)
 		return len == 0 ? 0 : -RT_EOPNOTSUPP;
 	if (name == RT_IP_ADD_MEMBERSHIP || name == RT_IP_DROP_MEMBERSHIP)
-		return -RT_EOPNOTSUPP;
+		return inet_mc_group(o, name == RT_IP_ADD_MEMBERSHIP, val, len);
 	if (name == RT_IP_MULTICAST_IF) {
-		u32 a;
-		if (len < 4)
-			return -RT_EINVAL;
-		memcpy(&a, val, 4);
-		return a == 0 || rt_netif_by_addr(a) ? 0 : -RT_EADDRNOTAVAIL;
+		struct rt_netif *n;
+		/* struct in_addr, or (Linux) struct ip_mreq / ip_mreqn */
+		r = mreq_netif(val, len, len >= sizeof(struct rt_ip_mreq) ? 4 : 0, &n);
+		if (r < 0)
+			return r;
+		if (n && !(n->flags & RT_IFF_MULTICAST))
+			return -RT_EADDRNOTAVAIL;
+		o->mcast_ifindex = n ? n->index : 0;
+		return 0;
 	}
 	r = opt_int(val, len, &v);
 	if (r < 0)
@@ -186,6 +294,16 @@ int rt_inet_getopt(const struct rt_inet_opts *o, int name, void *val, u32 *len, 
 	case RT_IP_OPTIONS:
 		*len = 0;
 		return 0;
+	case RT_IP_MULTICAST_IF: {
+		/* struct in_addr: the interface's address, INADDR_ANY when none */
+		struct rt_netif *n = rt_inet_mc_oif(o);
+		u32 a = n ? n->addr : RT_INADDR_ANY;
+		if (!val || !len || *len < 4)
+			return -RT_EINVAL;
+		memcpy(val, &a, 4);
+		*len = 4;
+		return 0;
+	}
 	default:
 		return -RT_ENOPROTOOPT;
 	}
@@ -487,6 +605,7 @@ static void udp_close(struct rt_socket *so)
 		if (n)
 			rt_ip6_mc_leave(n, &pcb->groups[i].grp);
 	}
+	rt_inet_mc_drop_all(&pcb->opt);
 	rt_bufq_purge(&so->rcvq);
 	so->pcb = NULL;
 	rt_free(pcb);
@@ -501,7 +620,8 @@ static int local_bindable(const rt_in6_addr *a)
 		return rt_netif_by_addr(v) || rt_ip_is_loopback_net(v) || rt_ip_is_multicast(v) ||
 		       rt_ip_is_broadcast(v, NULL);
 	}
-	return rt_in6_is_mcast(a) || rt_inet_is_local(a);
+	return rt_in6_is_mcast(a) || (rt_in6_is_v4mapped(a) && rt_ip_is_multicast(rt_in6_v4(a))) ||
+	       rt_inet_is_local(a);
 }
 
 static int udp_bind(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
@@ -581,9 +701,21 @@ static int udp_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 	scope = sin->sin6_scope_id;
 	if (!scope && (rt_in6_is_linklocal(&faddr) || rt_in6_is_mc_linklocal(&faddr)))
 		scope = pcb->scope;
-	r = rt_inet_route(&faddr, scope, &rt);
-	if (r < 0)
-		return r;
+	if (rt_in6_is_v4mapped(&faddr) && rt_ip_is_multicast(rt_in6_v4(&faddr))) {
+		/* the interface udp_send() will use */
+		struct rt_netif *n = rt_inet_mc_oif(&pcb->opt);
+		if (!n)
+			n = rt_ip_mc_default_if(rt_in6_v4(&faddr));
+		if (!n)
+			return -RT_ENETUNREACH;
+		memset(&rt, 0, sizeof(rt));
+		rt.netif = n;
+		rt_in6_set_v4mapped(&rt.src, n->addr);
+	} else {
+		r = rt_inet_route(&faddr, scope, &rt);
+		if (r < 0)
+			return r;
+	}
 	if (!pcb->lport) {
 		rt_in6_addr any;
 		if (rt_in6_is_v4mapped(&faddr))
@@ -647,6 +779,18 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 		return -RT_EAFNOSUPPORT;
 	if (!v4 && rt_in6_is_mcast(&daddr) && pcb->opt.mcast_if)
 		scope = pcb->opt.mcast_if;
+	if (v4 && rt_ip_is_multicast(rt_in6_v4(&daddr))) {
+		/* IP_MULTICAST_IF, else the route to the group, else the
+		 * first multicast interface (no default route needed) */
+		struct rt_netif *n = rt_inet_mc_oif(&pcb->opt);
+		if (!n && pcb->opt.mcast_ifindex)
+			return -RT_ENXIO;
+		if (!n)
+			n = rt_ip_mc_default_if(rt_in6_v4(&daddr));
+		if (!n)
+			return -RT_ENETUNREACH;
+		scope = n->index;
+	}
 	else if (!scope && !v4 && (rt_in6_is_linklocal(&daddr) || rt_in6_is_mc_linklocal(&daddr)))
 		scope = pcb->scope;
 	len = rt_iov_total(iov, iovcnt);
@@ -667,7 +811,9 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 	    (v4 && (rt_ip_is_multicast(rt_in6_v4(&saddr)) || rt_ip_is_broadcast(rt_in6_v4(&saddr), NULL))) ||
 	    (!v4 && rt_in6_is_mcast(&saddr))) {
 		struct rt_inet_route rt;
-		if (v4) {
+		if (v4 && rt_ip_is_multicast(rt_in6_v4(&daddr))) {
+			rt_in6_set_v4mapped(&saddr, rt_netif_by_index(scope)->addr);
+		} else if (v4) {
 			/* IPv4: errors (no route, broadcast) come from rt_ip_output() */
 			rt_in6_set_v4mapped(&saddr, rt_ip_select_source(rt_in6_v4(&daddr)));
 		} else {
@@ -708,8 +854,15 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 	o.dst = daddr;
 	o.proto = RT_IPPROTO_UDP;
 	if (v4) {
-		o.ttl = rt_ip_is_multicast(rt_in6_v4(&daddr)) ? pcb->opt.mcast_ttl : pcb->opt.ttl;
 		o.tos = pcb->opt.tos;
+		if (rt_ip_is_multicast(rt_in6_v4(&daddr))) {
+			o.ttl = pcb->opt.mcast_ttl ? pcb->opt.mcast_ttl : 1;
+			o.mcast_ttl0 = pcb->opt.mcast_ttl == 0;
+			o.mcast_noloop = !pcb->opt.mcast_loop;
+			o.scope = scope;
+		} else {
+			o.ttl = pcb->opt.ttl;
+		}
 	} else {
 		o.ttl = rt_in6_is_mcast(&daddr) ? (pcb->opt.mcast_hops >= 0 ? pcb->opt.mcast_hops : 1)
 		                                : pcb->opt.hlim;
@@ -859,6 +1012,20 @@ static int udp_faddr_match(const struct udp_pcb *p, const rt_in6_addr *saddr, u1
 	return !p->connected || (rt_in6_eq(&p->faddr, saddr) && p->fport == sport);
 }
 
+/* IPv4 multicast goes to members of the group on the receiving interface
+ * only (BSD; Linux IP_MULTICAST_ALL 0). 224.0.0.1 to all. */
+static int udp_mc_wanted(const struct udp_pcb *p, const struct rt_buf *b, const rt_in6_addr *daddr)
+{
+	u32 g;
+
+	if (!rt_in6_is_v4mapped(daddr))
+		return 1;
+	g = rt_in6_v4(daddr);
+	if (!rt_ip_is_multicast(g) || g == rt_htonl(RT_INADDR_ALLHOSTS_GROUP))
+		return 1;
+	return b->netif && rt_inet_mc_member(&p->opt, g, b->netif->index);
+}
+
 /* Common input: b->data at the UDP header, length checked by the caller.
  * Returns 1 if b was consumed, 0 if nobody wants it (caller sends port
  * unreachable and frees b, data at the UDP payload). */
@@ -877,6 +1044,8 @@ static int udp_rcv(struct rt_buf *b, const rt_in6_addr *saddr, const rt_in6_addr
 			if (!rt_inet_laddr_match(&p->laddr, p->opt.v6only, daddr))
 				continue;
 			if (!udp_faddr_match(p, saddr, sport))
+				continue;
+			if (!udp_mc_wanted(p, b, daddr))
 				continue;
 			if (last) {
 				struct rt_buf *c = rt_buf_copy(b);

@@ -186,10 +186,25 @@ static u32 recs_of(const struct mdns_if *f)
 	return m;
 }
 
+/* 224.0.0.251 is joined through the socket (IP_ADD_MEMBERSHIP): IPv4
+ * multicast reaches only sockets that are members on that interface */
+static int mc4(struct rt_netif *n, int join)
+{
+	struct rt_ip_mreqn mr;
+
+	if (!mdns_so)
+		return -RT_ENOTCONN;
+	memset(&mr, 0, sizeof(mr));
+	mr.imr_multiaddr = mdns_grp4();
+	mr.imr_ifindex = (s32)n->index;
+	return mdns_so->ops->setsockopt(mdns_so, RT_IPPROTO_IP,
+	                                join ? RT_IP_ADD_MEMBERSHIP : RT_IP_DROP_MEMBERSHIP, &mr, sizeof(mr));
+}
+
 static void if_leave(struct mdns_if *f)
 {
 	if (f->v4)
-		rt_ip_mc_leave(f->nif, mdns_grp4());
+		mc4(f->nif, 0);
 	if (f->v6)
 		rt_ip6_mc_leave(f->nif, &mdns_grp6);
 	memset(f, 0, sizeof(*f));
@@ -223,7 +238,7 @@ static u32 if_sync(void)
 			f->nif = n;
 		}
 		f->a4 = n->addr;
-		if (n->addr && !f->v4 && rt_ip_mc_join(n, mdns_grp4()) == 0)
+		if (n->addr && !f->v4 && mc4(n, 1) == 0)
 			f->v4 = 1;
 		f->n6 = 0;
 		if (rt_ip6_ifenabled(n)) {
@@ -845,7 +860,7 @@ void rt_mdns_if_gone(struct rt_netif *nif)
 
 	for (i = 0; i < MDNS_IFS; i++)
 		if (mif[i].nif == nif)
-			memset(&mif[i], 0, sizeof(mif[i]));   /* groups go with it */
+			if_leave(&mif[i]);   /* the socket's membership too */
 }
 
 static void mdns_enable(int on)

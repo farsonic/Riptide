@@ -96,7 +96,9 @@ tested under vamos and in FS-UAE with the AROS Kickstart (loopback). Still to
 verify: SANA-II receive on real hardware, and MNI drivers. IPv6 (dual-stack
 host: SLAAC, NDP, MLDv2, stateless DHCPv6) is tested against gVisor's
 netstack; `t_tap` repeats it against a Linux kernel with IPv6 over TAP.
-Not implemented: stateful DHCPv6, IPv4 multicast/IGMP, SSL, packet-filter
+IPv4 multicast (IGMPv3 with v2/v1 fallback, `IP_ADD_MEMBERSHIP`) is tested
+against the Linux kernel over TAP and on a bridged FS-UAE.
+Not implemented: stateful DHCPv6, multicast routing, SSL, packet-filter
 hooks, and the MiamiDx-private
 `miami.library` calls used by Miami's own NetStat, DiG and NSLookup.
 

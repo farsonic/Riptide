@@ -155,6 +155,8 @@ static void install_connected(struct rt_netif *nif)
 
 int rt_netif_set_addr(struct rt_netif *nif, u32 addr, u32 netmask, u32 peer)
 {
+	u32 old = nif->addr;
+
 	if (!mask_is_contiguous(netmask))
 		return -RT_EINVAL;
 	if (addr && (rt_ip_is_multicast(addr) || addr == RT_INADDR_BROADCAST))
@@ -178,6 +180,9 @@ int rt_netif_set_addr(struct rt_netif *nif, u32 addr, u32 netmask, u32 peer)
 	install_connected(nif);
 	if ((nif->flags & RT_IFF_UP) && nif->type == RT_IFT_ETHER)
 		rt_arp_announce(nif, addr);
+	/* reports sent before had source 0.0.0.0 (or the old address) */
+	if ((nif->flags & RT_IFF_UP) && addr != old)
+		rt_igmp_if_up(nif);
 	return 0;
 }
 
@@ -190,6 +195,7 @@ void rt_netif_up(struct rt_netif *nif)
 	nif->flags = nf;
 	if (nif->type == RT_IFT_ETHER && nif->addr)
 		rt_arp_announce(nif, nif->addr);
+	rt_igmp_if_up(nif);
 	rt_ip6_if_up(nif);
 	rt_kick();
 }
@@ -206,6 +212,7 @@ void rt_netif_down(struct rt_netif *nif)
 	 * learned ones go, as their information may be stale when it is
 	 * back up. */
 	rt_route_flush_dynamic_if(nif);
+	rt_igmp_if_down(nif);
 	rt_ip6_if_down(nif);
 }
 

@@ -41,8 +41,22 @@ void rt_route6_flush_learned(struct rt_netif *nif);
 /* ---- inet.c ---- */
 void rt_inet_init(void);
 
+/* ---- igmp.c: link state changes (netif.c), input (ip.c) ---- */
+void rt_igmp_if_up(struct rt_netif *nif);
+void rt_igmp_if_down(struct rt_netif *nif);
+void rt_igmp_if_remove(struct rt_netif *nif);
+/* b->data at the IGMP message; consumes b. */
+void rt_igmp_input(struct rt_buf *b, const struct rt_iphdr *ip);
+/* Group records for net.riptide.mcast (IPv4 and IPv6). */
+struct rt_ctl_mcast;
+int  rt_mcast_list(struct rt_ctl_mcast *out, int max);
+extern s32 rt_igmp_version;         /* net.inet.igmp.version: 0 auto, 1..3 force */
+
 /* ---- loopback.c ---- */
 int  rt_loopback_init(void);
+/* Queue a copy of an outgoing multicast datagram (data at the IP header)
+ * for IP input on 'nif', as if received there (IP_MULTICAST_LOOP). */
+void rt_loopback_mcast(struct rt_netif *nif, struct rt_buf *b);
 /* Deliver the deferred loopback queue; returns 1 if work remains. */
 int  rt_loopback_poll(void);
 
@@ -84,6 +98,11 @@ struct rt_inet_opts {
 	u8 hdrincl;
 	u8 mcast_ttl;
 	u8 mcast_loop;
+	u8 nmships;
+	u32 mcast_ifindex;  /* IP_MULTICAST_IF (as an interface index), 0 = route */
+	/* IP_ADD_MEMBERSHIP memberships (allocated on the first join), left
+	 * by rt_inet_mc_drop_all() when the socket closes */
+	struct rt_inet_mship { u32 grp, ifindex; } *mships;
 	/* IPPROTO_IPV6 level (AF_INET6 sockets) */
 	s16 hlim;           /* IPV6_UNICAST_HOPS, -1 = default */
 	s16 mcast_hops;     /* IPV6_MULTICAST_HOPS, -1 = default (1) */
@@ -94,6 +113,12 @@ struct rt_inet_opts {
 	u8  mcast_loop6;
 };
 void rt_inet_opts_init(struct rt_inet_opts *o, int domain);
+/* Leave every IPv4 group of a closing socket, free the list. */
+void rt_inet_mc_drop_all(struct rt_inet_opts *o);
+/* Is the socket a member of 'grp' on interface 'ifindex'? */
+int  rt_inet_mc_member(const struct rt_inet_opts *o, u32 grp, u32 ifindex);
+/* The interface for an IPv4 multicast send of this socket (NULL: route) */
+struct rt_netif *rt_inet_mc_oif(const struct rt_inet_opts *o);
 int  rt_inet_setopt(struct rt_inet_opts *o, int name, const void *val, u32 len, int allow_hdrincl);
 int  rt_inet_getopt(const struct rt_inet_opts *o, int name, void *val, u32 *len, int allow_hdrincl);
 /* IPPROTO_IPV6 level; 'so' for V6ONLY checks (bound sockets) */
@@ -143,6 +168,7 @@ struct rt_inet_out {
 	u8  dontroute;
 	u8  allow_broadcast;
 	u8  mcast_noloop;
+	u8  mcast_ttl0;               /* IPv4 multicast with IP_MULTICAST_TTL 0: local copy only */
 	u32 scope;                    /* outgoing interface index (IPv6 zone / multicast), 0 */
 };
 int  rt_inet_output(struct rt_buf *b, const struct rt_inet_out *o);
