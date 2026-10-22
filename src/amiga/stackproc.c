@@ -162,7 +162,7 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 			if (ip6 == 0)
 				rt_ip6_ifenable(nif, 0);
 			else if (ip6 == 1)
-				nif->ip6_disabled = 0;     /* comes up with the interface */
+				nif->ip6_disabled = 2;     /* comes up with the interface, whatever "ipv6 off" says */
 			if (qos >= 0)
 				rt_qos_enable(nif, qos);
 		}

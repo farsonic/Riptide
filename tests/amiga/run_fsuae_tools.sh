@@ -378,7 +378,7 @@ expect ip_r_down '^default via 10\.0\.2\.2 dev eth0 proto static linkdown'
 expect ip_help 'Usage: ip'
 expect ifconfig_bad 'No such device'
 expect status 'Routes:' 'default via 10\.0\.2\.2 dev eth0 proto static' 'DNS: 10\.0\.2\.3' \
-	'^Libraries: bsdsocket\.library 4, riptide\.library 1, usergroup\.library 4; compat alias: miami\.library 21$'
+	'^Libraries: bsdsocket\.library 4, riptide\.library 2, usergroup\.library 4; compat alias: miami\.library 21$'
 # IPv6
 expect ip6_a '^1: lo0: ' 'inet6 ::1/128 scope host' '^2: eth0: ' 'inet6 fe80::[0-9a-f:]+/64 scope link' \
 	'inet6 2001:db8:5::15/64 scope global nodad' 'valid_lft forever preferred_lft forever'
@@ -408,7 +408,7 @@ expect netstat6_s '^Ip6:' 'total packets received' '^Icmp6:' 'echo replies'
 reject ip6_a3 '2001:db8:5::15'
 expect status 'inet6 ::1/128'
 [ -n "$SDKTEST" ] && expect sdk_test '^sdk_test: ok$'
-if ! tr -d '\r' < "$dh0/riptide.log" 2>/dev/null | grep -Eq 'running: bsdsocket\.library 4, riptide\.library 1, usergroup\.library 4; compat alias: miami\.library 21'; then
+if ! tr -d '\r' < "$dh0/riptide.log" 2>/dev/null | grep -Eq 'running: bsdsocket\.library 4, riptide\.library 2, usergroup\.library 4; compat alias: miami\.library 21'; then
 	echo "FAIL riptide.log: no startup line naming the libraries"; fails=$((fails + 1))
 fi
 

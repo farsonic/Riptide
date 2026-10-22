@@ -94,7 +94,7 @@ struct rt_netif {
 	int (*mcast)(struct rt_netif *nif, const u8 *hwaddr, int join);
 	/* IPv6 state (src/core/ip6_if.c), NULL while IPv6 is off */
 	void *ip6;
-	u8    ip6_disabled;      /* "ipv6 off": not enabled automatically */
+	u8    ip6_disabled;      /* 1 "ipv6 off": not enabled automatically; 2 "ipv6=on": always */
 	/* optional driver counters (net.riptide.drivers), owned by the driver */
 	struct rt_drv_stats *drv;
 	/* "ifconfig IF tcpwindow N": the largest receive window TCP offers on
