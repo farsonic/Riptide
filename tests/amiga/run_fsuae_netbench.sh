@@ -43,7 +43,7 @@ if [ -z "${STACKS:-}" ]; then
 fi
 BYTES=${BYTES:-2097152}
 REPEAT=${REPEAT:-3}
-OUT=${OUT:-$BUILD/netbench}
+OUT=${OUT:-$BUILD/netbench-results}   # $BUILD/netbench is the program
 TIMEOUT=${TIMEOUT:-1200}
 TOLERANCE=${TOLERANCE:-10}
 UPTIME=${UPTIME:-240}
