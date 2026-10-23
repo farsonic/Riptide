@@ -73,7 +73,7 @@ DH0:C/nc -F -w 5 $TF_NET.1 8300 <DH0:S/req2 >DH0:out/tfo2
 DH0:C/nc -F -w 5 $TF_NET.1 8300 <DH0:S/req3 >DH0:out/tfo3
 DH0:C/sysctl net.inet.tcp.fastopen_cache >DH0:out/cache
 DH0:C/sysctl net.inet.tcp.connect_timeout net.inet.tcp.syn_rto_initial_ms net.inet.tcp.syn_rto_max_ms net.inet.tcp.keepalive_all net.inet.tcp.fastopen >DH0:out/sysctl
-DH0:C/nc -w 1 $TF_NET.1 9999 <NIL: >DH0:out/dead
+DH0:C/nc $TF_NET.1 9999 <NIL: >DH0:out/dead
 DH0:C/nc -w 1 $TF_NET.1 9998 <NIL: >DH0:out/unreach
 DH0:C/nc -K 1 -d -w 5 $TF_NET.1 8301 >DH0:out/ka
 DH0:C/netstat -s -t >DH0:out/netstat

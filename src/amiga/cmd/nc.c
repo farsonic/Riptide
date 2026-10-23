@@ -91,6 +91,18 @@ static int udp_listen(LONG s, int verbose, u32 wait_ms, u32 count, char *buf)
 	return CL_OK;
 }
 
+/* -K secs: keepalive after secs idle, probing every secs */
+static void keepalive_opts(LONG s, u32 keepidle)
+{
+	LONG one = 1, ki = (LONG)keepidle;
+
+	if (!keepidle)
+		return;
+	setsockopt(s, RT_SOL_SOCKET, RT_SO_KEEPALIVE, &one, sizeof(one));
+	setsockopt(s, RT_IPPROTO_TCP, RT_TCP_KEEPIDLE, &ki, sizeof(ki));
+	setsockopt(s, RT_IPPROTO_TCP, RT_TCP_KEEPINTVL, &ki, sizeof(ki));
+}
+
 static int nc_main(int argc, char **argv)
 {
 	struct cl_getopt g;
@@ -151,8 +163,10 @@ static int nc_main(int argc, char **argv)
 			usage();
 			return CL_ERROR;
 		}
-		if (!udp)
-			tcp_host = argv[g.ind];    /* connected by name below */
+		/* by name below (IPv6 and IPv4 raced); -F needs its option set
+		 * before connect(), on one socket of our own */
+		if (!udp && !fastopen)
+			tcp_host = argv[g.ind];
 		else if (cl_resolve_af(argv[g.ind], family ? family :
 		                       (cl_parse_addr(argv[g.ind], &addr) == 0 && addr.family == RT_AF_INET6) ? 6 : 4,
 		                       &addr) < 0)
@@ -179,6 +193,7 @@ static int nc_main(int argc, char **argv)
 		if (verbose)
 			cl_printf("Connection to %s (%s) %lu port succeeded!\n", tcp_host, cl_addr_str(&addr, a),
 			          (unsigned long)port);
+		keepalive_opts(fd, keepidle);
 		goto connected;
 	}
 	s = socket(addr.family, udp ? RT_SOCK_DGRAM : RT_SOCK_STREAM, 0);
@@ -238,12 +253,7 @@ static int nc_main(int argc, char **argv)
 	} else {
 		if (fastopen && setsockopt(s, RT_IPPROTO_TCP, RT_TCP_FASTOPEN_CONNECT, &one, sizeof(one)) < 0)
 			cl_error("TCP_FASTOPEN_CONNECT: %s", cl_strerror((int)Errno()));
-		if (keepidle) {
-			LONG ki = (LONG)keepidle;
-			setsockopt(s, RT_SOL_SOCKET, RT_SO_KEEPALIVE, &one, sizeof(one));
-			setsockopt(s, RT_IPPROTO_TCP, RT_TCP_KEEPIDLE, &ki, sizeof(ki));
-			setsockopt(s, RT_IPPROTO_TCP, RT_TCP_KEEPINTVL, &ki, sizeof(ki));
-		}
+		keepalive_opts(s, keepidle);
 		if (connect(s, &sa, (LONG)salen) < 0) {
 			cl_error("connect to %s port %lu (tcp) failed: %s", argv[g.ind], (unsigned long)port,
 			         cl_strerror((int)Errno()));
