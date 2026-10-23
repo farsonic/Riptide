@@ -6,7 +6,8 @@
 #   tests/amiga/netbench.c (bsdsocket.library calls only, data thrown away
 #   or generated: no disk in the path) against tests/amiga/netbench_host.py
 #   on the host end; for Riptide one more download and upload each under
-#   the profiler (Riptide PROFILE, not counted in the medians); ping.
+#   the profiler (Riptide PROFILE, not counted in the medians; netbench -I
+#   also reports how much CPU time was left idle); ping.
 # Results: OUT/results.md (table), OUT/results.json (medians, all runs);
 # with BASELINE=file.json the run fails when a median is more than 10 %
 # (TOLERANCE) below the baseline's.
@@ -167,10 +168,10 @@ run_one() {
 		if [ "$stack" = riptide ]; then
 			echo 'DH0:C/Riptide PROFILE RESET >NIL:'
 			echo 'DH0:C/Riptide PROFILE START >NIL:'
-			echo "$nb -l profiled -d $NET.1 $PORT >>DH0:out/nb_prof.txt"
+			echo "$nb -I -l profiled -d $NET.1 $PORT >>DH0:out/nb_prof.txt"
 			echo 'DH0:C/Riptide PROFILE SHOW >DH0:out/prof_download'
 			echo 'DH0:C/Riptide PROFILE RESET >NIL:'
-			echo "$nb -l profiled -u $NET.1 $PORT >>DH0:out/nb_prof.txt"
+			echo "$nb -I -l profiled -u $NET.1 $PORT >>DH0:out/nb_prof.txt"
 			echo 'DH0:C/Riptide PROFILE SHOW >DH0:out/prof_upload'
 			echo 'DH0:C/Riptide PROFILE STOP >NIL:'
 			echo "DH0:C/ping -c 5 -i 0.5 $NET.1 >DH0:out/ping"
@@ -251,10 +252,16 @@ for st in stacks:
              'upload_kbs': statistics.median(runs['upload']) if runs['upload'] else None,
              'download_runs': runs['download'], 'upload_runs': runs['upload'],
              'ping_ms': float(ping.group(1)) if ping else None}
+        nbp = read(os.path.join(d, 'nb_prof.txt'))
         for k in ('download', 'upload'):
             prof = read(os.path.join(d, 'prof_' + k))
             if prof:
-                r['profile_' + k] = prof
+                # netbench's own lines for this transfer (rate, CPU left idle)
+                own = [l for l in nbp.split('\n') if 'profiled' in l and
+                       (' %s ' % k in l or 'cpu idle' in l)]
+                idle = [l for l in own if 'cpu idle' in l]
+                rate = [l for l in own if ' %s ' % k in l]
+                r['profile_' + k] = '\n'.join(rate[:1] + idle[(0 if k == 'download' else 1):][:1] + [prof])
         res['results'].setdefault(st, {})[cpu] = r
         f = lambda v: '%.1f' % v if v is not None else 'n/a'
         md.append('| %s | %s | %s | %s | %s |' % (st, cpu, f(r['download_kbs']), f(r['upload_kbs']), f(r['ping_ms'])))

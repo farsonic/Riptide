@@ -2,7 +2,7 @@
  * Riptide - netbench: TCP throughput client for the speed lab
  * (tests/amiga/run_fsuae_netbench.sh). Talks to tests/amiga/netbench_host.py.
  *
- *   netbench -d|-u [-n BYTES] [-b BUFSIZE] [-w RCVBUF] [-l LABEL] A.B.C.D PORT
+ *   netbench -d|-u [-n BYTES] [-b BUFSIZE] [-w RCVBUF] [-l LABEL] [-I] A.B.C.D PORT
  *   netbench -W SECONDS      wait until a stack's bsdsocket.library opens
  *   netbench -s SECONDS      sleep (the AROS ROM has no Wait command)
  *   netbench -A NAME=PATH    assign NAME: to PATH (-a: add to NAME:), for
@@ -16,6 +16,12 @@
  *
  *   netbench: LABEL download 4194304 bytes 12.345678 s 331.79 KB/s
  *
+ * With -I (vbcc build) it also prints how much CPU time was left over
+ * ("cpu idle 12.3 %"): a task at priority -127 counts in a loop, first
+ * for half a second before the connect (all of the CPU), then during the
+ * transfer. The profiler of a stack cannot tell that apart from time its
+ * own task sleeps while others run.
+ *
  * timed from the first byte of the request to the last byte (download) or
  * the host's confirmation (upload); the connect is not timed. Uses only
  * bsdsocket.library version 3 calls (socket, connect, send, recv,
@@ -28,9 +34,63 @@
 
 static char *buf;
 
+#ifdef __VBCC__
+/* -I: the idle counter task */
+static volatile u32 idle_count, idle_stop, idle_gone;
+static struct Task *idle_task;
+static u8 *idle_stack;
+#define IDLE_STACK 2048
+
+static void idle_loop(void)
+{
+	while (!idle_stop)
+		idle_count++;
+	Forbid();               /* broken only by RemTask: gone means gone */
+	idle_gone = 1;
+}
+
+static int idle_start(void)
+{
+	idle_task = AllocMem(sizeof(*idle_task), MEMF_PUBLIC | MEMF_CLEAR);
+	idle_stack = AllocMem(IDLE_STACK, MEMF_PUBLIC | MEMF_CLEAR);
+	if (!idle_task || !idle_stack)
+		return -1;
+	idle_task->tc_Node.ln_Type = NT_TASK;
+	idle_task->tc_Node.ln_Pri = -127;
+	idle_task->tc_Node.ln_Name = (char *)"netbench idle";
+	idle_task->tc_SPLower = idle_stack;
+	idle_task->tc_SPUpper = idle_stack + IDLE_STACK;
+	idle_task->tc_SPReg = idle_stack + IDLE_STACK;
+	AddTask(idle_task, (APTR)idle_loop, NULL);
+	return 0;
+}
+
+static void idle_end(void)
+{
+	if (!idle_task)
+		return;
+	idle_stop = 1;
+	while (!idle_gone)
+		Delay(1);
+	FreeMem(idle_stack, IDLE_STACK);
+	FreeMem(idle_task, sizeof(*idle_task));
+	idle_task = NULL;
+}
+
+/* counts per second of an otherwise idle CPU */
+static u32 idle_calibrate(void)
+{
+	u32 c0 = idle_count, t0 = cl_now_us(), us;
+
+	Delay(25);
+	us = cl_now_us() - t0;
+	return us / 1000u ? (u32)(((u64)(idle_count - c0) * 1000u) / (us / 1000u)) : 0;
+}
+#endif
+
 static void usage(void)
 {
-	cl_puts("Usage: netbench -d|-u [-n BYTES] [-b BUFSIZE] [-w RCVBUF] [-l LABEL] A.B.C.D PORT\n"
+	cl_puts("Usage: netbench -d|-u [-n BYTES] [-b BUFSIZE] [-w RCVBUF] [-l LABEL] [-I] A.B.C.D PORT\n"
 	        "       netbench -W SECONDS | -s SECONDS | -A NAME=PATH | -a NAME=PATH | -R\n");
 }
 
@@ -129,8 +189,14 @@ static int netbench_main(int argc, char **argv)
 	char req[48];
 	struct rt_sockaddr_in sa;
 
-	while ((c = cl_getopt(argc, argv, "dun:b:w:l:s:W:A:a:R", &g)) != -1) {
+	int idle = 0;
+#ifdef __VBCC__
+	u32 idle_rate = 0, idle_c0 = 0;
+#endif
+
+	while ((c = cl_getopt(argc, argv, "dun:b:w:l:s:W:A:a:RI", &g)) != -1) {
 		switch (c) {
+		case 'I': idle = 1; break;
 		case 'R': return add_rexx_stub();
 		case 'A': return do_assign(g.arg, 0);
 		case 'a': return do_assign(g.arg, 1);
@@ -196,6 +262,12 @@ static int netbench_main(int argc, char **argv)
 		LONG v = (LONG)rcvbuf;
 		setsockopt(s, RT_SOL_SOCKET, RT_SO_RCVBUF, &v, sizeof(v));
 	}
+#ifdef __VBCC__
+	if (idle && idle_start() == 0)
+		idle_rate = idle_calibrate();
+#else
+	(void)idle;
+#endif
 	memset(&sa, 0, sizeof(sa));
 	sa.sin_len = sizeof(sa);
 	sa.sin_family = RT_AF_INET;
@@ -204,13 +276,22 @@ static int netbench_main(int argc, char **argv)
 	if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
 		cl_error("connect() failed");
 		CloseSocket(s);
+#ifdef __VBCC__
+		idle_end();
+#endif
 		return CL_FAIL;
 	}
 	n = rt_snprintf(req, sizeof(req), "%c %lu\n", dir == 'd' ? 'D' : 'U', (unsigned long)total);
+#ifdef __VBCC__
+	idle_c0 = idle_count;
+#endif
 	t0 = cl_now_us();
 	if (send(s, req, n, 0) != n) {
 		cl_error("send() failed");
 		CloseSocket(s);
+#ifdef __VBCC__
+		idle_end();
+#endif
 		return CL_FAIL;
 	}
 	if (dir == 'd') {
@@ -234,6 +315,15 @@ static int netbench_main(int argc, char **argv)
 			;
 	}
 	t1 = cl_now_us();
+#ifdef __VBCC__
+	if (idle_rate) {
+		u32 ms = (t1 - t0) / 1000u, c = idle_count - idle_c0;
+		u32 p10 = ms ? (u32)(((u64)c * 100000u) / ((u64)idle_rate * ms)) : 0;   /* tenths of % */
+		cl_printf("netbench: %s cpu idle %lu.%lu %%\n", label, (unsigned long)(p10 / 10u),
+		          (unsigned long)(p10 % 10u));
+	}
+	idle_end();
+#endif
 	CloseSocket(s);
 	us = t1 - t0;
 	if (!us)

@@ -41,7 +41,7 @@ static const char help_text[] =
 	"Riptide CAPTURE start|status|stop|save|clear [...]   packet capture to pcap\n"
 	"Riptide PROFILE start|show|stop|reset      where the CPU time goes\n"
 	"Riptide DEBUG [category,...|SHOW|DUMP f|NONE]  debug log\n"
-	"Riptide SELFTEST | BENCH                   built-in tests\n"
+	"Riptide SELFTEST | BENCH [TX]              built-in tests (TX: the send path)\n"
 	"Any riptide.conf line also works at run time through ip, ifconfig, route,\n"
 	"sysctl, hostname or RiptidePrefs. Manual: docs/AMIGA.md (Docs drawer).\n";
 
@@ -175,7 +175,7 @@ static int riptide_main(void)
 		FreeArgs(rda);
 		return rc;
 	}
-	if (more) {
+	if (more && !(args[ARG_BENCH] && !rt_strcasecmp(more[0], "tx") && (!more[1] || !more[2]))) {
 		put("Riptide: unexpected argument (Riptide HELP lists the commands)\n");
 		FreeArgs(rda);
 		return 10;
@@ -189,7 +189,7 @@ static int riptide_main(void)
 			put("Riptide: cannot initialise (timer.device or signals)\n");
 			rc = 20;
 		} else {
-			rc = amiga_bench();
+			rc = more ? amiga_bench_tx(more[1] ? rt_strtoul(more[1], NULL, 0) : 0) : amiga_bench();
 			amiga_os_fini();
 		}
 		FreeArgs(rda);

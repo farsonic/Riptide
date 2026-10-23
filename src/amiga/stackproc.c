@@ -692,6 +692,7 @@ void amiga_stack_loop(void)
 		u32 ms;
 
 		rt_lock();
+		RT_PROF_EV(RT_EV_LOOP);
 		RT_PROF_ENTER(RT_PROF_STACK);
 		/* the frames every driver has for us form one receive batch:
 		 * one ACK per connection and one reader wakeup at its end */

@@ -98,6 +98,13 @@ static u32 prof_max[RT_PROF_N];        /* ticks */
 static u32 prof_unbalanced;            /* exits without entry, unwinds */
 static u64 prof_t0_us, prof_t1_us;     /* run: start, stop (0 = running) */
 static u32 prof_rx0;                   /* received bytes at the start */
+static u32 prof_tx0;                   /* TCP data segments sent at the start */
+u32 rt_prof_ev[RT_EV_N];
+
+static const char *const ev_name[RT_EV_N] = {
+	"clock reads", "clock (cached)", "locks", "lock waits", "rt_malloc", "buf allocs",
+	"buf cache miss", "kicks", "app wakeups", "driver tx", "driver rx", "stack loops",
+};
 
 static const char *const prof_name[RT_PROF_N] = {
 	"stack loop", "timers", "ip input", "ip6 input", "tcp input", "udp input",
@@ -193,6 +200,9 @@ static void prof_reset(void)
 	prof_t0_us = rt_now_us();
 	prof_t1_us = 0;
 	prof_rx0 = rx_bytes_now();
+	prof_tx0 = rt_tcpstat.OutSegs;
+	for (i = 0; i < RT_EV_N; i++)
+		rt_prof_ev[i] = 0;
 }
 
 static u64 prof_wall_us(void)
@@ -325,6 +335,19 @@ int rt_prof_report(char *out, u32 outlen)
 	if (prof_unbalanced)
 		ADD("(%lu sections cut short by a lock release or a start inside them)\n",
 		    (unsigned long)prof_unbalanced);
+	{
+		u32 segs = rt_tcpstat.OutSegs - prof_tx0, k = 0;
+		char per[24];
+		ADD("events (per received KB / per TCP segment sent, %lu sent):\n", (unsigned long)segs);
+		for (i = 0; i < RT_EV_N; i++) {
+			u32 v = rt_prof_ev[i];
+			fmt_tenths(per, sizeof(per), segs ? div64(rt_mul32x32(v, 10u), segs) : 0);
+			ADD("  %-15s%8lu %6lu/KB %6s/seg%s", ev_name[i], (unsigned long)v,
+			    (unsigned long)(kb ? v / kb : 0), per, ++k % 2 ? "" : "\n");
+		}
+		if (k % 2)
+			ADD("\n");
+	}
 #undef ADD
 	return (int)o;
 }

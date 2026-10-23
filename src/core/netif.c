@@ -411,6 +411,7 @@ void rt_netif_down(struct rt_netif *nif)
 void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
                     const u8 *srchw, u16 flags)
 {
+	RT_PROF_EV(RT_EV_DRV_RX);
 	nif->stats.ipackets++;
 	nif->stats.ibytes += b->len;
 	if (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST))
@@ -462,6 +463,7 @@ void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, con
 
 int rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
+	RT_PROF_EV(RT_EV_DRV_TX);
 	if (nif->qos)
 		return rt_qos_xmit(nif, b, dsthw, ethertype);
 	if (rt_capture_on)

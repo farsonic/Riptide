@@ -15,6 +15,7 @@
 #include "rt/rt_buf.h"
 #include "rt/rt_os.h"
 #include "rt/rt_arch.h"
+#include "rt/rt_diag.h"
 
 #define RT_BUF_HDR_SIZE   ((sizeof(struct rt_buf) + 7u) & ~7u)
 #define RT_BUF_CACHE_MAX  64u      /* buffers kept per class */
@@ -76,12 +77,14 @@ struct rt_buf *rt_buf_alloc(u32 headroom, u32 size)
 		buf_stats.failures++;
 		return NULL;
 	}
+	RT_PROF_EV(RT_EV_BUF);
 	if (cl >= 0 && buf_cache[cl]) {
 		b = buf_cache[cl];
 		buf_cache[cl] = b->next;
 		buf_ncached[cl]--;
 		buf_stats.cached--;
 	} else {
+		RT_PROF_EV(RT_EV_BUF_MISS);
 		b = rt_malloc(RT_BUF_HDR_SIZE + RT_BUF_ALIGN - 1 + alloc);
 		if (!b) {
 			buf_stats.failures++;

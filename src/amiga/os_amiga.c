@@ -36,8 +36,11 @@ void rt_lock(void)
 		return;
 	}
 	/* profiling: time the waits (an uncontended lock costs no clock read) */
+	if (stack_sem.ss_Owner != RT_AMIGA_THISTASK(SysBase))
+		RT_PROF_EV(RT_EV_LOCK);
 	if (AttemptSemaphore(&stack_sem))
 		return;
+	RT_PROF_EV(RT_EV_LOCK_WAIT);
 	t0 = rt_prof_ticks();
 	ObtainSemaphore(&stack_sem);
 	rt_prof_add(FindTask(NULL) == amiga_stack_task ? RT_PROF_LOCK_STACK : RT_PROF_LOCK_APP,
@@ -45,6 +48,10 @@ void rt_lock(void)
 }
 
 static u32 clk_ok;    /* see eclock_read() */
+/* the cached time converted, once each per hold (clk_conv: bit 0 ms, 1 us):
+ * the divisions cost more than the rest of a cached read on a 68020 */
+static u32 clk_conv, clk_ms;
+static u64 clk_us;
 
 void rt_unlock(void)
 {
@@ -92,8 +99,10 @@ static void eclock_read(u32 *q, u32 *r)
 	if (owner && clk_ok) {
 		*q = clk_q;
 		*r = clk_r;
+		RT_PROF_EV(RT_EV_CLOCK_CACHED);
 		return;
 	}
+	RT_PROF_EV(RT_EV_CLOCK);
 	ReadEClock(&ev);
 	h = ec_hi;
 	hq = ec_hq;
@@ -118,34 +127,63 @@ static void eclock_read(u32 *q, u32 *r)
 	if (owner) {
 		clk_q = *q;
 		clk_r = lr;
+		clk_conv = 0;
 		clk_ok = 1;
 	}
 }
 
+/* the holder of the stack lock, with a time cached for this hold */
+static int clk_cached(void)
+{
+	return clk_ok && stack_sem.ss_Owner == RT_AMIGA_THISTASK(SysBase);
+}
+
 u32 rt_now_ms(void)
 {
-	u32 q, r;
+	u32 q, r, ms;
 
 	if (amiga_virtual_clock || !TimerBase)
 		return amiga_virtual_ms;
+	if ((clk_conv & 1) && clk_cached()) {
+		RT_PROF_EV(RT_EV_CLOCK_CACHED);
+		return clk_ms;
+	}
 	eclock_read(&q, &r);
 	if (eclock_freq < 4294967u)          /* r * 1000 fits 32 bits */
-		return q * 1000u + r * 1000u / eclock_freq;
-	return q * 1000u + (u32)(((u64)r * 1000u) / eclock_freq);
+		ms = q * 1000u + r * 1000u / eclock_freq;
+	else
+		ms = q * 1000u + (u32)(((u64)r * 1000u) / eclock_freq);
+	if (clk_cached()) {
+		clk_ms = ms;
+		clk_conv |= 1;
+	}
+	return ms;
 }
 
 u64 rt_now_us(void)
 {
 	u32 q, r, m;
+	u64 us;
 
 	if (amiga_virtual_clock || !TimerBase)
 		return rt_mul32x32(amiga_virtual_ms, 1000u);
+	if ((clk_conv & 2) && clk_cached()) {
+		RT_PROF_EV(RT_EV_CLOCK_CACHED);
+		return clk_us;
+	}
 	eclock_read(&q, &r);
-	if (eclock_freq >= 4294967u)
-		return (u64)q * 1000000u + ((u64)r * 1000000u) / eclock_freq;
-	/* r * 10^6 / f = 1000 * (r * 1000 / f) + (r * 1000 % f) * 1000 / f */
-	m = r * 1000u;
-	return rt_mul32x32(q, 1000000u) + (m / eclock_freq) * 1000u + (m % eclock_freq) * 1000u / eclock_freq;
+	if (eclock_freq >= 4294967u) {
+		us = (u64)q * 1000000u + ((u64)r * 1000000u) / eclock_freq;
+	} else {
+		/* r * 10^6 / f = 1000 * (r * 1000 / f) + (r * 1000 % f) * 1000 / f */
+		m = r * 1000u;
+		us = rt_mul32x32(q, 1000000u) + (m / eclock_freq) * 1000u + (m % eclock_freq) * 1000u / eclock_freq;
+	}
+	if (clk_cached()) {
+		clk_us = us;
+		clk_conv |= 2;
+	}
+	return us;
 }
 
 /* profiling clock: the EClock's low 32 bits (wraps after 100 minutes) */
@@ -291,6 +329,7 @@ void rt_os_program_name(char *buf, u32 len)
 
 void *rt_malloc(size_t n)
 {
+	RT_PROF_EV(RT_EV_MALLOC);
 	void *p;
 
 	if (n == 0)
@@ -502,6 +541,7 @@ void amiga_out(const char *fmt, ...)
 
 void rt_kick(void)
 {
+	RT_PROF_EV(RT_EV_KICK);
 	if (amiga_stack_task)
 		Signal(amiga_stack_task, amiga_kick_mask);
 }
@@ -591,8 +631,10 @@ struct rt_sleeper *rt_sleeper_self(void)
 static void sleeper_wake(struct rt_sleeper *s)
 {
 	s->woken = 1;
-	if (s->task && s->sigmask)
+	if (s->task && s->sigmask) {
+		RT_PROF_EV(RT_EV_WAKE);
 		Signal(s->task, s->sigmask);
+	}
 }
 
 int rt_sleeper_wait(struct rt_sleeper *s, s32 timeout_ms, u32 *extra_signals)
