@@ -26,8 +26,6 @@ static const u32 class_size[2] = {
 };
 static struct rt_buf *buf_cache[2];  /* singly linked through ->next */
 static u32 buf_ncached[2];
-static struct rt_buf *clone_cache;   /* header-only structs of clones */
-static u32 clone_ncached;
 static struct rt_buf_stats buf_stats;
 static u32 buf_limit;
 
@@ -70,25 +68,11 @@ static int buf_class(u32 alloc)
 	return alloc == class_size[0] ? 0 : alloc == class_size[1] ? 1 : -1;
 }
 
-struct rt_buf *rt_buf_alloc(u32 headroom, u32 size)
+/* A buffer of 'alloc' bytes (class cl, or -1) from the cache or the
+ * system, counted; not initialised but for 'size'. */
+static struct rt_buf *buf_get(u32 alloc, int cl)
 {
 	struct rt_buf *b;
-	u32 need, alloc;
-	int cl;
-
-	/* Reject absurd sizes before they can overflow the sums below. */
-	if (headroom > 0x100000u || size > 0x1000000u) {
-		buf_stats.failures++;
-		return NULL;
-	}
-	need = headroom + size;
-	if (need <= class_size[0])
-		alloc = class_size[0];
-	else if (need <= class_size[1])
-		alloc = class_size[1];
-	else
-		alloc = (need + 7u) & ~7u;
-	cl = buf_class(alloc);
 
 	if (buf_limit && buf_stats.bytes + alloc > buf_limit) {
 		buf_stats.failures++;
@@ -109,11 +93,33 @@ struct rt_buf *rt_buf_alloc(u32 headroom, u32 size)
 		}
 		b->size = alloc;
 	}
-	buf_reset(b, headroom);
 	buf_stats.allocated++;
 	buf_stats.bytes += b->size;
 	if (buf_stats.allocated > buf_stats.peak)
 		buf_stats.peak = buf_stats.allocated;
+	return b;
+}
+
+struct rt_buf *rt_buf_alloc(u32 headroom, u32 size)
+{
+	struct rt_buf *b;
+	u32 need, alloc;
+
+	/* Reject absurd sizes before they can overflow the sums below. */
+	if (headroom > 0x100000u || size > 0x1000000u) {
+		buf_stats.failures++;
+		return NULL;
+	}
+	need = headroom + size;
+	if (need <= class_size[0])
+		alloc = class_size[0];
+	else if (need <= class_size[1])
+		alloc = class_size[1];
+	else
+		alloc = (need + 7u) & ~7u;
+	b = buf_get(alloc, buf_class(alloc));
+	if (b)
+		buf_reset(b, headroom);
 	return b;
 }
 
@@ -126,14 +132,10 @@ void rt_buf_free(struct rt_buf *b)
 	if (b->owner) {
 		struct rt_buf *o = b->owner;
 
-		buf_stats.allocated--;
-		if (clone_ncached < RT_BUF_CACHE_MAX) {
-			b->next = clone_cache;
-			clone_cache = b;
-			clone_ncached++;
-		} else {
-			rt_free(b);
-		}
+		/* back to the small buffer it was allocated as */
+		b->owner = NULL;
+		b->size = class_size[0];
+		rt_buf_free(b);
 		if (--o->users == 0 && o->orphan) {
 			o->orphan = 0;
 			rt_buf_free(o);
@@ -216,19 +218,12 @@ struct rt_buf *rt_buf_clone(struct rt_buf *b)
 
 	if (b->users == 0xff)
 		return NULL;
-	RT_PROF_EV(RT_EV_BUF);
-	if (clone_cache) {
-		c = clone_cache;
-		clone_cache = c->next;
-		clone_ncached--;
-	} else {
-		RT_PROF_EV(RT_EV_BUF_MISS);
-		c = rt_malloc(sizeof(*c));
-		if (!c) {
-			buf_stats.failures++;
-			return NULL;
-		}
-	}
+	/* a small buffer's struct (its data area unused): from the same
+	 * cache as ACKs, so clones add no small allocations of their own,
+	 * which would fragment a machine with little memory */
+	c = buf_get(class_size[0], 0);
+	if (!c)
+		return NULL;
 	c->next = c->prev = NULL;
 	c->head = b->head;
 	c->data = b->data;
@@ -244,9 +239,6 @@ struct rt_buf *rt_buf_clone(struct rt_buf *b)
 	c->orphan = 0;
 	c->owner = b;
 	b->users++;
-	buf_stats.allocated++;
-	if (buf_stats.allocated > buf_stats.peak)
-		buf_stats.peak = buf_stats.allocated;
 	return c;
 }
 
@@ -256,7 +248,20 @@ struct rt_buf *rt_buf_unshare(struct rt_buf *b)
 
 	if (!b->owner)
 		return b;
-	c = rt_buf_copy(b);
+	/* as large as the shared buffer, as the copy TCP used to send was:
+	 * equal sizes reuse each other's memory (16 KB loopback segments) */
+	c = rt_buf_alloc(rt_buf_headroom(b), b->owner->size - rt_buf_headroom(b));
+	if (c) {
+		rt_copy_buf(c->data, b->data, b->len);
+		c->len = b->len;
+		c->netif = b->netif;
+		c->flags = b->flags;
+		c->prio = b->prio;
+		c->l3_proto = b->l3_proto;
+		c->tstamp_ms = b->tstamp_ms;
+		c->csum = b->csum;
+		memcpy(&c->cb, &b->cb, sizeof(c->cb));
+	}
 	rt_buf_free(b);
 	return c;
 }
