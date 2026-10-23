@@ -378,6 +378,7 @@ static int tcp_ip_send(struct tcp_sock *tp, struct rt_buf *b, u8 tos)
 	b->prio = rt_qos_sock_prio(tp->so);
 	o.dontroute = tp->so && (tp->so->options & RT_SO_DONTROUTE);
 	o.scope = tp->scope;
+	o.dst4 = &tp->dst4;
 	return rt_inet_output(b, &o);
 }
 

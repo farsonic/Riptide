@@ -296,6 +296,7 @@ struct tcp_sock {
 	struct tcp_sock *lhash_next;
 	struct tcp_sock *all_next, *all_prev;
 	struct tcp_sock *reap_next;
+	struct rt_ip_dst dst4;        /* IPv4 route cache (rt_ip_output) */
 	struct rt_socket *so;          /* NULL once orphaned */
 
 	rt_in6_addr saddr, daddr;      /* IPv4 as IPv4-mapped (see inet.c) */

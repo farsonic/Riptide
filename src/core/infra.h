@@ -173,6 +173,7 @@ struct rt_inet_out {
 	u8  mcast_noloop;
 	u8  mcast_ttl0;               /* IPv4 multicast with IP_MULTICAST_TTL 0: local copy only */
 	u32 scope;                    /* outgoing interface index (IPv6 zone / multicast), 0 */
+	struct rt_ip_dst *dst4;       /* IPv4 route cache of the connection, or NULL */
 };
 int  rt_inet_output(struct rt_buf *b, const struct rt_inet_out *o);
 void rt_inet_pmtu_update(const rt_in6_addr *dst, u32 mtu);

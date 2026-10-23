@@ -347,6 +347,7 @@ static void if_set_flag(struct rt_netif *nif, u16 bit, int on)
 	if (nf != nif->flags && nif->ioctl_flags)
 		nif->ioctl_flags(nif, nf);
 	nif->flags = nf;
+	rt_route_changed();
 }
 
 static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
@@ -358,6 +359,7 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 	long metric = -1, tcpwin = -1;
 	const char *end;
 
+	rt_route_changed();
 	if (need_args(argc, 2, err, errlen,
 	              "ifconfig IFNAME [alias] [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D] "
 	              "[mtu N] [metric N] [tcpwindow N] [[-]promisc] [[-]arp] [delete|-alias] [up|down]"))

@@ -86,6 +86,8 @@ int rt_ip_send_routed(struct rt_buf *b, const struct rt_nexthop *nh)
 		}
 		return rt_ipfrag_output(b, nh->netif, nh->nexthop, nh->mtu);
 	}
+	if (nh->flags & RT_NHF_UNICAST)
+		return rt_netif_output_ip_unicast(nh->netif, b, nh->nexthop);
 	return rt_netif_output_ip(nh->netif, b, nh->nexthop);
 }
 
@@ -153,6 +155,7 @@ static void ip_mc_loop(const struct rt_buf *b, const struct rt_nexthop *nh)
 
 int rt_ip_output(struct rt_buf *b, const struct rt_ip_out *o)
 {
+	struct rt_ip_dst *dst;
 	struct rt_nexthop nh;
 	struct rt_iphdr *ip;
 	u32 saddr;
@@ -166,6 +169,12 @@ int rt_ip_output(struct rt_buf *b, const struct rt_ip_out *o)
 	if (o->daddr == RT_INADDR_BROADCAST && !o->allow_broadcast) {
 		r = -RT_EACCES;          /* before routing: no route is no excuse */
 		goto fail;
+	}
+	dst = o->dst;
+	if (dst && dst->gen == rt_route_gen && dst->daddr == o->daddr &&
+	    (u32)(rt_now_ms() - dst->stamp) < RT_IP_DST_MS) {
+		nh = dst->nh;            /* the connection's cached route */
+		goto routed;
 	}
 	r = ip_route_out(o->daddr, o->oif, o->dontroute, &nh);
 	if (r < 0) {
@@ -183,7 +192,15 @@ int rt_ip_output(struct rt_buf *b, const struct rt_ip_out *o)
 			r = -RT_EMSGSIZE;
 			goto fail;
 		}
+	} else if (dst && !o->oif && !o->dontroute && !rt_ip_is_multicast(o->daddr) &&
+	           !rt_ip_is_multicast(nh.nexthop) && !rt_ip_is_broadcast(nh.nexthop, nh.netif)) {
+		dst->nh = nh;
+		dst->nh.flags |= RT_NHF_UNICAST;
+		dst->daddr = o->daddr;
+		dst->stamp = rt_now_ms();
+		dst->gen = rt_route_gen;
 	}
+routed:
 	if (b->len > 65535 - 20) {
 		r = -RT_EMSGSIZE;
 		goto fail;

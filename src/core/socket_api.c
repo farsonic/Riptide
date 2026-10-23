@@ -1220,6 +1220,7 @@ static int ifioctl(u32 req, struct rt_ifreq *ifr)
 	s16 f;
 	int r;
 
+	rt_route_changed();        /* setters change interfaces under routes */
 	if (!ifr)
 		return -RT_EFAULT;
 	memcpy(name, ifr->ifr_name, RT_IFNAMSIZ);

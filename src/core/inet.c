@@ -168,6 +168,7 @@ int rt_inet_output(struct rt_buf *b, const struct rt_inet_out *o)
 		io.allow_broadcast = o->allow_broadcast;
 		io.mcast_noloop = o->mcast_noloop;
 		io.mcast_ttl0 = o->mcast_ttl0;
+		io.dst = o->dst4;
 		/* scope: the interface of a multicast send (IP_MULTICAST_IF) */
 		if (o->scope && rt_ip_is_multicast(io.daddr)) {
 			io.oif = rt_netif_by_index(o->scope);

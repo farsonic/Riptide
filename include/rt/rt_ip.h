@@ -110,6 +110,8 @@ static inline u32 rt_buf_csum(const struct rt_buf *b, u32 sum)
 #define RT_RTF_CONNECTED 0x10000 /* interface route (not a BSD flag) */
 #define RT_RTF_PMTU     0x20000 /* PMTU cache entry: only mtu/expire_ms valid (not a BSD flag) */
 #define RT_RTF_DHCP     0x40000 /* installed by the DHCP client (not a BSD flag) */
+/* rt_nexthop only: the next hop is a unicast address (a cached route) */
+#define RT_NHF_UNICAST  0x80000000u
 
 struct rt_route {
 	struct rt_route *next;
@@ -147,6 +149,21 @@ struct rt_nexthop {
 };
 /* Longest-prefix lookup. Returns 0 or -RT_ENETUNREACH / -RT_EHOSTUNREACH. */
 int  rt_ip_route(u32 dst, struct rt_nexthop *nh);
+/* A connection's cached route (Linux's sk_dst_cache, BSD's inp_route):
+ * rt_ip_output() fills it on a unicast send and uses it while no route,
+ * interface or address changed (rt_route_gen) and for at most
+ * RT_IP_DST_MS, which bounds what a change made around the functions that
+ * bump the generation (expiry of a dynamic route) takes to apply. */
+#define RT_IP_DST_MS 1000u
+struct rt_ip_dst {
+	u32 gen;              /* rt_route_gen when filled; 0 = empty */
+	u32 daddr;
+	u32 stamp;            /* rt_now_ms() when filled */
+	struct rt_nexthop nh; /* nh.nexthop is a unicast address */
+};
+extern u32 rt_route_gen;
+/* Routes, interfaces or their addresses changed: drop cached routes. */
+void rt_route_changed(void);
 /* PMTU discovery (RFC 1191): record a smaller MTU for dst (expires after
  * net.inet.ip.mtu_expires). */
 void rt_ip_pmtu_update(u32 dst, u32 mtu);
@@ -166,6 +183,7 @@ struct rt_ip_out {
 	 * and TTL 0 (only the local copy, nothing on the wire) */
 	u8  mcast_noloop;
 	u8  mcast_ttl0;
+	struct rt_ip_dst *dst;  /* the connection's route cache, or NULL */
 };
 /* b->data points at the transport header (payload of IP). IP pushes its
  * header, routes, fragments if needed (unless df) and transmits. Consumes b
