@@ -85,6 +85,13 @@ int rt_qos_band(const struct rt_buf *b, u16 ethertype)
 	int band, small = 0;
 	u8 dscp, proto;
 
+	/* a VLAN interface's frame: classify what the tag carries */
+	if (ethertype == RT_ETH_P_8021Q && len >= 4) {
+		struct rt_buf inner = *b;
+		inner.data += 4;
+		inner.len -= 4;
+		return rt_qos_band(&inner, rt_get_be16(p + 2));
+	}
 	if (ethertype == RT_ETH_P_ARP)
 		return RT_QOS_BAND_INTERACTIVE;
 	if (ethertype == RT_ETH_P_IP && len >= 20 && (p[0] >> 4) == 4) {

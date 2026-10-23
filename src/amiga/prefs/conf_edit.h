@@ -58,12 +58,17 @@ extern const char *const rp_sc_names[RP_NSC];
 extern const char *const rp_ss_names[RP_NSS];
 extern const char *const rp_cc_names[];     /* "cubic", "reno", "ledbat" */
 
-/* lists: extra IPv4 addresses ("ifconfig IF alias SPEC") and QoS rules
- * ("qos rule SPEC"); entries are packed (no empty ones in between) */
+/* lists: extra IPv4 addresses ("ifconfig IF alias SPEC"), QoS rules
+ * ("qos rule SPEC") and VLANs of the interface; entries are packed (no
+ * empty ones in between). A VLAN entry is "ID [dhcp|A.B.C.D/BITS|up]
+ * [pcp=N|pcp=priority]" for the line "interface IF.ID vlan=ID parent=IF
+ * [dhcp|address=A.B.C.D/BITS|up] [pcp=...]". */
 #define RP_NALIAS   8
 #define RP_ALIASLEN 64
 #define RP_NQRULE   16
-enum { RP_LIST_ALIAS, RP_LIST_QRULE };
+#define RP_NVLAN    8
+#define RP_VLANLEN  48
+enum { RP_LIST_ALIAS, RP_LIST_QRULE, RP_LIST_VLAN };
 
 struct rp_model {
 	/* interface (the first "interface NAME device=..." line) */
@@ -96,6 +101,7 @@ struct rp_model {
 	char ss[RP_NSS][RP_SSLEN];            /* string sysctls, "" = no line */
 	char alias[RP_NALIAS][RP_ALIASLEN];   /* "A.B.C.D/BITS" or "A.B.C.D netmask M" */
 	char qrule[RP_NQRULE][RP_LONG];       /* the words after "qos rule" */
+	char vlan[RP_NVLAN][RP_VLANLEN];      /* "ID MODE [pcp=N]" (see above) */
 };
 
 struct rp_line {
@@ -113,11 +119,13 @@ struct rp_conf {
 	struct rp_line *l_hostname, *l_domain, *l_ipv6, *l_ntp, *l_tz, *l_mdns;
 	struct rp_line *l_quickack, *l_delack_segs, *l_delack_ms;
 	struct rp_line *l_ipv4, *l_qos, *l_sc[RP_NSC], *l_ss[RP_NSS];
-	struct rp_line *l_alias[RP_NALIAS], *l_qrule[RP_NQRULE];
+	struct rp_line *l_alias[RP_NALIAS], *l_qrule[RP_NQRULE], *l_vlan[RP_NVLAN];
 	/* what the list lines say now (conf_edit.c's sync_list()) */
 	char h_alias[RP_NALIAS][RP_ALIASLEN];
 	char h_qrule[RP_NQRULE][RP_LONG];
+	char h_vlan[RP_NVLAN][RP_VLANLEN];
 	char h_ifname[16];
+	char h_vifname[16];                   /* the parent named in the VLAN lines */
 };
 
 /* provided by the program */
@@ -157,6 +165,7 @@ int  rp_valid_ip(const char *s);           /* IPv4 or IPv6 literal */
 int  rp_valid_tz(const char *s);           /* "auto" or [+-]HH[:MM] (timezone) */
 int  rp_valid_alias(const char *s);        /* A.B.C.D[/BITS] [netmask M] [broadcast B] */
 int  rp_valid_qrule(const char *s);        /* key=value words of "qos rule" */
+int  rp_valid_vlan(const char *s);         /* "ID [dhcp|A.B.C.D/BITS|up] [pcp=0-7|pcp=priority]" */
 int  rp_valid_ports(const char *s);        /* P,P-Q,... (empty: valid) */
 int  rp_valid_programs(const char *s);     /* name,name*,... without spaces */
 

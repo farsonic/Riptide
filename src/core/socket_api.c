@@ -1312,7 +1312,11 @@ static int ifioctl(u32 req, struct rt_ifreq *ifr)
 		memcpy(&v, &ifr->ifr_ifru.ifru_mtu, sizeof(v));
 		if (v < 68 || v > (nif->type == RT_IFT_ETHER ? 1500 : 65535))
 			return -RT_EINVAL;
+		/* a VLAN interface's frames are its parent's, 4 bytes longer */
+		if (nif->vlan_parent && v > nif->vlan_parent->mtu)
+			return -RT_EINVAL;
 		nif->mtu = (u16)v;
+		rt_vlan_parent_changed(nif);
 		return 0;
 	case RT_SIOCSIFMETRIC:
 		memcpy(&v, &ifr->ifr_ifru.ifru_metric, sizeof(v));

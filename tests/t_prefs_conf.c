@@ -4,7 +4,7 @@
  * end), parsing, edits that touch only the lines of the changed settings
  * (keeping trailing comments), DHCP <-> static, the "other lines" list,
  * validation and the commands for the running stack; the Phase 3 settings
- * (ipv4, qos, sysctl table, extra addresses, QoS rules).
+ * (ipv4, qos, sysctl table, extra addresses, QoS rules) and VLANs.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stdio.h>
@@ -483,6 +483,81 @@ static void test_p3_live(void)
 	rp_conf_free(&c);
 }
 
+/* VLANs of the interface: "interface IF.ID vlan=ID parent=IF ..." lines */
+static const char *vlan_conf =
+	"interface eth0 device=uaenet.device unit=2\n"
+	"dhcp eth0\n"
+	"interface eth0.10 vlan=10 parent=eth0 address=10.10.0.2/24 pcp=4   # office\n"
+	"interface eth0.20  vlan=20 parent=eth0 dhcp\n"
+	"interface eth0.30 vlan=30 parent=eth0 mtu=1400\n"     /* other options: not in the list */
+	"interface wlan.5 vlan=5 parent=eth0 up\n"            /* another name: not in the list */
+	"hostname a\n";
+
+static void test_vlan(void)
+{
+	struct rp_conf c;
+	char *t;
+	int i;
+
+	roundtrip("vlans", vlan_conf);
+	CHECK(rp_conf_load(&c, vlan_conf, strlen(vlan_conf)) == 0);
+	CHECK(rp_list_count(&c, RP_LIST_VLAN) == 2);
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_VLAN, 0), "10 10.10.0.2/24 pcp=4"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_VLAN, 1), "20 dhcp"));
+	CHECK(rp_other_count(&c) == 2);          /* eth0.30 and wlan.5 */
+	/* change one (keeps its comment), delete one, add two */
+	CHECK(rp_list_set(&c, RP_LIST_VLAN, 0, "10 10.10.0.3/24 pcp=priority") == 0);
+	CHECK(rp_list_set(&c, RP_LIST_VLAN, 1, "") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_VLAN, "40 up") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_VLAN, "50") == 0);
+	t = text_of(&c);
+	CHECK(!strcmp(t, "interface eth0 device=uaenet.device unit=2\n"
+	                 "dhcp eth0\n"
+	                 "interface eth0.10 vlan=10 parent=eth0 address=10.10.0.3/24 pcp=priority   # office\n"
+	                 "interface eth0.40 vlan=40 parent=eth0 up\n"
+	                 "interface eth0.50 vlan=50 parent=eth0\n"
+	                 "interface eth0.30 vlan=30 parent=eth0 mtu=1400\n"
+	                 "interface wlan.5 vlan=5 parent=eth0 up\n"
+	                 "hostname a\n") || (fprintf(stderr, "%s", t), 0));
+	free(t);
+	rp_conf_free(&c);
+	/* the live commands: removed and changed ones go, new ones are made */
+	CHECK(rp_conf_load(&c, vlan_conf, strlen(vlan_conf)) == 0);
+	cmds[0] = 0;
+	CHECK(rp_list_set(&c, RP_LIST_VLAN, 0, "10 10.10.0.3/24") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_VLAN, "60 dhcp pcp=1") == 0);
+	CHECK(rp_live_commands(&c, collect, NULL) == 0);
+	CHECK(!strcmp(cmds, "interface eth0.10 delete;"
+	                    "interface eth0.10 vlan=10 parent=eth0 address=10.10.0.3/24;"
+	                    "interface eth0.60 vlan=60 parent=eth0 dhcp pcp=1;") ||
+	      (fprintf(stderr, "%s\n", cmds), 0));
+	/* renaming the parent rewrites the VLAN lines (and needs a restart) */
+	strcpy(c.cur.ifname, "net0");
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);
+	t = text_of(&c);
+	CHECK(strstr(t, "interface net0.10 vlan=10 parent=net0 address=10.10.0.3/24   # office\n") &&
+	      strstr(t, "interface net0.20 vlan=20 parent=net0 dhcp\n") &&
+	      strstr(t, "interface net0.60 vlan=60 parent=net0 dhcp pcp=1\n") &&
+	      strstr(t, "interface eth0.30 vlan=30 parent=eth0 mtu=1400\n"));
+	free(t);
+	rp_conf_free(&c);
+	/* at most 8 */
+	CHECK(rp_conf_load(&c, "", 0) == 0);
+	for (i = 1; i <= RP_NVLAN; i++) {
+		char e[16];
+		sprintf(e, "%d", i);
+		CHECK(rp_list_add(&c, RP_LIST_VLAN, e) == 0);
+	}
+	CHECK(rp_list_add(&c, RP_LIST_VLAN, "100") < 0);
+	rp_conf_free(&c);
+	/* validation */
+	CHECK(rp_valid_vlan("10") && rp_valid_vlan("10 dhcp") && rp_valid_vlan("4094 up pcp=7") &&
+	      rp_valid_vlan("10 10.0.0.1/24") && rp_valid_vlan("10 pcp=priority 10.0.0.1/24"));
+	CHECK(!rp_valid_vlan("") && !rp_valid_vlan("0") && !rp_valid_vlan("4095") && !rp_valid_vlan("x") &&
+	      !rp_valid_vlan("10 dhcp up") && !rp_valid_vlan("10 10.0.0.1") && !rp_valid_vlan("10 pcp=8") &&
+	      !rp_valid_vlan("10 pcp=1 pcp=2") && !rp_valid_vlan("10 foo"));
+}
+
 int main(void)
 {
 	test_roundtrips();
@@ -495,6 +570,7 @@ int main(void)
 	test_p3_edits();
 	test_p3_valid();
 	test_p3_live();
+	test_vlan();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

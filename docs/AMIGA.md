@@ -774,6 +774,79 @@ ifconfig eth0 alias 10.0.5.2/24            # another subnet on the same wire
 Several network cards work at once as before: give each its own
 `interface` line, address and routes.
 
+### VLAN interfaces (802.1Q)
+
+A VLAN interface is an interface of its own on the wire of an Ethernet
+interface (its parent): frames it sends carry an IEEE 802.1Q tag with its
+VLAN id, and tagged frames with that id that arrive on the parent go to it.
+Each has its own IPv4 and IPv6 addresses, DHCP client, ARP and neighbour
+tables, multicast memberships, mDNS answers, routes and counters:
+
+```
+interface eth0 device=uaenet.device unit=0
+dhcp eth0
+interface eth0.10 vlan=10 parent=eth0 dhcp                  # VLAN 10, DHCP
+interface eth0.20 vlan=20 parent=eth0 address=10.20.0.2/24 pcp=5
+interface eth0.30 vlan=30 parent=eth0 pcp=priority mtu=1500 up
+route add 10.99.0.0/16 10.20.0.1
+```
+
+| Option | |
+|---|---|
+| `vlan=ID` | the VLAN id, 1-4094 (required) |
+| `parent=IF` (or `link=IF`) | the Ethernet interface the VLAN runs on; it must be configured first. Several VLANs per parent, each id once |
+| `pcp=0-7` | the priority code point of the frames sent (default 0) |
+| `pcp=priority` | the PCP from the sender's `SO_PRIORITY` (0-7; packets without one: 0) |
+| `mtu=N` | default: the parent's MTU less 4, so a tagged frame is no longer than a full untagged one; up to the parent's MTU when the driver and the network take 1518 byte frames |
+| `dhcp`, `address=A.B.C.D/BITS`, `up` | start DHCP, set an address (and bring it up), or just bring it up (IPv6 link-local and SLAAC) |
+| `tcpwindow=`, `ipv4=`, `ipv6=`, `qos=` | as on any `interface` line |
+
+`interface eth0.10 delete` removes one (its addresses, routes, sockets'
+bindings and DHCP lease go with it). A line that fails (a bad option, an
+address in use) leaves no half-made interface behind. Any name works
+(`office`, `vlan10`); `IF.ID` is the convention the tools and RiptidePrefs
+use.
+
+* **Parent.** The VLAN's link state follows the parent: down when the
+  parent is down or has no carrier, up again with it; bringing a VLAN up
+  brings its parent up. Removing the parent (`ip link del eth0`) removes
+  its VLANs. A smaller parent MTU lowers the VLANs' MTUs; the VLAN's MTU
+  cannot be set above the parent's.
+* **Receive.** Frames tagged with an id that has no interface are dropped
+  and counted as unknown protocol on the parent (`missed` in `ip -s
+  link`); priority-tagged frames (id 0) are handled by the parent as if
+  untagged. Stacked tags (QinQ, 0x88a8) are not supported.
+* **SANA-II.** Riptide queues reads for packet type 0x8100 as long as the
+  parent has a VLAN (as many as for IPv4, `reads=`). The driver must pass
+  tagged frames to them: uaenet.device and drivers that accept any packet
+  type do; a driver that filters by type, or a network card that strips
+  tags, needs its own VLAN settings. MNI drivers deliver every frame.
+* The VLAN uses the parent's MAC address; its multicast groups go to the
+  parent's filter (shared groups are counted, so leaving on one interface
+  does not cut the other off).
+* Not on point-to-point (PPP/SLIP) interfaces.
+
+At run time:
+
+```
+1> ip link add link eth0 name eth0.10 type vlan id 10 [pcp 4]
+1> ip addr add 10.10.0.2/24 dev eth0.10
+1> ip -d link show eth0.10
+5: eth0.10@eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1496 state UP mode DEFAULT
+    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff
+    vlan protocol 802.1Q id 10 parent eth0 pcp 4
+1> ip link del eth0.10
+1> ifconfig eth0.20 create vlan 20 vlandev eth0 [vlanpcp 5]    # BSD style
+1> ifconfig eth0.20 destroy
+```
+
+`ifconfig` shows `vlan: 20 vlanpcp: 5 parent interface: eth0`, `Riptide
+STATUS` `VLAN 20 on eth0, 802.1Q, priority 5`; `netstat -i` lists VLANs
+like any interface. The `net.riptide.ifaces` records have `vlan_parent`
+(the parent's index, 0 when not a VLAN), `vlan_id`, `vlan_pcp`
+(`RT_CTL_VLAN_PCP_PRIO` for `pcp=priority`) and `nvlan` (the number of
+VLANs on the interface) at the end (0.16; check the record size).
+
 ### IPv4 and IPv6 on or off
 
 `ipv4 off` and `ipv6 off` switch a protocol off for every interface (and
@@ -820,6 +893,7 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 | Interface | interface name, device, unit, MTU, TCP window, reads; IPv4 and IPv6 on/off (two check boxes) | the first `interface NAME device=...` line (other options such as `raw`, `options=`, `ipv4=`, `ipv6=` or `qos=` are kept), `ipv4 on\|off`, `ipv6 on\|off` |
 | Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway | `dhcp IF`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
 | Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS` or `A.B.C.D netmask M`), with DHCP or a static primary address | `ifconfig IF alias SPEC` |
+| VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5` | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...]` |
 | Names | host name, domain, up to three DNS servers | `hostname`, `domain`, `nameserver` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=` |
@@ -870,17 +944,21 @@ the page below it (string gadgets, check boxes for IPv4 and IPv6), a hint line
 * Keyboard: the underlined letter of a field activates it (or toggles a
   check box or cycle gadget; with Shift backwards), `p`/`P` switch pages,
   `s`, `u`, `a`, `c` are the buttons, Esc cancels. On the list pages
-  (Extra addresses, Advanced: QoS rules, Other lines) `l` edits the
-  line, `d` adds it, `r` replaces and `e` deletes the selected one; an
-  extra address or QoS rule is checked before it goes into the list.
+  (Extra addresses, VLANs, Advanced: QoS rules, Other lines) `l` edits
+  the line, `d` adds it, `r` replaces and `e` deletes the selected one; an
+  extra address, VLAN or QoS rule is checked before it goes into the
+  list. Apply removes VLANs that were deleted or changed and creates the
+  new ones at once (renaming the interface needs a restart).
 * `USE` or `SAVE` on the command line copies the file without opening the
   window (`RiptidePrefs FROM=RAM:test.conf SAVE`, or `RiptidePrefs USE`
   to copy `ENVARC:` to `ENV:`).
 
 Only the first `interface` line with `device=` and its `dhcp`/`ifconfig`/
-`route add default`/`ifconfig IF alias` lines are on the Interface,
-Address and Extra addresses pages; other interfaces and routes appear
-under Other lines. The background rules are edited as their sysctls; a
+`route add default`/`ifconfig IF alias` lines and its VLANs (`interface
+IF.ID vlan=ID parent=IF` with only `dhcp`, `address=`, `up` and `pcp=`)
+are on the Interface, Address, Extra addresses and VLANs pages; other
+interfaces (VLAN lines with other options or names among them) and routes
+appear under Other lines. The background rules are edited as their sysctls; a
 `background ...` keyword line stays under Other lines (it sets the same
 values, so keep only one of the two). List entries that stay keep their
 line (and its comment) when others are added, replaced or deleted.
@@ -939,7 +1017,8 @@ default via 10.0.2.2 dev eth0 proto dhcp src 10.0.2.15
 | `ip link set [dev] IF reads N` | IPv4 read requests queued with a SANA-II driver (4..128) |
 | `ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]` | open a SANA-II device at run time |
 | `ip link add NAME type mni driver FILE [unit N] [options TEXT]` | load an MNI driver |
-| `ip link del [dev] NAME` | close a driver interface |
+| `ip link add link IF name NAME type vlan id ID [pcp N\|priority] [mtu N]` | a VLAN interface on IF (see "VLAN interfaces"); `ip link` shows it as `NAME@IF`, `-d` adds `vlan protocol 802.1Q id ID` |
+| `ip link del [dev] NAME` | close a driver interface or remove a VLAN |
 | `ip link resetstats [[dev] IF]` | **Riptide extension:** zero the counters of IF (all interfaces without IF) |
 | `ip addr [show [dev] IF]` | addresses; DHCP addresses are `dynamic` with the lease time left |
 | `ip addr add\|replace A.B.C.D/BITS [peer P] [broadcast B] dev IF` | `add` adds a further address (shown as `secondary`, up to nine per interface), `replace` changes the primary one |
@@ -1011,6 +1090,8 @@ eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
 Settings: `A.B.C.D[/BITS]`, `netmask`, `broadcast`, `pointopoint`, `mtu`,
 `metric`, `[-]promisc`, `[-]arp`, `[-]allmulti`, `del A.B.C.D`, `up`,
 `down`. A new address without a netmask gets the classful one, as on Linux.
+`ifconfig NAME create vlan ID vlandev IF [vlanpcp N]` and `ifconfig NAME
+destroy` add and remove VLAN interfaces (FreeBSD syntax).
 
 ### route
 
@@ -2110,13 +2191,15 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, RiptidePrefs in `SYS:Prefs`, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
 | `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply. |
 | `tests/amiga/run_vamos_prefs.sh build/amiga/RiptidePrefs` | (in `make -f Makefile.amiga check`) `RiptidePrefs FROM ... SAVE` / `USE` without a window under vamos: the files in `ENVARC:`/`ENV:` equal the input, the second Save leaves `riptide.conf.bak`, error return codes. |
-| `tests/amiga/run_fsuae_prefs.sh build/amiga` | RiptidePrefs on FS-UAE (AROS): opens the window, walks every page (screenshots in OUTDIR), switches to a static address and saves to get the validation requester, edits host name, domain, DNS, NTP, mDNS and an Other line with the keyboard (xdotool), saves, and compares `ENVARC:` (exact expected file), `ENV:` and the `.bak`. Run it for `build/amiga-gcc` too. |
+| `tests/amiga/run_fsuae_prefs.sh build/amiga` | RiptidePrefs on FS-UAE (AROS): opens the window, walks every page (screenshots in OUTDIR), switches to a static address and saves to get the validation requester, edits host name, domain, DNS, NTP, mDNS, an extra address, a VLAN and an Other line with the keyboard (xdotool), saves, and compares `ENVARC:` (exact expected file), `ENV:` and the `.bak`. Run it for `build/amiga-gcc` too. |
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 | `tests/t_tcpopt_tun.c` (host, root) | Against the Linux kernel over TUN, the Linux end in a network namespace with `tcp_fastopen=3` and iptables rules as middleboxes: Fast Open (cookie request, data in the SYN with `TCP_FASTOPEN_CONNECT` and `sendto(MSG_FASTOPEN)` as seen by Linux's `TCP_INFO`, a deferred connect that reads or waits first, a server without TFO, SYN-data dropped once and twice, three lost at three servers switching TFO off, `fastopen 0`), the connect timeout and the SYN backoff (times and SYN counts), ICMP host/port unreachable with each `syn_icmp_abort`, `TCP_KEEPINIT`, `SO_SNDTIMEO`, TIME_WAIT with 20 ports (`EADDRNOTAVAIL` without reuse, 20 reused with it) and 3000 short connections, keepalive probes and a silently dead peer, `keepalive_all` and an explicit `SO_KEEPALIVE` 0, and segment counts for Nagle, `TCP_NODELAY`, `TCP_CORK` with its 200 ms limit, `TCP_NOPUSH` and `MSG_MORE` (bytes checked at Linux). |
 | `tests/amiga/run_fsuae_tcpopt.sh build/amiga` | The same through bsdsocket.library on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtf0`/`rtf1`, 192.168.101.0/24, or `TF_IF`, `TF_PEER`, `TF_NET`; the Linux end in a namespace with `tests/amiga/tcpopt_peer.py`): `nc -F` three times (the second and third requests arrive in the SYN), `net.inet.tcp.fastopen_cache`, a connect timed out by `connect_timeout`, one ended by ICMP host unreachable, `nc -K 1` keepalive probes, and the `netstat -s` counters. |
 | `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root; `BR_IF`, `BR_PEER`, `BR_NET` choose other veth names and another /24 than `rtbr0`, `rtbr1`, `192.168.77`): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
+| `tests/t_vlan_unit.c`, `tests/t_vlan_wire.c`, `tests/t_vlan_tap.c` (host; TAP needs root) | VLANs: the `interface ... vlan=` keyword and its errors, tags and PCP (fixed and from `SO_PRIORITY`) on transmit, receive by id, priority-tagged, unknown-id, QinQ and runt frames, the MTU clamp, parent down/up/removal, link multicast reference counts, the `ifaces` record, a failed line leaving nothing; two stacks on the simulated wire with VLANs 10 and 20 (UDP up to the MTU and fragmented, 1 MB TCP each way, isolation of a VLAN the peer lacks, removal at run time); against Linux over TAP with an `AF_PACKET` peer (the container kernel may lack 8021q): tagged ND, ARP with PCP 5, ping with 1518 byte frames, frames of another VLAN ignored. |
+| `tests/amiga/run_fsuae_vlan.sh build/amiga` | VLANs on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtv0`/`rtv1`, 192.168.130.0/24 untagged and 192.168.131.0/24 on VLAN 10, or `VL_IF`, `VL_PEER`, `VL_NET`, `VL_NET2`) against `tests/amiga/vlan_peer.py`: ping untagged and on VLAN 10 (also 1496 bytes: 1518 byte tagged frames through uaenet.device), UDP on VLAN 10, PCP 4 on the wire, `ip -d link`, `ifconfig`, `netstat -i`, `STATUS`, VLANs added and removed with `ip` and `ifconfig`, a duplicate id refused. |
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |

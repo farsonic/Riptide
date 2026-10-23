@@ -88,6 +88,12 @@ static void fill_iface(struct rt_ctl_iface *r, const struct rt_netif *n)
 	r->ip6_off = n->ip6 == NULL;
 	r->naddr4 = (u8)rt_netif_addrs(n, NULL, 0);
 	r->qos = n->qos != NULL;
+	if (n->vlan_parent) {
+		r->vlan_parent = n->vlan_parent->index;
+		r->vlan_id = n->vlan_id;
+		r->vlan_pcp = n->vlan_pcp_prio ? RT_CTL_VLAN_PCP_PRIO : n->vlan_pcp;
+	}
+	r->nvlan = (u8)RT_MIN(n->nvlan, 255u);
 }
 
 /* ---- IPv4 addresses ---- */

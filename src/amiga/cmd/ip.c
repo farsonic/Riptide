@@ -27,6 +27,7 @@ static void usage(void)
 	        "                         tcpwindow N }\n"
 	        "  ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]\n"
 	        "  ip link add NAME type mni driver FILE [unit N] [options TEXT]\n"
+	        "  ip link add link IF name NAME type vlan id ID [pcp N|priority] [mtu N]\n"
 	        "  ip link del [dev] NAME\n"
 	        "  ip link resetstats [[dev] IF]   (all interfaces without IF)\n"
 	        "  ip addr [show [dev] IF]\n"
@@ -82,12 +83,18 @@ static void link_flags(const struct rt_ctl_iface *f, char *b, u32 len)
 	rt_snprintf(b + o, len - o, ">");
 }
 
+static const struct rt_ctl_iface *vlan_parent_of(const struct rt_ctl_iface *f);
+
 static void print_link_line(const struct rt_ctl_iface *f)
 {
 	char fl[128], mac[64];
+	const struct rt_ctl_iface *par = vlan_parent_of(f);
 
 	link_flags(f, fl, sizeof(fl));
-	cl_printf("%lu: %s: %s mtu %u ", (unsigned long)f->index, f->name, fl, (unsigned)f->mtu);
+	if (par)
+		cl_printf("%lu: %s@%s: %s mtu %u ", (unsigned long)f->index, f->name, par->name, fl, (unsigned)f->mtu);
+	else
+		cl_printf("%lu: %s: %s mtu %u ", (unsigned long)f->index, f->name, fl, (unsigned)f->mtu);
 	if (f->tcp_window)
 		cl_printf("tcpwindow %lu ", (unsigned long)f->tcp_window);
 	cl_printf("state %s mode DEFAULT\n", link_state(f));
@@ -97,8 +104,15 @@ static void print_link_line(const struct rt_ctl_iface *f)
 		cl_printf("    link/ether %s brd ff:ff:ff:ff:ff:ff\n", cl_mac(f->hwaddr, 6, mac));
 	else
 		cl_puts("    link/none \n");
-	if (opt_details && f->descr[0])
+	if (opt_details && par) {
+		cl_printf("    vlan protocol 802.1Q id %u parent %s ", (unsigned)f->vlan_id, par->name);
+		if (f->vlan_pcp == RT_CTL_VLAN_PCP_PRIO)
+			cl_puts("pcp priority\n");
+		else
+			cl_printf("pcp %u\n", (unsigned)f->vlan_pcp);
+	} else if (opt_details && f->descr[0]) {
 		cl_printf("    driver %s\n", f->descr);
+	}
 	if (opt_stats) {
 		cl_puts("    RX:  bytes  packets errors dropped  missed   mcast\n");
 		cl_printf("    %10lu %8lu %6lu %7lu %7lu %7lu\n", (unsigned long)f->ibytes,
@@ -371,10 +385,24 @@ static int has_addr6(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl
 	return 0;
 }
 
+/* the interface dump being shown (VLAN parents are looked up in it) */
+static void *if_dump;
+static struct rt_ctl_hdr if_hdr;
+
 static struct rt_ctl_iface *get_ifaces(void **dump, struct rt_ctl_hdr *h)
 {
 	*dump = cl_dump(RT_CTL_IFACES, h);
+	if_dump = *dump;
+	if_hdr = *h;
 	return *dump ? cl_rec(*dump, h, 0) : NULL;
+}
+
+/* the parent of a VLAN interface (Riptide 0.16 records), or NULL */
+static const struct rt_ctl_iface *vlan_parent_of(const struct rt_ctl_iface *f)
+{
+	if (!if_dump || if_hdr.recsize < offsetof(struct rt_ctl_iface, nvlan) + 1 || !f->vlan_parent)
+		return NULL;
+	return cl_iface_by_index(if_dump, &if_hdr, f->vlan_parent);
 }
 
 /* transmit priority bands (net.riptide.qos, Riptide 0.15), ip -s link */
@@ -584,7 +612,7 @@ static int do_link(int argc, char **argv, int i)
 	}
 	if (cl_match(cmd, "add")) {
 		const char *name = NULL, *type = NULL, *dev = NULL, *unit = "0", *mtu = NULL, *opts = NULL;
-		const char *reads = NULL;
+		const char *reads = NULL, *link = NULL, *vid = NULL, *pcp = NULL;
 		for (; i < argc; i++) {
 			const char *k = argv[i], *eq = strchr(k, '=');
 			char key[16];
@@ -611,6 +639,16 @@ static int do_link(int argc, char **argv, int i)
 				TAKE(reads);
 			else if (!strcmp(key, "options"))
 				TAKE(opts);
+			else if (!strcmp(key, "link") || !strcmp(key, "parent"))
+				TAKE(link);
+			else if (!strcmp(key, "id"))
+				TAKE(vid);
+			else if (!strcmp(key, "pcp"))
+				TAKE(pcp);
+			else if (!strcmp(key, "protocol") && v && !rt_strcasecmp(v, "802.1Q")) {
+				if (!eq)
+					i++;
+			}
 			else if (!strcmp(key, "name") || !strcmp(key, "dev"))
 				TAKE(name);
 			else if (!name && !eq)
@@ -621,8 +659,22 @@ static int do_link(int argc, char **argv, int i)
 			}
 #undef TAKE
 		}
+		if (type && !strcmp(type, "vlan")) {
+			/* ip link add link eth0 name eth0.10 type vlan id 10 [pcp N|priority] [mtu N] */
+			if (!name || !link || !vid) {
+				cl_puts("Error: ip link add link IF name NAME type vlan id ID [pcp N|priority] [mtu N]\n");
+				return CL_ERROR;
+			}
+			o = (u32)rt_snprintf(line, sizeof(line), "interface %s vlan=%s parent=%s", name, vid, link);
+			if (pcp)
+				o += (u32)rt_snprintf(line + o, sizeof(line) - o, " pcp=%s", pcp);
+			if (mtu)
+				rt_snprintf(line + o, sizeof(line) - o, " mtu=%s", mtu);
+			return run(line);
+		}
 		if (!name || !type || !dev) {
-			cl_puts("Error: ip link add NAME type { sana2 device DEV | mni driver FILE } [unit N]\n");
+			cl_puts("Error: ip link add NAME type { sana2 device DEV | mni driver FILE } [unit N]\n"
+			        "       ip link add link IF name NAME type vlan id ID\n");
 			return CL_ERROR;
 		}
 		if (!strcmp(type, "sana2") || !strcmp(type, "sana"))
