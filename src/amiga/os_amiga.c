@@ -138,16 +138,15 @@ static int clk_cached(void)
 	return clk_ok && stack_sem.ss_Owner == RT_AMIGA_THISTASK(SysBase);
 }
 
-u32 rt_now_ms(void)
+/* The slow paths of rt_now_ms()/rt_now_us(): the calls with a time cached
+ * for this hold (most of them) stay small functions that save no
+ * registers. */
+static u32 now_ms_slow(void)
 {
 	u32 q, r, ms;
 
 	if (amiga_virtual_clock || !TimerBase)
 		return amiga_virtual_ms;
-	if ((clk_conv & 1) && clk_cached()) {
-		RT_PROF_EV(RT_EV_CLOCK_CACHED);
-		return clk_ms;
-	}
 	eclock_read(&q, &r);
 	if (eclock_freq < 4294967u)          /* r * 1000 fits 32 bits */
 		ms = q * 1000u + r * 1000u / eclock_freq;
@@ -160,17 +159,24 @@ u32 rt_now_ms(void)
 	return ms;
 }
 
-u64 rt_now_us(void)
+u32 rt_now_ms(void)
+{
+	/* clk_conv is only set from eclock_read()'s results (never with the
+	 * virtual clock) */
+	if ((clk_conv & 1) && clk_ok && stack_sem.ss_Owner == RT_AMIGA_THISTASK(SysBase)) {
+		RT_PROF_EV(RT_EV_CLOCK_CACHED);
+		return clk_ms;
+	}
+	return now_ms_slow();
+}
+
+static u64 now_us_slow(void)
 {
 	u32 q, r, m;
 	u64 us;
 
 	if (amiga_virtual_clock || !TimerBase)
 		return rt_mul32x32(amiga_virtual_ms, 1000u);
-	if ((clk_conv & 2) && clk_cached()) {
-		RT_PROF_EV(RT_EV_CLOCK_CACHED);
-		return clk_us;
-	}
 	eclock_read(&q, &r);
 	if (eclock_freq >= 4294967u) {
 		us = (u64)q * 1000000u + ((u64)r * 1000000u) / eclock_freq;
@@ -184,6 +190,15 @@ u64 rt_now_us(void)
 		clk_conv |= 2;
 	}
 	return us;
+}
+
+u64 rt_now_us(void)
+{
+	if ((clk_conv & 2) && clk_ok && stack_sem.ss_Owner == RT_AMIGA_THISTASK(SysBase)) {
+		RT_PROF_EV(RT_EV_CLOCK_CACHED);
+		return clk_us;
+	}
+	return now_us_slow();
 }
 
 /* profiling clock: the EClock's low 32 bits (wraps after 100 minutes) */
