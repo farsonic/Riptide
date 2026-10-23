@@ -420,10 +420,24 @@ static int tcp_transmit_skb_body(struct tcp_sock *tp, struct rt_buf *skb, int cl
 		tcb->tx_ms = tcp_jiffies();
 		if (!tcb->first_tx_ms)
 			tcb->first_tx_ms = tcb->tx_ms;
-		/* copy the payload and checksum it in the same pass */
-		b = rt_buf_copy_csum(skb, &dsum);
-		if (!b)
-			return -RT_ENOBUFS;
+		if (!skb->users) {
+			/* the frame shares the payload: tcp_v4_send() summed it
+			 * while copying it from the application */
+			b = rt_buf_clone(skb);
+			if (!b)
+				return -RT_ENOBUFS;
+			if (skb->flags & RT_BUFF_CSUM_PART)
+				dsum = skb->csum;
+			else
+				dsum = skb->len ? rt_csum_partial(skb->data, skb->len, 0) : 0;
+		} else {
+			/* an earlier transmission of it still waits in a driver
+			 * (its headers sit in the headroom): copy the payload and
+			 * checksum it in the same pass */
+			b = rt_buf_copy_csum(skb, &dsum);
+			if (!b)
+				return -RT_ENOBUFS;
+		}
 	} else {
 		b = skb;
 		dsum = b->len ? rt_csum_partial(b->data, b->len, 0) : 0;
@@ -898,7 +912,7 @@ int tcp_fragment(struct tcp_sock *tp, struct rt_buf *b, u32 len)
 	if (!nb)
 		return -RT_ENOMEM;
 	rt_copy_buf(rt_buf_put(nb, nlen), b->data + len, nlen);
-	b->len = len;
+	rt_buf_trim(b, len);
 	ncb = TCP_SKB_CB(nb);
 	*ncb = *cb;
 	ncb->seq = cb->seq + len;
@@ -1117,6 +1131,7 @@ int tcp_retransmit_skb(struct tcp_sock *tp, struct rt_buf *b)
 		if (trim > b->len)
 			trim = b->len;
 		rt_buf_pull(b, trim);
+		b->flags &= (u16)~RT_BUFF_CSUM_PART;
 		tp->wq.bytes -= RT_MIN(tp->wq.bytes, trim);
 		tp->wq_bytes -= RT_MIN(tp->wq_bytes, trim);
 		cb->seq = tp->snd_una;

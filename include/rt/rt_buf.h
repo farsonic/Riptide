@@ -32,7 +32,10 @@ struct rt_buf {
 	u32  tstamp_ms;     /* free for owner (e.g. reassembly / queue time) */
 	u32  csum;          /* RT_BUFF_CSUM_PART: partial sum of data[0, len) */
 	u8   prio;          /* output: socket priority + 1 (rt_qos.h), 0 = none */
-	u8   resv[3];
+	u8   users;         /* clones sharing this buffer's data (rt_buf_clone) */
+	u8   orphan;        /* freed while clones were alive: free with the last */
+	u8   resv;
+	struct rt_buf *owner; /* clone: the buffer whose data it shares */
 	union {
 		u8  b[64];
 		u32 w[16];
@@ -65,6 +68,16 @@ struct rt_buf *rt_buf_copy_expand(const struct rt_buf *b, u32 headroom);
  * the partial checksum of the data, computed while copying (TCP
  * transmit). */
 struct rt_buf *rt_buf_copy_csum(const struct rt_buf *b, u32 *sum);
+/* Header-only clone of b (TCP transmit): its own struct with data, len,
+ * flags (less RT_BUFF_CSUM_PART), netif and prio of b, sharing b's data
+ * area. The cb is not initialised. Headers may be pushed into the shared
+ * headroom (b must not have another clone alive: check b->users); the
+ * clone has no tailroom, and nobody may write to the shared data. Freeing
+ * b while clones are alive defers the free to the last clone's. */
+struct rt_buf *rt_buf_clone(struct rt_buf *b);
+/* A clone becomes a private copy (frees the clone); other buffers are
+ * returned as they are. NULL if out of memory (b is freed). */
+struct rt_buf *rt_buf_unshare(struct rt_buf *b);
 
 static inline u32 rt_buf_headroom(const struct rt_buf *b) { return (u32)(b->data - b->head); }
 static inline u32 rt_buf_tailroom(const struct rt_buf *b)

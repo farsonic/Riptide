@@ -26,6 +26,8 @@ static const u32 class_size[2] = {
 };
 static struct rt_buf *buf_cache[2];  /* singly linked through ->next */
 static u32 buf_ncached[2];
+static struct rt_buf *clone_cache;   /* header-only structs of clones */
+static u32 clone_ncached;
 static struct rt_buf_stats buf_stats;
 static u32 buf_limit;
 
@@ -44,6 +46,9 @@ static void buf_reset(struct rt_buf *b, u32 headroom)
 	b->flags = 0;
 	b->l3_proto = 0;
 	b->prio = 0;
+	b->users = 0;
+	b->orphan = 0;
+	b->owner = NULL;
 	b->tstamp_ms = 0;
 	memset(&b->cb, 0, sizeof(b->cb));
 }
@@ -106,6 +111,27 @@ void rt_buf_free(struct rt_buf *b)
 
 	if (!b)
 		return;
+	if (b->owner) {
+		struct rt_buf *o = b->owner;
+
+		buf_stats.allocated--;
+		if (clone_ncached < RT_BUF_CACHE_MAX) {
+			b->next = clone_cache;
+			clone_cache = b;
+			clone_ncached++;
+		} else {
+			rt_free(b);
+		}
+		if (--o->users == 0 && o->orphan) {
+			o->orphan = 0;
+			rt_buf_free(o);
+		}
+		return;
+	}
+	if (b->users) {
+		b->orphan = 1;   /* a driver still sends a clone of it */
+		return;
+	}
 	buf_stats.allocated--;
 	buf_stats.bytes -= b->size;
 	cl = buf_class(b->size);
@@ -163,12 +189,63 @@ struct rt_buf *rt_buf_copy_csum(const struct rt_buf *b, u32 *sum)
 	*sum = rt_csum_copy(c->data, b->data, b->len, 0);
 	c->len = b->len;
 	c->netif = b->netif;
-	c->flags = b->flags;
+	c->flags = b->flags & (u16)~RT_BUFF_CSUM_PART;
 	c->prio = b->prio;
 	c->l3_proto = b->l3_proto;
 	c->tstamp_ms = b->tstamp_ms;
 	c->csum = b->csum;
 	memcpy(&c->cb, &b->cb, sizeof(c->cb));
+	return c;
+}
+
+struct rt_buf *rt_buf_clone(struct rt_buf *b)
+{
+	struct rt_buf *c;
+
+	if (b->users == 0xff)
+		return NULL;
+	RT_PROF_EV(RT_EV_BUF);
+	if (clone_cache) {
+		c = clone_cache;
+		clone_cache = c->next;
+		clone_ncached--;
+	} else {
+		RT_PROF_EV(RT_EV_BUF_MISS);
+		c = rt_malloc(sizeof(*c));
+		if (!c) {
+			buf_stats.failures++;
+			return NULL;
+		}
+	}
+	c->next = c->prev = NULL;
+	c->head = b->head;
+	c->data = b->data;
+	c->len = b->len;
+	c->size = (u32)(b->data - b->head) + b->len;
+	c->netif = b->netif;
+	c->flags = b->flags & (u16)~RT_BUFF_CSUM_PART;
+	c->l3_proto = b->l3_proto;
+	c->tstamp_ms = b->tstamp_ms;
+	c->csum = 0;
+	c->prio = b->prio;
+	c->users = 0;
+	c->orphan = 0;
+	c->owner = b;
+	b->users++;
+	buf_stats.allocated++;
+	if (buf_stats.allocated > buf_stats.peak)
+		buf_stats.peak = buf_stats.allocated;
+	return c;
+}
+
+struct rt_buf *rt_buf_unshare(struct rt_buf *b)
+{
+	struct rt_buf *c;
+
+	if (!b->owner)
+		return b;
+	c = rt_buf_copy(b);
+	rt_buf_free(b);
 	return c;
 }
 
