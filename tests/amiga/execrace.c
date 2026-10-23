@@ -7,9 +7,10 @@
  * "noise" (unless "quiet") keeps timer.device busy with 3 ms requests.
  * At the end DIR/execrace.done holds the round counts.
  *
- * On FS-UAE 3.2.35 with the AROS Kickstart ROM, under host load, one of
- * the two tasks ends up in state TS_READY but in neither exec's TaskReady
- * nor TaskWait list, and never runs again: the run hangs. Riptide's stack
+ * On FS-UAE 3.2.35 with the AROS Kickstart ROM, under host load, the DOS
+ * process ends up in state TS_READY but in neither exec's TaskReady nor
+ * TaskWait list, and never runs again: the run hangs (about half of the
+ * 240 s runs; with "quiet", i.e. without the timer task, none of four). Riptide's stack
  * process (woken by Signal() for every packet) was lost the same way in
  * rare bsdsocktest runs; see run_fsuae_execrace.sh and taskprobe.c.
  * SPDX-License-Identifier: GPL-2.0-only

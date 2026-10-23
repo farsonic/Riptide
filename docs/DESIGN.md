@@ -152,6 +152,49 @@ time:
 The host build mirrors this. A stack thread polls TUN or wire file
 descriptors and runs timers, and test threads call `rt_api_*` directly.
 
+### Sleepers and signals
+
+A blocking call sleeps on its task's `rt_sleeper` (a signal bit plus a
+timer request with its own port), found by `rt_sleeper_self()`: the one
+in the task's library context, or for a task without one (the Riptide
+process, a program calling through a base another task opened) an
+"orphan" sleeper on a list keyed by the `struct Task` pointer. Orphan
+sleepers are never freed. Known weakness, not seen to matter so far: when
+such a task ends and a new task is later created at the same address,
+the new task finds the old sleeper, whose signal bits it never allocated
+(they may collide with its own ports). Fixing it needs a way to see that
+a task has ended (exec has none short of patching `RemTask()`), so the
+library-context path, which every program that opens bsdsocket.library
+itself takes, is the supported one.
+
+### A stall that is not Riptide's (FS-UAE with the AROS ROM)
+
+Rare bsdsocktest and tools runs used to stop with no result: the stack
+process stopped answering `Riptide STATUS`, loopback traffic stopped,
+the test program waited forever, everything else ran. A probe
+(`tests/amiga/taskprobe.c`, run by `run_fsuae_bsdsocktest.sh` when vbcc
+is there) caught the Riptide process in state `TS_READY`, priority 2, in
+neither `SysBase->TaskReady` nor `TaskWait`, its `ln_Succ` still
+`&TaskReady.lh_Tail` and its `ln_Pred` the DH0 handler task, while
+priority 0 tasks kept running: exec had taken it off the ready list
+without running it, and it never ran again. Its saved stack showed the
+`Wait()` of `amiga_stack_loop()`, nothing in Riptide in between.
+
+`tests/amiga/execrace.c` reproduces it without any TCP/IP stack: a
+priority 2 task and a DOS process wake each other with `Signal()`/`Wait()`
+while a third task keeps timer.device busy with 3 ms requests. On FS-UAE
+3.2.35 with the AROS Kickstart ROM and a loaded host, the DOS process
+ended up in no task list in about half of the 240 s runs, with every
+`Signal()` inside `Disable()`/`Enable()` as well, and with its log on
+`RAM:` instead of the host filesystem; without the timer task four runs
+of four finished. So it is exec in that ROM (or FS-UAE's interrupt
+emulation) under timer interrupt load, not a Riptide bug, and wrapping
+Riptide's `Signal()` calls would not help. The Riptide process, woken by
+`Signal()` for every packet and with timer requests of its own, is the
+likeliest task to be hit. `run_fsuae_execrace.sh` counts such stalls on
+fresh boots; `run_fsuae_bsdsocktest.sh` says "emulator lost the stack
+process" when the probe saw it.
+
 ### Receive path
 
 On a 68020 a bulk download is CPU bound: the reader (nc, an FTP client)

@@ -10,8 +10,9 @@
 #   tests/amiga/run_fsuae_execrace.sh [BOOTS] [SECS] [DIR] [quiet]
 #
 # DIR is where execrace logs (default DH0:, RAM: keeps the host filesystem
-# out of it); "quiet" leaves out the timer task. Stalls are rare on an idle
-# host and frequent under load (several emulators at once, or CPU hogs).
+# out of it); "quiet" leaves out the timer task (it then did not stall).
+# Stalls are rare on an idle host and frequent under load (several
+# emulators at once, or CPU hogs). See docs/DESIGN.md.
 # Needs fs-uae, vbcc (VBCC, NDK) and Xvfb when DISPLAY is not set; reports
 # how many boots stalled, and the work directories of those.
 # SPDX-License-Identifier: GPL-2.0-only

@@ -716,7 +716,8 @@ makes exec lose a task that `Signal()` woke: the task is marked ready but
 sits in neither of exec's task lists and never runs again. When that task
 is Riptide's process, `Riptide STATUS` hangs, connections stop and
 programs wait forever, while everything else keeps running. It happens
-without Riptide too (`tests/amiga/run_fsuae_execrace.sh`), so it is not a
+without Riptide too, under timer interrupt load
+(`tests/amiga/run_fsuae_execrace.sh`; docs/DESIGN.md), so it is not a
 Riptide fault; reboot the emulated Amiga. It is rare when the host has
 spare CPU (about one bsdsocktest run in 50 to 100 while other emulators
 ran) and common when the host is overloaded.
