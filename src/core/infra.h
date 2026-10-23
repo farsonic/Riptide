@@ -33,6 +33,9 @@ void rt_buf_drain_cache(void);
 
 /* ---- netif.c ---- */
 void rt_netif_init(void);
+/* rt_netif_input() without the counters and capture: hand a received
+ * frame's payload to the protocol of 'ethertype' on nif (vlan.c). */
+void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, const u8 *srchw, u16 flags);
 
 /* ---- ip6_if.c: link state changes (netif.c) ---- */
 void rt_ip6_if_up(struct rt_netif *nif);

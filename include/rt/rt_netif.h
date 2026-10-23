@@ -40,6 +40,7 @@
 #define RT_ETH_P_IP   0x0800
 #define RT_ETH_P_ARP  0x0806
 #define RT_ETH_P_IPV6 0x86dd
+#define RT_ETH_P_8021Q 0x8100   /* IEEE 802.1Q VLAN tag (src/core/vlan.c) */
 
 struct rt_netif;
 
@@ -109,6 +110,18 @@ struct rt_netif {
 	u8    ip4_disabled;
 	/* transmit priority queue (src/core/qos.c), NULL while not in use */
 	void *qos;
+	/* 802.1Q VLANs (src/core/vlan.c). A VLAN interface has vlan_parent
+	 * set: its frames go out tagged through the parent's driver. A parent
+	 * counts its VLAN interfaces in nvlan and, when its driver needs to
+	 * ask for tagged frames (SANA-II reads by packet type), has vlan_rx:
+	 * called with on = 1 when the first VLAN appears and 0 after the last
+	 * one went (lock held; 0 or -errno). */
+	struct rt_netif *vlan_parent;
+	u16   vlan_id;           /* 1..4094 */
+	u8    vlan_pcp;          /* 802.1p priority of the tag, 0..7 */
+	u8    vlan_pcp_prio;     /* 1: the tag's priority is the socket priority (SO_PRIORITY) */
+	u16   nvlan;             /* parent: VLAN interfaces on it */
+	int (*vlan_rx)(struct rt_netif *nif, int on);
 };
 
 /* ---- driver counters (src/core/drvstats.c) ----
@@ -239,6 +252,39 @@ int  rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 
 
 /* The loopback interface "lo0" (127.0.0.1/8), created by rt_init(). */
 extern struct rt_netif *rt_loopback_if;
+
+/* ---- 802.1Q VLAN interfaces (src/core/vlan.c) ----
+ * A VLAN interface is an Ethernet interface of its own (addresses, DHCP,
+ * IPv6, ARP, multicast) whose frames carry a tag with 'vid' on the wire
+ * of 'parent'. Its MTU defaults to the parent's less 4 (drivers that cannot
+ * send frames longer than 1514 bytes); 'mtu' may go up to the parent's.
+ * pcp: 0..7, or -1 for "the socket priority". Lock held. */
+int  rt_vlan_add(struct rt_netif *parent, const char *name, u16 vid, int pcp, u16 mtu,
+                 struct rt_netif **out);
+/* Remove a VLAN interface (and free it); -RT_EINVAL if nif is none. */
+int  rt_vlan_del(struct rt_netif *nif);
+/* The VLAN interface of 'parent' with this id, or NULL. */
+struct rt_netif *rt_vlan_find(const struct rt_netif *parent, u16 vid);
+/* Parent -> stack: a tagged frame (b->data at the tag control field). */
+void rt_vlan_input(struct rt_netif *parent, struct rt_buf *b, const u8 *srchw, u16 flags);
+/* The parent's MTU changed or it went up/down/away: children follow. */
+void rt_vlan_parent_changed(struct rt_netif *parent);
+void rt_vlan_parent_removed(struct rt_netif *parent);
+/* "interface NAME vlan=ID parent=IF [pcp=N|priority] [mtu=N] ..." and
+ * "interface NAME delete" of a VLAN interface: 1 if not a VLAN line
+ * (the OS glue handles it), else 0 or -errno with a message in err. */
+int  rt_vlan_config(int argc, char **argv, char *err, u32 errlen);
+
+/* Reference counted link layer multicast filter for drivers: the same
+ * group may be joined by an interface and its VLAN interfaces (and by
+ * IPv4 and IPv6). Returns 1 when the driver must change its filter (first
+ * join, last leave), 0 when only the count changed. A full table returns
+ * 1 for joins (the address is then not tracked) and 0 for unknown leaves. */
+struct rt_mc_ref {
+	u8  hw[6];
+	u16 refs;
+};
+int  rt_mc_ref(struct rt_mc_ref *tab, int max, int *n, const u8 *hw, int join);
 
 /* ---- ARP (src/core/arp.c) ---- */
 struct rt_arp_entry_info {

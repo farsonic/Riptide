@@ -26,7 +26,9 @@ static void usage(void)
 	        "  ifconfig <interface> alias <address>[/<bits>] [netmask <address>] [broadcast <address>]\n"
 	        "  ifconfig <interface>:<n> <address>[/<bits>] ...  (the same: a further address)\n"
 	        "  ifconfig <interface> -alias <address>\n"
-	        "  ifconfig <interface> inet6 {add|del} <address>[/<prefixlen>]\n");
+	        "  ifconfig <interface> inet6 {add|del} <address>[/<prefixlen>]\n"
+	        "  ifconfig <interface> create vlan <id> vlandev <parent> [vlanpcp <0-7>]\n"
+	        "  ifconfig <interface> destroy\n");
 }
 
 /* Linux numbering of the flag word shown by net-tools */
@@ -144,7 +146,8 @@ static void print_inet4_extra(const struct rt_ctl_iface *f, void *d4, const stru
 }
 
 static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl_hdr *h6,
-                     void *d4, const struct rt_ctl_hdr *h4, const struct rt_ctl_driver *dr)
+                     void *d4, const struct rt_ctl_hdr *h4, const struct rt_ctl_driver *dr,
+                     const struct rt_ctl_iface *par)
 {
 	char fl[128], a[16], b[16], c[16], h[24];
 	u32 overruns = 0;
@@ -181,8 +184,17 @@ static void print_if(const struct rt_ctl_iface *f, void *d6, const struct rt_ctl
 	          (unsigned long)f->obytes, h);
 	cl_printf("        TX errors %lu  dropped 0 overruns 0  carrier 0  collisions %lu\n",
 	          (unsigned long)f->oerrors, (unsigned long)f->collisions);
-	if (f->descr[0] && f->type != RT_IFT_LOOP)
+	if (par) {
+		/* as FreeBSD's ifconfig */
+		cl_printf("        vlan: %u", (unsigned)f->vlan_id);
+		if (f->vlan_pcp == RT_CTL_VLAN_PCP_PRIO)
+			cl_puts(" vlanpcp: priority");
+		else
+			cl_printf(" vlanpcp: %u", (unsigned)f->vlan_pcp);
+		cl_printf(" parent interface: %s\n", par->name);
+	} else if (f->descr[0] && f->type != RT_IFT_LOOP) {
 		cl_printf("        device %s\n", f->descr);
+	}
 	if (verbose && dr)
 		print_driver(dr);
 	cl_puts("\n");
@@ -228,10 +240,14 @@ static int list(int all, int shortfmt, const char *only)
 		struct rt_ctl_iface *f = cl_rec(d, &h, k);
 		if (only ? strcmp(f->name, only) != 0 : (!all && !(f->flags & RT_IFF_UP)))
 			continue;
+		const struct rt_ctl_iface *par = NULL;
+		/* VLAN fields: Riptide 0.16 records */
+		if (h.recsize >= offsetof(struct rt_ctl_iface, nvlan) + 1 && f->vlan_parent)
+			par = cl_iface_by_index(d, &h, f->vlan_parent);
 		if (shortfmt)
 			print_short(f);
 		else
-			print_if(f, d6, &h6, d4, &h4, find_driver(f, dd, &dh));
+			print_if(f, d6, &h6, d4, &h4, find_driver(f, dd, &dh), par);
 	}
 	FreeVec(d);
 	if (d4)
@@ -466,6 +482,29 @@ static int ifconfig_main(int argc, char **argv)
 	}
 	if (i + 1 >= argc)
 		return list(1, shortfmt, ifn);
+	/* FreeBSD: ifconfig eth0.10 create vlan 10 vlandev eth0 / ifconfig eth0.10 destroy */
+	if (!strcmp(argv[i + 1], "destroy"))
+		return cl_command(cl_line("interface %s delete", ifn), 1) ? CL_ERROR : CL_OK;
+	if (!strcmp(argv[i + 1], "create")) {
+		const char *vid = NULL, *dev = NULL, *pcp = NULL;
+		int k;
+		for (k = i + 2; k + 1 < argc; k += 2) {
+			if (!strcmp(argv[k], "vlan"))
+				vid = argv[k + 1];
+			else if (!strcmp(argv[k], "vlandev"))
+				dev = argv[k + 1];
+			else if (!strcmp(argv[k], "vlanpcp"))
+				pcp = argv[k + 1];
+			else
+				break;
+		}
+		if (k != argc || !vid || !dev) {
+			usage();
+			return CL_ERROR;
+		}
+		return cl_command(pcp ? cl_line("interface %s vlan=%s parent=%s pcp=%s", ifn, vid, dev, pcp) :
+		                  cl_line("interface %s vlan=%s parent=%s", ifn, vid, dev), 1) ? CL_ERROR : CL_OK;
+	}
 	fd = cl_socket(RT_SOCK_DGRAM, 0);
 	if (fd < 0)
 		return CL_FAIL;

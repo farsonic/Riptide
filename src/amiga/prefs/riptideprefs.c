@@ -58,18 +58,18 @@ void rp_free(void *p)
 
 /* ---- the settings, page by page ---- */
 enum {
-	P_IFACE, P_ADDR, P_ALIAS, P_NAMES, P_TIME, P_TCP, P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE, P_QOS,
-	P_QRULE, P_OTHER, NPAGES
+	P_IFACE, P_ADDR, P_ALIAS, P_VLAN, P_NAMES, P_TIME, P_TCP, P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE,
+	P_QOS, P_QRULE, P_OTHER, NPAGES
 };
 static const char *const page_names[] = {
-	"Interface", "Address", "Extra addresses", "Names", "Time", "TCP", "Advanced: Connecting",
+	"Interface", "Address", "Extra addresses", "VLANs", "Names", "Time", "TCP", "Advanced: Connecting",
 	"Advanced: Ports", "Advanced: Keepalive", "Advanced: Background", "Advanced: Memory",
 	"Advanced: Happy Eyeballs", "Advanced: QoS", "Advanced: QoS rules", "Other lines", NULL
 };
 /* pages that are a list of lines */
 static int list_kind(int p)
 {
-	return p == P_ALIAS ? RP_LIST_ALIAS : p == P_QRULE ? RP_LIST_QRULE : -1;
+	return p == P_ALIAS ? RP_LIST_ALIAS : p == P_QRULE ? RP_LIST_QRULE : p == P_VLAN ? RP_LIST_VLAN : -1;
 }
 #define IS_LIST(p) ((p) == P_OTHER || list_kind(p) >= 0)
 
@@ -180,6 +180,7 @@ static const char *const page_notes[NPAGES] = {
 	"Interface changes need a restart of Riptide",
 	"Address changes need a restart of Riptide",
 	"A.B.C.D/BITS or A.B.C.D netmask M (up to 8)",
+	"ID dhcp|A.B.C.D/BITS|up [pcp=0-7] (up to 8)",
 	"Empty fields are left out of the file",
 	"Zone: auto or +10:00. No servers: from DHCP",
 	"Empty or Default: Riptide's built-in value",
@@ -911,6 +912,11 @@ static int list_valid(const char *s)
 		message("Extra address: enter A.B.C.D/BITS, e.g. 10.0.0.5/24,\nor A.B.C.D netmask M");
 		return 0;
 	}
+	if (page == P_VLAN && !rp_valid_vlan(s)) {
+		message("VLAN: the id (1-4094), then dhcp, an address\nA.B.C.D/BITS or up, and pcp=0-7 or pcp=priority\n"
+		        "if the frames need a priority; e.g. 10 dhcp");
+		return 0;
+	}
 	if (page == P_QRULE && !rp_valid_qrule(s)) {
 		message("QoS rule: port=, lport=, rport= or program=, and\npriority=interactive|default|bulk|0-7 "
 		        "or dscp=EF|CS1|AF41|0-63\n(proto=tcp|udp optional; at most 8 ports)");
@@ -932,7 +938,8 @@ static int other_edit(int id)
 		if (page == P_OTHER) {
 			rp_other_add(&conf, linebuf);
 		} else if (rp_list_add(&conf, k, linebuf) < 0) {
-			message(k == RP_LIST_ALIAS ? "At most 8 extra addresses" : "At most 16 QoS rules");
+			message(k == RP_LIST_ALIAS ? "At most 8 extra addresses" :
+			        k == RP_LIST_VLAN ? "At most 8 VLANs" : "At most 16 QoS rules");
 			return 0;
 		}
 		osel = list_count() - 1;

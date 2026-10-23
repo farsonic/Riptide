@@ -117,7 +117,7 @@ static int mc_wanted(const struct tap_dev *t, const u8 *dst)
 static void tap_rx(void *arg)
 {
 	struct tap_dev *t = arg;
-	u32 room = (u32)t->nif.mtu + ETH_HLEN, got = 0;
+	u32 room = (u32)t->nif.mtu + ETH_HLEN + 4, got = 0;    /* + an 802.1Q tag */
 	int i;
 
 	for (i = 0; i < TAP_RX_BURST; i++) {

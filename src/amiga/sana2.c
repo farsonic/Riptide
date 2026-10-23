@@ -30,6 +30,8 @@
 #define S2_READS_ARP  4
 #define S2_READS_IP6  24           /* a 32 KB window of IPv6 segments */
 #define S2_MCQ        32             /* queued multicast filter changes */
+#define S2_MCREF      32             /* multicast addresses counted (rt_mc_ref) */
+#define S2_RX_VLAN    RT_DRV_NRXQ    /* read queue of tagged frames (not in the counters) */
 #define S2_MAX_WRITES 32
 #define S2_RX_HEADROOM 64
 #define ETH_HLEN 14
@@ -69,6 +71,11 @@ struct s2if {
 	struct { u8 hw[6]; u8 join; } mcq[S2_MCQ];
 	int    mcq_n;
 	int    mc_unsupported;      /* driver said S2ERR_NOT_SUPPORTED: warned */
+	/* joins per address: an interface and its VLAN interfaces (and IPv4
+	 * and IPv6) may want the same one; the driver sees the first join
+	 * and the last leave */
+	struct rt_mc_ref mcref[S2_MCREF];
+	int    nmcref;
 	/* counters (net.riptide.drivers) */
 	struct rt_drv_stats drv;
 	struct Sana2DeviceQuery dq;
@@ -326,6 +333,8 @@ static int sana2_mcast(struct rt_netif *nif, const u8 *hw, int join)
 	int i;
 
 	if (!si->ether || nif->hwlen != 6)
+		return 0;
+	if (!rt_mc_ref(si->mcref, S2_MCREF, &si->nmcref, hw, join))
 		return 0;
 	/* a pending opposite request for the same address cancels out */
 	for (i = 0; i < si->mcq_n; i++) {
@@ -702,6 +711,45 @@ int sana2_set_reads(struct amiga_if *ai, int reads, char *err, u32 errlen)
 	return 0;
 }
 
+/* nif->vlan_rx: reads for tagged frames (packet type 0x8100) while the
+ * interface has VLAN interfaces, as many as for IPv4. On 0 they are
+ * retired: each finishes with the next tagged frame and is not queued
+ * again. Lock held. */
+static int sana2_vlan_rx(struct rt_netif *nif, int on)
+{
+	struct s2if *si = nif->driver;
+	struct s2req *r;
+	int n = 0;
+
+	for (r = si->all; r; r = r->all_next) {
+		if (r->kind != REQ_READ || r->q != S2_RX_VLAN)
+			continue;
+		if (on && n < si->reads) {
+			if (r->retired) {
+				r->retired = 0;
+				if (!r->busy)
+					s2_submit_read(si, r);
+			}
+			n++;
+		} else {
+			r->retired = 1;
+		}
+	}
+	for (; on && n < si->reads; n++) {
+		r = s2_newreq(si, REQ_READ);
+		if (!r)
+			return n ? 0 : -RT_ENOMEM;
+		r->io.ios2_PacketType = RT_ETH_P_8021Q;
+		r->q = S2_RX_VLAN;
+		if (!si->dev_open || s2_submit_read(si, r) < 0) {
+			r->idle = 1;
+			if (!rt_timer_pending(&si->retry))
+				rt_timer_after(&si->retry, 1000);
+		}
+	}
+	return 0;
+}
+
 int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw, int reads,
                   char *err, u32 errlen)
 {
@@ -804,6 +852,8 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	}
 	nif->link_output = sana2_output;
 	nif->mcast = sana2_mcast;
+	if (si->ether)
+		nif->vlan_rx = sana2_vlan_rx;
 	nif->driver = si;
 	si->drv.info = sana2_drv_info;
 	si->drv.tx_slots = S2_MAX_WRITES;

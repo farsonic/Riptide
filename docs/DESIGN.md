@@ -385,6 +385,44 @@ with `rt_netif_src()`: the address whose subnet holds the next hop, then
 the destination's, then the primary. Deleting the primary promotes the
 first additional address.
 
+### VLAN interfaces (vlan.c)
+
+A VLAN is an ordinary `struct rt_netif` (type Ethernet, the parent's MAC)
+with `vlan_parent`/`vlan_id`/`vlan_pcp` set and a `link_output` that
+pushes the 4-byte tag control field and inner ethertype in front of the
+packet and calls `rt_netif_xmit(parent, b, dsthw, 0x8100)`. The tag thus
+travels as payload of a frame of type 0x8100, which every driver path
+already builds correctly: SANA-II cooked (the device writes the header,
+`PacketType` 0x8100), SANA-II raw and MNI (Riptide writes the header),
+TAP and the simulated wire. No driver needs to know about VLANs on
+transmit, and there is no raw-mode requirement. The tag is the payload's
+first 4 bytes, so a full-size tagged frame is 1518 bytes; the VLAN's MTU
+defaults to the parent's less 4 because many SANA-II drivers refuse
+frames over 1514 bytes. A partial checksum carried with the buffer
+(`RT_BUFF_CSUM_PART`) is dropped before tagging: it covered the payload
+from the old start, and the tag is not part of it.
+
+Receive: `rt_netif_input()` was split into the counting/capture part and
+`rt_netif_deliver()` (the ethertype dispatch), so `rt_vlan_input()` can
+strip the tag and deliver the inner frame on the VLAN interface (after
+counting it there) through the same dispatch. VID 0 re-enters the parent;
+unknown ids and stacked tags count as `noproto` on the parent. SANA-II
+devices only return frames of the types that have reads queued, so the
+driver exports `nif->vlan_rx(nif, on)`: the first VLAN on a parent queues
+reads of type 0x8100 (as many as the IPv4 reads; their own queue index,
+outside the per-type counters), the last one removed retires them.
+
+Parent and VLANs share one MAC and so one hardware multicast filter: two
+interfaces joining 33:33:00:00:00:01 must not cause two `S2_ADDMULTICASTADDRESS`
+calls and, worse, one leave must not drop the group for both. Drivers
+keep a small reference-counted table (`rt_mc_ref()`, 32 entries) and talk
+to the device only on the first join and the last leave.
+
+Link state propagates in `rt_vlan_parent_changed()`, called from
+`rt_netif_up()`/`down()`, the MTU ioctl and DHCP's MTU option: a VLAN is
+RUNNING only while its parent is, and its MTU is clamped to the parent's.
+`rt_netif_remove()` of a parent removes its VLANs first.
+
 ### Happy Eyeballs
 
 `rt_resolve_name46()` (`resolv.c`) asks the local sources (hosts table,

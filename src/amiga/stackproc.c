@@ -389,6 +389,12 @@ int amiga_status_text(char *buf, u32 len)
 				ADD(" QoS on");
 			ADD("\n");
 		}
+		if (n->vlan_parent) {
+			if (n->vlan_pcp_prio)
+				ADD("       %s, 802.1Q, priority from the sockets\n", n->descr);
+			else
+				ADD("       %s, 802.1Q, priority %u\n", n->descr, (unsigned)n->vlan_pcp);
+		}
 		ai = amiga_if_find(n->name);
 		if (ai && ai->status && o + 8 < len) {
 			ADD("       ");

@@ -149,6 +149,8 @@ void rt_netif_remove(struct rt_netif *nif)
 {
 	struct rt_netif **pp;
 
+	if (nif->nvlan)
+		rt_vlan_parent_removed(nif);   /* its VLAN interfaces go first */
 	rt_dhcp_stop(nif);
 	rt_netif_down(nif);
 	rt_qos_enable(nif, 0);
@@ -365,6 +367,14 @@ void rt_netif_up(struct rt_netif *nif)
 {
 	u16 nf = nif->flags | RT_IFF_UP | RT_IFF_RUNNING;
 
+	/* a VLAN interface receives through its parent: that comes up too,
+	 * and the VLAN runs only while the parent does */
+	if (nif->vlan_parent) {
+		if (!(nif->vlan_parent->flags & RT_IFF_UP))
+			rt_netif_up(nif->vlan_parent);
+		if (!(nif->vlan_parent->flags & RT_IFF_RUNNING))
+			nf &= (u16)~RT_IFF_RUNNING;
+	}
 	if (nif->ioctl_flags && nf != nif->flags)
 		nif->ioctl_flags(nif, nf);
 	nif->flags = nf;
@@ -377,6 +387,7 @@ void rt_netif_up(struct rt_netif *nif)
 	}
 	rt_igmp_if_up(nif);
 	rt_ip6_if_up(nif);
+	rt_vlan_parent_changed(nif);
 	rt_kick();
 }
 
@@ -394,6 +405,7 @@ void rt_netif_down(struct rt_netif *nif)
 	rt_route_flush_dynamic_if(nif);
 	rt_igmp_if_down(nif);
 	rt_ip6_if_down(nif);
+	rt_vlan_parent_changed(nif);
 }
 
 void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
@@ -410,6 +422,11 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
 		rt_buf_free(b);
 		return;
 	}
+	rt_netif_deliver(nif, b, ethertype, srchw, flags);
+}
+
+void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, const u8 *srchw, u16 flags)
+{
 	b->netif = nif;
 	b->flags = (u16)((b->flags & (RT_BUFF_LOOP | RT_BUFF_CSUM_OK | RT_BUFF_CSUM_PART)) |
 	                 (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST)));
@@ -429,6 +446,12 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
 	case RT_ETH_P_IPV6:
 		if (nif->ip6) {
 			rt_ip6_input(nif, b);
+			return;
+		}
+		break;
+	case RT_ETH_P_8021Q:
+		if (nif->type == RT_IFT_ETHER) {
+			rt_vlan_input(nif, b, srchw, flags);
 			return;
 		}
 		break;

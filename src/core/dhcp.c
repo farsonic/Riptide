@@ -361,8 +361,10 @@ static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts
 	}
 	c->addr = yiaddr;
 	c->mask = mask;
-	if (o->mtu >= 68 && o->mtu <= nif->mtu)
+	if (o->mtu >= 68 && o->mtu <= nif->mtu) {
 		nif->mtu = o->mtu;
+		rt_vlan_parent_changed(nif);
+	}
 	if (o->router) {
 		/* (Re)install on every ACK: the route may have been removed by
 		 * hand. A static default route still wins (route.c orders DHCP

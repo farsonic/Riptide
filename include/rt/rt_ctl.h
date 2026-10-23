@@ -103,7 +103,13 @@ struct rt_ctl_iface {
 	u8   ip6_off;             /* "ipv6 off" on this interface */
 	u8   naddr4;              /* IPv4 addresses (net.riptide.addrs4 lists them) */
 	u8   qos;                 /* transmit priority bands in use */
+	/* 0.16: 802.1Q (older stacks send shorter records: check recsize) */
+	u32  vlan_parent;         /* index of the parent interface, 0 = not a VLAN */
+	u16  vlan_id;             /* 1..4094 */
+	u8   vlan_pcp;            /* tag priority 0..7, RT_CTL_VLAN_PCP_PRIO = the socket's */
+	u8   nvlan;               /* VLAN interfaces on this one */
 };
+#define RT_CTL_VLAN_PCP_PRIO 0xff
 
 /* ---- IPv4 addresses (every address of every interface) ---- */
 #define RT_CTL_A4_PRIMARY 0x01    /* the interface's primary address (rt_ctl_iface.addr) */

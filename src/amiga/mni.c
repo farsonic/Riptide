@@ -80,6 +80,8 @@ struct mni_tx {
 	int    busy;
 };
 
+#define MNI_MCREF 32                 /* multicast addresses counted (rt_mc_ref) */
+
 struct mniif {
 	struct amiga_if ai;          /* must be first */
 	struct Library *base;
@@ -97,6 +99,8 @@ struct mniif {
 	ULONG  overruns;
 	struct rt_drv_stats drv;     /* net.riptide.drivers */
 	ULONG  overruns0;            /* overruns at the last counter reset */
+	struct rt_mc_ref mcref[MNI_MCREF];
+	int    nmcref;
 };
 
 static BYTE mni_sigbit = -1;
@@ -327,6 +331,9 @@ static int mni_mcast(struct rt_netif *nif, const u8 *hw, int join)
 
 	if (!mi->handle)
 		return -RT_ENETDOWN;
+	/* first join and last leave only (VLAN interfaces share the filter) */
+	if (!rt_mc_ref(mi->mcref, MNI_MCREF, &mi->nmcref, hw, join))
+		return 0;
 	memcpy(a, hw, 6);
 	e = join ? MNI_AddMulticast(mi->base, mi->handle, a) : MNI_RemMulticast(mi->base, mi->handle, a);
 	if (e && join)

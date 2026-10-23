@@ -1156,6 +1156,12 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		rt_netif_reset_stats(nif);
 		return 0;
 	}
+	if (!strcmp(k, "interface")) {
+		/* VLAN interfaces are made here; the OS glue opens drivers */
+		r = rt_vlan_config(argc, argv, err, errlen);
+		if (r <= 0)
+			return r;
+	}
 	if (unknown)
 		return unknown(argc, argv, err, errlen);
 	return cfg_err(err, errlen, -RT_EINVAL, "unknown keyword '%s'", k);

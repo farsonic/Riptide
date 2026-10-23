@@ -146,6 +146,13 @@ key BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSp
 typ '10.0.1.2/24'
 key Return d
 settle 03g-extra-added
+# VLANs: one with DHCP and priority 4
+key p
+settle 03h-vlans
+key l
+typ '10 dhcp pcp=4'
+key Return d
+settle 03i-vlans-added
 # Names: replace the host name, add a domain and a name server
 key p
 settle 04-names
@@ -234,6 +241,7 @@ cat > "$work/expect.conf" <<'EOF'
 interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440
 dhcp eth0
 ifconfig eth0 alias 10.0.1.2/24
+interface eth0.10 vlan=10 parent=eth0 dhcp pcp=4
 nameserver 192.168.1.1
 hostname zeus    # the old name
 domain example.org
