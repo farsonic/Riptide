@@ -482,6 +482,11 @@ static struct tcp_sock *batch_list;
 
 static void tcp_batch_add(struct tcp_sock *tp, u8 what)
 {
+	/* a FIN that ends an orphan (tcp_fin -> tcp_time_wait -> tcp_done)
+	 * destroys it before tcp_queue_in_order() signals the data; tcp_reap()
+	 * frees it when the segment is done, before rt_rx_batch_end() */
+	if (tp->destroyed)
+		return;
 	if (!tp->batch) {
 		tp->batch_next = batch_list;
 		batch_list = tp;

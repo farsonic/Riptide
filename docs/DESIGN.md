@@ -180,7 +180,10 @@ FS-UAE):
   never covers more than `2 * delack_segs` segments: the next one past
   that goes out at once. Quick ACKs are held like the others (one per
   batch); duplicate ACKs (out-of-order data) and ACKs asked for
-  explicitly (`ICSK_ACK_NOW`) are not.
+  explicitly (`ICSK_ACK_NOW`) are not. A connection destroyed inside the
+  batch (an orphan's last FIN) never joins it: `tcp_reap()` frees it
+  before the batch ends. The host build batches each driver read the same
+  way, so the TUN and wire tests (and their ASan runs) cover it.
 * **Window updates.** Linux sends a window update after a read that
   doubles a nearly closed window. A reader slower than the link (2 KB
   `recv()`s, the window at a segment or two) then costs one pure ACK per

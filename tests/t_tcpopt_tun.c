@@ -99,7 +99,8 @@ static double elapsed(double t0) { return t_now() - t0; }
 struct srv {
 	u16 port;
 	int tfo;            /* TCP_FASTOPEN on the listener */
-	int mode;           /* 0 request/response, 1 banner first, 2 sink until EOF, 3 idle until EOF */
+	int mode;           /* 0 request/response, 1 banner first, 2 sink until EOF, 3 idle until EOF,
+	                     * 4 idle 2.5 s, then close */
 	int conns;          /* connections to serve (0 = until stop) */
 	volatile int stop;
 	volatile int ready;
@@ -152,6 +153,8 @@ static void *srv_thread(void *p)
 			shutdown(fd, SHUT_WR);
 			while (recv(fd, buf, sizeof(buf), 0) > 0)
 				;
+		} else if (s->mode == 4) {
+			usleep(2500000);
 		} else if (s->mode == 1) {
 			char buf[64];
 			send(fd, "220 hello\n", 10, 0);
@@ -302,8 +305,24 @@ static void test_fastopen(void)
 		rt_api_close(&ctx, fd);
 		CHECK(rt_tcpstat.TCPFastOpenActive == b.TCPFastOpenActive + 2);
 	}
+	/* the FIN of a shutdown() during the handshake crosses the server's
+	 * (20 ms on our side: the SYN-ACK comes after the shutdown): a
+	 * simultaneous close while the program still holds the socket */
+	{
+		struct rt_host_impair im;
+		int i;
+		memset(&im, 0, sizeof(im));
+		im.delay_ms = 20;
+		rt_host_impair(tun, &im);
+		for (i = 0; i < 4; i++) {
+			n = tfo_request(8300, "X\n", rep, sizeof(rep), &d);
+			CHECKV(n > 0 && !strcmp(rep, "OK X\n"), "crossing FINs %d: '%s'", i, rep);
+		}
+		memset(&im, 0, sizeof(im));
+		rt_host_impair(tun, &im);
+	}
 	srv_stop(&s);
-	CHECKV(s.served == 3 && !s.syn_data[0] && s.syn_data[1] && s.syn_data[2],
+	CHECKV(s.served == 7 && !s.syn_data[0] && s.syn_data[1] && s.syn_data[2],
 	       "linux saw SYN data %d %d %d (served %d)", s.syn_data[0], s.syn_data[1], s.syn_data[2], s.served);
 
 	/* 4: deferred connect, the server speaks first: recv() sends the SYN */
@@ -597,6 +616,52 @@ static void test_keepalive(void)
 	CHECKV(r == -RT_ETIMEDOUT && elapsed(t0) < 6.0, "r %d t %.2f", r, elapsed(t0));
 	rt_api_close(&ctx, fd);
 	NS("iptables -F INPUT");
+
+	/* as nc -K 1 -d -w 5: probes answered, then we close first (TIME_WAIT
+	 * with the keepalive timer having run); the stack must go on */
+	fd = rt_sock();
+	CHECK(rt_conn(fd, 8500) == 0);
+	t_set_int(&ctx, fd, RT_SOL_SOCKET, RT_SO_KEEPALIVE, 1);
+	t_set_int(&ctx, fd, RT_IPPROTO_TCP, RT_TCP_KEEPIDLE, 1);
+	t_set_int(&ctx, fd, RT_IPPROTO_TCP, RT_TCP_KEEPINTVL, 1);
+	{
+		u32 rd[2] = { 0, 0 };
+		rd[fd / 32] |= 1u << (fd % 32);
+		t0 = t_now();
+		r = rt_api_select(&ctx, fd + 1, rd, NULL, NULL, 3500, NULL);
+		CHECKV(r == 0 && elapsed(t0) > 3.0, "select r %d after %.2f s", r, elapsed(t0));
+	}
+	t0 = t_now();
+	CHECK(rt_api_close(&ctx, fd) == 0);
+	CHECKV(elapsed(t0) < 0.5, "close took %.2f s", elapsed(t0));
+	usleep(300000);
+	{
+		struct srv s2;
+		char rep[64];
+		int d;
+		srv_start(&s2, 8501, 0, 0, 0);
+		t0 = t_now();
+		r = tfo_request(8501, "AFTER\n", rep, sizeof(rep), &d);
+		CHECKV(r > 0 && !strcmp(rep, "OK AFTER\n") && elapsed(t0) < 1.0,
+		       "a connection after the keepalive close: '%s' in %.2f s", rep, elapsed(t0));
+		srv_stop(&s2);
+	}
+	/* the peer closes an idle keepalive connection: recv() returns 0 */
+	{
+		struct srv s3;
+		srv_start(&s3, 8502, 0, 4, 0);
+		fd = rt_sock();
+		CHECK(rt_conn(fd, 8502) == 0);
+		t_set_int(&ctx, fd, RT_SOL_SOCKET, RT_SO_KEEPALIVE, 1);
+		t_set_int(&ctx, fd, RT_IPPROTO_TCP, RT_TCP_KEEPIDLE, 1);
+		t_set_int(&ctx, fd, RT_IPPROTO_TCP, RT_TCP_KEEPINTVL, 1);
+		t0 = t_now();
+		r = rt_api_recv(&ctx, fd, b, 1, 0);
+		CHECKV(r == 0 && elapsed(t0) > 2.0 && elapsed(t0) < 4.0, "peer close: recv %d after %.2f s", r,
+		       elapsed(t0));
+		CHECK(rt_api_close(&ctx, fd) == 0);
+		srv_stop(&s3);
+	}
 
 	/* keepalive_all: a program that never asked */
 	t_sysctl("net.inet.tcp.keepalive_all", 1);

@@ -144,6 +144,9 @@ static int accept_wait(struct rt_sockctx *c, int lfd, int ms)
 		usleep(1000);
 	}
 	t_set_nbio(c, lfd, 0);
+	/* a child made while the listener was non-blocking inherits it */
+	if (fd >= 0)
+		t_set_nbio(c, fd, 0);
 	return fd;
 }
 
