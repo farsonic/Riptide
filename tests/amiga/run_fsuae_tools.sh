@@ -27,6 +27,16 @@ for f in Riptide rtcheck $TOOLS; do cp "$BUILD/$f" "$dh0/C/"; done
 # the SDK client (vbcc build only: it needs the NDK headers)
 SDKTEST=
 [ -f "$BUILD/sdk_test" ] && { cp "$BUILD/sdk_test" "$dh0/C/"; SDKTEST=1; }
+# with vbcc: tests/amiga/taskprobe.c snapshots the stack process every 5 s,
+# so a run that stops can tell an emulator stall from a Riptide one (as
+# run_fsuae_bsdsocktest.sh does)
+VBCC=${VBCC:-/opt/vbcc}
+NDK=${NDK:-/opt/ndk3.2}
+probe=
+if [ -x "$VBCC/bin/vc" ] && PATH=$VBCC/bin:$PATH VBCC=$VBCC "$VBCC/bin/vc" +aos68k -O1 -I"$NDK/Include_H" \
+	-o "$dh0/C/taskprobe" "$(dirname "$0")/taskprobe.c" -lamiga >/dev/null 2>&1; then
+	probe='DH0:C/rtcheck START="DH0:C/taskprobe DH0:probe 5" NOCHECK >NIL:'
+fi
 cat > "$dh0/S/riptide.conf" <<'CONF'
 hostname aros-test
 domain test.lan
@@ -182,6 +192,7 @@ CMDS
 {
 	echo "FailAt 30"
 	echo 'DH0:C/rtcheck START="DH0:C/Riptide >DH0:riptide.log CONFIG=DH0:S/riptide.conf" NOCHECK >DH0:out/start'
+	[ -n "$probe" ] && echo "$probe"
 	# background sockets for netstat: a TCP listener, a TCP connection to it, and a server for nc
 	echo 'DH0:C/rtcheck START="DH0:C/nc -d -l 7777" NOCHECK >NIL:'
 	echo 'DH0:C/rtcheck START="DH0:C/nc -l -p 7778 <DH0:S/riptide.conf" NOCHECK >NIL:'
@@ -434,6 +445,15 @@ if [ ! -s "$dh0/out/zz_done" ]; then
 	echo "run_fsuae_tools: did not finish (timeout ${TIMEOUT}s)"
 	tail -5 "$dh0/riptide.log" 2>/dev/null
 	fails=$((fails + 1))
+	# the newest probe snapshot: was the stack process lost by exec?
+	last=$(grep -l '^seq ' "$dh0"/probe.[0-9] 2>/dev/null | while read -r f; do
+		echo "$(head -1 "$f" | cut -d' ' -f2) $f"; done | sort -n | tail -1 | cut -d' ' -f2)
+	if [ -n "$last" ]; then
+		echo "---- last stack process snapshot ($last):"
+		tr -d '\r' < "$last" | head -12
+		grep -q ' ORPHANED$' "$last" &&
+			echo "---- the emulated system lost the stack process (FS-UAE/AROS, see tests/amiga/execrace.c)"
+	fi
 fi
 if [ $fails -eq 0 ]; then
 	echo "run_fsuae_tools: PASSED"
