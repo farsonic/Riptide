@@ -126,7 +126,7 @@ while Riptide runs.
 ## Command line
 
 ```
-Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH] [HELP]
+Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH [TX [BYTES]]] [HELP]
 Riptide CAPTURE start|stop|status|save FILE|clear [OPTIONS]
 Riptide PROFILE START|STOP|RESET|SHOW
 Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
@@ -143,6 +143,7 @@ Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=.
 | `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
 | `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and what one call of the OS services the stack uses per packet costs, and exit. Needs timer.device, so not under vamos. |
+| `BENCH TX [BYTES]` | Time the TCP send path without a network or a second task: an upload (default 2 MB, 16 KB `send()`s) to a scripted receiver behind a fake interface that ACKs every second segment, printing µs per segment and the KB/s that leaves, then half of it again under the profiler (`src/core/txbench.c`). |
 | `CAPTURE ...` | Packet capture in the running stack; the rest of the line is the command (see "Packet capture"). |
 | `PROFILE ...` | Control the running stack's profiler (see "Profiling and debug log"). |
 | `DEBUG ...` | With a word instead of a number: control the running stack's debug log (see "Profiling and debug log"). A number is still the log level of a new instance. |
@@ -1483,6 +1484,7 @@ not in Riptide              2213.0   15.5
 | `checksum` | checksums that are not combined with a copy (headers are summed inline and not counted) |
 | `copy to app`, `copy from app` | copying between the application's buffer and Riptide |
 | `driver send` | the `SendIO()` / `MNI_Send()` call |
+| `socket send` | the protocol's send operation outside the sections it calls (TCP: queueing the data, `tcp_write_xmit()`) |
 | `driver rx copy` | the SANA-II driver's `CopyToBuff` callback, which also sums the frame (driver context; nothing with DMA) |
 | `lock wait app`, `lock wait rt` | time applications / the Riptide process waited for the stack lock |
 | `idle` | the Riptide process waiting for work in `Wait()` |
@@ -1499,6 +1501,12 @@ not in Riptide              2213.0   15.5
   left after the sections and `idle`: applications, the OS, other tasks.
 * Times are wall-clock times of the task that runs the code, so a task
   switch in the middle (to a higher priority task) is counted too.
+* Below the table, event counters per received KB and per TCP segment
+  sent: clock reads (hardware and cached), outermost lock acquisitions
+  and those that waited, `rt_malloc()` calls, buffer allocations and
+  cache misses, kicks of the Riptide process, application wakeups,
+  frames to and from the drivers, and rounds of the Riptide process's
+  loop. They show what a change saves without a stopwatch.
 * The table is also available to programs as `net.riptide.profile`
   (`{4, 255, 19}`, `struct rt_ctl_prof`, see "Interfaces for tools").
 
@@ -2124,6 +2132,10 @@ On the emulated A1200 with its AROS Kickstart:
 | `rt_buf_alloc()` + `rt_buf_free()` (cached), with the lock | 232 |
 | timer.device `SendIO()` + `AbortIO()` + `WaitIO()` | 593 |
 
+`BENCH TX` measures the send path the same way: about 2220 µs per segment on
+the emulated A1200, of which about 350 µs is the copy and sum from the
+application (see `docs/DESIGN.md`, "Send path").
+
 A received segment used to read the clock about nine times; the holder of
 the stack lock now reads it once per hold. Commodore's Kickstart may be
 cheaper per call than AROS's; the counts matter either way.
@@ -2188,7 +2200,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_speedtest.sh build/amiga` | speedtest against three `httpd-test` servers on FS-UAE (plain, chunked with redirects, redirecting to https://): `--server-url`, `--mirror`, all output formats, byte counts against the servers' counters, errors and Ctrl-C. |
 | `tests/t_speedtest_*.c` (host) | speedtest's XML, URL and HTTP parsers (every split point, random input), distances; end to end against `tools/speedtest_mock.py` over Linux sockets and over Riptide through TUN. |
 | `tests/amiga/run_fsuae_bench.sh build/amiga` | `Riptide BENCH` on FS-UAE (A1200; `FSUAE_MODEL=A4000/040 FSUAE_EXTRA="cpu = 68060"` and so on for other CPUs). |
-| `tests/amiga/run_fsuae_netbench.sh build/amiga` | The speed lab: TCP download and upload throughput (2 MB, median of 3) on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtnb0`/`rtnb1`, 192.168.79.0/24, or `NB_IF`, `NB_PEER`, `NB_NET`) for four cycle-exact CPU presets (A1200 68020/14, 68030/25, A4000 68040/25, 68060/50; `CPUS=`), with `tests/amiga/netbench.c` on the Amiga (data discarded or generated, no disk) and `tests/amiga/netbench_host.py` on the host; a profiled transfer each way (`Riptide PROFILE`) and ping. Writes `results.md` and `results.json`; `BASELINE=tests/amiga/netbench-baseline.json` fails a run more than 10 % (`TOLERANCE=`) slower. `AMITCP_DIR=` adds AmiTCP 3.0b2 (see `docs/COMPARISON.md` 11). |
+| `tests/amiga/run_fsuae_netbench.sh build/amiga` | The speed lab: TCP download and upload throughput (2 MB, median of 3) on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtnb0`/`rtnb1`, 192.168.79.0/24, or `NB_IF`, `NB_PEER`, `NB_NET`) for four cycle-exact CPU presets (A1200 68020/14, 68030/25, A4000 68040/25, 68060/50; `CPUS=`), with `tests/amiga/netbench.c` on the Amiga (data discarded or generated, no disk) and `tests/amiga/netbench_host.py` on the host; a profiled transfer each way (`Riptide PROFILE`; netbench `-I` adds the CPU time left idle, measured by a priority -127 task, and for uploads the time spent in `send()`) and ping. Writes `results.md` and `results.json`; `BASELINE=tests/amiga/netbench-baseline.json` fails a run more than 10 % (`TOLERANCE=`) slower. `AMITCP_DIR=` adds AmiTCP 3.0b2 (see `docs/COMPARISON.md` 11). |
 | `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, RiptidePrefs in `SYS:Prefs`, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
 | `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply. |
 | `tests/amiga/run_vamos_prefs.sh build/amiga/RiptidePrefs` | (in `make -f Makefile.amiga check`) `RiptidePrefs FROM ... SAVE` / `USE` without a window under vamos: the files in `ENVARC:`/`ENV:` equal the input, the second Save leaves `riptide.conf.bak`, error return codes. |

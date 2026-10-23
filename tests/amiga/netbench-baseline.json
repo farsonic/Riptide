@@ -1,24 +1,24 @@
 {
- "about": "Speed lab baseline (tests/amiga/run_fsuae_netbench.sh): Riptide built from main d814867, FS-UAE 3.2.35 with the tools/fs-uae libpcap bridge, AROS ROM, veth; KB/s of emulated time. See docs/COMPARISON.md section 11.",
- "date": "2026-10-22",
+ "about": "Speed lab baseline (tests/amiga/run_fsuae_netbench.sh): FS-UAE 3.2.35 with the tools/fs-uae libpcap bridge, AROS ROM, veth; KB/s of emulated time. a1200-020 and a4000-040: the send path work of 23 October 2026 (branch p5-txpath); a1200-030 and a4000-060: main d814867 (22 October 2026), not rerun. See docs/COMPARISON.md section 11.",
+ "date": "2026-10-23",
  "bytes": 2097152,
  "repeat": 3,
  "results": {
   "riptide": {
    "a1200-020": {
-    "download_kbs": 447.94,
-    "upload_kbs": 269.36,
+    "download_kbs": 599.88,
+    "upload_kbs": 414.32,
     "download_runs": [
-     445.12,
-     447.94,
-     449.31
+     590.37,
+     599.88,
+     607.71
     ],
     "upload_runs": [
-     262.63,
-     274.34,
-     269.36
+     414.32,
+     422.61,
+     412.81
     ],
-    "ping_ms": 7.075
+    "ping_ms": 8.625
    },
    "a1200-030": {
     "download_kbs": 791.34,
@@ -36,19 +36,19 @@
     "ping_ms": 3.525
    },
    "a4000-040": {
-    "download_kbs": 1574.17,
-    "upload_kbs": 900.61,
+    "download_kbs": 2109.16,
+    "upload_kbs": 1352.7,
     "download_runs": [
-     1550.34,
-     1587.59,
-     1574.17
+     2167.19,
+     2109.16,
+     2072.87
     ],
     "upload_runs": [
-     917.97,
-     900.61,
-     878.59
+     1352.7,
+     1346.48,
+     1372.65
     ],
-    "ping_ms": 5.699
+    "ping_ms": 2.957
    },
    "a4000-060": {
     "download_kbs": 2760.1,
