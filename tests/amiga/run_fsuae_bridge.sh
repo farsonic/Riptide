@@ -8,7 +8,7 @@
 # address autoconfiguration, the RA default route, and ping6. A second
 # address on another subnet (ifconfig eth0:1): a download from a server on
 # that subnet comes from it, ip addr / ifconfig / Riptide STATUS list it,
-# "ip addr del" removes it; ip -s link shows the QoS bands; nc by name
+# "ip addr del" removes it; ip -s link shows the QoS bands (qos=on); nc by name
 # with an unanswered IPv6 address and "happy_eyeballs prefer ipv6"
 # connects over IPv4 (Happy Eyeballs).
 #
@@ -53,7 +53,7 @@ head -c 1048576 /dev/urandom > "$work/www/big.bin"
 cat > "$dh0/S/riptide.conf" <<CONF
 hostname bridge-test
 loglevel 2
-interface eth0 device=uaenet.device unit=2
+interface eth0 device=uaenet.device unit=2 qos=on
 ifconfig eth0 $BR_NET.2/24 up
 route add default $BR_NET.1
 host hetest fd00:77::99

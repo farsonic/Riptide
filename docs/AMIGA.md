@@ -695,7 +695,7 @@ default via 10.0.2.2 dev eth0 proto dhcp src 10.0.2.15
 | `ip link del [dev] NAME` | close a driver interface |
 | `ip link resetstats [[dev] IF]` | **Riptide extension:** zero the counters of IF (all interfaces without IF) |
 | `ip addr [show [dev] IF]` | addresses; DHCP addresses are `dynamic` with the lease time left |
-| `ip addr add\|replace A.B.C.D/BITS [peer P] [broadcast B] dev IF` | Riptide keeps one IPv4 address per interface: `add` refuses a second one, `replace` changes it |
+| `ip addr add\|replace A.B.C.D/BITS [peer P] [broadcast B] dev IF` | `add` adds a further address (shown as `secondary`, up to nine per interface), `replace` changes the primary one |
 | `ip addr del A.B.C.D[/BITS] dev IF`, `ip addr flush dev IF` | |
 | `ip route [show] [cache]` | routes with `proto kernel/static/dhcp/redirect`; `cache` lists path MTU entries |
 | `ip route add\|del\|replace\|change\|append PREFIX\|default [via GW] [dev IF] [metric N] [mtu N]` | also `ip route add unreachable PREFIX` |
@@ -1378,10 +1378,10 @@ otherwise; `getaddrinfo()` itself does the lookups in parallel.
 On a slow link, or with a fast upload, the frames a program sends queue up
 in front of the network driver: a SANA-II driver takes up to 32, which at
 the speed of an emulated or real Amiga is a few hundred milliseconds of
-data in front of every keystroke, ACK or DNS query. With **QoS** on (the
-default for SANA-II and MNI interfaces) Riptide gives the driver at most
-`inflight` frames (4) at a time and keeps the rest in three bands, sent
-strictly in order:
+data in front of every keystroke, ACK or DNS query. With **QoS** on
+(`qos on`, or `qos=on` on an `interface` line; SANA-II and MNI
+interfaces) Riptide gives the driver at most `inflight` frames (4) at a
+time and keeps the rest in three bands, sent strictly in order:
 
 | band | what |
 |---|---|
@@ -1394,6 +1394,14 @@ a whole upload, and the ACKs of a download leave at once while an upload
 fills the link. `ip -s link` shows each band (`QoS: direct N, interactive
 N (queued, most, dropped) ...`); `qos status` too. A band holds `limit`
 frames (128); beyond that TCP backs off as on any full queue.
+
+QoS is off by default: when the link is faster than the Amiga can fill
+(a fast emulated network, a 100 Mbit/s card) the frames that wait for
+the driver to finish one cost a few percent of upload speed and gain
+nothing. Turn it on for slow links (serial, PPP, 10 Mbit/s shared with
+other traffic, a slow upstream) where uploads and interactive use mix.
+Socket priority, DSCP marking and rules below work with QoS off too:
+they set the DSCP that the router sees.
 
 **Socket priority.** `setsockopt(s, SOL_SOCKET, SO_PRIORITY, &n, 4)` with
 n 0..7 (Linux semantics; `SO_PRIORITY` is 0x1100 in Riptide's headers,
@@ -1429,7 +1437,7 @@ kind of rules.
 
 | keyword | sysctl | default | |
 |---|---|---|---|
-| `qos on\|off [IF]`, `interface ... qos=on\|off` | `net.inet.ip.qos_default` | on | bands on driver interfaces |
+| `qos on\|off [IF]`, `interface ... qos=on\|off` | `net.inet.ip.qos_default` | off | bands on driver interfaces |
 | `qos inflight N` | `net.inet.ip.qos_inflight` | 4 | 1..32 frames in the driver |
 | `qos limit N` | `net.inet.ip.qos_limit` | 128 | 8..1024 frames per band |
 | `qos priodscp on\|off` | `net.inet.ip.qos_prio_dscp` | on | DSCP from SO_PRIORITY |

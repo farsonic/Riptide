@@ -147,8 +147,10 @@ static void test_queue(void)
 	eth0.flags = RT_IFF_BROADCAST;
 	eth0.link_output = hold_output;
 	CHECK(rt_netif_add(&eth0) >= 0);
+	CHECK(rt_qos_default == 0);            /* qos is off by default */
+	rt_qos_default = 1;
 	rt_drv_attach(&eth0, &d0);
-	CHECK(eth0.qos != NULL);               /* qos is on by default */
+	CHECK(eth0.qos != NULL);
 	rt_ip6_ifenable(&eth0, 0);              /* no RS, MLD, DAD in the counts */
 	rt_netif_up(&eth0);
 	drop_held();                           /* gratuitous ARP and the like */

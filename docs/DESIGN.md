@@ -201,11 +201,14 @@ FS-UAE):
 ### Transmit path: priority bands
 
 `rt_netif_xmit()` hands every frame to `rt_qos_xmit()` when the interface
-has bands (`src/core/qos.c`; on by default for drivers that report
+has bands (`src/core/qos.c`; for drivers that report
 completions through `rt_drv_tx_start()`/`rt_drv_tx_done()`, i.e. SANA-II,
-MNI and the host TAP driver). While the driver holds fewer than
+MNI and the host TAP driver; off by default because on a link faster
+than the Amiga, e.g. FS-UAE's uaenet, about half of an upload's frames
+wait for the stack task to see a completion, about 5% of upload speed).
+While the driver holds fewer than
 `net.inet.ip.qos_inflight` frames (4) and nothing waits, the frame goes
-straight through (the common case: no cost). Otherwise it is classified
+straight through. Otherwise it is classified
 (`rt_qos_band()`: ARP, ICMP, DNS/NTP/mDNS/DHCP, TCP without data or with
 up to 64 bytes, DSCP, then the socket priority carried in `rt_buf.prio`)
 and queued in its band; `rt_drv_tx_done()` sends the next one from the

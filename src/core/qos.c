@@ -7,7 +7,7 @@
 #include "infra.h"
 #include "sock_internal.h"
 
-s32 rt_qos_default = 1;
+s32 rt_qos_default = 0;
 s32 rt_qos_inflight = 4;
 s32 rt_qos_limit = 128;
 s32 rt_qos_prio_dscp = 1;
