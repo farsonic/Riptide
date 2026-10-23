@@ -363,19 +363,28 @@ it has every byte (upload).
 
 | CPU preset | FS-UAE | Download KB/s | Upload KB/s | Ping ms |
 |---|---|---|---|---|
-| a1200-020 | A1200, 68020 14 MHz, 8 MB Fast RAM | 447.9 → **522.2** | 269.4 → **309.8** | 7.1 |
+| a1200-020 | A1200, 68020 14 MHz, 8 MB Fast RAM | 447.9 → 522.2 → **599.9** | 269.4 → 309.8 → **414.3** | 8.6 |
 | a1200-030 | A1200, 68030 25 MHz, 8 MB Fast RAM | 791.3 | 459.2 | 3.5 |
-| a4000-040 | A4000, 68040 25 MHz, 16 MB Zorro III RAM | 1574.2 → **1906.9** | 900.6 → **1080.2** | 5.7 |
+| a4000-040 | A4000, 68040 25 MHz, 16 MB Zorro III RAM | 1574.2 → 1906.9 → **2109.2** | 900.6 → 1080.2 → **1352.7** | 3.0 |
 | a4000-060 | A4000, 68060 50 MHz, 16 MB Zorro III RAM | 2760.1 | 1539.8 | 7.7 |
 
-The first figure is Riptide 0.12 (main d814867, 22 October 2026), the
-baseline in `tests/amiga/netbench-baseline.json`; the bold one is 0.13's
-receive path (SANA-II DMA callbacks, checksum while copying, receive
-batches, one clock read per stack pass): +17 % down and +15 % up on the
-68020, +21 % and +20 % on the 68040. The 68030 and 68060 presets were not
-rerun. 0.15 measures the same as 0.13 on the 68020 preset (517-522 KB/s
-down, 274-311 KB/s up over several runs on a loaded host); its new
-features cost nothing with the default settings. KB = 1024 bytes. The
+The first figure is Riptide 0.12 (main d814867, 22 October 2026); the
+second is 0.13's receive path (SANA-II DMA callbacks, checksum while
+copying, receive batches, one clock read per stack pass): +17 % down and
++15 % up on the 68020, +21 % and +20 % on the 68040. 0.15 measured the
+same as 0.13 on the 68020 preset (517-522 KB/s down, 274-311 KB/s up over
+several runs on a loaded host). The bold figure is the send path work of
+23 October 2026 (zero-copy transmit with the payload summed while it is
+copied from the application, a per-connection route cache, cheaper
+cached clock reads, the per-packet core at vbcc `-O3`; see
+`docs/DESIGN.md`, "Send path"), now the baseline in
+`tests/amiga/netbench-baseline.json` for these two presets. Measured
+against main in alternating runs on the same host, medians of 3 each:
+uploads 309.0/308.9 → 414.3/418.0 KB/s on the 68020 (+34 %) and
+1053.5/1051.9 → 1352.7/1304.5 KB/s on the 68040 (+27 %); downloads
+gained too, 507.9/509.4 → 599.9/612.2 (+19 %) and 1798.1/1744.5 →
+2109.2/2160.3 (+20 %), mostly from `-O3` and the cheaper clock reads. The
+68030 and 68060 presets were not rerun. KB = 1024 bytes. The
 three downloads of a run spread by 1 % on the 68020 and 68030, 2.5 % on
 the 68040 and 13 % on the 68060; the uploads by 5 % or less. A speed lab
 run with `BASELINE=tests/amiga/netbench-baseline.json` fails when a median
@@ -403,8 +412,9 @@ Amiga's.
 * The upload is slower than the download on every CPU. The profile says
   why: on the 68020, sending spends most of its time in TCP output and
   waiting for the stack lock, while receiving is dominated by TCP input,
-  checksums and copies. 0.13 sped up the receive side; the send side is
-  the next target.
+  checksums and copies. 0.13 sped up the receive side, the send path
+  work of 23 October 2026 the send side; on the 68020 an upload is still about a
+  third slower than a download.
 * MMU emulation is off. With FS-UAE's 68030 or 68060 MMU emulated, Riptide
   hangs the machine at the first transfer over uaenet.device. The cause
   is not yet known; it may be the emulator, the stack, or both.

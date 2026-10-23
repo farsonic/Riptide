@@ -83,10 +83,11 @@ time:
 
 * `rt_copy()` and `rt_copy_buf()` call plain `memcpy()` below
   `RT_COPY_MIN` (128) bytes; the dispatch only pays off above it.
-* Where they are used: TCP transmit copies the write-queue segment and sums
-  its payload in one pass (`rt_buf_copy_csum()`), then adds the header sum;
-  UDP send copies from the user's iov and sums in one pass
-  (`rt_iov_to_buf_csum()`); the SANA-II `CopyToBuff` callback copies and
+* Where they are used: TCP `send()` and UDP send copy from the user's iov
+  and sum in one pass (`rt_iov_to_buf_csum()`; TCP keeps the sum with the
+  queued segment, see "Send path"), and a TCP retransmission whose earlier
+  copy still waits in a driver is copied and summed in one pass
+  (`rt_buf_copy_csum()`); the SANA-II `CopyToBuff` callback copies and
   sums each received frame in one pass (`RT_BUFF_CSUM_PART`, see "Receive
   path"); `send()`/`recv()` copies (`rt_iov_to_buf()`, `rt_buf_to_iov()`)
   and `CopyFromBuff` use `rt_copy()`; receive-queue coalescing and
@@ -243,6 +244,67 @@ FS-UAE):
 * **timer.device.** The idle tick (10 s, for `QUIT`) has its own request,
   so arming the stack's next deadline after an idle spell does not abort
   and resend the tick each time.
+
+### Send path
+
+An upload on a 68020 is CPU bound as well. The application's `send()`
+does most of the work in its own task under the stack lock: it copies the
+data into write-queue segments and, as far as the congestion and receive
+windows allow, builds and hands them to the driver
+(`__tcp_push_pending_frames()`); the Riptide process sends the rest when
+ACKs open the window. What a segment costs, and what was done about it
+(`Riptide BENCH TX` runs the send path against a scripted receiver in one
+task, `src/core/txbench.c`; `tests/t_tx_bench.c` does the same on the
+host and under `qemu-m68k`):
+
+* **The lock wait is the application's send().** In the profile of an
+  upload the Riptide process spends a quarter of the time in `lock wait
+  rt`: about one wait per `send()` call, for the 20 ms or so the
+  application holds the lock to queue 16 KB and send what the window
+  allows. `netbench -I` shows the CPU 100 % busy throughout, so the wait
+  is not idle time; it overlaps the application's work, which the
+  `socket send`, `copy from app`, `tcp output` and `driver send` sections
+  show.
+* **One pass over the payload.** `tcp_v4_send()` sums the data while it
+  copies it from the application (`rt_iov_to_buf_csum()`) and keeps the
+  sum with the queued segment (`RT_BUFF_CSUM_PART`, chained with
+  `rt_csum_block_add()` when a later `send()` appends to it; trimming or
+  splitting the segment drops the flag and the transmit path sums it
+  again). The segment goes out as a header-only clone that shares the
+  payload (`rt_buf_clone()`): the TCP, IP and link headers are pushed into
+  the shared headroom, and only the header sum is computed. The clone has
+  no tailroom and nobody writes the shared bytes; a queued segment freed
+  (ACKed) while a driver still holds its clone is freed with the clone.
+  A segment whose earlier transmission still waits in a driver is copied
+  as before, since its headers sit in the headroom; loopback unshares
+  clones, so the receiving socket owns and accounts its buffers.
+* **Route cache.** A connection keeps its IPv4 route (`struct rt_ip_dst`
+  in the `tcp_sock`, filled by `rt_ip_output()` for a unicast destination
+  and next hop): later segments skip the route lookup, the local address
+  scan and both broadcast tests. `rt_route_changed()` bumps
+  `rt_route_gen` on every route, interface and address change, which
+  empties all caches; an entry is also used for at most `RT_IP_DST_MS`
+  (1 s), which bounds how late a change made elsewhere applies (expiry of
+  a dynamic route, a field set directly).
+* **Clocks.** Cached clock reads (about ten per segment) return from a
+  small `rt_now_ms()`/`rt_now_us()` without the conversion's prologue.
+* **Timers.** `rt_timer_mod()` kicks the Riptide process only for a first
+  timer due before the deadline it sleeps until (`rt_timers_run()`
+  records it); TCP re-arms its retransmit timer with every segment and
+  ACK, usually for a later time. No measurable gain: most kicks left come
+  from the Riptide process itself, where they cost a signal.
+* **Compiler.** The per-packet core files are built with vbcc `-O3`
+  (`HOT_OBJ` in `Makefile.amiga`).
+
+On the emulated A1200 (68020, 14 MHz) these took the send path from 3231
+to about 2220 µs per segment in `BENCH TX`, and netbench uploads from
+309 to 414 KB/s (68040: 1054 to 1353 KB/s; `docs/COMPARISON.md` 11). What is left per segment: about 350 µs for the copy and sum
+from the application (`rt_csum_copy_020`), about 450 µs in the driver's
+`SendIO()` (the uaenet device copies the frame through `CopyFromBuff`),
+and the TCP/IP code; interrupts and the emulated device take a share the
+profiler cannot see. A driver with `S2_DMACopyFromBuff32` would save its
+copy only for frames that start on a 32-bit boundary, which TCP frames
+(behind a 14-byte Ethernet header) do not.
 
 ## TCP connection behaviour (Fast Open, connecting, keepalive, cork)
 

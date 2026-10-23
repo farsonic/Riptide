@@ -245,6 +245,8 @@ void rt_rx_batch_end(void);
  * on 'nif'. Resolves ARP on ethernet-like links (queueing while
  * unresolved). Consumes b. */
 int  rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop);
+/* The same for a next hop known to be unicast (a cached route) */
+int  rt_netif_output_ip_unicast(struct rt_netif *nif, struct rt_buf *b, u32 nexthop);
 
 /* Every transmission goes through here (packet capture), never through
  * nif->link_output() directly. Consumes b. */

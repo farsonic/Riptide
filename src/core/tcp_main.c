@@ -1366,7 +1366,19 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 			copy = total - copied;
 		if (copy > space)
 			copy = space;
-		rt_iov_to_buf(iov, iovcnt, copied, rt_buf_put(skb, copy), copy);
+		{
+			/* sum the payload while copying it: transmitting the
+			 * segment then takes no pass over it (RT_BUFF_CSUM_PART) */
+			u32 off = skb->len, sum;
+
+			rt_iov_to_buf_csum(iov, iovcnt, copied, rt_buf_put(skb, copy), copy, &sum);
+			if (off == 0) {
+				skb->csum = sum;
+				skb->flags |= RT_BUFF_CSUM_PART;
+			} else if (skb->flags & RT_BUFF_CSUM_PART) {
+				skb->csum = rt_csum_block_add(skb->csum, sum, off);
+			}
+		}
 		TCP_SKB_CB(skb)->end_seq += copy;
 		tp->write_seq += copy;
 		tp->wq_bytes += copy;

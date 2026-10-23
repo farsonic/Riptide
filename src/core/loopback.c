@@ -20,6 +20,13 @@ static struct rt_bufq lo_queue;
 
 static int lo_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
+	/* a TCP segment shares its payload with the send queue: the receiver
+	 * keeps it, and accounts it, as a buffer of its own */
+	b = rt_buf_unshare(b);
+	if (!b) {
+		nif->stats.oerrors++;
+		return -RT_ENOBUFS;
+	}
 	if (lo_queue.qlen >= LOOP_QLEN_MAX) {
 		nif->stats.iqdrops++;
 		rt_buf_free(b);

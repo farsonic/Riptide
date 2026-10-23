@@ -42,16 +42,35 @@
 #define RT_PROF_TO_APP     8   /* copying received data to the application */
 #define RT_PROF_FROM_APP   9   /* copying data to send from the application */
 #define RT_PROF_DRV_TX     10  /* handing a frame to the driver (SendIO / MNI_Send) */
-#define RT_PROF_NSECT      11
+#define RT_PROF_SEND       11  /* the protocol's send op (TCP: queueing the data) */
+#define RT_PROF_NSECT      12
 /* Counters (not on the section stack) */
-#define RT_PROF_DRV_RX     11  /* driver copying a received frame into Riptide (CopyToBuff) */
-#define RT_PROF_LOCK_APP   12  /* applications waiting for the stack lock */
-#define RT_PROF_LOCK_STACK 13  /* the Riptide process waiting for the stack lock */
-#define RT_PROF_IDLE       14  /* the Riptide process waiting for work */
-#define RT_PROF_N          15
+#define RT_PROF_DRV_RX     12  /* driver copying a received frame into Riptide (CopyToBuff) */
+#define RT_PROF_LOCK_APP   13  /* applications waiting for the stack lock */
+#define RT_PROF_LOCK_STACK 14  /* the Riptide process waiting for the stack lock */
+#define RT_PROF_IDLE       15  /* the Riptide process waiting for work */
+#define RT_PROF_N          16
+
+/* Event counters of the profiler (counted only while it runs; "profile
+ * show" prints them per received KB and per sent segment) */
+#define RT_EV_CLOCK        0   /* clock reads that read the hardware clock */
+#define RT_EV_CLOCK_CACHED 1   /* clock reads served from the per-hold cache */
+#define RT_EV_LOCK         2   /* outermost stack lock acquisitions */
+#define RT_EV_LOCK_WAIT    3   /* ... that had to wait for another task */
+#define RT_EV_MALLOC       4   /* rt_malloc() */
+#define RT_EV_BUF          5   /* rt_buf_alloc() */
+#define RT_EV_BUF_MISS     6   /* rt_buf_alloc() not served from the cache */
+#define RT_EV_KICK         7   /* rt_kick(): signals to the Riptide process */
+#define RT_EV_WAKE         8   /* application wakeups (rt_sock_wakeup reaching a sleeper) */
+#define RT_EV_DRV_TX       9   /* frames handed to drivers */
+#define RT_EV_DRV_RX       10  /* frames received from drivers */
+#define RT_EV_LOOP         11  /* passes of the Riptide process's main loop */
+#define RT_EV_N            12
 
 #ifndef RT_NO_DIAG
 extern volatile int rt_prof_on;
+extern u32 rt_prof_ev[RT_EV_N];
+#define RT_PROF_EV(e) do { if (rt_prof_on) rt_prof_ev[e]++; } while (0)
 extern int rt_prof_depth;
 void rt_prof_enter(int s);
 void rt_prof_exit(int s);
@@ -67,6 +86,7 @@ void rt_prof_add(int c, u32 ticks);  /* counters */
 #else
 #define rt_prof_on 0
 #define rt_prof_depth 0
+#define RT_PROF_EV(e) do { } while (0)
 static inline void rt_prof_unwind(void) { }
 static inline void rt_prof_add(int c, u32 ticks) { (void)c; (void)ticks; }
 #define RT_PROF_ENTER(s) do { } while (0)

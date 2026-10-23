@@ -22,6 +22,15 @@ static struct rt_timer firing_list = { &firing_list, &firing_list, 0, NULL, NULL
 
 static int time_before(u32 a, u32 b) { return (s32)(a - b) < 0; }
 
+/* When the poller (rt_stack_poll) comes back at the latest: the expiry of
+ * the first timer as rt_timers_run() last saw it. A new first timer needs
+ * an rt_kick() only if it expires before that. TCP re-arms its retransmit
+ * timer with every segment and ACK, usually as the first timer but for a
+ * later time; kicking the stack process for each costs two task switches
+ * when an application sends. All timer calls hold the stack lock. */
+static u32 wake_at;
+static int wake_set;
+
 static void timer_unlink(struct rt_timer *t)
 {
 	t->prev->next = t->next;
@@ -60,7 +69,7 @@ void rt_timer_mod(struct rt_timer *t, u32 expires)
 		if (!time_before(expires, pos->expires))
 			break;
 	timer_insert_after(pos, t);
-	if (timer_list.next == t)
+	if (timer_list.next == t && (!wake_set || time_before(expires, wake_at)))
 		rt_kick();
 }
 
@@ -86,7 +95,7 @@ u32 rt_timers_next(u32 now)
 u32 rt_timers_run(u32 now)
 {
 	struct rt_timer *t;
-	u32 fired = 0;
+	u32 fired = 0, next;
 
 	/* Detach the expired prefix of the sorted list onto firing_list. */
 	while ((t = timer_list.next) != &timer_list && !time_before(now, t->expires)) {
@@ -102,5 +111,8 @@ u32 rt_timers_run(u32 now)
 	if (fired)
 		RT_DBG(RT_DBG_TIMER, "ran %lu timers, next in %lu ms", (unsigned long)fired,
 		       (unsigned long)rt_timers_next(now));
-	return rt_timers_next(now);
+	next = rt_timers_next(now);
+	wake_set = next != RT_TIMER_NONE;
+	wake_at = now + next;
+	return next;
 }

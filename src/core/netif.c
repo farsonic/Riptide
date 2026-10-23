@@ -142,6 +142,7 @@ int rt_netif_add(struct rt_netif *nif)
 	for (pp = &netif_list; *pp; pp = &(*pp)->next)
 		;
 	*pp = nif;
+	rt_route_changed();
 	return 0;
 }
 
@@ -149,6 +150,7 @@ void rt_netif_remove(struct rt_netif *nif)
 {
 	struct rt_netif **pp;
 
+	rt_route_changed();        /* cached routes may point at nif */
 	if (nif->nvlan)
 		rt_vlan_parent_removed(nif);   /* its VLAN interfaces go first */
 	rt_dhcp_stop(nif);
@@ -295,6 +297,7 @@ int rt_netif_addr_add(struct rt_netif *nif, u32 addr, u32 netmask, u32 bcast)
 	nif->alias[i].addr = addr;
 	nif->alias[i].netmask = netmask;
 	nif->alias[i].broadaddr = default_bcast(nif, addr, netmask, bcast);
+	rt_route_changed();
 	reinstall_connected(nif);
 	if ((nif->flags & RT_IFF_UP) && nif->type == RT_IFT_ETHER)
 		rt_arp_announce(nif, addr);
@@ -318,6 +321,7 @@ int rt_netif_addr_del(struct rt_netif *nif, u32 addr)
 	if (i < 0)
 		return -RT_EADDRNOTAVAIL;
 	alias_remove(nif, i);
+	rt_route_changed();
 	rt_arp_flush(nif, 1);
 	reinstall_connected(nif);
 	return 0;
@@ -327,6 +331,7 @@ int rt_netif_set_addr(struct rt_netif *nif, u32 addr, u32 netmask, u32 peer)
 {
 	u32 old = nif->addr;
 
+	rt_route_changed();
 	if (!mask_is_contiguous(netmask))
 		return -RT_EINVAL;
 	if (addr && (rt_ip_is_multicast(addr) || addr == RT_INADDR_BROADCAST))
@@ -378,6 +383,7 @@ void rt_netif_up(struct rt_netif *nif)
 	if (nif->ioctl_flags && nf != nif->flags)
 		nif->ioctl_flags(nif, nf);
 	nif->flags = nf;
+	rt_route_changed();
 	if (nif->type == RT_IFT_ETHER) {
 		int i;
 		if (nif->addr)
@@ -398,6 +404,7 @@ void rt_netif_down(struct rt_netif *nif)
 	if (nif->ioctl_flags && nf != nif->flags)
 		nif->ioctl_flags(nif, nf);
 	nif->flags = nf;
+	rt_route_changed();
 	rt_arp_flush(nif, 1);
 	/* Configured routes stay (unused while down, shown as linkdown);
 	 * learned ones go, as their information may be stale when it is
@@ -411,6 +418,7 @@ void rt_netif_down(struct rt_netif *nif)
 void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
                     const u8 *srchw, u16 flags)
 {
+	RT_PROF_EV(RT_EV_DRV_RX);
 	nif->stats.ipackets++;
 	nif->stats.ibytes += b->len;
 	if (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST))
@@ -462,6 +470,7 @@ void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, con
 
 int rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
+	RT_PROF_EV(RT_EV_DRV_TX);
 	if (nif->qos)
 		return rt_qos_xmit(nif, b, dsthw, ethertype);
 	if (rt_capture_on)
@@ -473,6 +482,7 @@ int rt_ip4_auto_enable = 1;
 
 int rt_netif_ip4_enable(struct rt_netif *nif, int on)
 {
+	rt_route_changed();
 	if (nif->type == RT_IFT_LOOP)
 		return on ? 0 : -RT_EINVAL;
 	if (on) {
@@ -491,7 +501,7 @@ int rt_netif_ip4_enable(struct rt_netif *nif, int on)
 	return 0;
 }
 
-int rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
+static int netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop, int unicast)
 {
 	u8 mc[6];
 	int r;
@@ -505,7 +515,9 @@ int rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
 	nif->stats.obytes += b->len;
 	switch (nif->type) {
 	case RT_IFT_ETHER:
-		if (rt_ip_is_broadcast(nexthop, nif)) {
+		if (unicast) {
+			return rt_arp_resolve_output(nif, b, nexthop);
+		} else if (rt_ip_is_broadcast(nexthop, nif)) {
 			nif->stats.omcasts++;
 			r = rt_netif_xmit(nif, b, NULL, RT_ETH_P_IP);
 		} else if (rt_ip_is_multicast(nexthop)) {
@@ -529,4 +541,14 @@ int rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
 	if (r < 0)
 		nif->stats.oerrors++;
 	return r;
+}
+
+int rt_netif_output_ip(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
+{
+	return netif_output_ip(nif, b, nexthop, 0);
+}
+
+int rt_netif_output_ip_unicast(struct rt_netif *nif, struct rt_buf *b, u32 nexthop)
+{
+	return netif_output_ip(nif, b, nexthop, 1);
 }

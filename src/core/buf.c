@@ -15,6 +15,7 @@
 #include "rt/rt_buf.h"
 #include "rt/rt_os.h"
 #include "rt/rt_arch.h"
+#include "rt/rt_diag.h"
 
 #define RT_BUF_HDR_SIZE   ((sizeof(struct rt_buf) + 7u) & ~7u)
 #define RT_BUF_CACHE_MAX  64u      /* buffers kept per class */
@@ -43,8 +44,23 @@ static void buf_reset(struct rt_buf *b, u32 headroom)
 	b->flags = 0;
 	b->l3_proto = 0;
 	b->prio = 0;
+	b->users = 0;
+	b->orphan = 0;
+	b->owner = NULL;
 	b->tstamp_ms = 0;
-	memset(&b->cb, 0, sizeof(b->cb));
+	/* inline stores: a memset() call costs more than the 64 bytes on a
+	 * 68020, and every packet allocates two or three buffers */
+	{
+		u32 *w = b->cb.w;
+		int i;
+
+		for (i = 0; i < 16; i += 4) {
+			w[i] = 0;
+			w[i + 1] = 0;
+			w[i + 2] = 0;
+			w[i + 3] = 0;
+		}
+	}
 }
 
 static int buf_class(u32 alloc)
@@ -52,11 +68,42 @@ static int buf_class(u32 alloc)
 	return alloc == class_size[0] ? 0 : alloc == class_size[1] ? 1 : -1;
 }
 
+/* A buffer of 'alloc' bytes (class cl, or -1) from the cache or the
+ * system, counted; not initialised but for 'size'. */
+static struct rt_buf *buf_get(u32 alloc, int cl)
+{
+	struct rt_buf *b;
+
+	if (buf_limit && buf_stats.bytes + alloc > buf_limit) {
+		buf_stats.failures++;
+		return NULL;
+	}
+	RT_PROF_EV(RT_EV_BUF);
+	if (cl >= 0 && buf_cache[cl]) {
+		b = buf_cache[cl];
+		buf_cache[cl] = b->next;
+		buf_ncached[cl]--;
+		buf_stats.cached--;
+	} else {
+		RT_PROF_EV(RT_EV_BUF_MISS);
+		b = rt_malloc(RT_BUF_HDR_SIZE + RT_BUF_ALIGN - 1 + alloc);
+		if (!b) {
+			buf_stats.failures++;
+			return NULL;
+		}
+		b->size = alloc;
+	}
+	buf_stats.allocated++;
+	buf_stats.bytes += b->size;
+	if (buf_stats.allocated > buf_stats.peak)
+		buf_stats.peak = buf_stats.allocated;
+	return b;
+}
+
 struct rt_buf *rt_buf_alloc(u32 headroom, u32 size)
 {
 	struct rt_buf *b;
 	u32 need, alloc;
-	int cl;
 
 	/* Reject absurd sizes before they can overflow the sums below. */
 	if (headroom > 0x100000u || size > 0x1000000u) {
@@ -70,30 +117,9 @@ struct rt_buf *rt_buf_alloc(u32 headroom, u32 size)
 		alloc = class_size[1];
 	else
 		alloc = (need + 7u) & ~7u;
-	cl = buf_class(alloc);
-
-	if (buf_limit && buf_stats.bytes + alloc > buf_limit) {
-		buf_stats.failures++;
-		return NULL;
-	}
-	if (cl >= 0 && buf_cache[cl]) {
-		b = buf_cache[cl];
-		buf_cache[cl] = b->next;
-		buf_ncached[cl]--;
-		buf_stats.cached--;
-	} else {
-		b = rt_malloc(RT_BUF_HDR_SIZE + RT_BUF_ALIGN - 1 + alloc);
-		if (!b) {
-			buf_stats.failures++;
-			return NULL;
-		}
-		b->size = alloc;
-	}
-	buf_reset(b, headroom);
-	buf_stats.allocated++;
-	buf_stats.bytes += b->size;
-	if (buf_stats.allocated > buf_stats.peak)
-		buf_stats.peak = buf_stats.allocated;
+	b = buf_get(alloc, buf_class(alloc));
+	if (b)
+		buf_reset(b, headroom);
 	return b;
 }
 
@@ -103,6 +129,23 @@ void rt_buf_free(struct rt_buf *b)
 
 	if (!b)
 		return;
+	if (b->owner) {
+		struct rt_buf *o = b->owner;
+
+		/* back to the small buffer it was allocated as */
+		b->owner = NULL;
+		b->size = class_size[0];
+		rt_buf_free(b);
+		if (--o->users == 0 && o->orphan) {
+			o->orphan = 0;
+			rt_buf_free(o);
+		}
+		return;
+	}
+	if (b->users) {
+		b->orphan = 1;   /* a driver still sends a clone of it */
+		return;
+	}
 	buf_stats.allocated--;
 	buf_stats.bytes -= b->size;
 	cl = buf_class(b->size);
@@ -160,12 +203,66 @@ struct rt_buf *rt_buf_copy_csum(const struct rt_buf *b, u32 *sum)
 	*sum = rt_csum_copy(c->data, b->data, b->len, 0);
 	c->len = b->len;
 	c->netif = b->netif;
-	c->flags = b->flags;
+	c->flags = b->flags & (u16)~RT_BUFF_CSUM_PART;
 	c->prio = b->prio;
 	c->l3_proto = b->l3_proto;
 	c->tstamp_ms = b->tstamp_ms;
 	c->csum = b->csum;
 	memcpy(&c->cb, &b->cb, sizeof(c->cb));
+	return c;
+}
+
+struct rt_buf *rt_buf_clone(struct rt_buf *b)
+{
+	struct rt_buf *c;
+
+	if (b->users == 0xff)
+		return NULL;
+	/* a small buffer's struct (its data area unused): from the same
+	 * cache as ACKs, so clones add no small allocations of their own,
+	 * which would fragment a machine with little memory */
+	c = buf_get(class_size[0], 0);
+	if (!c)
+		return NULL;
+	c->next = c->prev = NULL;
+	c->head = b->head;
+	c->data = b->data;
+	c->len = b->len;
+	c->size = (u32)(b->data - b->head) + b->len;
+	c->netif = b->netif;
+	c->flags = b->flags & (u16)~RT_BUFF_CSUM_PART;
+	c->l3_proto = b->l3_proto;
+	c->tstamp_ms = b->tstamp_ms;
+	c->csum = 0;
+	c->prio = b->prio;
+	c->users = 0;
+	c->orphan = 0;
+	c->owner = b;
+	b->users++;
+	return c;
+}
+
+struct rt_buf *rt_buf_unshare(struct rt_buf *b)
+{
+	struct rt_buf *c;
+
+	if (!b->owner)
+		return b;
+	/* as large as the shared buffer, as the copy TCP used to send was:
+	 * equal sizes reuse each other's memory (16 KB loopback segments) */
+	c = rt_buf_alloc(rt_buf_headroom(b), b->owner->size - rt_buf_headroom(b));
+	if (c) {
+		rt_copy_buf(c->data, b->data, b->len);
+		c->len = b->len;
+		c->netif = b->netif;
+		c->flags = b->flags;
+		c->prio = b->prio;
+		c->l3_proto = b->l3_proto;
+		c->tstamp_ms = b->tstamp_ms;
+		c->csum = b->csum;
+		memcpy(&c->cb, &b->cb, sizeof(c->cb));
+	}
+	rt_buf_free(b);
 	return c;
 }
 

@@ -122,6 +122,7 @@ void rt_vlan_parent_changed(struct rt_netif *parent)
 {
 	struct rt_netif *n;
 
+	rt_route_changed();        /* also called after MTU changes */
 	if (!parent->nvlan)
 		return;
 	for (n = rt_netif_list(); n; n = n->next) {

@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
+#include "rt/rt_txbench.h"
 
 #define BENCH_TOTAL (512u * 1024u)
 #define BENCH_MAX   8192u
@@ -173,4 +174,65 @@ int amiga_bench(void)
 	FreeVec(sa);
 	FreeVec(da);
 	return 0;
+}
+
+/*
+ * "Riptide BENCH TX": the send path alone (src/core/txbench.c), in this
+ * task: a 2 MB upload to a scripted receiver in 16 KB send()s with an ACK
+ * every second segment, timed; then 1 MB more under the profiler. No
+ * driver, no second task, no lock contention: what is left is the
+ * protocol code as vbcc or gcc built it.
+ */
+static void txbench_line(const char *what, const struct rt_txbench_result *r)
+{
+	u32 segs = r->segs ? r->segs : 1, us = r->send_us + r->ack_us + r->poll_us;
+
+	amiga_out("%s: %lu bytes, %lu segments, %lu ACKs; stack %lu us (send %lu, ACK input %lu, "
+	          "poll %lu) = %lu us per segment, %lu KB/s; with the receiver %lu us\n", what,
+	          (unsigned long)r->bytes, (unsigned long)r->segs, (unsigned long)r->acks, (unsigned long)us,
+	          (unsigned long)r->send_us, (unsigned long)r->ack_us, (unsigned long)r->poll_us,
+	          (unsigned long)(us / segs), (unsigned long)(us / 1000u ? (r->bytes / 1024u) * 1000u / (us / 1000u) : 0),
+	          (unsigned long)r->total_us);
+}
+
+int amiga_bench_tx(u32 bytes)
+{
+	struct rt_txbench_result r;
+	static char out[2048];
+	char *av[2];
+	int e;
+
+	amiga_out("Riptide BENCH TX: cpu %lu, send path in one task (src/core/txbench.c)\n",
+	          (unsigned long)rt_arch_cpu);
+	if (rt_init() < 0 || rt_txbench_setup() < 0) {
+		amiga_out("Riptide BENCH TX: cannot set up the stack\n");
+		return 20;
+	}
+	if (!bytes)
+		bytes = 2u << 20;
+	e = rt_txbench(bytes, 16384, 2, &r);
+	txbench_line(e ? "FAILED" : "upload", &r);
+	if (e)
+		return 20;
+	av[0] = (char *)"profile";
+	av[1] = (char *)"start";
+	rt_prof_command(2, av, out, sizeof(out));
+	e = rt_txbench(bytes / 2, 16384, 2, &r);
+	txbench_line(e ? "FAILED" : "profiled", &r);
+	av[1] = (char *)"show";
+	rt_prof_command(2, av, out, sizeof(out));
+	/* line by line: amiga_out() has a line buffer */
+	{
+		char *p = out, *nl;
+		while (*p) {
+			nl = strchr(p, '\n');
+			if (nl)
+				*nl = 0;
+			amiga_out("%s\n", p);
+			if (!nl)
+				break;
+			p = nl + 1;
+		}
+	}
+	return e ? 20 : 0;
 }

@@ -49,8 +49,17 @@ static int mask_ok(u32 mask_n)
 	return (inv & (inv + 1)) == 0;
 }
 
+u32 rt_route_gen = 1;
+
+void rt_route_changed(void)
+{
+	if (++rt_route_gen == 0)
+		rt_route_gen = 1;
+}
+
 static void route_free(struct rt_route *r)
 {
+	rt_route_changed();
 	if (r->flags & (RT_RTF_PMTU | RT_RTF_DYNAMIC))
 		route_ndyn--;
 	rt_free(r);
@@ -73,6 +82,7 @@ static void route_insert(struct rt_route *r)
 	}
 	r->next = *pp;
 	*pp = r;
+	rt_route_changed();
 	if (r->flags & (RT_RTF_PMTU | RT_RTF_DYNAMIC))
 		route_ndyn++;
 }
@@ -394,6 +404,7 @@ void rt_ip_pmtu_update(u32 dst, u32 mtu)
 	}
 	pm->mtu = mtu;
 	pm->expire_ms = dyn_expiry(now);
+	rt_route_changed();
 }
 
 /* ICMP redirect (RFC 1122 3.2.2.2): accepted only from the gateway we
