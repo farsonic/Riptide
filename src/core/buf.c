@@ -50,7 +50,19 @@ static void buf_reset(struct rt_buf *b, u32 headroom)
 	b->orphan = 0;
 	b->owner = NULL;
 	b->tstamp_ms = 0;
-	memset(&b->cb, 0, sizeof(b->cb));
+	/* inline stores: a memset() call costs more than the 64 bytes on a
+	 * 68020, and every packet allocates two or three buffers */
+	{
+		u32 *w = b->cb.w;
+		int i;
+
+		for (i = 0; i < 16; i += 4) {
+			w[i] = 0;
+			w[i + 1] = 0;
+			w[i + 2] = 0;
+			w[i + 3] = 0;
+		}
+	}
 }
 
 static int buf_class(u32 alloc)
