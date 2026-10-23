@@ -109,7 +109,7 @@ static const char *const ev_name[RT_EV_N] = {
 static const char *const prof_name[RT_PROF_N] = {
 	"stack loop", "timers", "ip input", "ip6 input", "tcp input", "udp input",
 	"tcp output", "checksum", "copy to app", "copy from app", "driver send",
-	"driver rx copy", "lock wait app", "lock wait rt", "idle",
+	"socket send", "driver rx copy", "lock wait app", "lock wait rt", "idle",
 };
 
 void rt_prof_enter(int s)

@@ -42,13 +42,14 @@
 #define RT_PROF_TO_APP     8   /* copying received data to the application */
 #define RT_PROF_FROM_APP   9   /* copying data to send from the application */
 #define RT_PROF_DRV_TX     10  /* handing a frame to the driver (SendIO / MNI_Send) */
-#define RT_PROF_NSECT      11
+#define RT_PROF_SEND       11  /* the protocol's send op (TCP: queueing the data) */
+#define RT_PROF_NSECT      12
 /* Counters (not on the section stack) */
-#define RT_PROF_DRV_RX     11  /* driver copying a received frame into Riptide (CopyToBuff) */
-#define RT_PROF_LOCK_APP   12  /* applications waiting for the stack lock */
-#define RT_PROF_LOCK_STACK 13  /* the Riptide process waiting for the stack lock */
-#define RT_PROF_IDLE       14  /* the Riptide process waiting for work */
-#define RT_PROF_N          15
+#define RT_PROF_DRV_RX     12  /* driver copying a received frame into Riptide (CopyToBuff) */
+#define RT_PROF_LOCK_APP   13  /* applications waiting for the stack lock */
+#define RT_PROF_LOCK_STACK 14  /* the Riptide process waiting for the stack lock */
+#define RT_PROF_IDLE       15  /* the Riptide process waiting for work */
+#define RT_PROF_N          16
 
 /* Event counters of the profiler (counted only while it runs; "profile
  * show" prints them per received KB and per sent segment) */

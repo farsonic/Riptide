@@ -261,7 +261,9 @@ for st in stacks:
                        (' %s ' % k in l or 'cpu idle' in l)]
                 idle = [l for l in own if 'cpu idle' in l]
                 rate = [l for l in own if ' %s ' % k in l]
-                r['profile_' + k] = '\n'.join(rate[:1] + idle[(0 if k == 'download' else 1):][:1] + [prof])
+                sends = [l for l in nbp.split('\n') if 'profiled' in l and 'send() calls' in l]
+                r['profile_' + k] = '\n'.join(rate[:1] + idle[(0 if k == 'download' else 1):][:1] +
+                                               (sends[:1] if k == 'upload' else []) + [prof])
         res['results'].setdefault(st, {})[cpu] = r
         f = lambda v: '%.1f' % v if v is not None else 'n/a'
         md.append('| %s | %s | %s | %s | %s |' % (st, cpu, f(r['download_kbs']), f(r['upload_kbs']), f(r['ping_ms'])))

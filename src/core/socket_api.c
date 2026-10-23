@@ -670,7 +670,9 @@ static int sock_sendit(struct rt_socket *so, const struct rt_iov *iov0, int iovc
 			to = NULL;
 	}
 	for (;;) {
+		RT_PROF_ENTER(RT_PROF_SEND);
 		r = so->ops->send(so, iov, cnt, flags, to);
+		RT_PROF_EXIT(RT_PROF_SEND);
 		if (r > 0) {
 			sent += (u32)r;
 			if (!stream || sent >= total)

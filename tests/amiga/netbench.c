@@ -190,6 +190,7 @@ static int netbench_main(int argc, char **argv)
 	struct rt_sockaddr_in sa;
 
 	int idle = 0;
+	u32 in_send = 0, nsend = 0;   /* -I: time in send() during an upload */
 #ifdef __VBCC__
 	u32 idle_rate = 0, idle_c0 = 0;
 #endif
@@ -303,8 +304,12 @@ static int netbench_main(int argc, char **argv)
 		}
 	} else {
 		while (done < total) {
-			u32 k = total - done < bufsize ? total - done : bufsize;
+			u32 k = total - done < bufsize ? total - done : bufsize, s0 = idle ? cl_now_us() : 0;
 			n = send(s, buf, (LONG)k, 0);
+			if (idle) {
+				in_send += cl_now_us() - s0;
+				nsend++;
+			}
 			if (n <= 0)
 				break;
 			done += (u32)n;
@@ -315,6 +320,10 @@ static int netbench_main(int argc, char **argv)
 			;
 	}
 	t1 = cl_now_us();
+	if (nsend && t1 != t0)
+		cl_printf("netbench: %s %lu send() calls, %lu us each, %lu %% of the time\n", label,
+		          (unsigned long)nsend, (unsigned long)(in_send / nsend),
+		          (unsigned long)(((u64)in_send * 100u) / (t1 - t0)));
 #ifdef __VBCC__
 	if (idle_rate) {
 		u32 ms = (t1 - t0) / 1000u, c = idle_count - idle_c0;
