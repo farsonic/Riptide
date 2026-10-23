@@ -411,7 +411,10 @@ static void ip_input_body(struct rt_netif *nif, struct rt_buf *b)
 	if (rt_ip_is_loopback_net(daddr) && !(nif->flags & RT_IFF_LOOPBACK))
 		goto addrerr;
 
-	if (rt_ip_is_multicast(daddr)) {
+	if (daddr == nif->addr && daddr) {
+		/* the receiving interface's own address: ours and not a
+		 * broadcast (BSD ip_input() takes it first, too) */
+	} else if (rt_ip_is_multicast(daddr)) {
 		/* groups joined on this interface (224.0.0.1 always is) */
 		if (!rt_ip_mc_member(nif, daddr))
 			goto discard;
@@ -422,8 +425,7 @@ static void ip_input_body(struct rt_netif *nif, struct rt_buf *b)
 			return;
 		}
 		goto addrerr;
-	}
-	if (rt_ip_is_broadcast(daddr, NULL)) {
+	} else if (rt_ip_is_broadcast(daddr, NULL)) {
 		rt_ipstat.InBcast++;
 		b->flags |= RT_BUFF_BCAST;
 	}
