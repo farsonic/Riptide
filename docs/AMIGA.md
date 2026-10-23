@@ -710,6 +710,18 @@ router's advertisements, no slirp, no NAT. Use
 `interface eth0 device=uaenet.device unit=2` without `tcpwindow`. It needs
 a wired interface and permission to capture; see `tools/fs-uae/README.md`.
 
+**A stack that stops answering under FS-UAE with the AROS ROM.** On FS-UAE
+3.2.35 with the AROS Kickstart replacement ROM, a busy host occasionally
+makes exec lose a task that `Signal()` woke: the task is marked ready but
+sits in neither of exec's task lists and never runs again. When that task
+is Riptide's process, `Riptide STATUS` hangs, connections stop and
+programs wait forever, while everything else keeps running. It happens
+without Riptide too, under timer interrupt load
+(`tests/amiga/run_fsuae_execrace.sh`; docs/DESIGN.md), so it is not a
+Riptide fault; reboot the emulated Amiga. It is rare when the host has
+spare CPU (about one bsdsocktest run in 50 to 100 while other emulators
+ran) and common when the host is overloaded.
+
 ### TCP window per interface
 
 `tcpwindow=N` on the `interface` line, `ifconfig IF tcpwindow N` or `ip
@@ -2110,7 +2122,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |
 | `tests/t_ledbat_unit.c` (host) | Background transfers and memory limits: the LEDBAT++ controller in a fluid model of a 12 Mbit/s link with 20 ms base RTT and 500 ms of buffer (alone: about 50 ms of queue at 97 % utilisation and periodic slowdowns; against Reno: under 1 % of the link; Reno alone: 400 ms of queue), loss handling; rLEDBAT's window on a bare connection; the `background` keyword in every form AmigaDOS hands it over, the sysctls, rules by program name (`rt_host_set_program()`) and local port, `TCP_BACKGROUND`, an explicit `TCP_CONGESTION` winning; socket memory: 12 connections nobody reads stay at the 1 MB limit (2 MB without), the data is intact once read, the defaults from the free memory. |
 | `tests/t_ledbat_tun.c` (host, root) | Background transfers against Linux CUBIC over TUN. Downloads: Riptide reads the TUN device at 8 Mbit/s (`rt_host_tun_rx_rate()`), so the kernel's tun queue (300 packets) is the bottleneck; a normal download fills it (about 270 ms RTT), a background one (rLEDBAT by a `lport` rule) keeps the RTT near 65 ms at 96 % of the link, and next to a normal one it gets about 1 %. Uploads: Riptide's transmit rate limit; LEDBAT alone 63 ms RTT (CUBIC 235 ms), against CUBIC about 1 %. |
-| `tests/amiga/run_fsuae_bsdsocktest.sh build/amiga` | [bsdsocktest](https://github.com/tbdye/bsdsocktest), an independent bsdsocket.library conformance suite (`BSDSOCKTEST=` its Amiga binary from the release archive), on FS-UAE: its loopback tests (socket lifecycle, send/recv, options, WaitSelect, signals, DNS, utility calls, descriptor transfer, errno, ICMP, throughput). Passes when every test that ran passed; 0.15: 130 of 130, 12 skipped (they need a host helper or a network). |
+| `tests/amiga/run_fsuae_bsdsocktest.sh build/amiga` | [bsdsocktest](https://github.com/tbdye/bsdsocktest), an independent bsdsocket.library conformance suite (`BSDSOCKTEST=` its Amiga binary from the release archive), on FS-UAE: its loopback tests (socket lifecycle, send/recv, options, WaitSelect, signals, DNS, utility calls, descriptor transfer, errno, ICMP, throughput). Passes when every test that ran passed; 0.15: 130 of 130, 12 skipped (they need a host helper or a network). With vbcc it also runs `tests/amiga/taskprobe.c`, and a run without a result says whether the emulated system lost the stack process (see the next row). |
+| `tests/amiga/run_fsuae_execrace.sh [BOOTS] [SECS] [DIR] [quiet]` | Not a Riptide test: two tasks wake each other with `Signal()`/`Wait()` (`tests/amiga/execrace.c`, no TCP/IP stack) on fresh FS-UAE boots, watched by `tests/amiga/taskprobe.c`. On FS-UAE 3.2.35 with the AROS Kickstart ROM, under host load, a task that `Signal()` made ready sometimes ends up in neither exec's `TaskReady` nor `TaskWait` list and never runs again; the rare bsdsocktest/tools runs that stopped with no result (Riptide's stack process lost the same way, in state ready, its links still pointing at the list it was taken out of) are this. Reports how many boots stalled. |
 
 `rtcheck CONNECT=a.b.c.d:port` also runs a TCP echo test through a real
 interface.

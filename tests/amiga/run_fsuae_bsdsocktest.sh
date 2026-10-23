@@ -10,6 +10,12 @@
 # (bsdsocktest-0.2.3.lha: bsdsocktest/bsdsocktest). Passes when every test
 # that ran passed (skipped ones are fine); prints the failures otherwise.
 # Headless: starts Xvfb on :97 when DISPLAY is not set. Needs fs-uae.
+#
+# With vbcc (VBCC, NDK) it also runs tests/amiga/taskprobe.c, which
+# snapshots the stack process every 5 s: when a run gives no result the
+# script says whether the emulated system lost the stack process (state
+# ready, in no exec task list; see tests/amiga/execrace.c), which is an
+# FS-UAE/AROS ROM problem and not a Riptide one.
 # SPDX-License-Identifier: GPL-2.0-only
 set -u
 BUILD=${1:-build/amiga}
@@ -24,14 +30,22 @@ dh0=$work/dh0
 mkdir -p "$dh0/C" "$dh0/S" "$dh0/bst"
 cp "$BUILD/Riptide" "$BUILD/rtcheck" "$dh0/C/"
 cp "$BSDSOCKTEST" "$dh0/bst/bsdsocktest"
+VBCC=${VBCC:-/opt/vbcc}
+NDK=${NDK:-/opt/ndk3.2}
+probe=
+if [ -x "$VBCC/bin/vc" ] && PATH=$VBCC/bin:$PATH VBCC=$VBCC "$VBCC/bin/vc" +aos68k -O1 -I"$NDK/Include_H" \
+	-o "$dh0/C/taskprobe" "$(dirname "$0")/taskprobe.c" -lamiga >/dev/null 2>&1; then
+	probe='DH0:C/rtcheck START="DH0:C/taskprobe DH0:probe 5" NOCHECK >NIL:'
+fi
 cat > "$dh0/S/riptide.conf" <<'CONF'
 # loopback only
 hostname aros-test
 CONF
-cat > "$dh0/S/Startup-Sequence" <<'SEQ'
+cat > "$dh0/S/Startup-Sequence" <<SEQ
 FailAt 30
 Stack 65536
 DH0:C/rtcheck START="DH0:C/Riptide >DH0:riptide.log CONFIG=DH0:S/riptide.conf" NOCHECK >DH0:start.txt
+$probe
 CD DH0:bst
 DH0:bst/bsdsocktest >DH0:result.txt
 Echo "bsdsocktest finished" >DH0:done.txt
@@ -79,5 +93,16 @@ if [ -n "$res" ] && ! echo "$res" | grep -q 'FAILED'; then
 	exit 0
 fi
 plain "$dh0/bst/bsdsocktest.log" | grep -A3 '^not ok' | head -40
+# the newest probe snapshot: was the stack process lost by exec?
+last=$(grep -l '^seq ' "$dh0"/probe.[0-9] 2>/dev/null | while read -r f; do
+	echo "$(head -1 "$f" | cut -d' ' -f2) $f"; done | sort -n | tail -1 | cut -d' ' -f2)
+if [ -z "$res" ] && [ -n "$last" ] && grep -q ' ORPHANED$' "$last"; then
+	echo "---- the emulated system lost the stack process (ready, in no exec task list):"
+	head -1 "$last"
+	grep '^in ready list' "$last"
+	echo "---- an FS-UAE/AROS ROM problem (tests/amiga/execrace.c shows it without Riptide)"
+	echo "run_fsuae_bsdsocktest: FAILED (no result: emulator lost the stack process)"
+	exit 1
+fi
 echo "run_fsuae_bsdsocktest: FAILED (${res:-no result})"
 exit 1
