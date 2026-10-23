@@ -108,8 +108,11 @@ static void *stack_main(void *unused)
 		for (i = 0; i < n; i++) {
 			if (!(pfd[i].revents & (POLLIN | POLLERR | POLLHUP)))
 				continue;
+			/* one receive batch per read, as the Amiga stack loop does */
 			rt_lock();
+			rt_rx_batch_begin();
 			local[i].rx(local[i].arg);
+			rt_rx_batch_end();
 			rt_unlock();
 		}
 	}
