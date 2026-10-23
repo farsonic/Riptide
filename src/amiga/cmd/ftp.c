@@ -1122,19 +1122,30 @@ static int ftp_open(const char *host, u32 port)
 	}
 	if (!fam && cl_parse_addr(host, &addr) == 0)
 		fam = addr.family == RT_AF_INET6 ? 6 : 4;
-	if (cl_resolve_af(host, fam == 6 ? 6 : 4, &addr) < 0)
-		return -1;
-	s = socket(addr.family, RT_SOCK_STREAM, 0);
-	if (s < 0) {
-		cl_printf("ftp: socket: %s\n", cl_strerror((int)Errno()));
-		return -1;
-	}
-	r = cl_connect_addr(s, &addr, (u16)port, timeout_s * 1000UL);
-	if (r) {
-		cl_printf("ftp: connect to %s port %lu: %s\n", cl_addr_str(&addr, a), (unsigned long)port,
-		          r == RT_EINTR ? "Interrupted" : cl_strerror(r));
-		CloseSocket(s);
-		return -1;
+	if (!fam) {
+		/* a name, either family: IPv6 and IPv4 raced (Happy Eyeballs) */
+		s = cl_connect_name(host, (u16)port, 0, timeout_s * 1000UL, &addr);
+		if (s < 0) {
+			if (s != -RT_EHOSTUNREACH)
+				cl_printf("ftp: connect to %s port %lu: %s\n", host, (unsigned long)port,
+				          s == -RT_EINTR ? "Interrupted" : cl_strerror(-s));
+			return -1;
+		}
+	} else {
+		if (cl_resolve_af(host, fam == 6 ? 6 : 4, &addr) < 0)
+			return -1;
+		s = socket(addr.family, RT_SOCK_STREAM, 0);
+		if (s < 0) {
+			cl_printf("ftp: socket: %s\n", cl_strerror((int)Errno()));
+			return -1;
+		}
+		r = cl_connect_addr(s, &addr, (u16)port, timeout_s * 1000UL);
+		if (r) {
+			cl_printf("ftp: connect to %s port %lu: %s\n", cl_addr_str(&addr, a), (unsigned long)port,
+			          r == RT_EINTR ? "Interrupted" : cl_strerror(r));
+			CloseSocket(s);
+			return -1;
+		}
 	}
 	{
 		LONG one = 1;

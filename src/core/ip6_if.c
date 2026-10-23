@@ -1014,7 +1014,9 @@ void rt_ip6_if_up(struct rt_netif *nif)
 	struct ip6_if *ifp = ip6_ifp(nif);
 
 	if (!ifp) {
-		if (rt_ip6_auto_enable && !nif->ip6_disabled)
+		/* ip6_disabled: 0 the default (net.inet6.ip6.enable), 1 off,
+		 * 2 on for this interface whatever the default */
+		if ((rt_ip6_auto_enable && nif->ip6_disabled != 1) || nif->ip6_disabled == 2)
 			rt_ip6_ifenable(nif, 1);
 		return;
 	}

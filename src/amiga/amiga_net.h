@@ -156,9 +156,24 @@ struct if_nameindex {
 
 /* riptide.library */
 #define RIPTIDE_LIB_NAME     "riptide.library"
-#define RIPTIDE_LIB_VERSION  1
+#define RIPTIDE_LIB_VERSION  2
 #define RIPTIDE_LIB_REVISION 0
-#define RIPTIDE_LIB_VERSTR   "1.0"
+#define RIPTIDE_LIB_VERSTR   "2.0"
+
+/* RiptideConnectName() tags and result (as sdk/include/libraries/riptide.h) */
+#define RTCN_Dummy    (TAG_USER + 0x52430000)
+#define RTCN_Family   (RTCN_Dummy + 1)
+#define RTCN_Type     (RTCN_Dummy + 2)
+#define RTCN_Timeout  (RTCN_Dummy + 3)
+#define RTCN_Result   (RTCN_Dummy + 4)
+struct RiptideConnectResult {
+	UBYTE rcr_Addr[16];
+	ULONG rcr_Millis;
+	UWORD rcr_Family;
+	UWORD rcr_NumAddrs;
+	UWORD rcr_Attempts;
+	UWORD rcr_Index;
+};
 /* RiptideSupportedCPUs()/RiptideSetFdCallback() CPU types */
 #define RIPTIDECPU_M68KREG 1
 #define RIPTIDECPU_PPCV4   2

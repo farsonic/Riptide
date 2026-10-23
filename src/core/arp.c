@@ -175,7 +175,7 @@ static void arp_send(struct rt_netif *nif, u16 op, const u8 *dst, u32 sip,
 static void arp_solicit(struct arp_entry *e, int unicast)
 {
 	struct rt_netif *nif = e->nif;
-	u32 sip = nif->addr;
+	u32 sip = rt_netif_src(nif, e->ip, 0);
 
 	e->probes++;
 	arp_send(nif, ARPOP_REQUEST, unicast ? e->hw : NULL, sip, NULL, e->ip);
@@ -339,7 +339,7 @@ void rt_arp_input(struct rt_netif *nif, struct rt_buf *b)
 	if (rt_ip_is_multicast(sip) || sip == RT_INADDR_BROADCAST || rt_ip_is_loopback_net(sip))
 		goto drop;
 
-	if (nif->addr && sip == nif->addr) {
+	if (rt_netif_has_addr(nif, sip)) {
 		/* Someone else claims our address (RFC 5227 2.4): defend by
 		 * announcing once, and leave the table alone. */
 		static u32 last_defend;
@@ -350,11 +350,11 @@ void rt_arp_input(struct rt_netif *nif, struct rt_buf *b)
 		last_defend = now ? now : 1;
 		rt_log(RT_LOG_WARN, "arp: address conflict on %s with %02x:%02x:%02x:%02x:%02x:%02x",
 		       nif->name, sha[0], sha[1], sha[2], sha[3], sha[4], sha[5]);
-		rt_arp_announce(nif, nif->addr);
+		rt_arp_announce(nif, sip);
 		goto drop;
 	}
 
-	for_us = nif->addr && tip == nif->addr;
+	for_us = rt_netif_has_addr(nif, tip);
 	e = sip ? arp_lookup(nif, sip) : NULL;
 
 	if (sip && op == ARPOP_REPLY && !e && memcmp(tha, nif->hwaddr, 6) == 0) {
@@ -370,7 +370,7 @@ void rt_arp_input(struct rt_netif *nif, struct rt_buf *b)
 		arp_update(e, sha, op == ARPOP_REPLY && (for_us || memcmp(tha, nif->hwaddr, 6) == 0));
 
 	if (op == ARPOP_REQUEST && for_us)
-		arp_send(nif, ARPOP_REPLY, sha, nif->addr, sha, sip);
+		arp_send(nif, ARPOP_REPLY, sha, tip, sha, sip);
 drop:
 	rt_buf_free(b);
 }
@@ -468,7 +468,7 @@ void rt_arp_announce(struct rt_netif *nif, u32 ip)
 {
 	if (nif->type != RT_IFT_ETHER)
 		return;
-	if (ip == nif->addr)
+	if (rt_netif_has_addr(nif, ip))
 		arp_send(nif, ARPOP_REQUEST, NULL, ip, NULL, ip);
 	else
 		arp_send(nif, ARPOP_REQUEST, NULL, 0, NULL, ip);

@@ -71,7 +71,7 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 	if (!rt_strcasecmp(argv[0], "interface")) {
 		const char *dev = NULL, *mni = NULL, *opts = NULL, *v;
 		unsigned long unit = 0;
-		int mtu = 0, raw = 0, reads = 0, r;
+		int mtu = 0, raw = 0, reads = 0, r, ip4 = -1, ip6 = -1, qos = -1;
 		long tcpwin = -1;
 
 		if (argc == 3 && (!rt_strcasecmp(argv[2], "delete") || !rt_strcasecmp(argv[2], "del") ||
@@ -79,7 +79,8 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 			return amiga_if_delete(argv[1], err, errlen);
 
 		if (argc < 3) {
-			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] [tcpwindow=N] [raw] [options=TEXT]");
+			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] "
+			            "[tcpwindow=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [raw] [options=TEXT]");
 			return -RT_EINVAL;
 		}
 		if (strlen(argv[1]) >= RT_IFNAMSIZ) {
@@ -117,6 +118,20 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 					rt_snprintf(err, errlen, "interface: tcpwindow is 0 or 536..16777216 bytes");
 					return -RT_EINVAL;
 				}
+			} else if ((v = kv(argv[i], "ipv4")) != NULL || (v = kv(argv[i], "ipv6")) != NULL ||
+			           (v = kv(argv[i], "qos")) != NULL) {
+				int on = !rt_strcasecmp(v, "on") || !strcmp(v, "1") ? 1 :
+				         !rt_strcasecmp(v, "off") || !strcmp(v, "0") ? 0 : -1;
+				if (on < 0) {
+					rt_snprintf(err, errlen, "interface: %.4s= is on or off", argv[i]);
+					return -RT_EINVAL;
+				}
+				if (!rt_strncasecmp(argv[i], "ipv4", 4))
+					ip4 = on;
+				else if (!rt_strncasecmp(argv[i], "ipv6", 4))
+					ip6 = on;
+				else
+					qos = on;
 			} else if ((v = kv(argv[i], "options")) != NULL)
 				opts = v;
 			else if (!rt_strcasecmp(argv[i], "raw"))
@@ -138,8 +153,19 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 		else
 			r = mni_open_if(argv[1], mni, (ULONG)unit, opts, mtu, err, errlen);
 		rt_lock();
-		if (r == 0 && tcpwin >= 0 && rt_netif_find(argv[1]))
-			rt_netif_find(argv[1])->tcp_window = (u32)tcpwin;
+		if (r == 0 && rt_netif_find(argv[1])) {
+			struct rt_netif *nif = rt_netif_find(argv[1]);
+			if (tcpwin >= 0)
+				nif->tcp_window = (u32)tcpwin;
+			if (ip4 >= 0)
+				rt_netif_ip4_enable(nif, ip4);
+			if (ip6 == 0)
+				rt_ip6_ifenable(nif, 0);
+			else if (ip6 == 1)
+				nif->ip6_disabled = 2;     /* comes up with the interface, whatever "ipv6 off" says */
+			if (qos >= 0)
+				rt_qos_enable(nif, qos);
+		}
 		return r;
 	}
 	if (!rt_strcasecmp(argv[0], "user")) {
@@ -351,6 +377,18 @@ int amiga_status_text(char *buf, u32 len)
 		    (n->flags & RT_IFF_RUNNING) ? ",RUNNING" : "",
 		    (unsigned long)n->stats.ipackets, (unsigned long)n->stats.opackets,
 		    (unsigned long)n->stats.ierrors, (unsigned long)n->stats.oerrors);
+		if (n->nalias || n->ip4_disabled || (n->qos && n->type != RT_IFT_LOOP)) {
+			int k;
+			ADD("      ");
+			if (n->ip4_disabled)
+				ADD(" IPv4 off");
+			for (k = 0; k < n->nalias; k++)
+				ADD(" also %s/%s", rt_format_ipv4(n->alias[k].addr, a),
+				    rt_format_ipv4(n->alias[k].netmask, m));
+			if (n->qos)
+				ADD(" QoS on");
+			ADD("\n");
+		}
 		ai = amiga_if_find(n->name);
 		if (ai && ai->status && o + 8 < len) {
 			ADD("       ");

@@ -320,7 +320,8 @@ int cl_need_riptide(void)
 		return -1;
 	if (RiptideBase)
 		return 0;
-	RiptideBase = OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, RIPTIDE_LIB_VERSION);
+	/* version 1: the tools also work with older Riptide versions */
+	RiptideBase = OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, 1);
 	if (!RiptideBase) {
 		cl_error("cannot open " RIPTIDE_LIB_NAME " (is Riptide running?)");
 		return -1;
@@ -771,6 +772,49 @@ void cl_from_sockaddr(const void *sa, struct cl_addr *out, u16 *port)
 	}
 }
 
+int cl_connect_name(const char *host, u16 port, int family, u32 ms, struct cl_addr *peer)
+{
+	struct cl_addr a;
+	int fd, r;
+
+	if (cl_need_riptide() == 0 && RiptideBase->lib_Version >= 2) {
+		/* riptide.library 2: Happy Eyeballs (RFC 8305) in the stack */
+		struct RiptideConnectResult res;
+		struct TagItem tags[4];
+		tags[0].ti_Tag = RTCN_Family;
+		tags[0].ti_Data = family == 6 ? RT_AF_INET6 : family == 4 ? RT_AF_INET : RT_AF_UNSPEC;
+		tags[1].ti_Tag = RTCN_Timeout;
+		tags[1].ti_Data = ms;
+		tags[2].ti_Tag = RTCN_Result;
+		tags[2].ti_Data = (ULONG)&res;
+		tags[3].ti_Tag = TAG_DONE;
+		tags[3].ti_Data = 0;
+		fd = (int)RiptideConnectName((CONST_STRPTR)host, port, tags);
+		if (fd < 0)
+			return -(int)Errno();
+		if (peer) {
+			peer->family = res.rcr_Family;
+			memcpy(peer->a.b, res.rcr_Addr, 16);
+			peer->scope = 0;
+		}
+		return fd;
+	}
+	/* older Riptide: the first address */
+	if (cl_resolve_af(host, family, &a) < 0)
+		return -RT_EHOSTUNREACH;
+	fd = (int)socket(a.family, RT_SOCK_STREAM, 0);
+	if (fd < 0)
+		return -(int)Errno();
+	r = cl_connect_addr(fd, &a, port, ms);
+	if (r) {
+		CloseSocket(fd);
+		return -r;
+	}
+	if (peer)
+		*peer = a;
+	return fd;
+}
+
 int cl_connect_addr(int fd, const struct cl_addr *a, u16 port, u32 ms)
 {
 	struct rt_sockaddr_in6 sa;
@@ -833,6 +877,19 @@ const char *cl_strerror(int err)
 
 /* ------------------------------------------------------------ Riptide */
 
+static int dump_quiet;
+
+/* a table that older Riptide versions lack: NULL without a message */
+void *cl_dump_quiet(int what, struct rt_ctl_hdr *hdr)
+{
+	void *d;
+
+	dump_quiet = 1;
+	d = cl_dump(what, hdr);
+	dump_quiet = 0;
+	return d;
+}
+
 void *cl_dump(int what, struct rt_ctl_hdr *hdr)
 {
 	LONG mib[3], len;
@@ -847,7 +904,8 @@ void *cl_dump(int what, struct rt_ctl_hdr *hdr)
 	for (tries = 0; tries < 4; tries++) {
 		len = 0;
 		if (RiptideSysCtl(mib, 3, NULL, &len, NULL, 0) != 0) {
-			cl_error("cannot read the Riptide tables (not Riptide 0.10 or later?)");
+			if (!dump_quiet)
+				cl_error("cannot read the Riptide tables (not Riptide 0.10 or later?)");
 			return NULL;
 		}
 		len += len / 4 + 256;           /* room for growth meanwhile */

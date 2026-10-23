@@ -40,6 +40,7 @@ LONG sockatmark(LONG fd);
 void RiptideSupportedCPUs(ULONG* apis, ULONG* callbacks, ULONG* kernel);
 LONG RiptideGetFdCallback(APTR* cbptr);
 LONG RiptideSetFdCallback(APTR cbptr, LONG cputype);
+LONG RiptideConnectName(CONST_STRPTR host, ULONG port, APTR tags);
 
 #ifdef __cplusplus
 }

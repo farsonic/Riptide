@@ -321,6 +321,28 @@ void sock_addr_out(int domain, const struct rt_sockaddr_in6 *n, void *a, u32 *al
  * socket / bind / listen / accept / connect
  * ====================================================================== */
 
+/* "qos rule"s with ports, once the ports are known (lport/rport 0 =
+ * look them up) */
+static void qos_ports(struct rt_socket *so, u16 lport, u16 rport)
+{
+	struct rt_sockaddr_in6 a;
+
+	if (!rt_qos_nrules() || !so->ops->getname)
+		return;
+	if (!lport) {
+		memset(&a, 0, sizeof(a));
+		if (so->ops->getname(so, &a, 0) == 0)
+			lport = rt_ntohs(a.sin6_port);
+	}
+	if (!rport) {
+		memset(&a, 0, sizeof(a));
+		if (so->ops->getname(so, &a, 1) == 0)
+			rport = rt_ntohs(a.sin6_port);
+	}
+	if (lport || rport)
+		rt_qos_sock_rules(so, NULL, lport, rport);
+}
+
 int rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol)
 {
 	const struct rt_proto_ops *ops;
@@ -354,6 +376,7 @@ int rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol)
 		return r;
 	}
 	fd_install(c, fd, so, 1);
+	rt_qos_sock_rules(so, NULL, 0, 0);
 	RT_DBG(RT_DBG_SOCKET, "socket(%d, %d, %d) = %d", domain, type, protocol, fd);
 	rt_unlock();
 	return fd;
@@ -384,8 +407,10 @@ int rt_api_bind(struct rt_sockctx *c, int fd, const void *a, u32 alen)
 	}
 	if (r == 0) {
 		r = so->ops->bind ? so->ops->bind(so, &sin) : -RT_EOPNOTSUPP;
-		if (r == 0)
+		if (r == 0) {
 			so->state |= RT_SS_ISBOUND;
+			qos_ports(so, 0, 0);
+		}
 	}
 	rt_unlock();
 	return r;
@@ -486,6 +511,15 @@ int rt_api_accept(struct rt_sockctx *c, int fd, void *a, u32 *alen)
 	}
 	if (ch) {
 		fd_install(c, nfd, ch, 1);
+		/* the listener's priority and program rules carry over (Linux
+		 * copies sk_priority), then the rules for the ports */
+		if (so->qos_flags) {
+			ch->priority = so->priority;
+			ch->qos_flags = so->qos_flags;
+			ch->rule_dscp = so->rule_dscp;
+		}
+		ch->qos_prog = so->qos_prog;
+		qos_ports(ch, 0, 0);
 		if (a) {
 			memset(&sin, 0, sizeof(sin));
 			if (ch->ops->getname)
@@ -519,6 +553,7 @@ int rt_api_connect(struct rt_sockctx *c, int fd, const void *a, u32 alen)
 	if (r < 0)
 		goto out;
 	RT_DBG(RT_DBG_SOCKET, "connect(%d) to port %u", fd, (unsigned)rt_ntohs(sin.sin6_port));
+	qos_ports(so, 0, rt_ntohs(sin.sin6_port));      /* before the SYN goes out */
 	if (sin.sin6_family != (so->domain == RT_AF_INET6 ? RT_AF_INET6 : RT_AF_INET) &&
 	    !(sin.sin6_family == RT_AF_UNSPEC && so->type != RT_SOCK_STREAM)) {
 		r = -RT_EAFNOSUPPORT;
@@ -758,6 +793,8 @@ int rt_api_sendmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int i
 			}
 		}
 	}
+	if (r == 0 && to && rt_qos_nrules())
+		qos_ports(so, 0, rt_ntohs(sin.sin6_port));
 	if (r == 0)
 		r = sock_sendit(so, iov, iovcnt, flags, to ? &sin : NULL);
 	rt_unlock();
@@ -956,6 +993,14 @@ static int sol_set(struct rt_socket *so, int name, const void *val, u32 len)
 		else
 			so->rcvtimeo_ms = ms ? (s32)ms : -1;
 		return 0;
+	case RT_SO_PRIORITY: case RT_SO_PRIORITY_LINUX:
+		if ((r = opt_int(val, len, &v)) < 0)
+			return r;
+		if (v < 0 || v > 7)
+			return -RT_EINVAL;
+		so->priority = (u8)v;
+		so->qos_flags = (u8)((so->qos_flags & ~RT_SOQ_RULE_PRIO) | RT_SOQ_PRIO);
+		return 0;
 	case RT_SO_EVENTMASK:
 		if ((r = opt_int(val, len, &v)) < 0)
 			return r;
@@ -1050,6 +1095,7 @@ int rt_api_getsockopt(struct rt_sockctx *c, int fd, int level, int name, void *v
 	case RT_SO_ERROR:   v = so->so_error; so->so_error = 0; break;
 	case RT_SO_TYPE:    v = so->type; break;
 	case RT_SO_EVENTMASK: v = (s32)so->event_mask; break;
+	case RT_SO_PRIORITY: case RT_SO_PRIORITY_LINUX: v = so->priority; break;
 	default:
 		r = -RT_ENOPROTOOPT;
 		goto out;
@@ -1144,16 +1190,20 @@ static int ifconf(struct rt_ifconf *ifc)
 	if (!p && ifc->ifc_len > 0)
 		return -RT_EFAULT;
 	for (nif = rt_netif_list(); nif; nif = nif->next) {
-		if (!nif->addr)
-			continue;
-		if (ifc->ifc_len - used < (s32)sizeof(ifr))
-			break;
-		memset(&ifr, 0, sizeof(ifr));
-		memcpy(ifr.ifr_name, nif->name, RT_IFNAMSIZ);
-		ifr_put_addr(&ifr, nif->addr);
-		memcpy(p + used, &ifr, sizeof(ifr));
-		used += sizeof(ifr);
+		/* one entry per address (BSD), the primary first */
+		struct rt_ifaddr4 a[1 + RT_IF_MAXADDR4];
+		int i, n = rt_netif_addrs(nif, a, 1 + RT_IF_MAXADDR4);
+		for (i = 0; i < n; i++) {
+			if (ifc->ifc_len - used < (s32)sizeof(ifr))
+				goto full;
+			memset(&ifr, 0, sizeof(ifr));
+			memcpy(ifr.ifr_name, nif->name, RT_IFNAMSIZ);
+			ifr_put_addr(&ifr, a[i].addr);
+			memcpy(p + used, &ifr, sizeof(ifr));
+			used += sizeof(ifr);
+		}
 	}
+full:
 	ifc->ifc_len = used;
 	return 0;
 }
@@ -1269,13 +1319,12 @@ static int ifioctl(u32 req, struct rt_ifreq *ifr)
 		nif->metric = (u32)v;
 		return 0;
 	case RT_SIOCDIFADDR:
-		if (!nif->addr)
+		if (!nif->addr && !nif->nalias)
 			return -RT_EADDRNOTAVAIL;
 		if ((r = ifr_get_addr(ifr, &a)) < 0)
 			return r;
-		if (a && a != nif->addr)
-			return -RT_EADDRNOTAVAIL;
-		return rt_netif_set_addr(nif, 0, 0, 0);
+		/* the named address (BSD), or the primary one */
+		return rt_netif_addr_del(nif, a ? a : nif->addr);
 	}
 	return -RT_EINVAL;
 }

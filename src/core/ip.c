@@ -95,14 +95,15 @@ static int route_direct(u32 dst, struct rt_nexthop *nh)
 	struct rt_netif *n;
 
 	for (n = rt_netif_list(); n; n = n->next) {
-		if (!(n->flags & RT_IFF_UP) || !n->addr)
+		u32 src;
+		if (!(n->flags & RT_IFF_UP) || !(src = rt_netif_src(n, dst, 0)))
 			continue;
 		if ((n->type == RT_IFT_PTP && n->dstaddr == dst) ||
-		    (n->netmask && (dst & n->netmask) == (n->addr & n->netmask))) {
+		    rt_netif_on_link(n, dst)) {
 			memset(nh, 0, sizeof(*nh));
 			nh->netif = n;
 			nh->nexthop = dst;
-			nh->src = n->addr;
+			nh->src = src;
 			nh->mtu = n->mtu;
 			nh->flags = RT_RTF_UP;
 			return 0;

@@ -25,6 +25,8 @@ void rt_drv_attach(struct rt_netif *nif, struct rt_drv_stats *d)
 		d->rxq[q].low = LOW_UNSET;
 	d->reset_ms = rt_now_ms();
 	nif->drv = d;
+	if (rt_qos_default && nif->type != RT_IFT_LOOP)
+		rt_qos_enable(nif, 1);
 }
 
 void rt_drv_rx_queued(struct rt_netif *nif, int q)
@@ -149,6 +151,8 @@ void rt_drv_tx_done(struct rt_netif *nif, s32 err)
 		d->tx_errors++;
 		rt_drv_count_err(d->txerr, err);
 	}
+	if (nif->qos)
+		rt_qos_run(nif);
 }
 
 void rt_drv_tx_full(struct rt_netif *nif)

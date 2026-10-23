@@ -143,7 +143,15 @@ struct rt_socket {
 	u32  refcnt;                  /* descriptor references (Dup2Socket) */
 	u32  pgid;                    /* FIOSETOWN/SIOCSPGRP value (Amiga: task), 0 = none */
 	u16  domain;                  /* RT_AF_INET or RT_AF_INET6 */
+	/* QoS (rt_qos.h): SO_PRIORITY and what "qos rule"s set */
+	u8   priority;                /* 0..7 */
+	u8   qos_flags;               /* RT_SOQ_* */
+	u8   rule_dscp;               /* DSCP of a matching rule (RT_SOQ_RULE_DSCP) */
+	u16  qos_prog;                /* rules whose program= matched at creation */
 };
+#define RT_SOQ_PRIO      0x01     /* the program set SO_PRIORITY */
+#define RT_SOQ_RULE_PRIO 0x02     /* priority from a rule */
+#define RT_SOQ_RULE_DSCP 0x04     /* rule_dscp is valid */
 
 /* Ancillary info stored in rt_buf.cb of buffers on so->rcvq */
 struct rt_dgram_cb {

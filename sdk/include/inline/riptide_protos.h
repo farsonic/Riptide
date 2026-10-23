@@ -96,4 +96,7 @@ LONG __RiptideGetFdCallback(__reg("a6") void *, __reg("a0") APTR* cbptr)="\tjsr\
 LONG __RiptideSetFdCallback(__reg("a6") void *, __reg("a0") APTR cbptr, __reg("d0") LONG cputype)="\tjsr\t-336(a6)";
 #define RiptideSetFdCallback(cbptr, cputype) __RiptideSetFdCallback(RiptideBase, (cbptr), (cputype))
 
+LONG __RiptideConnectName(__reg("a6") void *, __reg("a0") CONST_STRPTR host, __reg("d0") ULONG port, __reg("a1") APTR tags)="\tjsr\t-528(a6)";
+#define RiptideConnectName(host, port, tags) __RiptideConnectName(RiptideBase, (host), (port), (tags))
+
 #endif /* _VBCCINLINE_RIPTIDE_H */

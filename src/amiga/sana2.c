@@ -309,13 +309,14 @@ static void s2_write_done(struct s2if *si, struct s2req *r)
 
 	if (r->io.ios2_Req.io_Error)
 		nif->stats.oerrors++;
-	rt_drv_tx_done(nif, (s32)r->io.ios2_Req.io_Error);
 	rt_buf_free(r->b);
 	r->b = NULL;
 	r->busy = 0;
 	si->wbusy--;
 	r->next = si->wfree;
 	si->wfree = r;
+	/* last: it may send the next queued frame (QoS) with this request */
+	rt_drv_tx_done(nif, (s32)r->io.ios2_Req.io_Error);
 }
 
 /* rt_netif mcast hook: lock held, any task. Queue for sana2_poll. */

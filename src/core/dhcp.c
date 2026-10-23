@@ -654,6 +654,8 @@ int rt_dhcp_start(struct rt_netif *nif, void (*cb)(struct rt_netif *nif, int eve
 
 	if (!nif || nif->type == RT_IFT_LOOP)
 		return -RT_EINVAL;
+	if (nif->ip4_disabled)
+		return -RT_EAFNOSUPPORT;
 	c = client_of(nif);
 	if (c) {
 		c->cb = cb;

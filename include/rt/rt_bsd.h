@@ -87,6 +87,11 @@ struct rt_timeval {
 #define RT_SO_ERROR        0x1007
 #define RT_SO_TYPE         0x1008
 #define RT_SO_EVENTMASK    0x2001   /* AmiTCP: RT_SEV_* mask */
+/* Riptide: socket priority 0..7 (Linux SO_PRIORITY semantics: transmit
+ * band, and DSCP when the program sets no TOS; see rt_qos.h). Linux's
+ * number 12 is accepted too: no 4.4BSD/AmiTCP option uses it. */
+#define RT_SO_PRIORITY     0x1100
+#define RT_SO_PRIORITY_LINUX 12
 
 /* ---- IPPROTO_IP options ---- */
 #define RT_IP_OPTIONS          1

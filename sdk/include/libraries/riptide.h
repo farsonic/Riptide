@@ -13,7 +13,31 @@
  */
 
 #define RIPTIDE_LIB_NAME    "riptide.library"
-#define RIPTIDE_LIB_VERSION 1
+#define RIPTIDE_LIB_VERSION 1    /* RiptideConnectName() needs version 2 */
+
+/* RiptideConnectName(host, port, tags) (version 2): a TCP (or UDP)
+ * socket connected to host:port, IPv6 and IPv4 raced as RFC 8305 "Happy
+ * Eyeballs" describes; returns the socket descriptor (blocking mode) or
+ * -1 with Errno() set. The tags are optional. */
+#define RTCN_Dummy    (TAG_USER + 0x52430000)
+#define RTCN_Family   (RTCN_Dummy + 1)   /* AF_UNSPEC (default), AF_INET, AF_INET6 */
+#define RTCN_Type     (RTCN_Dummy + 2)   /* SOCK_STREAM (default) or SOCK_DGRAM */
+#define RTCN_Timeout  (RTCN_Dummy + 3)   /* milliseconds, default 75000 */
+#define RTCN_Result   (RTCN_Dummy + 4)   /* struct RiptideConnectResult *, filled on success */
+
+struct RiptideConnectResult {
+	UBYTE rcr_Addr[16];      /* the address that answered (IPv4: ::ffff:a.b.c.d) */
+	ULONG rcr_Millis;        /* time to connect, name lookups included */
+	UWORD rcr_Family;        /* AF_INET or AF_INET6 */
+	UWORD rcr_NumAddrs;      /* addresses the name had */
+	UWORD rcr_Attempts;      /* connection attempts started */
+	UWORD rcr_Index;         /* the one that won, in the order tried */
+};
+
+/* SOL_SOCKET option: socket priority 0..7 (Linux SO_PRIORITY semantics,
+ * Riptide 0.15): the transmit priority band, and the DSCP of packets of a
+ * socket without IP_TOS. Linux's number 12 is accepted too. */
+#define SO_RIPTIDE_PRIORITY 0x1100
 
 /* RiptideSupportedCPUs() / RiptideSetFdCallback() CPU types */
 #define RIPTIDECPU_M68KREG 1     /* 68k code, arguments in registers */
@@ -42,6 +66,8 @@
 #define RIPTIDE_CTL_IP6STAT   15
 #define RIPTIDE_CTL_ICMP6STAT 16
 #define RIPTIDE_CTL_IFACES6   17
+#define RIPTIDE_CTL_ADDRS4    40     /* every IPv4 address (Riptide 0.15) */
+#define RIPTIDE_CTL_QOS       41     /* transmit priority bands (Riptide 0.15) */
 
 /* IPv6 (RiptideSupportsIPV6() returns TRUE). BSD/KAME numbers, as in the
  * Miami SDK; sockaddr_in6 is the 28-byte RFC 3493 layout (24-byte RFC 2133

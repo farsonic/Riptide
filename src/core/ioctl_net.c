@@ -144,9 +144,10 @@ static int aifaddr(struct rt_ifaliasreq *ifra)
 		return -RT_EAFNOSUPPORT;
 	a = sa_addr(&ifra->ifra_addr);
 	m = ifra->ifra_mask.sa_len ? sa_addr(&ifra->ifra_mask) :
-	    nif->netmask ? nif->netmask : net_mask_for(a);
+	    a == nif->addr && nif->netmask ? nif->netmask : net_mask_for(a);
 	b = ifra->ifra_broadaddr.sa_len ? sa_addr(&ifra->ifra_broadaddr) : 0;
-	r = rt_netif_set_addr(nif, a, m, b);
+	/* BSD: adds the address (an alias when the interface has one) */
+	r = rt_netif_addr_add(nif, a, m, b);
 	if (r == 0 && a && !(nif->flags & RT_IFF_UP))
 		rt_netif_up(nif);
 	return r;

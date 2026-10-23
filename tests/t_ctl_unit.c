@@ -342,14 +342,46 @@ static void test_ioctls(struct rt_sockctx *ctx, int fd)
 	rt_strlcpy(ifra.ifra_name, "eth1", sizeof(ifra.ifra_name));
 	sin_set(&ifra.ifra_addr, ip4(10, 0, 3, 15));
 	sin_set(&ifra.ifra_mask, ip4(255, 255, 0, 0));
+	/* BSD: an interface with an address gets a second one */
 	CHECK(rt_api_ioctl(ctx, fd, RT_SIOCAIFADDR, &ifra) == 0);
-	CHECK(eth1.addr == ip4(10, 0, 3, 15) && eth1.netmask == ip4(255, 255, 0, 0) &&
-	      eth1.broadaddr == ip4(10, 0, 255, 255));
+	CHECK(eth1.addr == ip4(10, 0, 2, 15) && eth1.nalias == 1 && eth1.alias[0].addr == ip4(10, 0, 3, 15) &&
+	      eth1.alias[0].netmask == ip4(255, 255, 0, 0) && eth1.alias[0].broadaddr == ip4(10, 0, 255, 255));
+	CHECK(rt_ip_is_local(ip4(10, 0, 3, 15)) && rt_netif_by_addr(ip4(10, 0, 3, 15)) == &eth1);
+	CHECK(rt_ip_is_broadcast(ip4(10, 0, 255, 255), &eth1));
+	{
+		struct rt_nexthop nh2;
+		CHECK(rt_ip_route(ip4(10, 0, 200, 1), &nh2) == 0 && nh2.netif == &eth1 && nh2.src == ip4(10, 0, 3, 15));
+		CHECK(rt_ip_route(ip4(10, 0, 2, 7), &nh2) == 0 && nh2.src == ip4(10, 0, 2, 15));
+	}
+	{
+		/* SIOCGIFCONF lists both */
+		struct rt_ifreq rq[16];
+		struct rt_ifconf ifc;
+		int k, n2 = 0;
+		ifc.ifc_len = sizeof(rq);
+		ifc.ifc_buf = (void *)rq;
+		CHECK(rt_api_ioctl(ctx, fd, RT_SIOCGIFCONF, &ifc) == 0);
+		for (k = 0; k < (int)(ifc.ifc_len / sizeof(rq[0])); k++)
+			if (!strcmp(rq[k].ifr_name, "eth1"))
+				n2++;
+		CHECK(n2 == 2);
+	}
+	/* the primary: mask and broadcast change */
 	sin_set(&ifra.ifra_addr, ip4(10, 0, 2, 15));
 	sin_set(&ifra.ifra_mask, ip4(255, 255, 255, 0));
 	sin_set(&ifra.ifra_broadaddr, ip4(10, 0, 2, 255));
 	CHECK(rt_api_ioctl(ctx, fd, RT_SIOCAIFADDR, &ifra) == 0);
-	CHECK(eth1.addr == ip4(10, 0, 2, 15) && eth1.broadaddr == ip4(10, 0, 2, 255));
+	CHECK(eth1.addr == ip4(10, 0, 2, 15) && eth1.broadaddr == ip4(10, 0, 2, 255) && eth1.nalias == 1);
+	{
+		/* SIOCDIFADDR of the second address */
+		struct rt_ifreq rq;
+		memset(&rq, 0, sizeof(rq));
+		rt_strlcpy(rq.ifr_name, "eth1", sizeof(rq.ifr_name));
+		sin_set(&rq.ifr_ifru.ifru_addr, ip4(10, 0, 3, 15));
+		CHECK(rt_api_ioctl(ctx, fd, RT_SIOCDIFADDR, &rq) == 0);
+		CHECK(eth1.nalias == 0 && eth1.addr == ip4(10, 0, 2, 15) && !rt_ip_is_local(ip4(10, 0, 3, 15)));
+		CHECK(rt_api_ioctl(ctx, fd, RT_SIOCDIFADDR, &rq) == -RT_EADDRNOTAVAIL);
+	}
 	rt_strlcpy(ifra.ifra_name, "nope0", sizeof(ifra.ifra_name));
 	CHECK(rt_api_ioctl(ctx, fd, RT_SIOCAIFADDR, &ifra) == -RT_ENXIO);
 }

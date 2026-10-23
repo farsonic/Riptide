@@ -272,13 +272,33 @@ static void print_lft(const struct rt_ctl_iface *f)
 		cl_puts("       valid_lft forever preferred_lft forever\n");
 }
 
-static void print_addr_lines(const struct rt_ctl_iface *f)
+/* the additional IPv4 addresses (net.riptide.addrs4, Riptide 0.15) */
+static void print_addr4_extra(const struct rt_ctl_iface *f, void *d4, const struct rt_ctl_hdr *h4)
+{
+	char a[16], b[16];
+	u32 j;
+
+	for (j = 0; d4 && j < h4->count; j++) {
+		const struct rt_ctl_addr4 *x = cl_rec(d4, h4, j);
+		if (x->ifindex != f->index || (x->flags & RT_CTL_A4_PRIMARY))
+			continue;
+		cl_printf("    inet %s/%u", cl_ip(x->addr, a), (unsigned)x->prefixlen);
+		if (x->broadaddr)
+			cl_printf(" brd %s", cl_ip(x->broadaddr, b));
+		cl_printf(" scope global secondary %s\n", f->name);
+		cl_puts("       valid_lft forever preferred_lft forever\n");
+	}
+}
+
+static void print_addr_lines(const struct rt_ctl_iface *f, void *d4, const struct rt_ctl_hdr *h4)
 {
 	char a[16], b[16];
 	int bits = rt_ctl_prefixlen(f->netmask);
 
-	if (!f->addr)
+	if (!f->addr) {
+		print_addr4_extra(f, d4, h4);
 		return;
+	}
 	if (f->type == RT_IFT_PTP && f->dstaddr)
 		cl_printf("    inet %s peer %s/%d", cl_ip(f->addr, a), cl_ip(f->dstaddr, b), bits);
 	else
@@ -290,6 +310,7 @@ static void print_addr_lines(const struct rt_ctl_iface *f)
 		cl_puts(" dynamic");
 	cl_printf(" %s\n", f->name);
 	print_lft(f);
+	print_addr4_extra(f, d4, h4);
 }
 
 static const char *scope6_name(const struct rt_ctl_addr6 *x)
@@ -356,6 +377,24 @@ static struct rt_ctl_iface *get_ifaces(void **dump, struct rt_ctl_hdr *h)
 	return *dump ? cl_rec(*dump, h, 0) : NULL;
 }
 
+/* transmit priority bands (net.riptide.qos, Riptide 0.15), ip -s link */
+static void print_qos_of(const struct rt_ctl_iface *f, void *dq, const struct rt_ctl_hdr *hq)
+{
+	static const char *const bn[RT_QOS_BANDS] = { "interactive", "default", "bulk" };
+	u32 j, b;
+
+	for (j = 0; dq && j < hq->count; j++) {
+		const struct rt_ctl_qos *q = cl_rec(dq, hq, j);
+		if (q->ifindex != f->index)
+			continue;
+		cl_printf("    QoS: direct %lu", (unsigned long)q->bypass);
+		for (b = 0; b < RT_QOS_BANDS; b++)
+			cl_printf(", %s %lu (queued %lu, most %lu, dropped %lu)", bn[b], (unsigned long)q->packets[b],
+			          (unsigned long)q->queued[b], (unsigned long)q->maxq[b], (unsigned long)q->drops[b]);
+		cl_puts("\n");
+	}
+}
+
 /* "dev IF" or a bare IF at argv[i]; returns the name or NULL */
 static const char *dev_arg(int argc, char **argv, int *i)
 {
@@ -388,12 +427,22 @@ static int run(const char *line)
 	return r ? CL_ERROR : CL_OK;
 }
 
+/* run(), without printing the stack's error message */
+static int run_quiet(const char *line)
+{
+	int r = cl_command(line, 0);
+
+	if (r < 0)
+		return CL_FAIL;
+	return r ? CL_ERROR : CL_OK;
+}
+
 /* ------------------------------------------------------------ link / addr */
 
 static int do_show_ifs(int argc, char **argv, int i, int addrs)
 {
-	struct rt_ctl_hdr h, h6, dh;
-	void *d, *d6 = NULL, *dd = NULL;
+	struct rt_ctl_hdr h, h6, dh, h4, hq;
+	void *d, *d6 = NULL, *dd = NULL, *d4 = NULL, *dq = NULL;
 	const char *only = NULL;
 	u32 k, j;
 	char a[RT_INET6_ADDRSTRLEN], mac[64], fl[128], ab[160];
@@ -421,8 +470,12 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 	}
 	if (addrs && opt_family != 4)
 		d6 = cl_dump(RT_CTL_ADDRS6, &h6);
-	if (opt_stats && !opt_brief)
+	if (addrs && opt_family != 6)
+		d4 = cl_dump_quiet(RT_CTL_ADDRS4, &h4);     /* none before 0.15 */
+	if (opt_stats && !opt_brief) {
 		dd = get_drivers(&dh);
+		dq = cl_dump_quiet(RT_CTL_QOS, &hq);
+	}
 	for (k = 0; k < h.count; k++) {
 		struct rt_ctl_iface *f = cl_rec(d, &h, k);
 		if (only && strcmp(f->name, only))
@@ -436,6 +489,12 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 				if (f->addr && opt_family != 6)
 					o = (u32)rt_snprintf(ab, sizeof(ab), "%s/%d ", cl_ip(f->addr, a),
 					                     rt_ctl_prefixlen(f->netmask));
+				for (j = 0; d4 && j < h4.count && o + 1 < sizeof(ab); j++) {
+					struct rt_ctl_addr4 *x = cl_rec(d4, &h4, j);
+					if (x->ifindex == f->index && !(x->flags & RT_CTL_A4_PRIMARY))
+						o += (u32)rt_snprintf(ab + o, sizeof(ab) - o, "%s/%u ", cl_ip(x->addr, a),
+						                      (unsigned)x->prefixlen);
+				}
 				for (j = 0; d6 && j < h6.count && o + 1 < sizeof(ab); j++) {
 					struct rt_ctl_addr6 *x = cl_rec(d6, &h6, j);
 					if (x->ifindex == f->index)
@@ -454,14 +513,20 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 		print_link_line(f);
 		if (dd)
 			print_driver_of(f, dd, &dh);
+		if (dq)
+			print_qos_of(f, dq, &hq);
 		if (addrs && opt_family != 6)
-			print_addr_lines(f);
+			print_addr_lines(f, d4, &h4);
 		if (addrs)
 			print_addr6_lines(f, d6, &h6);
 	}
 	FreeVec(d);
 	if (d6)
 		FreeVec(d6);
+	if (d4)
+		FreeVec(d4);
+	if (dq)
+		FreeVec(dq);
 	if (dd)
 		FreeVec(dd);
 	return CL_OK;
@@ -716,13 +781,13 @@ static int do_addr(int argc, char **argv, int i)
 		return no_dev(dev);
 	}
 	if (cl_match(cmd, "delete")) {
-		r = f->addr == addr;
 		FreeVec(d);
-		if (!r) {
+		/* the primary (the next one takes its place) or another one */
+		if (run_quiet(cl_line("ifconfig %s %s delete", dev, cl_ip(addr, a))) != CL_OK) {
 			cl_puts("Error: ipv4: Address not found.\n");
 			return CL_ERROR;
 		}
-		return run(cl_line("ifconfig %s delete", dev));
+		return CL_OK;
 	}
 	if (cl_match(cmd, "replace") || cl_match(cmd, "change"))
 		replace = 1;
@@ -732,10 +797,12 @@ static int do_addr(int argc, char **argv, int i)
 		return CL_ERROR;
 	}
 	if (!replace && f->addr && f->addr != addr) {
-		cl_printf("Error: %s already has %s (Riptide keeps one IPv4 address per interface;\n"
-		          "use \"ip addr replace\" or delete it first).\n", dev, cl_ip(f->addr, a));
+		/* a further address (Linux: secondary, or primary of its own subnet) */
 		FreeVec(d);
-		return CL_ERROR;
+		r = rt_snprintf(line, sizeof(line), "ifconfig %s alias %s/%d", dev, cl_ip(addr, a), bits < 0 ? 32 : bits);
+		if (brd)
+			rt_snprintf(line + r, sizeof(line) - (u32)r, " broadcast %s", cl_ip(brd, a));
+		return run(line);
 	}
 	if (!replace && f->addr == addr && f->netmask == cl_mask(bits < 0 ? 32 : bits)) {
 		FreeVec(d);

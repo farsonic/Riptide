@@ -353,14 +353,14 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 {
 	struct rt_netif *nif;
 	u32 addr = 0, mask = 0, peer = 0, bcast = 0;
-	int bits = 0, i, r, up = -1, have_addr = 0, mtu = 0, have_mask = 0, del = 0;
+	int bits = 0, i, r, up = -1, have_addr = 0, mtu = 0, have_mask = 0, del = 0, alias = 0;
 	int promisc = -1, arp = -1;
 	long metric = -1, tcpwin = -1;
 	const char *end;
 
 	if (need_args(argc, 2, err, errlen,
-	              "ifconfig IFNAME [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D] "
-	              "[mtu N] [metric N] [tcpwindow N] [[-]promisc] [[-]arp] [delete] [up|down]"))
+	              "ifconfig IFNAME [alias] [A.B.C.D[/BITS]] [netmask M] [broadcast B] [peer A.B.C.D] "
+	              "[mtu N] [metric N] [tcpwindow N] [[-]promisc] [[-]arp] [delete|-alias] [up|down]"))
 		return -RT_EINVAL;
 	nif = rt_netif_find(argv[1]);
 	if (!nif)
@@ -382,6 +382,8 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 			arp = k[0] != '-';
 		} else if (!strcmp(k, "delete") || !strcmp(k, "del") || !strcmp(k, "-alias")) {
 			del = 1;
+		} else if (!strcmp(k, "alias") || !strcmp(k, "add")) {
+			alias = 1;
 		} else if (!strcmp(k, "metric")) {
 			u32 v;
 			if (++i >= argc || parse_uint(argv[i], 0x7fffffff, &v) < 0)
@@ -432,17 +434,32 @@ static int cfg_ifconfig(int argc, char **argv, char *err, u32 errlen)
 	if (arp >= 0)
 		if_set_flag(nif, RT_IFF_NOARP, !arp);
 	if (del) {
-		/* "ifconfig IF [A.B.C.D] delete": remove the address */
-		if (have_addr && addr != nif->addr)
-			return cfg_err(err, errlen, -RT_EADDRNOTAVAIL, "ifconfig: %s has no such address",
-			               argv[1]);
-		rt_netif_set_addr(nif, 0, 0, 0);
+		/* "ifconfig IF A.B.C.D delete": remove that address (deleting
+		 * the primary promotes the next one); "ifconfig IF delete":
+		 * every IPv4 address */
+		if (have_addr) {
+			r = rt_netif_addr_del(nif, addr);
+			if (r < 0)
+				return cfg_err(err, errlen, r, "ifconfig: %s has no such address", argv[1]);
+		} else {
+			nif->nalias = 0;
+			rt_netif_set_addr(nif, 0, 0, 0);
+		}
 		have_addr = 0;
 		peer = 0;
 		have_mask = 0;
 		bcast = 0;
 	}
-	if (have_addr) {
+	if (have_addr && alias) {
+		/* "ifconfig IF alias A.B.C.D[/BITS] [netmask M] [broadcast B]" */
+		if (!have_mask)
+			mask = classful(addr);
+		r = rt_netif_addr_add(nif, addr, mask, bcast);
+		if (r < 0)
+			return cfg_err(err, errlen, r, "ifconfig: cannot add address: %s", rt_strerror(-r));
+		if (up < 0)
+			up = 1;
+	} else if (have_addr) {
 		if (!have_mask)
 			mask = nif->type == RT_IFT_PTP && peer ? 0xffffffffu : classful(addr);
 		r = rt_netif_set_addr(nif, addr, mask, nif->type == RT_IFT_PTP ? peer : bcast);
@@ -827,6 +844,36 @@ static int cfg_route6(int argc, char **argv, char *err, u32 errlen)
 	return 0;
 }
 
+/* ipv4 on|off: default for interfaces added later;
+ * ipv4 IF on|off: that interface now (off: no IPv4 addresses, DHCP, ARP) */
+static int cfg_ipv4(int argc, char **argv, char *err, u32 errlen)
+{
+	static const char usage[] = "ipv4 [IF] on|off";
+	const char *v = argc == 2 ? argv[1] : argc == 3 ? argv[2] : NULL;
+	struct rt_netif *n;
+	int on, r;
+
+	if (!v || (strcmp(v, "on") && strcmp(v, "off") && strcmp(v, "1") && strcmp(v, "0")))
+		return cfg_err(err, errlen, -RT_EINVAL, "usage: %s", usage);
+	on = !strcmp(v, "on") || !strcmp(v, "1");
+	if (argc == 2) {
+		rt_ip4_auto_enable = on;
+		/* and the interfaces that exist (the configuration usually
+		 * says "ipv4 off" before or after its interface lines) */
+		for (n = rt_netif_list(); n; n = n->next)
+			if (n->type != RT_IFT_LOOP)
+				rt_netif_ip4_enable(n, on);
+		return 0;
+	}
+	n = rt_netif_find(argv[1]);
+	if (!n)
+		return cfg_err(err, errlen, -RT_ENXIO, "ipv4: no interface '%s'", argv[1]);
+	r = rt_netif_ip4_enable(n, on);
+	if (r < 0)
+		return cfg_err(err, errlen, r, "ipv4: %s", rt_strerror(-r));
+	return 0;
+}
+
 /* ipv6 on|off: default for interfaces that come up later;
  * ipv6 IF on|off: that interface now */
 static int cfg_ipv6(int argc, char **argv, char *err, u32 errlen)
@@ -839,7 +886,12 @@ static int cfg_ipv6(int argc, char **argv, char *err, u32 errlen)
 		return cfg_err(err, errlen, -RT_EINVAL, "usage: %s", usage);
 	on = !strcmp(v, "on") || !strcmp(v, "1");
 	if (argc == 2) {
+		struct rt_netif *n;
 		rt_ip6_auto_enable = on;
+		/* and the interfaces that are up already (run time changes) */
+		for (n = rt_netif_list(); n; n = n->next)
+			if (n->type != RT_IFT_LOOP && (n->flags & RT_IFF_UP))
+				rt_ip6_ifenable(n, on);
 		return 0;
 	}
 	if (!rt_netif_find(argv[1]))
@@ -1048,6 +1100,12 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		return rt_dbg_command(argc, argv, err, errlen);
 	if (!strcmp(k, "ipv6"))
 		return cfg_ipv6(argc, argv, err, errlen);
+	if (!strcmp(k, "ipv4"))
+		return cfg_ipv4(argc, argv, err, errlen);
+	if (!strcmp(k, "qos"))
+		return rt_qos_command(argc, argv, err, errlen);
+	if (!strcmp(k, "happy_eyeballs") || !strcmp(k, "happyeyeballs"))
+		return rt_he_command(argc, argv, err, errlen);
 	if (!strcmp(k, "ntp"))
 		return rt_ntp_command(argc, argv, err, errlen);
 	if (!strcmp(k, "timezone"))

@@ -719,12 +719,43 @@ static u32 amiga_cpu_model(void)
 	return 68000;
 }
 
+/* "qos rule program=NAME": the calling program, i.e. the command a Shell
+ * runs (cli_CommandName, a BSTR at offset 16 of struct
+ * CommandLineInterface) or else the task's name. Called by the program's
+ * own task inside socket(). */
+static void amiga_program_name(char *buf, u32 len)
+{
+	struct Process *me = (struct Process *)FindTask(NULL);
+	const char *n = me->pr_Task.tc_Node.ln_Name;
+
+	buf[0] = 0;
+	if (me->pr_Task.tc_Node.ln_Type == NT_PROCESS && me->pr_CLI) {
+		const UBYTE *cli = BADDR(me->pr_CLI);
+		BPTR cn;
+		memcpy(&cn, cli + 16, sizeof(cn));
+		if (cn) {
+			const UBYTE *b = BADDR(cn);
+			u32 l = b[0];
+			if (l && len) {
+				if (l >= len)
+					l = len - 1;
+				memcpy(buf, b + 1, l);
+				buf[l] = 0;
+				return;
+			}
+		}
+	}
+	if (n && len)
+		rt_strlcpy(buf, n, len);
+}
+
 int amiga_os_init(void)
 {
 	BYTE kb;
 
 	InitSemaphore(&stack_sem);
 	rt_dbg_dump_hook = amiga_dbg_dump;
+	rt_qos_program_hook = amiga_program_name;
 	rt_newminlist(&orphan_sleepers);
 	rt_arch_cpu = amiga_cpu_model();
 	amiga_have_fast = AvailMem(MEMF_FAST) != 0;

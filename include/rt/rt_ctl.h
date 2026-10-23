@@ -55,6 +55,8 @@
 #define RT_CTL_DRIVERS   20       /* net.riptide.drivers   struct rt_ctl_driver[] */
 #define RT_CTL_MCAST     30       /* net.riptide.mcast     struct rt_ctl_mcast[] (IPv4 and IPv6 groups) */
 #define RT_CTL_IGMPSTAT  31       /* net.riptide.igmpstat  one struct rt_igmp_stats */
+#define RT_CTL_ADDRS4    40       /* net.riptide.addrs4    struct rt_ctl_addr4[] (every IPv4 address) */
+#define RT_CTL_QOS       41       /* net.riptide.qos       struct rt_ctl_qos[] (transmit bands) */
 
 struct rt_ctl_hdr {
 	u16 version;              /* RT_CTL_VERSION */
@@ -96,6 +98,39 @@ struct rt_ctl_iface {
 	u32  dhcp_left_s;         /* seconds until the lease expires */
 	char descr[RT_CTL_DESCRLEN]; /* driver, e.g. "uaenet.device unit 0" */
 	u32  tcp_window;          /* "tcpwindow": TCP receive window limit, 0 = none (0.12) */
+	/* 0.15 */
+	u8   ip4_off;             /* "ipv4 off" on this interface */
+	u8   ip6_off;             /* "ipv6 off" on this interface */
+	u8   naddr4;              /* IPv4 addresses (net.riptide.addrs4 lists them) */
+	u8   qos;                 /* transmit priority bands in use */
+};
+
+/* ---- IPv4 addresses (every address of every interface) ---- */
+#define RT_CTL_A4_PRIMARY 0x01    /* the interface's primary address (rt_ctl_iface.addr) */
+#define RT_CTL_A4_DHCP    0x02    /* from the DHCP lease */
+
+struct rt_ctl_addr4 {
+	char ifname[16];
+	u32  ifindex;
+	u32  addr, netmask;       /* network order */
+	u32  broadaddr;           /* network order, 0 = none */
+	u8   prefixlen;
+	u8   flags;               /* RT_CTL_A4_* */
+	u8   pad[2];
+};
+
+/* ---- transmit priority bands (QoS) per interface ---- */
+#define RT_QOS_BANDS 3            /* 0 interactive, 1 default, 2 bulk */
+struct rt_ctl_qos {
+	char ifname[16];
+	u32  ifindex;
+	u32  limit;               /* packets queued per band at most */
+	u32  queued[RT_QOS_BANDS];   /* now */
+	u32  maxq[RT_QOS_BANDS];     /* most ever */
+	u32  packets[RT_QOS_BANDS];  /* sent through the band */
+	u32  bytes[RT_QOS_BANDS];
+	u32  drops[RT_QOS_BANDS];    /* tail drops (band full) */
+	u32  bypass;              /* sent straight to the driver (queues empty) */
 };
 
 /* ---- routes ---- */

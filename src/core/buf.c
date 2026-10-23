@@ -42,6 +42,7 @@ static void buf_reset(struct rt_buf *b, u32 headroom)
 	b->netif = NULL;
 	b->flags = 0;
 	b->l3_proto = 0;
+	b->prio = 0;
 	b->tstamp_ms = 0;
 	memset(&b->cb, 0, sizeof(b->cb));
 }
@@ -138,6 +139,7 @@ struct rt_buf *rt_buf_copy_expand(const struct rt_buf *b, u32 headroom)
 	c->len = b->len;
 	c->netif = b->netif;
 	c->flags = b->flags;
+	c->prio = b->prio;
 	c->l3_proto = b->l3_proto;
 	c->tstamp_ms = b->tstamp_ms;
 	c->csum = b->csum;
@@ -159,6 +161,7 @@ struct rt_buf *rt_buf_copy_csum(const struct rt_buf *b, u32 *sum)
 	c->len = b->len;
 	c->netif = b->netif;
 	c->flags = b->flags;
+	c->prio = b->prio;
 	c->l3_proto = b->l3_proto;
 	c->tstamp_ms = b->tstamp_ms;
 	c->csum = b->csum;

@@ -300,6 +300,59 @@ and `tcp_stream_is_writeable()` refuse to queue beyond 8 KB, and
 exceed `mem_high` by up to two minimums and two segments per connection
 that was below them (Linux keeps 4 KB, `tcp_rmem[0]`).
 
+### Transmit path: priority bands
+
+`rt_netif_xmit()` hands every frame to `rt_qos_xmit()` when the interface
+has bands (`src/core/qos.c`; for drivers that report
+completions through `rt_drv_tx_start()`/`rt_drv_tx_done()`, i.e. SANA-II,
+MNI and the host TAP driver; off by default because on a link faster
+than the Amiga, e.g. FS-UAE's uaenet, about half of an upload's frames
+wait for the stack task to see a completion, about 5% of upload speed).
+While the driver holds fewer than
+`net.inet.ip.qos_inflight` frames (4) and nothing waits, the frame goes
+straight through. Otherwise it is classified
+(`rt_qos_band()`: ARP, ICMP, DNS/NTP/mDNS/DHCP, TCP without data or with
+up to 64 bytes, DSCP, then the socket priority carried in `rt_buf.prio`)
+and queued in its band; `rt_drv_tx_done()` sends the next one from the
+highest band. The SANA-II and MNI drivers report a completion only after
+the request is back on their free list, so the next frame can use it. A
+failsafe timer sends one frame every 250 ms if a driver stops reporting
+completions, so a broken driver cannot hold the queue forever. Capture
+records frames when they go to the driver, i.e. in wire order.
+
+Socket priority (`SO_PRIORITY`, `rt_socket.priority`) and `qos rule`s
+(`rt_qos_sock_rules()`, applied at socket creation for program rules and
+at bind/connect/accept/sendto for port rules) end up in two places: the
+TOS/traffic class byte through `rt_qos_sock_tos()` in TCP, UDP and raw
+output (only when the program's own TOS has DSCP 0), and `rt_buf.prio`.
+
+### Several IPv4 addresses
+
+`struct rt_netif` keeps its primary address in `addr`/`netmask`/
+`broadaddr` (so the ~60 users of the single address, the ioctls and the
+`net.riptide.ifaces` record are unchanged) and up to `RT_IF_MAXADDR4` (8)
+more in `alias[]`. The places that ask "is this ours" use
+`rt_netif_has_addr()` (`rt_netif_by_addr()`, `rt_ip_is_local()`, ARP),
+broadcast checks walk all prefixes, connected routes are installed for
+each prefix (`install_connected()`), and the route lookup picks the source
+with `rt_netif_src()`: the address whose subnet holds the next hop, then
+the destination's, then the primary. Deleting the primary promotes the
+first additional address.
+
+### Happy Eyeballs
+
+`rt_resolve_name46()` (`resolv.c`) asks the local sources (hosts table,
+cache, our mDNS name) for both types first; for what is left it sends A
+and AAAA queries for each search candidate on one socket per server and
+waits for both, but no longer than `net.inet.he.resolution_delay` for the
+AAAA answer once the A records are in. `rt_he_connect()` (`happy.c`) runs
+in the caller's task without the lock, like the resolver: it sorts with
+`rt_inet_sort_dest()`, interleaves the families and keeps non-blocking
+connects going with `rt_api_select()`, starting the next one every
+`attempt_delay` ms or when one fails. riptide.library 2 exports it as
+`RiptideConnectName()` (LVO -528, beyond the historical table so the
+compat alias keeps its layout).
+
 ## IPv6
 
 Riptide is a dual-stack host (RFC 8200, 4291, 4861, 4862, 8981, 7217,
