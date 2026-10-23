@@ -1604,7 +1604,7 @@ static int ip_main(int argc, char **argv)
 			}
 			opt_family = !strcmp(argv[i], "inet6") ? 6 : !strcmp(argv[i], "inet") ? 4 : 0;
 		} else if (cl_match(o, "Version")) {
-			cl_puts("ip utility, Riptide 0.15\n");
+			cl_puts("ip utility, Riptide 0.16\n");
 			return CL_OK;
 		} else if (cl_match(o, "help")) {
 			usage();

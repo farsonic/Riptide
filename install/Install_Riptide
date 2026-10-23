@@ -1,4 +1,4 @@
-; $VER: Install_Riptide 0.15 (23.10.2026)
+; $VER: Install_Riptide 0.16 (23.10.2026)
 ;
 ; Installer script for Riptide, a TCP/IP stack for AmigaOS 3.x (68020+).
 ; Written for the Commodore/Amiga Technologies Installer V43 language; it
@@ -20,7 +20,7 @@
 ;
 ; SPDX-License-Identifier: GPL-2.0-only
 
-(set #version "0.15")
+(set #version "0.16")
 (if (= @app-name "") (set @app-name "Riptide"))
 
 ; ---------------------------------------------------------------------------
