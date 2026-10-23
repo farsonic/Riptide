@@ -805,16 +805,31 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 
 | Page | Settings | Lines in riptide.conf |
 |---|---|---|
-| Interface | interface name, device, unit, MTU, TCP window, reads, IPv6 on/off | the first `interface NAME device=...` line (other options such as `raw` or `options=` are kept), `ipv6 on\|off` |
+| Interface | interface name, device, unit, MTU, TCP window, reads; IPv4 and IPv6 on/off (two check boxes) | the first `interface NAME device=...` line (other options such as `raw`, `options=`, `ipv4=`, `ipv6=` or `qos=` are kept), `ipv4 on\|off`, `ipv6 on\|off` |
 | Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway | `dhcp IF`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
+| Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS` or `A.B.C.D netmask M`), with DHCP or a static primary address | `ifconfig IF alias SPEC` |
 | Names | host name, domain, up to three DNS servers | `hostname`, `domain`, `nameserver` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=` |
-| Other lines | a list of the lines RiptidePrefs does not edit itself (e.g. `compat ...`, extra interfaces, routes); a line can be edited, replaced, added or deleted | as typed |
+| Advanced: Connecting | Fast Open (Default/On/Off), Fast Open for every connect with a cookie, Fast Open backoff after lost SYNs (s, 0-86400), first and largest SYN RTO (ms, 200-3000 / 200-120000), SYN backoff (Linear/Doubling), connect timeout (s, 0-600) | `sysctl net.inet.tcp.fastopen=`, `fastopen_all=`, `fastopen_blackhole=`, `syn_rto_initial_ms=`, `syn_rto_max_ms=`, `syn_backoff=`, `connect_timeout=` |
+| Advanced: Ports | ICMP unreachable during a connect (Keep trying / 2nd report / At once), TIME_WAIT reuse (Off/On/Loopback only), TIME_WAIT limit (0-65536), local port range (1024-65535) | `sysctl net.inet.tcp.syn_icmp_abort=`, `tw_reuse=`, `max_tw_buckets=`, `net.inet.ip.portrange.first=`, `.last=` |
+| Advanced: Keepalive | keepalive for every TCP connection (idle seconds, 0 = off), idle time, probe interval (s, 1-32767), probe count (1-127) | `sysctl net.inet.tcp.keepalive_all=`, `keepidle=`, `keepintvl=`, `keepcnt=` |
+| Advanced: Background | default congestion control (CUBIC/Reno/LEDBAT), background mode (Off/Receive/Send/Both), background programs (`AmiFTP,wget*`), remote and local ports (`20,21,6881-6889`), LEDBAT target (ms, 5-1000), LEDBAT slowdowns (On/Off) | `sysctl net.inet.tcp.cc=`, `bg_mode=`, `bg_programs=`, `bg_ports=`, `bg_lports=`, `ledbat_target=`, `ledbat_slowdown=` |
+| Advanced: Memory | socket memory low water, pressure and high water (KB, 16-4194304; empty: from the free memory at start) | `sysctl net.inet.tcp.mem_low=`, `mem_pressure=`, `mem_high=` |
+| Advanced: Happy Eyeballs | Happy Eyeballs (On/Off), attempt delay (ms, 10-2000), resolution delay (ms, 0-1000), prefer (RFC 6724 / IPv6 / IPv4), IPv6 lookup filter (On/Off) | `sysctl net.inet.he.enable=`, `attempt_delay=`, `resolution_delay=`, `prefer=`, `aaaa_filter=` |
+| Advanced: QoS | QoS bands (Default/On/Off), frames in flight (1-32), band limit (frames, 8-1024), priority sets DSCP (On/Off) | `qos on\|off`, `sysctl net.inet.ip.qos_inflight=`, `qos_limit=`, `qos_prio_dscp=` |
+| Advanced: QoS rules | a list of up to 16 rules: `[proto=tcp\|udp] port=\|lport=\|rport=P,.. \| program=NAME` and `priority=interactive\|default\|bulk\|0-7` and/or `dscp=EF\|CS1\|AF41\|0-63` | `qos rule ...` |
+| Other lines | a list of the lines RiptidePrefs does not edit itself (e.g. `compat ...`, extra interfaces, routes, `background ...`); a line can be edited, replaced, added or deleted | as typed |
+
+The "Advanced:" pages edit the settings of "Connecting, Fast Open,
+keepalive, cork", "Background transfers", "Socket memory limits", "Happy
+Eyeballs" and "Priorities and quality of service" in this document (the
+extra addresses: "Several IPv4 addresses per interface"); Default (or an
+empty field) leaves the line out, so Riptide's built-in value applies.
 
 A screenshot of the first page shows the window titled "Riptide
 Preferences": the Page cycle gadget at the top, the labelled fields of
-the page below it (string gadgets, a check box for IPv6), a hint line
+the page below it (string gadgets, check boxes for IPv4 and IPv6), a hint line
 ("Interface changes need a restart of Riptide") and the buttons **Save**,
 **Use**, **Apply** and **Cancel** along the bottom.
 
@@ -823,9 +838,13 @@ the page below it (string gadgets, a check box for IPv6), a hint line
   `ENV:`. **Cancel** (or the close gadget, or Esc) changes nothing.
 * **Apply** sends what a running Riptide can change at once through the
   RIPTIDE port: host name, domain, name servers (`nameserver flush` and
-  `nameserver add`), NTP, time zone, mDNS and the sysctls. It says which
-  changes (interface, address, IPv6) need a restart of Riptide. After
-  Save or Use, RiptidePrefs offers the same when Riptide is running.
+  `nameserver add`), NTP, time zone, mDNS, the sysctls, `qos on|off`, the
+  QoS rules (`qos rules flush` and `qos rule ...`) and extra addresses
+  (`ifconfig IF ADDR -alias`, `ifconfig IF alias SPEC`). It says when
+  changes need a restart of Riptide: interface, address and IPv4/IPv6
+  on/off, and a setting set back to Default or emptied (the running
+  value stays until then). After Save or Use, RiptidePrefs offers the
+  same when Riptide is running.
 * The file is changed only where you changed a setting: comments, blank
   lines, unknown keywords, the order of lines, trailing `# comments` on
   edited lines and CRLF line ends stay as they were, so an unchanged file
@@ -838,16 +857,21 @@ the page below it (string gadgets, a check box for IPv6), a hint line
   keyword out of the file.
 * Keyboard: the underlined letter of a field activates it (or toggles a
   check box or cycle gadget; with Shift backwards), `p`/`P` switch pages,
-  `s`, `u`, `a`, `c` are the buttons, Esc cancels. On the Other lines
-  page `l` edits the line, `d` adds it, `r` replaces and `e` deletes the
-  selected one.
+  `s`, `u`, `a`, `c` are the buttons, Esc cancels. On the list pages
+  (Extra addresses, Advanced: QoS rules, Other lines) `l` edits the
+  line, `d` adds it, `r` replaces and `e` deletes the selected one; an
+  extra address or QoS rule is checked before it goes into the list.
 * `USE` or `SAVE` on the command line copies the file without opening the
   window (`RiptidePrefs FROM=RAM:test.conf SAVE`, or `RiptidePrefs USE`
   to copy `ENVARC:` to `ENV:`).
 
 Only the first `interface` line with `device=` and its `dhcp`/`ifconfig`/
-`route add default` lines are on the Interface and Address pages; other
-interfaces and routes appear under Other lines.
+`route add default`/`ifconfig IF alias` lines are on the Interface,
+Address and Extra addresses pages; other interfaces and routes appear
+under Other lines. The background rules are edited as their sysctls; a
+`background ...` keyword line stays under Other lines (it sets the same
+values, so keep only one of the two). List entries that stay keep their
+line (and its comment) when others are added, replaced or deleted.
 
 ## Tools
 

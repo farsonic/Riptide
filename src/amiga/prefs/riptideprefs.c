@@ -8,7 +8,9 @@
  * "Save" writes ENVARC:Riptide/riptide.conf (the old one becomes
  * riptide.conf.bak) and ENV:, "Use" writes ENV: only, "Apply" sends the
  * changes that a running Riptide can take (host name, name servers, time,
- * sysctls) to the RIPTIDE port. USE or SAVE on the command line writes
+ * sysctls, extra addresses, QoS) to the RIPTIDE port. The "Advanced:"
+ * pages hold the connection, background, memory, Happy Eyeballs and QoS
+ * settings. USE or SAVE on the command line writes
  * the file without opening the window, like the system prefs editors.
  * conf_edit.c keeps every line it does not understand as it is.
  * SPDX-License-Identifier: GPL-2.0-only
@@ -55,15 +57,27 @@ void rp_free(void *p)
 }
 
 /* ---- the settings, page by page ---- */
-enum { P_IFACE, P_ADDR, P_NAMES, P_TIME, P_TCP, P_OTHER, NPAGES };
-static const char *const page_names[] = {
-	"Interface", "Address", "Names", "Time", "TCP", "Other lines", NULL
+enum {
+	P_IFACE, P_ADDR, P_ALIAS, P_NAMES, P_TIME, P_TCP, P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE, P_QOS,
+	P_QRULE, P_OTHER, NPAGES
 };
+static const char *const page_names[] = {
+	"Interface", "Address", "Extra addresses", "Names", "Time", "TCP", "Advanced: Connecting",
+	"Advanced: Ports", "Advanced: Keepalive", "Advanced: Background", "Advanced: Memory",
+	"Advanced: Happy Eyeballs", "Advanced: QoS", "Advanced: QoS rules", "Other lines", NULL
+};
+/* pages that are a list of lines */
+static int list_kind(int p)
+{
+	return p == P_ALIAS ? RP_LIST_ALIAS : p == P_QRULE ? RP_LIST_QRULE : -1;
+}
+#define IS_LIST(p) ((p) == P_OTHER || list_kind(p) >= 0)
 
 enum { F_STR, F_NUM, F_CHECK, F_CYCLE };
 #define FL_STATIC 1             /* disabled with DHCP */
 #define FL_NTP    2             /* disabled without NTP */
 #define FL_ZERO   4             /* F_NUM: 0 is allowed below min */
+#define FL_RIGHT  8             /* F_CHECK: on the previous row, at the right */
 
 struct field {
 	UBYTE page, type, flags;
@@ -82,6 +96,22 @@ static const char *const cy_tri[] = { "Default", "On", "Off", NULL };
 static const long cyv_tri[] = { -1, 1, 0 };
 static const char *const cy_ack[] = { "Default", "Off", "On", NULL };
 static const long cyv_ack[] = { RP_UNSET, 0, 1 };
+static const char *const cy_sw[] = { "Default", "On", "Off", NULL };
+static const long cyv_sw[] = { RP_UNSET, 1, 0 };
+static const char *const cy_backoff[] = { "Default", "Linear", "Doubling", NULL };
+static const long cyv_backoff[] = { RP_UNSET, 0, 1 };
+static const char *const cy_icmp[] = { "Default", "Keep trying", "2nd report", "At once", NULL };
+static const long cyv_icmp[] = { RP_UNSET, 0, 1, 2 };
+static const char *const cy_tw[] = { "Default", "Off", "On", "Loopback only", NULL };
+static const long cyv_tw[] = { RP_UNSET, 0, 1, 2 };
+static const char *const cy_cc[] = { "Default", "CUBIC", "Reno", "LEDBAT", NULL };
+static const long cyv_cc[] = { RP_UNSET, 0, 1, 2 };   /* rp_cc_names */
+static const char *const cy_bg[] = { "Default", "Off", "Receive", "Send", "Both", NULL };
+static const long cyv_bg[] = { RP_UNSET, 0, 1, 2, 3 };
+static const char *const cy_prefer[] = { "Default", "RFC 6724", "IPv6", "IPv4", NULL };
+static const long cyv_prefer[] = { RP_UNSET, 0, 6, 4 };
+#define SC(i) M(sc) + (i) * sizeof(long), sizeof(long)
+#define SS(i) M(ss) + (i) * RP_SSLEN, RP_SSLEN
 
 static const struct field fields[] = {
 	{ P_IFACE, F_STR,   0, MS(ifname),    0, 0,        "_Interface name", NULL, NULL },
@@ -90,7 +120,8 @@ static const struct field fields[] = {
 	{ P_IFACE, F_NUM,   0, MS(mtu),       68, 65535,   "_MTU", NULL, NULL },
 	{ P_IFACE, F_NUM,   FL_ZERO, MS(tcpwindow), 536, 16777216, "TCP _window", NULL, NULL },
 	{ P_IFACE, F_NUM,   0, MS(reads),     4, 128,      "_Reads", NULL, NULL },
-	{ P_IFACE, F_CHECK, 0, MS(ipv6),      0, 0,        "IP_v6", NULL, NULL },
+	{ P_IFACE, F_CHECK, 0, MS(ipv4),      0, 0,        "IPv_4", NULL, NULL },
+	{ P_IFACE, F_CHECK, FL_RIGHT, MS(ipv6), 0, 0,      "IP_v6", NULL, NULL },
 	{ P_ADDR,  F_CYCLE, 0, MS(dhcp),      0, 0,        "_Mode", cy_dhcp, cyv_dhcp },
 	{ P_ADDR,  F_STR,   FL_STATIC, MS(addr),    0, 0,  "Add_ress", NULL, NULL },
 	{ P_ADDR,  F_STR,   FL_STATIC, MS(netmask), 0, 0,  "_Netmask", NULL, NULL },
@@ -107,15 +138,59 @@ static const struct field fields[] = {
 	{ P_TCP,   F_CYCLE, 0, MS(quickack),  0, 0,        "_Quick ACK", cy_ack, cyv_ack },
 	{ P_TCP,   F_NUM,   0, MS(delack_segs), 1, 64,     "Delayed ACK se_gments", NULL, NULL },
 	{ P_TCP,   F_NUM,   0, MS(delack_ms), 1, 500,      "Delayed ACK _limit (ms)", NULL, NULL },
+	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_FASTOPEN), 0, 0,   "_Fast Open", cy_sw, cyv_sw },
+	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_FASTOPEN_ALL), 0, 0, "Fast Open _defer all", cy_sw, cyv_sw },
+	{ P_CONN,  F_NUM,   0, SC(RP_SC_FO_BLACKHOLE), 0, 86400, "Fast Open _backoff (s)", NULL, NULL },
+	{ P_CONN,  F_NUM,   0, SC(RP_SC_SYN_RTO_INIT), 200, 3000, "SYN first _RTO (ms)", NULL, NULL },
+	{ P_CONN,  F_NUM,   0, SC(RP_SC_SYN_RTO_MAX), 200, 120000, "SYN _max RTO (ms)", NULL, NULL },
+	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_SYN_BACKOFF), 0, 0, "SYN back_off", cy_backoff, cyv_backoff },
+	{ P_CONN,  F_NUM,   0, SC(RP_SC_CONNECT_TIMEOUT), 0, 600, "Connect _timeout (s)", NULL, NULL },
+	{ P_PORTS, F_CYCLE, 0, SC(RP_SC_SYN_ICMP_ABORT), 0, 0, "_ICMP unreachable", cy_icmp, cyv_icmp },
+	{ P_PORTS, F_CYCLE, 0, SC(RP_SC_TW_REUSE), 0, 0,   "Time-wait _reuse", cy_tw, cyv_tw },
+	{ P_PORTS, F_NUM,   0, SC(RP_SC_MAX_TW), 0, 65536, "Time-wait _limit", NULL, NULL },
+	{ P_PORTS, F_NUM,   0, SC(RP_SC_PORT_FIRST), 1024, 65535, "Local ports _from", NULL, NULL },
+	{ P_PORTS, F_NUM,   0, SC(RP_SC_PORT_LAST), 1024, 65535, "Local ports _to", NULL, NULL },
+	{ P_KA,    F_NUM,   0, SC(RP_SC_KA_ALL), 0, 32767, "_Keepalive all (s)", NULL, NULL },
+	{ P_KA,    F_NUM,   0, SC(RP_SC_KEEPIDLE), 1, 32767, "_Idle time (s)", NULL, NULL },
+	{ P_KA,    F_NUM,   0, SC(RP_SC_KEEPINTVL), 1, 32767, "Probe int_erval (s)", NULL, NULL },
+	{ P_KA,    F_NUM,   0, SC(RP_SC_KEEPCNT), 1, 127,  "Probe c_ount", NULL, NULL },
+	{ P_BG,    F_CYCLE, 0, SC(RP_SC_CC), 0, 0,         "Default _TCP algorithm", cy_cc, cyv_cc },
+	{ P_BG,    F_CYCLE, 0, SC(RP_SC_BG_MODE), 0, 0,    "Background _mode", cy_bg, cyv_bg },
+	{ P_BG,    F_STR,   0, SS(RP_SS_BG_PROGRAMS), 0, 0, "Background p_rograms", NULL, NULL },
+	{ P_BG,    F_STR,   0, SS(RP_SS_BG_PORTS), 0, 0,   "Remote p_orts", NULL, NULL },
+	{ P_BG,    F_STR,   0, SS(RP_SS_BG_LPORTS), 0, 0,  "_Local ports", NULL, NULL },
+	{ P_BG,    F_NUM,   0, SC(RP_SC_LEDBAT_TARGET), 5, 1000, "LEDBAT tar_get (ms)", NULL, NULL },
+	{ P_BG,    F_CYCLE, 0, SC(RP_SC_LEDBAT_SLOWDOWN), 0, 0, "LEDBAT slow_downs", cy_sw, cyv_sw },
+	{ P_MEM,   F_NUM,   0, SC(RP_SC_MEM_LOW), 16, 4194304, "_Low water (KB)", NULL, NULL },
+	{ P_MEM,   F_NUM,   0, SC(RP_SC_MEM_PRESSURE), 16, 4194304, "Pr_essure (KB)", NULL, NULL },
+	{ P_MEM,   F_NUM,   0, SC(RP_SC_MEM_HIGH), 16, 4194304, "_High water (KB)", NULL, NULL },
+	{ P_HE,    F_CYCLE, 0, SC(RP_SC_HE_ENABLE), 0, 0,  "_Happy Eyeballs", cy_sw, cyv_sw },
+	{ P_HE,    F_NUM,   0, SC(RP_SC_HE_DELAY), 10, 2000, "Attempt _delay (ms)", NULL, NULL },
+	{ P_HE,    F_NUM,   0, SC(RP_SC_HE_RESDELAY), 0, 1000, "_Resolution delay (ms)", NULL, NULL },
+	{ P_HE,    F_CYCLE, 0, SC(RP_SC_HE_PREFER), 0, 0,  "Pre_fer", cy_prefer, cyv_prefer },
+	{ P_HE,    F_CYCLE, 0, SC(RP_SC_HE_AAAA), 0, 0,    "_IPv6 lookup filter", cy_sw, cyv_sw },
+	{ P_QOS,   F_CYCLE, 0, MS(qos),       0, 0,        "_QoS bands", cy_tri, cyv_tri },
+	{ P_QOS,   F_NUM,   0, SC(RP_SC_QOS_INFLIGHT), 1, 32, "Frames in _flight", NULL, NULL },
+	{ P_QOS,   F_NUM,   0, SC(RP_SC_QOS_LIMIT), 8, 1024, "Band _limit (frames)", NULL, NULL },
+	{ P_QOS,   F_CYCLE, 0, SC(RP_SC_QOS_PRIODSCP), 0, 0, "Priority sets _DSCP", cy_sw, cyv_sw },
 };
 #define NFIELDS ((int)(sizeof(fields) / sizeof(fields[0])))
 
 static const char *const page_notes[NPAGES] = {
 	"Interface changes need a restart of Riptide",
 	"Address changes need a restart of Riptide",
+	"A.B.C.D/BITS or A.B.C.D netmask M (up to 8)",
 	"Empty fields are left out of the file",
 	"Zone: auto or +10:00. No servers: from DHCP",
 	"Empty or Default: Riptide's built-in value",
+	"Empty or Default: Riptide's built-in value",
+	"Empty or Default: Riptide's built-in value",
+	"Keepalive all: idle seconds, 0 = off",
+	"Programs a,b*  Ports 20,21,6881-6889",
+	"Empty: from the free memory at start",
+	"Empty or Default: Riptide's built-in value",
+	"QoS bands: for slow links (off by default)",
+	"port=22,23 priority=interactive dscp=EF",
 	"Lines RiptidePrefs does not edit itself",
 };
 
@@ -407,6 +482,22 @@ static int validate(void)
 		return bad(find_field(m->ntp_servers), "host names or addresses, separated by spaces");
 	if (m->timezone[0] && !rp_valid_tz(m->timezone))
 		return bad(find_field(m->timezone), "auto, or the offset from UTC: +10:00, -5, +5:30");
+	if (!rp_valid_programs(m->ss[RP_SS_BG_PROGRAMS]))
+		return bad(find_field(m->ss[RP_SS_BG_PROGRAMS]), "names separated by commas, e.g. AmiFTP,wget*");
+	for (i = RP_SS_BG_PORTS; i <= RP_SS_BG_LPORTS; i++)
+		if (!rp_valid_ports(m->ss[i]))
+			return bad(find_field(m->ss[i]), "ports or ranges separated by commas, e.g. 20,21,6881-6889");
+	if (m->sc[RP_SC_PORT_FIRST] != RP_UNSET && m->sc[RP_SC_PORT_LAST] != RP_UNSET &&
+	    m->sc[RP_SC_PORT_FIRST] > m->sc[RP_SC_PORT_LAST])
+		return bad(find_field(&m->sc[RP_SC_PORT_LAST]), "the last port must not be below the first");
+	if (m->sc[RP_SC_SYN_RTO_INIT] != RP_UNSET && m->sc[RP_SC_SYN_RTO_MAX] != RP_UNSET &&
+	    m->sc[RP_SC_SYN_RTO_INIT] > m->sc[RP_SC_SYN_RTO_MAX])
+		return bad(find_field(&m->sc[RP_SC_SYN_RTO_MAX]), "must not be below the first RTO");
+	if ((m->sc[RP_SC_MEM_LOW] != RP_UNSET && m->sc[RP_SC_MEM_PRESSURE] != RP_UNSET &&
+	     m->sc[RP_SC_MEM_LOW] > m->sc[RP_SC_MEM_PRESSURE]) ||
+	    (m->sc[RP_SC_MEM_PRESSURE] != RP_UNSET && m->sc[RP_SC_MEM_HIGH] != RP_UNSET &&
+	     m->sc[RP_SC_MEM_PRESSURE] > m->sc[RP_SC_MEM_HIGH]))
+		return bad(find_field(&m->sc[RP_SC_MEM_PRESSURE]), "low <= pressure <= high water");
 	return 0;
 }
 
@@ -418,9 +509,20 @@ static void free_nodes(void)
 	onodes = NULL;
 }
 
+/* the list of a list page */
+static int list_count(void)
+{
+	return page == P_OTHER ? rp_other_count(&conf) : rp_list_count(&conf, list_kind(page));
+}
+
+static const char *list_get(int i)
+{
+	return page == P_OTHER ? rp_other_get(&conf, i) : rp_list_get(&conf, list_kind(page), i);
+}
+
 static void build_list(void)
 {
-	int i, n = rp_other_count(&conf);
+	int i, n = list_count();
 
 	olist.lh_Head = (struct Node *)&olist.lh_Tail;
 	olist.lh_Tail = NULL;
@@ -429,7 +531,7 @@ static void build_list(void)
 	if (n <= 0 || !(onodes = AllocVec(sizeof(struct Node) * (ULONG)n, MEMF_ANY | MEMF_CLEAR)))
 		return;
 	for (i = 0; i < n; i++) {
-		onodes[i].ln_Name = (char *)rp_other_get(&conf, i);
+		onodes[i].ln_Name = (char *)list_get(i);
 		AddTail(&olist, &onodes[i]);
 	}
 }
@@ -499,7 +601,7 @@ static struct Gadget *mk_field(struct Gadget *g, int i, int y)
 {
 	const struct field *f = &fields[i];
 	struct TagItem t[5];
-	int n = 0, x = x0 + lw, h = rowh;
+	int n = 0, x = (f->flags & FL_RIGHT) ? x0 + lw + fw - 26 : x0 + lw, h = rowh;
 	ULONG kind = STRING_KIND;
 
 	t[n].ti_Tag = GT_Underscore;
@@ -582,7 +684,7 @@ static int build(void)
 	t[3].ti_Tag = TAG_DONE;
 	g = g_page = mk(CYCLE_KIND, g, G_PAGE, "_Page", PLACETEXT_LEFT, x0 + lw, y0, fw, rowh, t);
 
-	if (page == P_OTHER) {
+	if (IS_LIST(page)) {
 		int lh = 5 * ystep - 8;
 		build_list();
 		t[0].ti_Tag = GTLV_Labels;
@@ -619,6 +721,8 @@ static int build(void)
 	} else {
 		for (i = 0; i < NFIELDS; i++)
 			if (fields[i].page == page) {
+				if (fields[i].flags & FL_RIGHT)
+					y -= ystep;
 				g = mk_field(g, i, y);
 				y += ystep;
 			}
@@ -654,7 +758,7 @@ static int harvest(void)
 {
 	int i;
 
-	if (page == P_OTHER) {
+	if (IS_LIST(page)) {
 		if (g_line)
 			rt_strlcpy(linebuf, gstr(g_line), sizeof(linebuf));
 		return 0;
@@ -702,6 +806,10 @@ static int harvest(void)
 
 static int show_page(int p)
 {
+	if (p != page) {
+		osel = -1;
+		linebuf[0] = 0;
+	}
 	page = p;
 	return build();
 }
@@ -753,7 +861,8 @@ static void apply(int ask)
 		rt_snprintf(msg, sizeof(msg), "Nothing to apply.");
 	if (restart)
 		rt_strlcpy(msg + strlen(msg),
-		           "\nInterface, address and IPv6 changes take effect\nwhen Riptide is restarted.",
+		           "\nInterface, address and IPv4/IPv6 changes, and\nsettings set back to Default, take effect\n"
+		           "when Riptide is restarted.",
 		           sizeof(msg) - strlen(msg));
 	message(msg);
 }
@@ -795,16 +904,48 @@ static int finish(int what)
 	return 1;
 }
 
+/* the entry of an address or QoS rule list page is valid (or a message) */
+static int list_valid(const char *s)
+{
+	if (page == P_ALIAS && !rp_valid_alias(s)) {
+		message("Extra address: enter A.B.C.D/BITS, e.g. 10.0.0.5/24,\nor A.B.C.D netmask M");
+		return 0;
+	}
+	if (page == P_QRULE && !rp_valid_qrule(s)) {
+		message("QoS rule: port=, lport=, rport= or program=, and\npriority=interactive|default|bulk|0-7 "
+		        "or dscp=EF|CS1|AF41|0-63\n(proto=tcp|udp optional; at most 8 ports)");
+		return 0;
+	}
+	return 1;
+}
+
 static int other_edit(int id)
 {
+	int k = list_kind(page);
+
 	harvest();
+	if ((id == G_ADD || id == G_REPL) && linebuf[0] && !list_valid(linebuf)) {
+		ActivateGadget(g_line, win, NULL);
+		return 0;
+	}
 	if (id == G_ADD && linebuf[0]) {
-		rp_other_add(&conf, linebuf);
-		osel = rp_other_count(&conf) - 1;
+		if (page == P_OTHER) {
+			rp_other_add(&conf, linebuf);
+		} else if (rp_list_add(&conf, k, linebuf) < 0) {
+			message(k == RP_LIST_ALIAS ? "At most 8 extra addresses" : "At most 16 QoS rules");
+			return 0;
+		}
+		osel = list_count() - 1;
 	} else if (id == G_REPL && osel >= 0 && linebuf[0]) {
-		rp_other_set(&conf, osel, linebuf);
+		if (page == P_OTHER)
+			rp_other_set(&conf, osel, linebuf);
+		else
+			rp_list_set(&conf, k, osel, linebuf);
 	} else if (id == G_DEL && osel >= 0) {
-		rp_other_set(&conf, osel, "");
+		if (page == P_OTHER)
+			rp_other_set(&conf, osel, "");
+		else
+			rp_list_set(&conf, k, osel, "");
 		osel = -1;
 		linebuf[0] = 0;
 	} else {
@@ -852,7 +993,7 @@ static int event_loop(void)
 						return 0;
 				} else if (id == G_LIST) {
 					osel = code;
-					rt_strlcpy(linebuf, rp_other_get(&conf, osel), sizeof(linebuf));
+					rt_strlcpy(linebuf, list_get(osel) ? list_get(osel) : "", sizeof(linebuf));
 					build();
 				} else if (id >= G_ADD && id <= G_DEL) {
 					other_edit(id);
@@ -871,7 +1012,7 @@ static int event_loop(void)
 			case IDCMP_VANILLAKEY: {
 				char k = (char)(code >= 'A' && code <= 'Z' ? code + 32 : code);
 				int shift = code >= 'A' && code <= 'Z';
-							if (page == P_OTHER) {
+				if (IS_LIST(page)) {
 					if (k == 'l') {
 						ActivateGadget(g_line, win, NULL);
 						break;
