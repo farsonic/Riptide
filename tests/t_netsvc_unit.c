@@ -112,19 +112,19 @@ static void test_commands(void)
 	CHECK(cmd("timezone x", out, sizeof(out)) < 0);
 	CHECK(cmd("timezone auto", out, sizeof(out)) == 0 && !rt_tz_configured && rt_tz_offset == rt_tz_system);
 
-	CHECK(cmd("ntp status", out, sizeof(out)) == 0 && !strcmp(out, "NTP: off"));
+	CHECK(cmd("ntp status", out, sizeof(out)) == 0 && !strncmp(out, "NTP: off.", 9));
 	CHECK(cmd("ntp interval 10", out, sizeof(out)) < 0);
-	CHECK(cmd("ntp interval 7200", out, sizeof(out)) == 0);
-	CHECK(cmd("ntp step 250", out, sizeof(out)) == 0);
+	CHECK(cmd("ntp interval 7200", out, sizeof(out)) == 0 && !strcmp(out, "NTP: interval 7200 s"));
+	CHECK(cmd("ntp step 250", out, sizeof(out)) == 0 && !strcmp(out, "NTP: step 250 ms"));
 	CHECK(cmd("ntp battclock on", out, sizeof(out)) == 0 && rt_ntp_battclock == 1);
 	CHECK(cmd("ntp battclock off", out, sizeof(out)) == 0 && rt_ntp_battclock == 0);
 	CHECK(cmd("ntp battclock maybe", out, sizeof(out)) < 0);
 	CHECK(cmd("ntp a b c d e", out, sizeof(out)) < 0);
-	CHECK(cmd("ntp 192.0.2.1 time.example.org", out, sizeof(out)) == 0);
+	CHECK(cmd("ntp 192.0.2.1 time.example.org", out, sizeof(out)) == 0 && strstr(out, "2 servers"));
 	CHECK(cmd("ntp status", out, sizeof(out)) == 0 && strstr(out, "not synchronised"));
-	CHECK(cmd("ntp off", out, sizeof(out)) == 0);
-	CHECK(cmd("ntp", out, sizeof(out)) == 0 && !strcmp(out, "NTP: off"));
-	CHECK(cmd("ntp STATUS", out, sizeof(out)) == 0 && !strcmp(out, "NTP: off"));   /* Amiga style */
+	CHECK(cmd("ntp off", out, sizeof(out)) == 0 && !strcmp(out, "NTP: off"));
+	CHECK(cmd("ntp", out, sizeof(out)) == 0 && !strncmp(out, "NTP: off.", 9));
+	CHECK(cmd("ntp STATUS", out, sizeof(out)) == 0 && !strncmp(out, "NTP: off.", 9));   /* Amiga style */
 	CHECK(cmd("ntp BattClock ON", out, sizeof(out)) == 0 && rt_ntp_battclock == 1);
 	CHECK(cmd("timezone AUTO", out, sizeof(out)) == 0);
 

@@ -126,11 +126,12 @@ while Riptide runs.
 ## Command line
 
 ```
-Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
+Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH] [HELP]
 Riptide CAPTURE start|stop|status|save FILE|clear [OPTIONS]
 Riptide PROFILE START|STOP|RESET|SHOW
 Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
-Riptide NTP [STATUS|SYNC|...] | MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
+Riptide NTP [STATUS|ON|OFF|SYNC|SERVER...|INTERVAL S|STEP MS|BATTCLOCK ON|OFF]
+Riptide MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
 Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=...] [target=MS]
 ```
 

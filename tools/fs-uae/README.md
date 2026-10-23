@@ -100,7 +100,12 @@ IPv6 starts by itself when your router sends advertisements. Check with
   Amiga's) does not work over Wi-Fi.
 * **The host and the Amiga cannot reach each other** through the bridge:
   frames the Amiga sends go out on the wire, not into the host's own
-  stack. Test against another machine, your router or the internet.
+  stack, and the host's own frames never reach the Amiga. So `ping`
+  from the Mac to the Amiga gets no answer. Ping it from another
+  machine, your router or a phone on the same network. If the Mac has a
+  second connection to the same network (e.g. Wi-Fi next to the bridged
+  Ethernet), it can reach the Amiga through that one:
+  `ping -S <the Mac's Wi-Fi address> <Amiga address>`.
 * Everything the interface receives for the Amiga's MAC, broadcast and
   multicast goes into the emulator; the capture filter drops the rest.
 

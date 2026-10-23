@@ -19,9 +19,9 @@
 #include "amiga_priv.h"
 
 /* CAPTURE/F: the rest of the line as it is (ARGS/M would split "iface=x") */
-#define TEMPLATE "CONFIG/K,DEBUG/K,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,PROFILE/K,CAPTURE/K/F,ARGS/M"
+#define TEMPLATE "CONFIG/K,DEBUG/K,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,PROFILE/K,CAPTURE/K/F,HELP/S,ARGS/M"
 enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_PROFILE, ARG_CAPTURE,
-       ARG_ARGS, ARG_COUNT };
+       ARG_HELP, ARG_ARGS, ARG_COUNT };
 
 const char riptide_version_tag[] = "$VER: Riptide " RIPTIDE_VERSION_STRING " (" RIPTIDE_DATE ")";
 
@@ -29,6 +29,21 @@ static void put(const char *s)
 {
 	PutStr((CONST_STRPTR)s);
 }
+
+static const char help_text[] =
+	"Riptide [CONFIG=file] [DEBUG=level]       start the stack\n"
+	"Riptide STATUS | QUIT                      the running stack: status, stop\n"
+	"Riptide NTP [STATUS|ON|OFF|SYNC|SERVER...] time sync (also INTERVAL s, STEP ms,\n"
+	"                                           BATTCLOCK ON|OFF)\n"
+	"Riptide TIMEZONE [+HH:MM|AUTO]             time zone used for the clock\n"
+	"Riptide MDNS [STATUS|ON|OFF]               the HOSTNAME.local responder\n"
+	"Riptide BACKGROUND [rules]                 background (LEDBAT) connections\n"
+	"Riptide CAPTURE start|status|stop|save|clear [...]   packet capture to pcap\n"
+	"Riptide PROFILE start|show|stop|reset      where the CPU time goes\n"
+	"Riptide DEBUG [category,...|SHOW|DUMP f|NONE]  debug log\n"
+	"Riptide SELFTEST | BENCH                   built-in tests\n"
+	"Any riptide.conf line also works at run time through ip, ifconfig, route,\n"
+	"sysctl, hostname or RiptidePrefs. Manual: docs/AMIGA.md (Docs drawer).\n";
 
 /* line: the command line of RTCMD_COMMAND, else NULL */
 static int send_command(ULONG cmd, const char *line)
@@ -125,6 +140,11 @@ static int riptide_main(void)
 		return 10;
 	}
 	more = (char **)args[ARG_ARGS];
+	if (args[ARG_HELP] || (more && (!rt_strcasecmp(more[0], "help") || !strcmp(more[0], "-h")))) {
+		put(help_text);
+		FreeArgs(rda);
+		return 0;
+	}
 	/* Riptide NTP SYNC|STATUS|..., MDNS ON|OFF|STATUS, TIMEZONE +HH:MM
 	 * (ReadArgs takes a STATUS word for the STATUS switch) */
 	if (more && (!rt_strcasecmp(more[0], "ntp") || !rt_strcasecmp(more[0], "mdns") ||
@@ -156,7 +176,7 @@ static int riptide_main(void)
 		return rc;
 	}
 	if (more) {
-		put("Riptide: unexpected argument (see Riptide ?)\n");
+		put("Riptide: unexpected argument (Riptide HELP lists the commands)\n");
 		FreeArgs(rda);
 		return 10;
 	}

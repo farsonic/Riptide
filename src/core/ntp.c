@@ -595,15 +595,20 @@ int rt_ntp_command(int argc, char **argv, char *out, u32 outlen)
 	if (!rt_strcasecmp(a, "status")) {
 		rt_ntp_status(out, outlen);
 		if (!out[0])
-			rt_strlcpy(out, "NTP: off", outlen);
+			rt_strlcpy(out, "NTP: off. \"Riptide NTP ON\" uses the DHCP lease's servers (else pool.ntp.org),\n"
+			           "\"Riptide NTP SERVER...\" names them; to keep it, add \"ntp on\" to riptide.conf\n"
+			           "(RiptidePrefs: Time page).", outlen);
 		return 0;
 	}
 	if (!rt_strcasecmp(a, "off")) {
 		ntp_enable(0);
+		rt_strlcpy(out, "NTP: off", outlen);
 		return 0;
 	}
 	if (!rt_strcasecmp(a, "on")) {
 		ntp_enable(1);
+		rt_strlcpy(out, ntp.nnames ? "NTP: on, first sync in 2 s (Riptide NTP STATUS shows it)" :
+		           "NTP: on, servers from the DHCP lease or pool.ntp.org; first sync in 2 s", outlen);
 		return 0;
 	}
 	if (!rt_strcasecmp(a, "sync")) {
@@ -612,6 +617,9 @@ int rt_ntp_command(int argc, char **argv, char *out, u32 outlen)
 		if (ntp.state == NS_IDLE) {
 			ntp.backoff = 0;
 			rt_timer_after(&ntp_timer, 0);
+			rt_strlcpy(out, "NTP: syncing now (Riptide NTP STATUS shows the result)", outlen);
+		} else {
+			rt_strlcpy(out, "NTP: a sync is already running", outlen);
 		}
 		return 0;
 	}
@@ -630,12 +638,15 @@ int rt_ntp_command(int argc, char **argv, char *out, u32 outlen)
 		} else {
 			ntp.step_ms = v;
 		}
+		rt_snprintf(out, outlen, "NTP: %s %lu %s", (a[0] | 0x20) == 'i' ? "interval" : "step",
+		            (unsigned long)v, (a[0] | 0x20) == 'i' ? "s" : "ms");
 		return 0;
 	}
 	if (!rt_strcasecmp(a, "battclock")) {
 		if (argc != 3 || (rt_strcasecmp(argv[2], "on") && rt_strcasecmp(argv[2], "off")))
 			goto bad;
 		rt_ntp_battclock = (argv[2][1] | 0x20) == 'n';
+		rt_snprintf(out, outlen, "NTP: battclock %s", rt_ntp_battclock ? "on" : "off");
 		return 0;
 	}
 	/* server list */
@@ -655,6 +666,8 @@ int rt_ntp_command(int argc, char **argv, char *out, u32 outlen)
 	}
 	ntp.enabled = 0;
 	ntp_enable(1);
+	rt_snprintf(out, outlen, "NTP: %lu server%s, first sync in 2 s", (unsigned long)ntp.nnames,
+	            ntp.nnames == 1 ? "" : "s");
 	return 0;
 bad:
 	rt_strlcpy(out, usage, outlen);
