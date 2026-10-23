@@ -102,12 +102,12 @@ fail() { echo "FAIL $*"; fails=$((fails + 1)); }
 key() {
 	for k in "$@"; do
 		xdotool key "$k"
-		sleep 0.3
+		sleep ${KEYDELAY:-0.7}
 	done
 }
 typ() {
-	xdotool type --delay 120 "$1"
-	sleep 0.3
+	xdotool type --delay 200 "$1"
+	sleep ${KEYDELAY:-0.7}
 }
 settle() {
 	$ptr stable 2 60 >/dev/null || fail "screen did not settle before $1"
@@ -117,6 +117,9 @@ settle() {
 # wait for the window (the screen settles once RiptidePrefs is up)
 sleep 8
 settle 01-interface
+# IPv4 off (IPv6 stays on)
+key 4
+settle 01b-interface-ipv4-off
 # Address page: switch to static to show the fields, then back to DHCP
 key p
 settle 02-address
@@ -129,6 +132,20 @@ $ptr click 511 407 >/dev/null    # "OK"
 settle 03c-dismissed
 # the requester leaves the address field active: leave it, back to DHCP
 key Return m
+# Extra addresses: a bad one (requester), then 10.0.1.2/24
+key p
+settle 03d-extra
+key l
+typ '10.0.1.300'
+key Return d
+settle 03e-extra-invalid
+$ptr click 511 407 >/dev/null    # "OK"
+settle 03f-extra-dismissed
+key Return l
+key BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace
+typ '10.0.1.2/24'
+key Return d
+settle 03g-extra-added
 # Names: replace the host name, add a domain and a name server
 key p
 settle 04-names
@@ -154,6 +171,47 @@ key m
 settle 08-time-edited
 key p
 settle 09-tcp
+# Advanced: Connecting: Fast Open on, connect timeout 15 s
+key p
+settle 09a-adv-connecting
+key f t
+typ 15
+key Return
+settle 09b-adv-connecting-edited
+key p
+settle 09c-adv-ports
+# Advanced: Keepalive: keepalive for all after 120 s
+key p
+settle 09d-adv-keepalive
+key k
+typ 120
+key Return
+settle 09e-adv-keepalive-edited
+# Advanced: Background: LEDBAT by default, background programs
+key p
+settle 09f-adv-background
+key t t t
+settle 09g-adv-background-ledbat
+key r
+typ 'AmiFTP,wget'
+key Return
+settle 09g-adv-background-edited
+key p
+settle 09h-adv-memory
+key p
+settle 09i-adv-happyeyeballs
+# Advanced: QoS: bands on
+key p
+settle 09j-adv-qos
+key q
+settle 09k-adv-qos-edited
+# Advanced: QoS rules: add one
+key p
+settle 09l-adv-qosrules
+key l
+typ 'port=22,23 priority=interactive'
+key Return d
+settle 09m-adv-qosrules-added
 key p
 settle 10-other
 # Other lines: add one
@@ -175,6 +233,7 @@ cat > "$work/expect.conf" <<'EOF'
 
 interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440
 dhcp eth0
+ifconfig eth0 alias 10.0.1.2/24
 nameserver 192.168.1.1
 hostname zeus    # the old name
 domain example.org
@@ -184,6 +243,14 @@ sysctl net.inet.tcp.delack_ms=40
 compat bsdsocket off
 ntp pool.ntp.org
 mdns on
+ipv4 off
+qos on
+qos rule port=22,23 priority=interactive
+sysctl net.inet.tcp.fastopen=1
+sysctl net.inet.tcp.connect_timeout=15
+sysctl net.inet.tcp.keepalive_all=120
+sysctl net.inet.tcp.cc=ledbat
+sysctl net.inet.tcp.bg_programs=AmiFTP,wget
 EOF
 cmp -s "$work/orig.conf" "$conf.bak" || fail "ENVARC:Riptide/riptide.conf.bak is not the old file"
 cmp -s "$conf" "$dh0/ENV/Riptide/riptide.conf" || fail "ENV: and ENVARC: riptide.conf differ"
@@ -192,7 +259,7 @@ if ! cmp -s "$work/expect.conf" "$conf"; then
 	diff -u "$work/expect.conf" "$conf" | sed 's/^/  | /'
 fi
 if [ $fails -eq 0 ]; then
-	echo "ok   RiptidePrefs on FS-UAE ($BUILD): pages, keyboard edits, Save (ENVARC:, ENV:, .bak)"
+	echo "ok   RiptidePrefs on FS-UAE ($BUILD): pages (Advanced too), keyboard edits, list pages, Save (ENVARC:, ENV:, .bak)"
 	echo "     screenshots: $work/*.png"
 	exit 0
 fi

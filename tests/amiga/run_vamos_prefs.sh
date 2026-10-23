@@ -24,6 +24,11 @@ rm -rf "$d/env/Riptide"
 run USE; rc=$?
 [ $rc -eq 0 ] && cmp -s "$d/in.conf" "$d/env/Riptide/riptide.conf" ||
 	{ echo "FAIL USE: rc $rc, ENV:Riptide/riptide.conf not written from ENVARC:"; fail=1; }
+# the Phase 3 lines (addresses, ipv4, qos, sysctls) come back unchanged too
+printf 'interface eth0 device=uaenet.device unit=2 qos=on\nifconfig eth0 10.0.0.2/24 up\nifconfig eth0 alias 10.0.1.2/24  # x\nipv4 on\nipv6 off\nqos on\nqos rule port=22,23 priority=interactive\nsysctl net.inet.tcp.cc=ledbat\nsysctl net.inet.tcp.bg_programs=AmiFTP,wget*\nsysctl net.inet.he.prefer=6\n' > "$d/p3.conf"
+run FROM T:p3.conf USE; rc=$?
+[ $rc -eq 0 ] && cmp -s "$d/p3.conf" "$d/env/Riptide/riptide.conf" ||
+	{ echo "FAIL USE of the Phase 3 configuration: rc $rc, not identical"; fail=1; }
 run FROM T:missing USE; rc=$?
 [ $rc -eq 10 ] && grep -q 'Cannot read T:missing' "$d/out" || { echo "FAIL missing FROM: rc $rc"; cat "$d/out"; fail=1; }
 run BADARG=1; rc=$?

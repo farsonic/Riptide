@@ -56,7 +56,10 @@ Manual installation
 
 RiptidePrefs (in SYS:Prefs, or in this drawer) edits riptide.conf: "Save"
 writes ENVARC: and ENV:, "Use" ENV: only, "Apply" passes host name,
-name servers, time and TCP settings to the running stack.
+name servers, time, TCP, extra address and QoS settings to the running
+stack. The "Advanced:" pages hold Fast Open, connect timeouts,
+keepalive, background (LEDBAT) transfers, memory limits, Happy Eyeballs
+and QoS.
 
 Docs/AMIGA.md is the manual. Riptide is free software under the GNU
 General Public License version 2 (Docs/LICENSE).

@@ -3,7 +3,8 @@
  * byte-exact round trips (comments, unknown lines, CRLF, no final line
  * end), parsing, edits that touch only the lines of the changed settings
  * (keeping trailing comments), DHCP <-> static, the "other lines" list,
- * validation and the commands for the running stack.
+ * validation and the commands for the running stack; the Phase 3 settings
+ * (ipv4, qos, sysctl table, extra addresses, QoS rules).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stdio.h>
@@ -297,6 +298,191 @@ static void test_live(void)
 	rp_conf_free(&c);
 }
 
+/* ---- Phase 3 ---- */
+static const char *p3_conf =
+	"interface eth0 device=uaenet.device unit=2 ipv4=on qos=on\n"
+	"ifconfig eth0 192.168.1.20/24 up\n"
+	"route add default 192.168.1.1\n"
+	"ifconfig eth0 alias 10.0.0.5/24\n"
+	"ifconfig eth0 alias 10.0.1.5 netmask 255.255.255.0   # lab\n"
+	"ifconfig eth1 alias 10.9.9.9/24\n"
+	"ipv6 on\n"
+	"ipv4 on\n"
+	"qos on\n"
+	"qos rule port=22,23 priority=interactive dscp=EF\n"
+	"qos rule program=AmiFTP priority=bulk\n"
+	"qos rule nonsense\n"
+	"sysctl net.inet.tcp.fastopen=1\n"
+	"sysctl net.inet.tcp.cc=ledbat\n"
+	"sysctl net.inet.tcp.bg_programs=AmiFTP,wget*\n"
+	"sysctl net.inet.he.prefer 6\n"
+	"sysctl net.inet.tcp.mem_high=2048   # KB\n"
+	"sysctl net.inet.tcp.cc=reno\n"
+	"background program=x\n";
+
+static void test_p3_parse(void)
+{
+	struct rp_conf c;
+
+	roundtrip("phase 3", p3_conf);
+	CHECK(rp_conf_load(&c, p3_conf, strlen(p3_conf)) == 0);
+	CHECK(c.cur.ipv4 == 1 && c.l_ipv4 && c.cur.qos == 1 && c.l_qos);
+	CHECK(!strcmp(c.cur.ifextra, "ipv4=on qos=on"));
+	CHECK(rp_list_count(&c, RP_LIST_ALIAS) == 2);
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ALIAS, 0), "10.0.0.5/24"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ALIAS, 1), "10.0.1.5 netmask 255.255.255.0"));
+	CHECK(rp_list_get(&c, RP_LIST_ALIAS, 2) == NULL);
+	CHECK(rp_list_count(&c, RP_LIST_QRULE) == 2);
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_QRULE, 1), "program=AmiFTP priority=bulk"));
+	CHECK(c.cur.sc[RP_SC_FASTOPEN] == 1 && c.cur.sc[RP_SC_CC] == 2 && c.cur.sc[RP_SC_HE_PREFER] == 6);
+	CHECK(c.cur.sc[RP_SC_MEM_HIGH] == 2048 && c.cur.sc[RP_SC_MEM_LOW] == RP_UNSET);
+	CHECK(!strcmp(c.cur.ss[RP_SS_BG_PROGRAMS], "AmiFTP,wget*") && !c.cur.ss[RP_SS_BG_PORTS][0]);
+	/* not understood: another interface, a bad rule, a second cc, the background keyword */
+	CHECK(rp_other_count(&c) == 4);
+	CHECK(!strcmp(rp_other_get(&c, 0), "ifconfig eth1 alias 10.9.9.9/24"));
+	CHECK(!strcmp(rp_other_get(&c, 1), "qos rule nonsense"));
+	CHECK(!strcmp(rp_other_get(&c, 2), "sysctl net.inet.tcp.cc=reno"));
+	rp_conf_free(&c);
+}
+
+static void e_p3(struct rp_model *m)
+{
+	m->ipv4 = 0;
+	m->qos = 0;
+	m->sc[RP_SC_FASTOPEN] = RP_UNSET;
+	m->sc[RP_SC_CONNECT_TIMEOUT] = 10;
+	m->sc[RP_SC_CC] = 0;
+	m->sc[RP_SC_HE_PREFER] = 4;
+	strcpy(m->ss[RP_SS_BG_PROGRAMS], "");
+	strcpy(m->ss[RP_SS_BG_PORTS], "20,21,6881-6889");
+}
+
+static void e_none_p3(struct rp_model *m)
+{
+	m->ipv4 = 0;
+	m->sc[RP_SC_KEEPIDLE] = 120;
+	strcpy(m->ss[RP_SS_BG_LPORTS], "8080");
+	m->qos = 1;
+}
+
+static void test_p3_edits(void)
+{
+	struct rp_conf c;
+	char *t;
+	int i;
+	char a[32];
+
+	t = edit(p3_conf, e_p3);
+	CHECK(t && strstr(t, "ipv6 on\nipv4 off\nqos off\nqos rule port=22,23"));
+	CHECK(t && !strstr(t, "fastopen") && !strstr(t, "bg_programs"));
+	CHECK(t && strstr(t, "sysctl net.inet.tcp.cc=cubic\n"));
+	CHECK(t && strstr(t, "sysctl net.inet.he.prefer=4\n"));
+	CHECK(t && strstr(t, "sysctl net.inet.tcp.mem_high=2048   # KB\n"));       /* untouched */
+	CHECK(t && strstr(t, "background program=x\nsysctl net.inet.tcp.connect_timeout=10\n"
+	                     "sysctl net.inet.tcp.bg_ports=20,21,6881-6889\n"));
+	free(t);
+
+	/* from the defaults: ipv4 off, qos on and the sysctls are appended */
+	t = edit(inst_dhcp, e_none_p3);
+	CHECK(t && strstr(t, "loglevel 1\nipv4 off\nqos on\nsysctl net.inet.tcp.keepidle=120\n"
+	                     "sysctl net.inet.tcp.bg_lports=8080\n"));
+	free(t);
+
+	/* lists: delete the first address, add one; add a QoS rule */
+	CHECK(rp_conf_load(&c, p3_conf, strlen(p3_conf)) == 0);
+	CHECK(rp_list_set(&c, RP_LIST_ALIAS, 0, "") == 0);
+	CHECK(rp_list_count(&c, RP_LIST_ALIAS) == 1);
+	CHECK(rp_list_add(&c, RP_LIST_ALIAS, "172.16.0.1/16") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_QRULE, "proto=udp rport=6667 dscp=AF41") == 0);
+	CHECK(rp_list_set(&c, RP_LIST_QRULE, 5, "x") < 0);
+	t = text_of(&c);
+	CHECK(strstr(t, "route add default 192.168.1.1\nifconfig eth0 alias 10.0.1.5 netmask 255.255.255.0   # lab\n"
+	                "ifconfig eth0 alias 172.16.0.1/16\nifconfig eth1 alias") != NULL);
+	CHECK(strstr(t, "qos rule program=AmiFTP priority=bulk\nqos rule proto=udp rport=6667 dscp=AF41\n"
+	                "qos rule nonsense\n") != NULL);
+	free(t);
+	rp_conf_free(&c);
+
+	/* untouched entries keep their spelling; a replaced one keeps its comment */
+	{
+		static const char in[] = "dhcp eth0\nifconfig  eth0 add 10.0.0.5/24\nifconfig eth0 alias 10.0.1.5/24 # b\n";
+		CHECK(rp_conf_load(&c, in, strlen(in)) == 0);
+		CHECK(rp_list_set(&c, RP_LIST_ALIAS, 1, "10.0.2.5/24") == 0);
+		CHECK(rp_list_add(&c, RP_LIST_ALIAS, "10.0.3.5/24") == 0);
+		t = text_of(&c);
+		CHECK(!strcmp(t, "dhcp eth0\nifconfig  eth0 add 10.0.0.5/24\nifconfig eth0 alias 10.0.2.5/24 # b\n"
+		                 "ifconfig eth0 alias 10.0.3.5/24\n"));
+		free(t);
+		rp_conf_free(&c);
+	}
+
+	/* at most 8 addresses */
+	CHECK(rp_conf_load(&c, "", 0) == 0);
+	for (i = 0; i < RP_NALIAS; i++) {
+		sprintf(a, "10.0.%d.1/24", i);
+		CHECK(rp_list_add(&c, RP_LIST_ALIAS, a) == 0);
+	}
+	CHECK(rp_list_add(&c, RP_LIST_ALIAS, "10.1.0.1/24") < 0);
+	t = text_of(&c);
+	CHECK(!strncmp(t, "ifconfig eth0 alias 10.0.0.1/24\nifconfig eth0 alias 10.0.1.1/24\n", 64));
+	free(t);
+	rp_conf_free(&c);
+
+	/* renaming the interface rewrites its address lines */
+	CHECK(rp_conf_load(&c, p3_conf, strlen(p3_conf)) == 0);
+	strcpy(c.cur.ifname, "net0");
+	t = text_of(&c);
+	CHECK(strstr(t, "ifconfig net0 alias 10.0.0.5/24\n") && strstr(t, "ifconfig eth1 alias"));
+	free(t);
+	rp_conf_free(&c);
+}
+
+static void test_p3_valid(void)
+{
+	CHECK(rp_valid_alias("10.0.0.5") && rp_valid_alias("10.0.0.5/24") &&
+	      rp_valid_alias("10.0.0.5 netmask 255.255.0.0") && rp_valid_alias("10.0.0.5/24 broadcast 10.0.0.255"));
+	CHECK(!rp_valid_alias("") && !rp_valid_alias("10.0.0.5 netmask") && !rp_valid_alias("10.0.0.5 up") &&
+	      !rp_valid_alias("fe80::1") && !rp_valid_alias("10.0.0.5/40"));
+	CHECK(rp_valid_ports("") && rp_valid_ports("21") && rp_valid_ports("20,21,6881-6889"));
+	CHECK(!rp_valid_ports("0") && !rp_valid_ports("70000") && !rp_valid_ports("21,") && !rp_valid_ports("9-3") &&
+	      !rp_valid_ports("a"));
+	CHECK(rp_valid_programs("") && rp_valid_programs("AmiFTP,wget*") && !rp_valid_programs("a b") &&
+	      !rp_valid_programs("a,,b"));
+	CHECK(rp_valid_qrule("port=22 priority=interactive") && rp_valid_qrule("program=AmiFTP dscp=CS1") &&
+	      rp_valid_qrule("proto=tcp lport=80,443 prio=5 dscp=46"));
+	CHECK(!rp_valid_qrule("port=22") && !rp_valid_qrule("priority=bulk") && !rp_valid_qrule("port=1-9 dscp=EF") &&
+	      !rp_valid_qrule("port=22 dscp=64") && !rp_valid_qrule("port=22 priority=8") &&
+	      !rp_valid_qrule("port=1,2,3,4,5,6,7,8,9 dscp=EF") && !rp_valid_qrule("proto=icmp port=1 dscp=EF") &&
+	      !rp_valid_qrule("foo=1 port=1 dscp=EF"));
+}
+
+static void test_p3_live(void)
+{
+	struct rp_conf c;
+
+	CHECK(rp_conf_load(&c, p3_conf, strlen(p3_conf)) == 0);
+	cmds[0] = 0;
+	c.cur.sc[RP_SC_KA_ALL] = 120;
+	c.cur.sc[RP_SC_CC] = 1;
+	strcpy(c.cur.ss[RP_SS_BG_PROGRAMS], "");
+	c.cur.qos = 0;
+	CHECK(rp_list_set(&c, RP_LIST_QRULE, 0, "") == 0);
+	CHECK(rp_list_set(&c, RP_LIST_ALIAS, 1, "10.0.2.5/24") == 0);
+	CHECK(rp_live_commands(&c, collect, NULL) == 0);
+	CHECK(!strcmp(cmds, "sysctl net.inet.tcp.keepalive_all=120;sysctl net.inet.tcp.cc=reno;"
+	                    "sysctl net.inet.tcp.bg_programs=;qos off;qos rules flush;"
+	                    "qos rule program=AmiFTP priority=bulk;ifconfig eth0 10.0.1.5 -alias;"
+	                    "ifconfig eth0 alias 10.0.2.5/24;"));
+	/* back to the built-in value, or IPv4 off: a restart */
+	cmds[0] = 0;
+	c.cur.sc[RP_SC_FASTOPEN] = RP_UNSET;
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);
+	c.cur.sc[RP_SC_FASTOPEN] = 1;
+	c.cur.ipv4 = 0;
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);
+	rp_conf_free(&c);
+}
+
 int main(void)
 {
 	test_roundtrips();
@@ -305,6 +491,10 @@ int main(void)
 	test_other();
 	test_valid();
 	test_live();
+	test_p3_parse();
+	test_p3_edits();
+	test_p3_valid();
+	test_p3_live();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

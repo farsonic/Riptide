@@ -10,6 +10,23 @@
 #define MAXTOK 24
 #define LINEMAX 512
 
+const char *const rp_sc_names[RP_NSC] = {
+	"net.inet.tcp.fastopen", "net.inet.tcp.fastopen_all", "net.inet.tcp.fastopen_blackhole",
+	"net.inet.tcp.syn_rto_initial_ms", "net.inet.tcp.syn_rto_max_ms", "net.inet.tcp.syn_backoff",
+	"net.inet.tcp.connect_timeout", "net.inet.tcp.syn_icmp_abort", "net.inet.tcp.tw_reuse",
+	"net.inet.tcp.max_tw_buckets", "net.inet.ip.portrange.first", "net.inet.ip.portrange.last",
+	"net.inet.tcp.keepalive_all", "net.inet.tcp.keepidle", "net.inet.tcp.keepintvl", "net.inet.tcp.keepcnt",
+	"net.inet.tcp.cc", "net.inet.tcp.ledbat_target", "net.inet.tcp.ledbat_slowdown", "net.inet.tcp.bg_mode",
+	"net.inet.tcp.mem_low", "net.inet.tcp.mem_pressure", "net.inet.tcp.mem_high", "net.inet.he.enable",
+	"net.inet.he.attempt_delay", "net.inet.he.resolution_delay", "net.inet.he.prefer",
+	"net.inet.he.aaaa_filter", "net.inet.ip.qos_inflight", "net.inet.ip.qos_limit",
+	"net.inet.ip.qos_prio_dscp"
+};
+const char *const rp_ss_names[RP_NSS] = {
+	"net.inet.tcp.bg_programs", "net.inet.tcp.bg_ports", "net.inet.tcp.bg_lports"
+};
+const char *const rp_cc_names[] = { "cubic", "reno", "ledbat", NULL };
+
 struct toks {
 	int n;
 	char *t[MAXTOK];          /* tokens, quotes removed */
@@ -147,6 +164,52 @@ static long num(const char *s)
 	return (long)v;
 }
 
+/* tokens from..n-1 as written, separated by one space */
+static void join_raw(const struct toks *tk, int from, char *out, size_t size)
+{
+	size_t o = 0;
+	int i;
+
+	out[0] = 0;
+	for (i = from; i < tk->n; i++)
+		o += (size_t)rt_snprintf(out + o, size > o ? size - o : 0, "%s%s", i > from ? " " : "", tk->raw[i]);
+}
+
+/* the value of a sysctl line for a known name: 1 if it was taken */
+static int parse_sc(struct rp_conf *c, struct rp_line *l, const char *name, const char *val)
+{
+	struct rp_model *m = &c->orig;
+	int i, k;
+
+	for (i = 0; i < RP_NSC; i++)
+		if (eq(name, rp_sc_names[i])) {
+			long v = RP_UNSET;
+			if (c->l_sc[i])
+				return 0;
+			if (i == RP_SC_CC) {
+				for (k = 0; rp_cc_names[k]; k++)
+					if (eq(val, rp_cc_names[k]))
+						v = k;
+			} else {
+				v = num(val);
+			}
+			if (v == RP_UNSET)
+				return 0;
+			c->l_sc[i] = l;
+			m->sc[i] = v;
+			return 1;
+		}
+	for (i = 0; i < RP_NSS; i++)
+		if (eq(name, rp_ss_names[i])) {
+			if (c->l_ss[i] || strlen(val) >= RP_SSLEN || strchr(val, ' '))
+				return 0;
+			c->l_ss[i] = l;
+			copy(m->ss[i], val, sizeof(m->ss[i]));
+			return 1;
+		}
+	return 0;
+}
+
 /* ---- line list ---- */
 
 static struct rp_line *line_new(const char *text)
@@ -234,6 +297,8 @@ static struct rp_line *top_anchor(struct rp_conf *c)
 
 static void model_defaults(struct rp_model *m)
 {
+	int i;
+
 	memset(m, 0, sizeof(*m));
 	copy(m->ifname, "eth0", sizeof(m->ifname));
 	copy(m->device, "uaenet.device", sizeof(m->device));
@@ -243,6 +308,10 @@ static void model_defaults(struct rp_model *m)
 	m->ipv6 = 1;
 	m->mdns = -1;
 	m->quickack = m->delack_segs = m->delack_ms = RP_UNSET;
+	m->ipv4 = 1;
+	m->qos = -1;
+	for (i = 0; i < RP_NSC; i++)
+		m->sc[i] = RP_UNSET;
 }
 
 static void parse_interface(struct rp_conf *c, struct rp_line *l, struct toks *tk)
@@ -293,6 +362,18 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 			c->l_dhcp = l;
 			m->dhcp = 1;
 		}
+	} else if (eq(k, "ifconfig") && tk->n >= 4 && eq(tk->t[1], m->ifname) &&
+	           (eq(tk->t[2], "alias") || eq(tk->t[2], "add"))) {
+		/* ifconfig IF alias A.B.C.D[/BITS] [netmask M] [broadcast B] */
+		char spec[RP_ALIASLEN + 8];
+		join_raw(tk, 3, spec, sizeof(spec));
+		if (strlen(spec) < RP_ALIASLEN && rp_valid_alias(spec))
+			for (i = 0; i < RP_NALIAS; i++)
+				if (!c->l_alias[i]) {
+					c->l_alias[i] = l;
+					copy(m->alias[i], spec, sizeof(m->alias[i]));
+					break;
+				}
 	} else if (eq(k, "ifconfig")) {
 		/* ifconfig IF A.B.C.D[/BITS] [netmask M] [up] */
 		const char *addr = NULL, *mask = NULL;
@@ -351,6 +432,23 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 	           !c->l_ipv6) {
 		c->l_ipv6 = l;
 		m->ipv6 = eq(tk->t[1], "on");
+	} else if (eq(k, RP_KW_IPV4) && tk->n == 2 && (eq(tk->t[1], "on") || eq(tk->t[1], "off")) &&
+	           !c->l_ipv4) {
+		c->l_ipv4 = l;
+		m->ipv4 = eq(tk->t[1], "on");
+	} else if (eq(k, RP_KW_QOS) && tk->n == 2 && (eq(tk->t[1], "on") || eq(tk->t[1], "off")) && !c->l_qos) {
+		c->l_qos = l;
+		m->qos = eq(tk->t[1], "on");
+	} else if (eq(k, RP_KW_QOS) && tk->n >= 3 && eq(tk->t[1], "rule")) {
+		char spec[RP_LONG + 8];
+		join_raw(tk, 2, spec, sizeof(spec));
+		if (strlen(spec) < RP_LONG && rp_valid_qrule(spec))
+			for (i = 0; i < RP_NQRULE; i++)
+				if (!c->l_qrule[i]) {
+					c->l_qrule[i] = l;
+					copy(m->qrule[i], spec, sizeof(m->qrule[i]));
+					break;
+				}
 	} else if (eq(k, RP_KW_NTP) && tk->n >= 2 && !c->l_ntp) {
 		c->l_ntp = l;
 		if (tk->n == 2 && eq(tk->t[1], RP_KW_NTP_OFF)) {
@@ -401,6 +499,8 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 		if (slot && !*slot && num(val) != RP_UNSET) {
 			*slot = l;
 			*field = num(val);
+		} else if (!slot) {
+			parse_sc(c, l, name, val);
 		}
 	}
 }
@@ -452,6 +552,9 @@ int rp_conf_load(struct rp_conf *c, const char *text, size_t len)
 			parse_line(c, l, tk);
 	rp_free(tk);
 	c->cur = c->orig;
+	memcpy(c->h_alias, c->orig.alias, sizeof(c->h_alias));
+	memcpy(c->h_qrule, c->orig.qrule, sizeof(c->h_qrule));
+	copy(c->h_ifname, c->orig.ifname, sizeof(c->h_ifname));
 	return 0;
 oom:
 	rp_conf_free(c);
@@ -483,6 +586,22 @@ static int addr_changed(const struct rp_model *o, const struct rp_model *n)
 	return o->dhcp != n->dhcp || str_changed(o->ifname, n->ifname) ||
 	       (!n->dhcp && (str_changed(o->addr, n->addr) || str_changed(o->netmask, n->netmask) ||
 	                     str_changed(o->gateway, n->gateway)));
+}
+
+static int list_changed(const struct rp_model *o, const struct rp_model *n, int which)
+{
+	int i;
+
+	if (which == RP_LIST_ALIAS) {
+		for (i = 0; i < RP_NALIAS; i++)
+			if (str_changed(o->alias[i], n->alias[i]))
+				return 1;
+	} else {
+		for (i = 0; i < RP_NQRULE; i++)
+			if (str_changed(o->qrule[i], n->qrule[i]))
+				return 1;
+	}
+	return 0;
 }
 
 static int dns_changed(const struct rp_model *o, const struct rp_model *n)
@@ -552,6 +671,70 @@ static const char *quoted(const char *s, char *buf, size_t size)
 static struct rp_line *first_of(struct rp_line *a, struct rp_line *b)
 {
 	return a ? a : b;
+}
+
+/* is text among the n entries (of len bytes) from 'from' on? */
+static int in_list(const char *base, int from, int n, size_t len, const char *text)
+{
+	for (; from < n && base[(size_t)from * len]; from++)
+		if (!strcmp(base + (size_t)from * len, text))
+			return 1;
+	return 0;
+}
+
+static void list_line(const struct rp_conf *c, int which, const char *e, char *buf, size_t size)
+{
+	if (which == RP_LIST_ALIAS)
+		rt_snprintf(buf, size, "ifconfig %s alias %s", c->cur.ifname, e);
+	else
+		rt_snprintf(buf, size, "%s rule %s", RP_KW_QOS, e);
+}
+
+/* Bring a list's lines in line with want[]: have[] is what the lines say
+ * now (slot i: have[i]). Lines of entries that stay keep their place and
+ * comment, a replaced entry is rewritten in place, deleted ones go, new
+ * ones follow the entry before them (the first one 'anchor'). */
+static int sync_list(struct rp_conf *c, int which, struct rp_line **slot, char *have, const char *want, int n,
+                     size_t len, struct rp_line *anchor)
+{
+	struct rp_line *ns[RP_NQRULE], *prev = anchor, *l;
+	char buf[LINEMAX];
+	int i = 0, j = 0, k = 0, r = 0;
+
+	for (;;) {
+		const char *h = i < n && have[(size_t)i * len] ? have + (size_t)i * len : NULL;
+		const char *w = j < n && want[(size_t)j * len] ? want + (size_t)j * len : NULL;
+		if (!h && !w)
+			break;
+		if (h && w && (!strcmp(h, w) || (!in_list(want, j + 1, n, len, h) && !in_list(have, i + 1, n, len, w)))) {
+			/* the same (untouched unless the interface was renamed), or
+			 * replaced: in place */
+			if (strcmp(h, w) || (which == RP_LIST_ALIAS && strcmp(c->h_ifname, c->cur.ifname))) {
+				list_line(c, which, w, buf, sizeof(buf));
+				r |= put(c, &slot[i], NULL, buf);
+			}
+			prev = ns[k++] = slot[i];
+			i++;
+			j++;
+		} else if (h && !in_list(want, j, n, len, h)) {
+			line_unlink(c, slot[i]);
+			i++;
+		} else {
+			list_line(c, which, w, buf, sizeof(buf));
+			l = line_new(buf);
+			if (!l)
+				return -1;
+			line_insert_after(c, prev, l);
+			prev = ns[k++] = l;
+			j++;
+		}
+	}
+	for (i = 0; i < n; i++)
+		slot[i] = i < k ? ns[i] : NULL;
+	memcpy(have, want, (size_t)n * len);
+	if (which == RP_LIST_ALIAS)
+		copy(c->h_ifname, c->cur.ifname, sizeof(c->h_ifname));
+	return r;
 }
 
 /* bring the lines in line with c->cur */
@@ -647,6 +830,30 @@ static int sync_lines(struct rp_conf *c)
 	SYSCTL(delack_segs, l_delack_segs, "net.inet.tcp.delack_segs")
 	SYSCTL(delack_ms, l_delack_ms, "net.inet.tcp.delack_ms")
 #undef SYSCTL
+	if (o->ipv4 != n->ipv4) {
+		rt_snprintf(buf, sizeof(buf), "%s %s", RP_KW_IPV4, n->ipv4 ? "on" : "off");
+		r |= put(c, &c->l_ipv4, c->l_ipv6, (n->ipv4 && !c->l_ipv4) ? NULL : buf);
+	}
+	if (o->qos != n->qos) {
+		rt_snprintf(buf, sizeof(buf), "%s %s", RP_KW_QOS, n->qos ? "on" : "off");
+		r |= put(c, &c->l_qos, NULL, n->qos < 0 ? NULL : buf);
+	}
+	for (i = 0; i < RP_NSC; i++)
+		if (o->sc[i] != n->sc[i]) {
+			if (i == RP_SC_CC && n->sc[i] >= 0)
+				rt_snprintf(buf, sizeof(buf), "sysctl %s=%s", rp_sc_names[i], rp_cc_names[n->sc[i]]);
+			else
+				rt_snprintf(buf, sizeof(buf), "sysctl %s=%ld", rp_sc_names[i], n->sc[i]);
+			r |= put(c, &c->l_sc[i], NULL, n->sc[i] == RP_UNSET ? NULL : buf);
+		}
+	for (i = 0; i < RP_NSS; i++)
+		if (str_changed(o->ss[i], n->ss[i])) {
+			rt_snprintf(buf, sizeof(buf), "sysctl %s=%s", rp_ss_names[i], n->ss[i]);
+			r |= put(c, &c->l_ss[i], NULL, n->ss[i][0] ? buf : NULL);
+		}
+	r |= sync_list(c, RP_LIST_ALIAS, c->l_alias, c->h_alias[0], n->alias[0], RP_NALIAS, RP_ALIASLEN,
+	               first_of(c->l_route, first_of(c->l_ifconfig, first_of(c->l_dhcp, c->l_iface))));
+	r |= sync_list(c, RP_LIST_QRULE, c->l_qrule, c->h_qrule[0], n->qrule[0], RP_NQRULE, RP_LONG, c->l_qos);
 	return r ? -1 : 0;
 }
 
@@ -691,6 +898,20 @@ static int is_bound(const struct rp_conf *c, const struct rp_line *l)
 		return 1;
 	for (i = 0; i < RP_NDNS; i++)
 		if (l == c->l_dns[i])
+			return 1;
+	if (l == c->l_ipv4 || l == c->l_qos)
+		return 1;
+	for (i = 0; i < RP_NSC; i++)
+		if (l == c->l_sc[i])
+			return 1;
+	for (i = 0; i < RP_NSS; i++)
+		if (l == c->l_ss[i])
+			return 1;
+	for (i = 0; i < RP_NALIAS; i++)
+		if (l == c->l_alias[i])
+			return 1;
+	for (i = 0; i < RP_NQRULE; i++)
+		if (l == c->l_qrule[i])
 			return 1;
 	return 0;
 }
@@ -749,6 +970,74 @@ int rp_other_add(struct rp_conf *c, const char *text)
 	return 0;
 }
 
+/* ---- lists of the model ---- */
+
+static char *list_entry(struct rp_model *m, int which, int i, int *n, size_t *size)
+{
+	if (which == RP_LIST_ALIAS) {
+		*n = RP_NALIAS;
+		*size = RP_ALIASLEN;
+		return i >= 0 && i < RP_NALIAS ? m->alias[i] : NULL;
+	}
+	*n = RP_NQRULE;
+	*size = RP_LONG;
+	return i >= 0 && i < RP_NQRULE ? m->qrule[i] : NULL;
+}
+
+int rp_list_count(const struct rp_conf *c, int which)
+{
+	int i, n;
+	size_t size;
+
+	for (i = 0;; i++) {
+		const char *e = list_entry((struct rp_model *)&c->cur, which, i, &n, &size);
+		if (!e || !e[0])
+			return i;
+	}
+}
+
+const char *rp_list_get(const struct rp_conf *c, int which, int i)
+{
+	int n;
+	size_t size;
+	const char *e = list_entry((struct rp_model *)&c->cur, which, i, &n, &size);
+
+	return e && e[0] ? e : NULL;
+}
+
+int rp_list_set(struct rp_conf *c, int which, int i, const char *text)
+{
+	int n, k;
+	size_t size;
+	char *e = list_entry(&c->cur, which, i, &n, &size);
+
+	if (!e || !e[0] || strlen(text) >= size)
+		return -1;
+	if (text[0]) {
+		memset(e, 0, size);
+		copy(e, text, size);
+		return 0;
+	}
+	/* delete: the later entries move up */
+	for (k = i; k + 1 < n; k++)
+		memcpy(list_entry(&c->cur, which, k, &n, &size), list_entry(&c->cur, which, k + 1, &n, &size), size);
+	memset(list_entry(&c->cur, which, n - 1, &n, &size), 0, size);
+	return 0;
+}
+
+int rp_list_add(struct rp_conf *c, int which, const char *text)
+{
+	int n;
+	size_t size;
+	char *e = list_entry(&c->cur, which, rp_list_count(c, which), &n, &size);
+
+	if (!e || !text[0] || strlen(text) >= size)
+		return -1;
+	memset(e, 0, size);
+	copy(e, text, size);
+	return 0;
+}
+
 /* ---- validation ---- */
 
 int rp_valid_ip4(const char *s, int allow_prefix)
@@ -804,6 +1093,127 @@ int rp_valid_name(const char *s)
 			return 0;
 	}
 	return total <= 253;
+}
+
+/* A.B.C.D[/BITS] [netmask M] [broadcast B] */
+int rp_valid_alias(const char *s)
+{
+	char w[4][RP_ALIASLEN];
+	int n = 0, i;
+	size_t k;
+
+	while (*s && n < 4) {
+		while (*s == ' ')
+			s++;
+		for (k = 0; *s && *s != ' '; s++)
+			if (k < sizeof(w[0]) - 1)
+				w[n][k++] = *s;
+		if (k)
+			w[n++][k] = 0;
+		while (*s == ' ')
+			s++;
+	}
+	if (*s || !n || !rp_valid_ip4(w[0], 1))
+		return 0;
+	for (i = 1; i < n; i += 2)
+		if (i + 1 >= n || !(eq(w[i], "netmask") || eq(w[i], "broadcast")) || !rp_valid_ip4(w[i + 1], 0))
+			return 0;
+	return 1;
+}
+
+int rp_valid_ports(const char *s)
+{
+	while (*s) {
+		unsigned long a, b;
+		const char *e;
+		a = rt_strtoul(s, &e, 10);
+		if (e == s || a < 1 || a > 65535)
+			return 0;
+		s = e;
+		if (*s == '-') {
+			b = rt_strtoul(++s, &e, 10);
+			if (e == s || b < a || b > 65535)
+				return 0;
+			s = e;
+		}
+		if (*s == ',' && s[1])
+			s++;
+		else if (*s)
+			return 0;
+	}
+	return 1;
+}
+
+int rp_valid_programs(const char *s)
+{
+	if (strlen(s) >= RP_SSLEN)
+		return 0;
+	for (; *s; s++)
+		if (*s == ' ' || *s == '\t' || *s == '"' || *s == '#' || *s == ';' || (*s == ',' && (s[1] == ',' || !s[1])))
+			return 0;
+	return 1;
+}
+
+/* "qos rule" words (as src/core/qos.c takes them): [proto=tcp|udp]
+ * [port=|lport=|rport=P,.. (at most 8)] [program=NAME] [priority=
+ * interactive|default|normal|bulk|background|0-7] [dscp=NAME|0-63]; a port
+ * list or a program, and a priority or a DSCP */
+int rp_valid_qrule(const char *s)
+{
+	static const char *const dscp[] = { "be", "ef", "cs0", "cs1", "cs2", "cs3", "cs4", "cs5", "cs6", "cs7",
+		"af11", "af12", "af13", "af21", "af22", "af23", "af31", "af32", "af33", "af41", "af42", "af43",
+		"va", "le", NULL };
+	char w[RP_LONG];
+	int what = 0, match = 0;
+
+	if (strlen(s) >= RP_LONG)
+		return 0;
+	while (*s) {
+		const char *v;
+		size_t k;
+		while (*s == ' ')
+			s++;
+		if (!*s)
+			break;
+		for (k = 0; *s && *s != ' '; s++)
+			w[k++] = *s;
+		w[k] = 0;
+		if ((v = kv(w, "proto")) != NULL) {
+			if (!eq(v, "tcp") && !eq(v, "udp"))
+				return 0;
+		} else if ((v = kv(w, "port")) != NULL || (v = kv(w, "lport")) != NULL || (v = kv(w, "rport")) != NULL) {
+			int n = 1;
+			const char *p;
+			if (!*v || strchr(v, '-') || !rp_valid_ports(v))
+				return 0;
+			for (p = v; *p; p++)
+				n += *p == ',';
+			if (n > 8)
+				return 0;
+			match = 1;
+		} else if ((v = kv(w, "program")) != NULL) {
+			if (!*v || strlen(v) >= 32 || strchr(v, ',') || !rp_valid_programs(v))
+				return 0;
+			match = 1;
+		} else if ((v = kv(w, "priority")) != NULL || (v = kv(w, "prio")) != NULL) {
+			long p = num(v);
+			if (!eq(v, "interactive") && !eq(v, "default") && !eq(v, "normal") && !eq(v, "bulk") &&
+			    !eq(v, "background") && (p < 0 || p > 7))
+				return 0;
+			what = 1;
+		} else if ((v = kv(w, "dscp")) != NULL) {
+			long d = num(v);
+			int i, ok = d >= 0 && d <= 63;
+			for (i = 0; !ok && dscp[i]; i++)
+				ok = eq(v, dscp[i]);
+			if (!ok)
+				return 0;
+			what = 1;
+		} else {
+			return 0;
+		}
+	}
+	return what && match;
 }
 
 int rp_valid_tz(const char *s)
@@ -905,7 +1315,59 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 	SYSCTL(delack_segs, "net.inet.tcp.delack_segs")
 	SYSCTL(delack_ms, "net.inet.tcp.delack_ms")
 #undef SYSCTL
-	if (iface_changed(o, n) || addr_changed(o, n) || o->ipv6 != n->ipv6)
+	for (i = 0; i < RP_NSC; i++)
+		if (o->sc[i] != n->sc[i]) {
+			if (n->sc[i] == RP_UNSET) {
+				restart = 1;            /* back to the built-in value */
+				continue;
+			}
+			if (i == RP_SC_CC)
+				rt_snprintf(buf, sizeof(buf), "sysctl %s=%s", rp_sc_names[i], rp_cc_names[n->sc[i]]);
+			else
+				rt_snprintf(buf, sizeof(buf), "sysctl %s=%ld", rp_sc_names[i], n->sc[i]);
+			fn(buf, arg);
+		}
+	for (i = 0; i < RP_NSS; i++)
+		if (str_changed(o->ss[i], n->ss[i])) {
+			/* an empty list clears the rules at once */
+			rt_snprintf(buf, sizeof(buf), "sysctl %s=%s", rp_ss_names[i], n->ss[i]);
+			fn(buf, arg);
+		}
+	if (o->qos != n->qos && n->qos >= 0) {
+		rt_snprintf(buf, sizeof(buf), "%s %s", RP_KW_QOS, n->qos ? "on" : "off");
+		fn(buf, arg);
+	}
+	if (list_changed(o, n, RP_LIST_QRULE)) {
+		fn("qos rules flush", arg);
+		for (i = 0; i < RP_NQRULE && n->qrule[i][0]; i++) {
+			rt_snprintf(buf, sizeof(buf), "%s rule %s", RP_KW_QOS, n->qrule[i]);
+			fn(buf, arg);
+		}
+	}
+	if (list_changed(o, n, RP_LIST_ALIAS) && !str_changed(o->ifname, n->ifname)) {
+		int j, k;
+		/* removed addresses first, then the new ones */
+		for (i = 0; i < RP_NALIAS && o->alias[i][0]; i++) {
+			for (j = 0; j < RP_NALIAS && str_changed(o->alias[i], n->alias[j]); j++)
+				;
+			if (j < RP_NALIAS)
+				continue;
+			for (k = 0; o->alias[i][k] && o->alias[i][k] != '/' && o->alias[i][k] != ' '; k++)
+				;
+			rt_snprintf(buf, sizeof(buf), "ifconfig %s %.*s -alias", n->ifname, k, o->alias[i]);
+			fn(buf, arg);
+		}
+		for (i = 0; i < RP_NALIAS && n->alias[i][0]; i++) {
+			for (j = 0; j < RP_NALIAS && str_changed(n->alias[i], o->alias[j]); j++)
+				;
+			if (j < RP_NALIAS)
+				continue;
+			rt_snprintf(buf, sizeof(buf), "ifconfig %s alias %s", n->ifname, n->alias[i]);
+			fn(buf, arg);
+		}
+	}
+	if (iface_changed(o, n) || addr_changed(o, n) || o->ipv6 != n->ipv6 || o->ipv4 != n->ipv4 ||
+	    (list_changed(o, n, RP_LIST_ALIAS) && str_changed(o->ifname, n->ifname)))
 		restart = 1;
 	return restart;
 }
