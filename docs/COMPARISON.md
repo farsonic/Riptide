@@ -34,24 +34,34 @@ SDK may be missing here.
 
 | | MiamiDx 1.0c | Roadshow | Riptide |
 |---|---|---|---|
-| Status | Last release 2000; no longer sold | Commercial, maintained (1.15 in Feb 2024 [RS-1.15]) | Open source, in development (0.10) |
+| Status | Last release 2000; no longer sold | Commercial, maintained (1.15 in Feb 2024 [RS-1.15]) | Open source, in development (0.15, October 2026) |
 | Licence | Commercial shareware with registration key (RE-NOTES, intro) | Commercial; free 15-minute demo [RS-README] | GPL-2.0-only, full source |
 | Kernel | 4.4BSD-Lite derived (RE-NOTES 5) | BSD derived, see 2.1 | New clean-room core; TCP modelled on Linux |
 | TCP | Reno/NewReno, early SACK, IW 1, 500 ms ticks, T/TCP on | 4.4BSD-style tunables (RFC 1323 switches, `tcp.rttdflt`) [RS-DOC]; modern loss recovery not documented | CUBIC+HyStart, SACK/D-SACK, RACK-TLP, PRR, F-RTO, IW 10, 200 ms RTO min |
+| Newer TCP features | No | Not documented [RS-DOC] (**unverified**) | TCP Fast Open client (RFC 7413); LEDBAT++ and receive-side LEDBAT (RFC 9840) background transfers chosen by program or port; 20 s connect timeout; TIME_WAIT reuse; `keepalive_all`; `TCP_CORK`; global socket memory limits |
+| Address handling | Not analysed | **Unverified** | Up to 9 IPv4 addresses per interface; IPv4 and IPv6 switchable per interface; Happy Eyeballs v2 (RFC 8305) |
+| Traffic priority | Not analysed | **Unverified** | `SO_PRIORITY`, DSCP/`IP_TOS` marking, `qos rule` lines for old programs, optional priority transmit bands |
 | IPv6 | No | Not documented (unverified, see 4) | Yes: dual-stack host (SLAAC, MLDv2, stateless DHCPv6, RDNSS; see 4) |
 | Multicast | Yes (multicast routing tools in the package) | Yes [RS-README], [RS-DOC] `-ip-` | Host side: IGMPv3 (v2/v1 fallback) and MLDv2; no multicast routing |
 | PPP | Built in (dialer, PPP, PPPoE/PPTP/L2TP) | PPP and PPPoE drivers included [RS-README] | No; needs a SANA-II PPP driver |
 | Firewall/NAT | Yes (IPFW, IP-NAT) | "IP packet filter/network address translation (firewall)" [RS-README] | No |
-| GUI | MUI/plain GUI, setup wizard | None; text configuration [RS-README] | None; text configuration |
-| Drivers | SANA-II, MNI, serial | SANA-II (R3 with DMA) [RS-README] | SANA-II, MNI (direct loader) |
+| GUI | MUI/plain GUI, setup wizard | None; text configuration [RS-README] | RiptidePrefs (GadTools): every setting of the text configuration, including eight Advanced pages; Installer package |
+| Drivers | SANA-II, MNI, serial | SANA-II (R3 with DMA) [RS-README] | SANA-II (R3 with DMA), MNI (direct loader) |
 | Tested on real hardware | Yes, widely | Yes, widely | Not yet (emulators and host tests) |
 
-The short version: Riptide's protocol engine is the most modern of the
-three, and it is the only one with its source open and its behaviour
-tested against a reference TCP (Linux). MiamiDx and Roadshow are complete
-products with decades of real-world use and far more features around the
-protocol engine: PPP dial-up, firewall, NAT, multicast, packet capture and
-(MiamiDx) a GUI. Section 9 lists where Riptide is behind.
+The short version: Riptide has the most modern protocol engine of the
+three and, as far as the published documentation of the others shows, the
+widest set of protocol features on classic AmigaOS: the only IPv6, the
+only modern TCP loss recovery (SACK scoreboard, RACK-TLP, PRR), and,
+since 0.15, TCP Fast Open, background transfers, Happy Eyeballs, socket
+memory limits and traffic priorities, all of them editable in
+RiptidePrefs. It is also the only one with its source open and its
+behaviour tested against a reference TCP (Linux). MiamiDx and Roadshow
+are complete products with decades of use on real Amigas and features
+around the protocol engine that Riptide does not have: PPP dial-up,
+firewall and NAT, a BPF API (and, in MiamiDx, multicast routing).
+Riptide has run only in emulators so far, so its real-hardware speed and
+robustness are unproven. Section 9 lists where it is behind.
 
 ## 2. Lineage, licensing and availability
 
@@ -212,11 +222,11 @@ for the plain AmiTCP API or for MiamiDx's documented API do.
 
 | | MiamiDx | Roadshow | Riptide |
 |---|---|---|---|
-| SANA-II | Yes | Yes, SANA-II R3 including DMA access [RS-README] | Yes, with buffer-management callbacks; cooked or raw Ethernet; point-to-point devices |
+| SANA-II | Yes | Yes, SANA-II R3 including DMA access [RS-README] | Yes, with buffer-management callbacks including the R3 DMA calls (0.13), checksum computed while copying; cooked or raw Ethernet; point-to-point devices |
 | MNI (MiamiDx native drivers) | Yes | No | Yes, direct loader with zero-copy receive |
 | Serial (SLIP/PPP built in) | Yes | PPP via its `ppp-serial.device`, PPPoE via `ppp-ethernet.device` [RS-1.13], [RS-README] | No |
-| Configuration | GUI + settings database (IFF), setup wizard | Text files in `DEVS:` subdirectories, "mount file" style driver configuration, tracked by file notification; no GUI [RS-README] | One text file (`ENV:Riptide/riptide.conf`); every line can also be sent to the running stack (RIPTIDE port) |
-| Run-time changes | GUI | Shell commands (`AddNetInterface`, `ConfigureNetInterface`, `AddNetRoute`, `RoadshowControl`, ...) [RS-SRC] | `ip`, `ifconfig`, `route`, `arp`, `sysctl`, `hostname` |
+| Configuration | GUI + settings database (IFF), setup wizard | Text files in `DEVS:` subdirectories, "mount file" style driver configuration, tracked by file notification; no GUI [RS-README] | One text file (`ENV:Riptide/riptide.conf`), edited by hand or with RiptidePrefs (which changes only the lines you change); every line can also be sent to the running stack (RIPTIDE port); an Installer script writes the first one |
+| Run-time changes | GUI | Shell commands (`AddNetInterface`, `ConfigureNetInterface`, `AddNetRoute`, `RoadshowControl`, ...) [RS-SRC] | `ip`, `ifconfig`, `route`, `arp`, `sysctl`, `hostname`, the RIPTIDE port commands; RiptidePrefs' Apply |
 
 ## 7. DHCP, DNS and tools
 
@@ -226,8 +236,9 @@ for the plain AmiTCP API or for MiamiDx's documented API do.
 | Resolver | BIND 4.9-era, DNS cache (32 entries) (RE-NOTES 6, 7.9) | "Built-in DNS cache", IDN (ISO Latin 1 to Punycode) [RS-README] | Own resolver with a 32-entry cache, search domain, static host table, PTR lookups; no IDN, no DNSSEC |
 | inetd | Yes (built in) | Yes, "inetd style Internet superserver" [RS-README] | No |
 | TCP: handler | Not analysed | Yes [RS-README] | No |
-| Packet capture | `MiamiTCPDump` (miamibpf/miamipcap) | `tcpdump`, BPF [RS-README] | No |
-| Tools | `Miami*` tools: ping, traceroute, netstat (kvm based), route, arp, ifconfig, sysctl, host, DiG, NSLookup, ftp, telnet, finger, IPFW, IPNatD... | Configuration and status commands (`ShowNetStatus`, `GetNetStatus`, `NetShutdown`, `Online`, `Offline`, `SampleNetSpeed`...) [RS-SRC], plus `ping`, `traceroute`, `wget`, `ftp`, `tcpdump` [RS-1.13], [RS-1.15] | Linux-style `ip` (iproute2), `ifconfig`, `route`, `arp`, `netstat`, `traceroute`, `ping`, `host`, `sysctl`, `hostname`, `nc`, `ftp`; no wget, telnet or dig |
+| Packet capture | `MiamiTCPDump` (miamibpf/miamipcap) | `tcpdump`, BPF [RS-README] | `Riptide CAPTURE` records into a RAM ring with filters and saves pcap files for Wireshark/tcpdump; `rtdiag` bundles capture, profile and debug log for bug reports. No BPF API, no live tcpdump |
+| Tools | `Miami*` tools: ping, traceroute, netstat (kvm based), route, arp, ifconfig, sysctl, host, DiG, NSLookup, ftp, telnet, finger, IPFW, IPNatD... | Configuration and status commands (`ShowNetStatus`, `GetNetStatus`, `NetShutdown`, `Online`, `Offline`, `SampleNetSpeed`...) [RS-SRC], plus `ping`, `traceroute`, `wget`, `ftp`, `tcpdump` [RS-1.13], [RS-1.15] | Linux-style `ip` (iproute2), `ifconfig`, `route`, `arp`, `netstat`, `traceroute`/`traceroute6`, `ping`/`ping6`, `host`, `sysctl`, `hostname`, `nc` (Fast Open, keepalive, multicast), `ftp`, `speedtest`, `rtdiag`; no wget, telnet or dig |
+| Time and names | Not analysed | **Unverified** | SNTP client setting the clock (and battclock) from DHCP or configured servers; mDNS responder for `HOSTNAME.local` and `.local` lookups |
 
 ## 8. Security posture
 
@@ -271,18 +282,24 @@ Riptide is younger and narrower. Be aware of these before choosing it:
   neither of the others has, is there, but only host-side: no stateful
   DHCPv6, no RFC 3542 ancillary data, and SANA-II drivers need a
   multicast filter.
-* **No firewall, NAT or packet filter hooks**, no BPF/tcpdump, no SOCKS,
-  no SSL (`RiptideOpenSSL()` returns NULL), no inetd, no `TCP:` handler,
-  no ZeroConf, no IDN.
-* **No GUI** (MiamiDx has one; Roadshow has none either).
+* **No firewall, NAT or packet filter hooks**, no BPF API or live
+  tcpdump (only capture to pcap files), no SOCKS, no SSL
+  (`RiptideOpenSSL()` returns NULL), no inetd, no `TCP:` handler, no
+  ZeroConf, no IDN.
+* **No server-side TCP Fast Open** (the client side is there).
 * **Roadshow's API extensions** (routing, interface, DNS, monitoring, BPF,
   `RoadshowData`) are not implemented, so Roadshow-specific tools do not
   run.
 * **MiamiDx's private vectors** (resolver internals, kvm access, settings
   database) return 0, so MiamiDx's own NetStat, DiG and NSLookup do not
   work with Riptide's compat alias.
-* **Single IPv4 address per interface**, single usergroup user, no
-  forwarding/router mode.
+* **Single usergroup user, no IPv4 forwarding/router mode.**
+* **Emulator caveats.** On FS-UAE, Riptide stops at the first transfer
+  when the 68030/68060 MMU is emulated (cause unknown). Under heavy
+  timer-interrupt load the AROS Kickstart replacement sometimes loses a
+  task from exec's ready list; this reproduces without Riptide
+  (`tests/amiga/run_fsuae_execrace.sh`), but Riptide's stack process,
+  woken for every packet, is the likeliest victim.
 
 ## 10. Testing methodology
 
@@ -295,7 +312,11 @@ Riptide is tested in layers, all automated:
 * **Host interop.** The portable core runs on Linux and talks to the
   **Linux kernel's TCP over TUN**: connects in both directions, bulk
   transfers, ECN, small MTUs, `netem` loss and reordering, DNS, ICMP, UDP,
-  DHCP (17 test programs, `tests/run_tests.sh build/host`).
+  DHCP, IPv6, multicast, NTP and mDNS; Fast Open, connect timeouts,
+  TIME_WAIT reuse, keepalive and cork against Linux in a network
+  namespace with iptables rules playing middleboxes; LEDBAT and rLEDBAT
+  against Linux CUBIC through an emulated bottleneck; IPv4 aliases and
+  DSCP marking over TAP (40 test programs, `make check`).
 * **Simulated wire.** Two Riptide instances over a wire with seeded loss,
   reordering, duplication, delay and rate limits, byte-exact verification,
   and counters for every recovery mechanism (`tests/t_tcp_wire.c`).
@@ -308,7 +329,16 @@ Riptide is tested in layers, all automated:
   hunk/relocation checks; a library self test under vamos; and full-system
   tests in FS-UAE with the AROS Kickstart: about 90 live library checks
   (including the compat alias), every network tool, and a client built
-  from the developer SDK alone.
+  from the developer SDK alone; RiptidePrefs driven page by page with
+  screenshots; the Installer with Installer 43.3 and InstallerLG; and,
+  on an FS-UAE patched to bridge `uaenet.device` to a Linux veth pair,
+  LAN, IPv6, Happy Eyeballs with a dead IPv6 address, Fast Open, NTP,
+  mDNS and multicast against real Linux peers.
+* **Independent conformance.** [bsdsocktest](https://github.com/tbdye/bsdsocktest)
+  0.2.3, a third-party bsdsocket.library suite: 130 of 130 loopback
+  tests pass on both builds (vbcc and gcc).
+* **Speed lab.** The throughput benchmark of section 11 runs against a
+  stored baseline and fails on a drop of more than 10 %.
 
 What is missing is the most important layer for users: long-term use on
 real Amiga hardware with real SANA-II and MNI drivers.
@@ -332,19 +362,29 @@ it has every byte (upload).
 
 | CPU preset | FS-UAE | Download KB/s | Upload KB/s | Ping ms |
 |---|---|---|---|---|
-| a1200-020 | A1200, 68020 14 MHz, 8 MB Fast RAM | 447.9 | 269.4 | 7.1 |
+| a1200-020 | A1200, 68020 14 MHz, 8 MB Fast RAM | 447.9 → **522.2** | 269.4 → **309.8** | 7.1 |
 | a1200-030 | A1200, 68030 25 MHz, 8 MB Fast RAM | 791.3 | 459.2 | 3.5 |
-| a4000-040 | A4000, 68040 25 MHz, 16 MB Zorro III RAM | 1574.2 | 900.6 | 5.7 |
+| a4000-040 | A4000, 68040 25 MHz, 16 MB Zorro III RAM | 1574.2 → **1906.9** | 900.6 → **1080.2** | 5.7 |
 | a4000-060 | A4000, 68060 50 MHz, 16 MB Zorro III RAM | 2760.1 | 1539.8 | 7.7 |
 
-Riptide 0.12 (main d814867), 22 October 2026; KB = 1024 bytes. The three
-downloads spread by 1 % on the 68020 and 68030, 2.5 % on the 68040 and
-13 % on the 68060; the uploads by 5 % or less on every CPU. The 68060
-download is the least stable cell and the most likely to fail the
-baseline check by chance. `tests/amiga/netbench-baseline.json`
-holds every run; a speed lab run with
-`BASELINE=tests/amiga/netbench-baseline.json` fails when a median is more
-than 10 % below it.
+The first figure is Riptide 0.12 (main d814867, 22 October 2026), the
+baseline in `tests/amiga/netbench-baseline.json`; the bold one is 0.13's
+receive path (SANA-II DMA callbacks, checksum while copying, receive
+batches, one clock read per stack pass): +17 % down and +15 % up on the
+68020, +21 % and +20 % on the 68040. The 68030 and 68060 presets were not
+rerun. 0.15 measures the same as 0.13 on the 68020 preset (517-522 KB/s
+down, 274-311 KB/s up over several runs on a loaded host); its new
+features cost nothing with the default settings. KB = 1024 bytes. The
+three downloads of a run spread by 1 % on the 68020 and 68030, 2.5 % on
+the 68040 and 13 % on the 68060; the uploads by 5 % or less. A speed lab
+run with `BASELINE=tests/amiga/netbench-baseline.json` fails when a median
+is more than 10 % below the baseline.
+
+For scale: on a patched FS-UAE bridged to a home network on a Mac, with
+FS-UAE's CPU speed setting not cycle-exact, a user measured about
+60 Mbit/s down and 29 Mbit/s up with AmiSpeedTest against a server over
+the internet (Riptide 0.14). That is the emulator's speed, not a real
+Amiga's.
 
 **How far to trust these numbers.**
 
@@ -362,7 +402,8 @@ than 10 % below it.
 * The upload is slower than the download on every CPU. The profile says
   why: on the 68020, sending spends most of its time in TCP output and
   waiting for the stack lock, while receiving is dominated by TCP input,
-  checksums and copies. That is where Phase 2's optimisation work starts.
+  checksums and copies. 0.13 sped up the receive side; the send side is
+  the next target.
 * MMU emulation is off. With FS-UAE's 68030 or 68060 MMU emulated, Riptide
   hangs the machine at the first transfer over uaenet.device. The cause
   is not yet known; it may be the emulator, the stack, or both.
