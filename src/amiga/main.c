@@ -125,6 +125,46 @@ static int send_verb(const char *verb, const char *first, char **more)
 	return send_command(RTCMD_COMMAND, line);
 }
 
+/* "Riptide NTP SYNC", "Riptide CAPTURE start iface=eth0", ...: verbs that
+ * pass the rest of the line to the running stack. Recognised on the raw
+ * argument line, before ReadArgs(): Kickstart 3.1.4's ReadArgs() fills the
+ * CAPTURE/K/F argument without its keyword, so "Riptide ntp" became
+ * "capture ntp" there (AROS keeps it for ARGS/M). Returns -1 when the line
+ * holds no such verb. */
+static int raw_verb(void)
+{
+	static const char *const verbs[] = { "ntp", "mdns", "timezone", "background", "capture" };
+	const char *a = (const char *)GetArgStr();
+	char line[256];
+	u32 n, i, o;
+
+	if (!a)
+		return -1;
+	while (*a == ' ' || *a == '\t')
+		a++;
+	for (n = 0; a[n] && a[n] != ' ' && a[n] != '\t' && a[n] != '\n' && a[n] != '='; n++)
+		;
+	for (i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
+		if (n == strlen(verbs[i]) && !rt_strncasecmp(a, verbs[i], n))
+			break;
+	if (i == sizeof(verbs) / sizeof(verbs[0]) || a[n] == '=')
+		return -1;
+	o = (u32)rt_snprintf(line, sizeof(line), "%s", verbs[i]);
+	a += n;
+	while (*a == ' ' || *a == '\t')
+		a++;
+	/* the rest as typed, without the newline ("Riptide NTP" alone: status) */
+	if (*a && *a != '\n' && o < sizeof(line) - 1) {
+		line[o++] = ' ';
+		for (; *a && *a != '\n' && o < sizeof(line) - 1; a++)
+			line[o++] = *a;
+		while (o > 0 && (line[o - 1] == ' ' || line[o - 1] == '\t'))
+			o--;
+		line[o] = 0;
+	}
+	return send_command(RTCMD_COMMAND, line);
+}
+
 static int riptide_main(void)
 {
 	LONG args[ARG_COUNT];
@@ -133,6 +173,10 @@ static int riptide_main(void)
 	char **more;
 	int rc = 0;
 
+	rc = raw_verb();
+	if (rc >= 0)
+		return rc;
+	rc = 0;
 	memset(args, 0, sizeof(args));
 	rda = (struct RDArgs *)ReadArgs((CONST_STRPTR)TEMPLATE, args, NULL);
 	if (!rda) {
