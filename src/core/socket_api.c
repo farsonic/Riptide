@@ -771,6 +771,26 @@ static int sock_recvit(struct rt_socket *so, const struct rt_iov *iov0, int iovc
 	return r;
 }
 
+/* the destination of a send: normalised into sin (lock held) */
+static int send_addr(struct rt_socket *so, const void *to, u32 tolen, struct rt_sockaddr_in6 *sin)
+{
+	int r = sock_addr_in(so->domain, to, tolen, sin);
+
+	if (r == 0) {
+		if (so->domain == RT_AF_INET6) {
+			if (sin->sin6_family != RT_AF_INET6)
+				r = -RT_EAFNOSUPPORT;
+		} else if (sin->sin6_family != RT_AF_INET && sin->sin6_family != RT_AF_UNSPEC) {
+			r = -RT_EAFNOSUPPORT;
+		} else {
+			sin->sin6_family = RT_AF_INET;
+		}
+	}
+	if (r == 0 && rt_qos_nrules())
+		qos_ports(so, 0, rt_ntohs(sin->sin6_port));
+	return r;
+}
+
 int rt_api_sendmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int iovcnt,
                    int flags, const void *to, u32 tolen)
 {
@@ -782,25 +802,70 @@ int rt_api_sendmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int i
 		return -RT_EINVAL;
 	rt_lock();
 	r = fd_get(c, fd, &so);
-	if (r == 0 && to) {
-		r = sock_addr_in(so->domain, to, tolen, &sin);
-		if (r == 0) {
-			if (so->domain == RT_AF_INET6) {
-				if (sin.sin6_family != RT_AF_INET6)
-					r = -RT_EAFNOSUPPORT;
-			} else if (sin.sin6_family != RT_AF_INET && sin.sin6_family != RT_AF_UNSPEC) {
-				r = -RT_EAFNOSUPPORT;
-			} else {
-				sin.sin6_family = RT_AF_INET;
-			}
-		}
-	}
-	if (r == 0 && to && rt_qos_nrules())
-		qos_ports(so, 0, rt_ntohs(sin.sin6_port));
+	if (r == 0 && to)
+		r = send_addr(so, to, tolen, &sin);
 	if (r == 0)
 		r = sock_sendit(so, iov, iovcnt, flags, to ? &sin : NULL);
 	rt_unlock();
 	return r;
+}
+
+/* Linux sendmmsg(): n messages under one lock. Returns how many were
+ * sent (their len set), or the error of the first one. A blocking socket
+ * may sleep per message; a non-blocking one stops at the first that would
+ * block. */
+int rt_api_sendmmsg(struct rt_sockctx *c, int fd, struct rt_mmsg *v, u32 n, int flags)
+{
+	struct rt_sockaddr_in6 sin;
+	struct rt_socket *so;
+	u32 i;
+	int r = 0;
+
+	if (n && !v)
+		return -RT_EFAULT;
+	rt_lock();
+	for (i = 0; i < n; i++) {
+		/* again each time: a sleep may let the socket be closed */
+		r = fd_get(c, fd, &so);
+		if (r == 0 && (v[i].iovcnt < 0 || v[i].iovcnt > SOCK_IOV_MAX || (v[i].iovcnt && !v[i].iov)))
+			r = -RT_EINVAL;
+		if (r == 0 && v[i].name)
+			r = send_addr(so, v[i].name, v[i].namelen, &sin);
+		if (r == 0)
+			r = sock_sendit(so, v[i].iov, v[i].iovcnt, flags, v[i].name ? &sin : NULL);
+		if (r < 0)
+			break;
+		v[i].len = (u32)r;
+	}
+	if (i)
+		rt_udpstat.MMsgDatagrams += i;
+	rt_unlock();
+	return i ? (int)i : r;
+}
+
+/* Linux recvmmsg(): up to n messages; the first as 'flags' say (it may
+ * block), the rest only if already queued. Returns how many (len, name,
+ * namelen and msgflags set), or the error of the first. */
+int rt_api_recvmmsg(struct rt_sockctx *c, int fd, struct rt_mmsg *v, u32 n, int flags)
+{
+	u32 i;
+	int r = 0;
+
+	if (n && !v)
+		return -RT_EFAULT;
+	for (i = 0; i < n; i++) {
+		u32 nl = v[i].namelen;
+		r = rt_api_recvmsg(c, fd, v[i].iov, v[i].iovcnt, i ? flags | RT_MSG_DONTWAIT : flags,
+		                   v[i].name, v[i].name ? &nl : NULL, &v[i].msgflags);
+		if (r < 0)
+			break;
+		v[i].len = (u32)r;
+		if (v[i].name)
+			v[i].namelen = nl;
+	}
+	if (i && r == -RT_EWOULDBLOCK)
+		r = 0;
+	return i ? (int)i : r;
 }
 
 int rt_api_recvmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int iovcnt,
@@ -1003,6 +1068,13 @@ static int sol_set(struct rt_socket *so, int name, const void *val, u32 len)
 		so->priority = (u8)v;
 		so->qos_flags = (u8)((so->qos_flags & ~RT_SOQ_RULE_PRIO) | RT_SOQ_PRIO);
 		return 0;
+	case RT_SO_NO_CHECK: case RT_SO_NO_CHECK_LINUX:
+		if ((r = opt_int(val, len, &v)) < 0)
+			return r;
+		if (so->type != RT_SOCK_DGRAM)
+			return -RT_ENOPROTOOPT;
+		so->no_check = v != 0;
+		return 0;
 	case RT_SO_EVENTMASK:
 		if ((r = opt_int(val, len, &v)) < 0)
 			return r;
@@ -1098,6 +1170,7 @@ int rt_api_getsockopt(struct rt_sockctx *c, int fd, int level, int name, void *v
 	case RT_SO_TYPE:    v = so->type; break;
 	case RT_SO_EVENTMASK: v = (s32)so->event_mask; break;
 	case RT_SO_PRIORITY: case RT_SO_PRIORITY_LINUX: v = so->priority; break;
+	case RT_SO_NO_CHECK: case RT_SO_NO_CHECK_LINUX: v = so->no_check; break;
 	default:
 		r = -RT_ENOPROTOOPT;
 		goto out;

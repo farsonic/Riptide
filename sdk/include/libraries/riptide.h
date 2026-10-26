@@ -13,7 +13,8 @@
  */
 
 #define RIPTIDE_LIB_NAME    "riptide.library"
-#define RIPTIDE_LIB_VERSION 1    /* RiptideConnectName() needs version 2 */
+#define RIPTIDE_LIB_VERSION 1    /* RiptideConnectName() needs version 2,
+                                    RiptideSendMMsg()/RecvMMsg() version 3 */
 
 /* RiptideConnectName(host, port, tags) (version 2): a TCP (or UDP)
  * socket connected to host:port, IPv6 and IPv4 raced as RFC 8305 "Happy
@@ -38,6 +39,30 @@ struct RiptideConnectResult {
  * Riptide 0.15): the transmit priority band, and the DSCP of packets of a
  * socket without IP_TOS. Linux's number 12 is accepted too. */
 #define SO_RIPTIDE_PRIORITY 0x1100
+
+/* SOL_SOCKET option, datagram sockets (Riptide 0.17): int, 1 = send this
+ * socket's IPv4 UDP datagrams without a checksum (Linux SO_NO_CHECK; Linux's
+ * number 11 is accepted too). IPv6 datagrams always carry one (RFC 8200). */
+#define SO_RIPTIDE_NO_CHECK 0x1101
+
+/* RiptideSendMMsg(fd, vec, vlen, flags) / RiptideRecvMMsg(fd, vec, vlen,
+ * flags) (version 3): Linux sendmmsg()/recvmmsg(). vec is an array of
+ * vlen of these; returns how many messages were sent / received (rmm_Len
+ * holds each one's byte count) or -1 with Errno() set when the first one
+ * failed. Sending stops at the first message that fails (for a
+ * non-blocking socket: that would block, EWOULDBLOCK); receiving takes the
+ * first as flags say and the rest only if already queued. */
+struct RiptideMMsgHdr {
+	/* a struct msghdr, as for sendmsg()/recvmsg() */
+	APTR  rmm_Name;          /* msg_name: struct sockaddr * or NULL */
+	ULONG rmm_NameLen;       /* msg_namelen */
+	APTR  rmm_Iov;           /* msg_iov: struct iovec * */
+	ULONG rmm_IovLen;        /* msg_iovlen */
+	APTR  rmm_Control;       /* msg_control (not used) */
+	ULONG rmm_ControlLen;    /* msg_controllen */
+	LONG  rmm_Flags;         /* msg_flags (receive: MSG_TRUNC ...) */
+	ULONG rmm_Len;           /* out: bytes sent / received */
+};
 
 /* RiptideSupportedCPUs() / RiptideSetFdCallback() CPU types */
 #define RIPTIDECPU_M68KREG 1     /* 68k code, arguments in registers */

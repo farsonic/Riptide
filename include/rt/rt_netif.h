@@ -122,6 +122,10 @@ struct rt_netif {
 	u8    vlan_pcp_prio;     /* 1: the tag's priority is the socket priority (SO_PRIORITY) */
 	u16   nvlan;             /* parent: VLAN interfaces on it */
 	int (*vlan_rx)(struct rt_netif *nif, int on);
+	/* UDP pacing: datagram sockets wait for transmit room here
+	 * (rt_netif_tx_room()); rt_drv_tx_done() wakes them, the stall timer
+	 * when the driver stops completing frames (rt_netif_tx_wait()) */
+	u8    tx_waiters;
 };
 
 /* ---- driver counters (src/core/drvstats.c) ----
@@ -149,6 +153,7 @@ struct rt_drv_stats {
 	u32 rx_nobuf, rx_errors, tx_errors;
 	struct rt_drv_err rxerr[RT_DRV_NERR], txerr[RT_DRV_NERR];
 	u32 tx_slots, tx_inflight, tx_inflight_max, tx_full;
+	u32 tx_progress_ms;      /* last completion, or the start from idle */
 	u32 reset_ms;            /* rt_now_ms() at the last reset */
 	u32 warn_ms;             /* last "reads ran out" warning */
 	u32 warn_empty;          /* empty count at that warning */
@@ -251,6 +256,25 @@ int  rt_netif_output_ip_unicast(struct rt_netif *nif, struct rt_buf *b, u32 next
 /* Every transmission goes through here (packet capture), never through
  * nif->link_output() directly. Consumes b. */
 int  rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype);
+/* index of the interface rt_netif_xmit() last sent on (for a VLAN: its
+ * parent, which sends last); protocols clear it before an output to learn
+ * where a datagram went */
+extern u32 rt_netif_tx_last;
+/* Can nif take another frame now? The driver holds fewer than its
+ * transmit slots, or with QoS the band of a socket priority 'prio'
+ * (rt_buf.prio: 0 none, else priority + 1) is below qos_limit. Always
+ * true for interfaces without counted slots and for one that is down
+ * (the send then fails on its own). Lock held. */
+int  rt_netif_tx_room(struct rt_netif *nif, u8 prio);
+/* A driver that holds frames but has completed none for this long is
+ * stalled (a SANA-II device that stopped replying, offline hardware):
+ * rt_netif_tx_room() then says yes, so senders do not wait for it
+ * forever, and frames are dropped as they were before pacing. */
+#define RT_NETIF_TX_STALL_MS 1000
+int  rt_netif_tx_stalled(const struct rt_netif *nif);
+/* A sender found no room: mark nif for rt_drv_tx_done()'s wakeup and arm
+ * the stall timer, which wakes the waiters when the driver stalls. */
+void rt_netif_tx_wait(struct rt_netif *nif);
 
 /* The loopback interface "lo0" (127.0.0.1/8), created by rt_init(). */
 extern struct rt_netif *rt_loopback_if;

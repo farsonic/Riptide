@@ -216,6 +216,29 @@ static void qos_timer(void *arg)
 		rt_timer_after(&q->timer, 250);
 }
 
+int rt_netif_tx_stalled(const struct rt_netif *nif)
+{
+	const struct rt_drv_stats *d = nif->drv;
+
+	return d && d->tx_inflight && (s32)(rt_now_ms() - d->tx_progress_ms) >= RT_NETIF_TX_STALL_MS;
+}
+
+int rt_netif_tx_room(struct rt_netif *nif, u8 prio)
+{
+	const struct rt_drv_stats *d = nif->drv;
+
+	if (!(nif->flags & RT_IFF_UP) || rt_netif_tx_stalled(nif))
+		return 1;
+	if (nif->qos) {
+		const struct qos_if *q = nif->qos;
+		int band = prio ? prio_band[(prio - 1) & 7] : RT_QOS_BAND_DEFAULT;
+		return q->q[band].qlen < (u32)rt_qos_limit;
+	}
+	if (!d || !d->tx_slots)
+		return 1;
+	return d->tx_inflight < d->tx_slots;
+}
+
 int rt_qos_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
 	struct qos_if *q = nif->qos;

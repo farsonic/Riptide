@@ -134,6 +134,8 @@ void rt_drv_tx_start(struct rt_netif *nif, u32 len)
 		return;
 	d->tx_frames++;
 	d->tx_bytes += len;
+	if (!d->tx_inflight)
+		d->tx_progress_ms = rt_now_ms();
 	d->tx_inflight++;
 	if (d->tx_inflight > d->tx_inflight_max)
 		d->tx_inflight_max = d->tx_inflight;
@@ -147,12 +149,18 @@ void rt_drv_tx_done(struct rt_netif *nif, s32 err)
 		return;
 	if (d->tx_inflight)
 		d->tx_inflight--;
+	d->tx_progress_ms = rt_now_ms();
 	if (err) {
 		d->tx_errors++;
 		rt_drv_count_err(d->txerr, err);
 	}
 	if (nif->qos)
 		rt_qos_run(nif);
+	/* UDP pacing: wake the datagram sockets that wait for room */
+	if (nif->tx_waiters && rt_netif_tx_room(nif, 0)) {
+		nif->tx_waiters = 0;
+		rt_udp_tx_wake(nif);
+	}
 }
 
 void rt_drv_tx_full(struct rt_netif *nif)

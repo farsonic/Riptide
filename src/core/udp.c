@@ -741,6 +741,55 @@ static int udp_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 	return 0;
 }
 
+/* Pacing. A datagram socket remembers the interface its last datagram
+ * left by (so->tx_ifindex). While that interface has no transmit room
+ * (driver slots or QoS band full), the socket is not writable and a send
+ * says EWOULDBLOCK: sock_sendit() then sleeps for a blocking socket, a
+ * non-blocking one waits with WaitSelect(). rt_drv_tx_done() wakes the
+ * waiters (rt_udp_tx_wake()); so does a stall timer when the driver
+ * completes nothing for RT_NETIF_TX_STALL_MS, after which the interface
+ * counts as having room (its frames are dropped as before pacing). The
+ * first datagram, and one to another interface, is sent as before. */
+static int udp_tx_room(struct rt_socket *so)
+{
+	struct rt_netif *n;
+
+	if (!so->tx_ifindex)
+		return 1;
+	n = rt_netif_by_index(so->tx_ifindex);
+	if (!n) {
+		so->tx_ifindex = 0;
+		return 1;
+	}
+	if (rt_netif_tx_room(n, rt_qos_sock_prio(so)))
+		return 1;
+	so->tx_wait = 1;
+	rt_netif_tx_wait(n);
+	return 0;
+}
+
+void rt_udp_tx_wake(struct rt_netif *nif)
+{
+	struct udp_pcb *p;
+
+	for (p = udp_pcbs; p; p = p->next) {
+		struct rt_socket *so = p->so;
+		if (so && so->tx_wait && so->tx_ifindex == nif->index) {
+			so->tx_wait = 0;
+			rt_sock_wakeup(so, RT_SEV_WRITE);
+		}
+	}
+}
+
+static u32 udp_poll(struct rt_socket *so)
+{
+	u32 m = rt_dgram_poll(so);
+
+	if ((m & RT_POLLOUT) && !udp_tx_room(so))
+		m &= ~RT_POLLOUT;
+	return m;
+}
+
 static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
                     int flags, const struct rt_sockaddr_in6 *to)
 {
@@ -825,7 +874,11 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 				return -RT_EADDRNOTAVAIL;
 		}
 	}
-	csum = !v4 || rt_udp_checksum;
+	csum = !v4 || (rt_udp_checksum && !so->no_check);
+	if (!udp_tx_room(so)) {
+		rt_udpstat.TxNoRoom++;
+		return -RT_EWOULDBLOCK;
+	}
 
 	b = rt_buf_alloc(RT_BUF_HEADROOM, 8 + len);
 	if (!b)
@@ -876,7 +929,16 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 	b->prio = rt_qos_sock_prio(so);
 	o.dontroute = (so->options & RT_SO_DONTROUTE) || (flags & RT_MSG_DONTROUTE);
 	o.allow_broadcast = (so->options & RT_SO_BROADCAST) != 0;
+	rt_netif_tx_last = 0;
 	r = rt_inet_output(b, &o);
+	if (rt_netif_tx_last)
+		so->tx_ifindex = rt_netif_tx_last;
+	if (r == -RT_ENOBUFS && !udp_tx_room(so)) {
+		/* the driver filled up after all: wait for room, then this
+		 * datagram is sent again from the caller's buffer */
+		rt_udpstat.TxNoRoom++;
+		return -RT_EWOULDBLOCK;
+	}
 	if (r < 0)
 		return r;
 	rt_udpstat.OutDatagrams++;
@@ -992,7 +1054,7 @@ const struct rt_proto_ops rt_udp_ops = {
 	udp_shutdown,
 	udp_setsockopt,
 	udp_getsockopt,
-	rt_dgram_poll,
+	udp_poll,
 	udp_getname,
 	rt_dgram_ioctl,
 };

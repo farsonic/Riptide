@@ -75,4 +75,6 @@ RiptideReserved23()()
 RiptideReserved53()()
 ##public
 RiptideConnectName(host,port,tags)(a0,d0,a1)
+RiptideSendMMsg(fd,vec,vlen,flags)(d0,a0,d1,d2)
+RiptideRecvMMsg(fd,vec,vlen,flags)(d0,a0,d1,d2)
 ##end

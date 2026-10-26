@@ -121,6 +121,9 @@
 522 LONG RiptideReserved53() = null
 # riptide.library 2 (Riptide 0.15): beyond the historical table
 528 LONG RiptideConnectName(CONST_STRPTR host a0, ULONG port d0, APTR tags a1)
+# riptide.library 3 (Riptide 0.17)
+534 LONG RiptideSendMMsg(LONG fd d0, APTR vec a0, ULONG vlen d1, ULONG flags d2)
+540 LONG RiptideRecvMMsg(LONG fd d0, APTR vec a0, ULONG vlen d1, ULONG flags d2)
 
 @lib usergroup UserGroupBase prefix=ug_
 6   ULONG LibOpen(ULONG version d0) = ug_libopen

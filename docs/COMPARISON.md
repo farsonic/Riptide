@@ -203,6 +203,7 @@ slightly between runs (seeded but timing dependent).
 | IPv4 / IPv6 per interface on or off | Not applicable (no IPv6) | **Unverified** | Yes (0.15): `ipv4 [IF] on\|off`, `ipv6 [IF] on\|off` |
 | Happy Eyeballs (RFC 8305) | No | **Unverified** | Yes (0.15): parallel A/AAAA lookups (50 ms resolution delay), RFC 6724 order, connection racing with 250 ms attempt delay (`RiptideConnectName()`, nc, ftp); no AAAA for `getaddrinfo()` while IPv6 has no route |
 | QoS / DiffServ | Not analysed | **Unverified** | Yes (0.15): three strict-priority transmit bands in front of SANA-II/MNI drivers (ACKs, DNS, small segments, EF first; CS1 last), `SO_PRIORITY` with DSCP marking, `IP_TOS`/`IPV6_TCLASS`, `qos rule` by port or program |
+| UDP send pacing, batches, no checksum | Not analysed | **Unverified** | Yes (0.17): a UDP socket is writable only while the driver (or QoS band) has room, a blocking send waits, a non-blocking one says `EWOULDBLOCK` instead of dropping with `ENOBUFS`; `RiptideSendMMsg()`/`RiptideRecvMMsg()` (Linux `sendmmsg`/`recvmmsg`, riptide.library 3); `SO_NO_CHECK` per socket (IPv4) |
 
 ## 5. Application interfaces
 

@@ -148,6 +148,11 @@ struct rt_socket {
 	u8   qos_flags;               /* RT_SOQ_* */
 	u8   rule_dscp;               /* DSCP of a matching rule (RT_SOQ_RULE_DSCP) */
 	u16  qos_prog;                /* rules whose program= matched at creation */
+	/* UDP transmit (0.17): SO_NO_CHECK, and the interface the last
+	 * datagram went out on, for writability (udp.c, pacing) */
+	u8   no_check;                /* no UDP checksum over IPv4 */
+	u8   tx_wait;                 /* waits for room on tx_ifindex */
+	u32  tx_ifindex;              /* 0: not known yet */
 };
 #define RT_SOQ_PRIO      0x01     /* the program set SO_PRIORITY */
 #define RT_SOQ_RULE_PRIO 0x02     /* priority from a rule */
@@ -257,6 +262,17 @@ int  rt_api_sendmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int 
                     int flags, const void *to, u32 tolen);
 int  rt_api_recvmsg(struct rt_sockctx *c, int fd, const struct rt_iov *iov, int iovcnt,
                     int flags, void *from, u32 *fromlen, int *msgflags);
+/* sendmmsg()/recvmmsg(): several datagrams per call */
+struct rt_mmsg {
+	struct rt_iov *iov;
+	int   iovcnt;
+	void *name;          /* destination / source address, or NULL */
+	u32   namelen;       /* in: its size; recv out: the length used */
+	u32   len;           /* out: bytes sent / received */
+	int   msgflags;      /* recv out: RT_MSG_TRUNC ... */
+};
+int  rt_api_sendmmsg(struct rt_sockctx *c, int fd, struct rt_mmsg *v, u32 n, int flags);
+int  rt_api_recvmmsg(struct rt_sockctx *c, int fd, struct rt_mmsg *v, u32 n, int flags);
 int  rt_api_send(struct rt_sockctx *c, int fd, const void *buf, u32 len, int flags);
 int  rt_api_recv(struct rt_sockctx *c, int fd, void *buf, u32 len, int flags);
 int  rt_api_sendto(struct rt_sockctx *c, int fd, const void *buf, u32 len, int flags,

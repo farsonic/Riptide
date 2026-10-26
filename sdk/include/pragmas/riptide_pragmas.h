@@ -37,5 +37,7 @@
 #pragma libcall RiptideBase RiptideGetFdCallback 14a 801
 #pragma libcall RiptideBase RiptideSetFdCallback 150 0802
 #pragma libcall RiptideBase RiptideConnectName 210 90803
+#pragma libcall RiptideBase RiptideSendMMsg 216 218004
+#pragma libcall RiptideBase RiptideRecvMMsg 21c 218004
 
 #endif /* PRAGMAS_RIPTIDE_PRAGMAS_H */
