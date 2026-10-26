@@ -41,6 +41,8 @@ void RiptideSupportedCPUs(ULONG* apis, ULONG* callbacks, ULONG* kernel);
 LONG RiptideGetFdCallback(APTR* cbptr);
 LONG RiptideSetFdCallback(APTR cbptr, LONG cputype);
 LONG RiptideConnectName(CONST_STRPTR host, ULONG port, APTR tags);
+LONG RiptideSendMMsg(LONG fd, APTR vec, ULONG vlen, ULONG flags);
+LONG RiptideRecvMMsg(LONG fd, APTR vec, ULONG vlen, ULONG flags);
 
 #ifdef __cplusplus
 }

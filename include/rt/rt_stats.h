@@ -22,6 +22,10 @@ struct rt_icmp_stats {
 struct rt_udp_stats {
 	u32 InDatagrams, NoPorts, InErrors, OutDatagrams, RcvbufErrors,
 	    InCsumErrors;
+	/* 0.17 (appended: older readers check the record size): sends that
+	 * found no transmit room on the interface (pacing: EWOULDBLOCK or a
+	 * wait), and datagrams sent with RiptideSendMMsg() */
+	u32 TxNoRoom, MMsgDatagrams;
 };
 struct rt_tcp_stats {
 	/* RFC 4022 / Linux Tcp: */

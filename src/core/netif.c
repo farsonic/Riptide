@@ -413,6 +413,11 @@ void rt_netif_down(struct rt_netif *nif)
 	rt_igmp_if_down(nif);
 	rt_ip6_if_down(nif);
 	rt_vlan_parent_changed(nif);
+	/* UDP senders waiting for room find out (the send then fails) */
+	if (nif->tx_waiters) {
+		nif->tx_waiters = 0;
+		rt_udp_tx_wake(nif);
+	}
 }
 
 void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
@@ -468,9 +473,12 @@ void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, con
 	rt_buf_free(b);
 }
 
+u32 rt_netif_tx_last;
+
 int rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
 	RT_PROF_EV(RT_EV_DRV_TX);
+	rt_netif_tx_last = nif->index;
 	if (nif->qos)
 		return rt_qos_xmit(nif, b, dsthw, ethertype);
 	if (rt_capture_on)

@@ -99,4 +99,10 @@ LONG __RiptideSetFdCallback(__reg("a6") void *, __reg("a0") APTR cbptr, __reg("d
 LONG __RiptideConnectName(__reg("a6") void *, __reg("a0") CONST_STRPTR host, __reg("d0") ULONG port, __reg("a1") APTR tags)="\tjsr\t-528(a6)";
 #define RiptideConnectName(host, port, tags) __RiptideConnectName(RiptideBase, (host), (port), (tags))
 
+LONG __RiptideSendMMsg(__reg("a6") void *, __reg("d0") LONG fd, __reg("a0") APTR vec, __reg("d1") ULONG vlen, __reg("d2") ULONG flags)="\tjsr\t-534(a6)";
+#define RiptideSendMMsg(fd, vec, vlen, flags) __RiptideSendMMsg(RiptideBase, (fd), (vec), (vlen), (flags))
+
+LONG __RiptideRecvMMsg(__reg("a6") void *, __reg("d0") LONG fd, __reg("a0") APTR vec, __reg("d1") ULONG vlen, __reg("d2") ULONG flags)="\tjsr\t-540(a6)";
+#define RiptideRecvMMsg(fd, vec, vlen, flags) __RiptideRecvMMsg(RiptideBase, (fd), (vec), (vlen), (flags))
+
 #endif /* _VBCCINLINE_RIPTIDE_H */

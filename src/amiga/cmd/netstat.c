@@ -683,7 +683,8 @@ static int show_stats(void)
 	}
 	if (all || opt_u) {
 		struct rt_udp_stats *u;
-		if (!(d = stat_dump(RT_CTL_UDPSTAT, sizeof(*u))))
+		/* stacks before 0.17 have a shorter record */
+		if (!(d = stat_dump(RT_CTL_UDPSTAT, offsetof(struct rt_udp_stats, TxNoRoom))))
 			return CL_FAIL;
 		u = (struct rt_udp_stats *)((u8 *)d + sizeof(struct rt_ctl_hdr));
 		cl_puts("Udp:\n");
@@ -694,6 +695,10 @@ static int show_stats(void)
 		P("%lu receive buffer errors", u->RcvbufErrors);
 		P("%lu send buffer errors", 0);
 		P("%lu InCsumErrors", u->InCsumErrors);
+		if (stat_recsize >= sizeof(*u)) {
+			P("%lu sends that waited for transmit room", u->TxNoRoom);
+			P("%lu datagrams sent with RiptideSendMMsg()", u->MMsgDatagrams);
+		}
 		FreeVec(d);
 	}
 	return CL_OK;

@@ -153,6 +153,11 @@ void rt_drv_tx_done(struct rt_netif *nif, s32 err)
 	}
 	if (nif->qos)
 		rt_qos_run(nif);
+	/* UDP pacing: wake the datagram sockets that wait for room */
+	if (nif->tx_waiters && rt_netif_tx_room(nif, 0)) {
+		nif->tx_waiters = 0;
+		rt_udp_tx_wake(nif);
+	}
 }
 
 void rt_drv_tx_full(struct rt_netif *nif)

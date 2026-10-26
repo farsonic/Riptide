@@ -232,6 +232,8 @@ struct rt_netif *rt_ip_mc_default_if(u32 group);
  * owns b. */
 void rt_tcp_input(struct rt_buf *b, const struct rt_iphdr *ip);
 void rt_udp_input(struct rt_buf *b, const struct rt_iphdr *ip);
+/* nif has transmit room again: wake the UDP sockets waiting for it */
+void rt_udp_tx_wake(struct rt_netif *nif);
 void rt_icmp_input(struct rt_buf *b, const struct rt_iphdr *ip);
 /* Raw sockets get a copy of every datagram for their protocol; b is NOT
  * consumed. Returns number of sockets that took a copy. */

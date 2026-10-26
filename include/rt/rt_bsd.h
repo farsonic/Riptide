@@ -92,6 +92,11 @@ struct rt_timeval {
  * number 12 is accepted too: no 4.4BSD/AmiTCP option uses it. */
 #define RT_SO_PRIORITY     0x1100
 #define RT_SO_PRIORITY_LINUX 12
+/* Riptide: no UDP checksum for this socket's IPv4 datagrams (Linux
+ * SO_NO_CHECK; IPv6 always has one, RFC 8200). int, 0/1. Linux's number
+ * 11 is accepted too: no 4.4BSD/AmiTCP option uses it. */
+#define RT_SO_NO_CHECK     0x1101
+#define RT_SO_NO_CHECK_LINUX 11
 
 /* ---- IPPROTO_IP options ---- */
 #define RT_IP_OPTIONS          1

@@ -8,7 +8,7 @@ these libraries:
 | Library | Version | API |
 |---|---|---|
 | `bsdsocket.library` | 4.1 | AmiTCP 4: all 46 functions, `socket()` through `GetSocketEvents()` |
-| `riptide.library` | 1.0 | Riptide's own API: `RiptideSysCtl()`, interface state, `getaddrinfo()` & co., `if_*`; 53 documented vectors, reserved vectors up to LVO -522 return 0. See "riptide.library" below. |
+| `riptide.library` | 3.0 | Riptide's own API: `RiptideSysCtl()`, interface state, `getaddrinfo()` & co., `if_*`; 53 documented vectors, reserved vectors up to LVO -522 return 0; then `RiptideConnectName()` (version 2) and `RiptideSendMMsg()`/`RiptideRecvMMsg()` (version 3). See "riptide.library" below. |
 | compat alias of `riptide.library` | 21.1 | The same library under the name and version of the historical API it implements, `miami.library` 21, so existing programs keep working. `compat aliases off` removes it. |
 | `usergroup.library` | 4.1 | AmiTCP usergroup, 39 functions. Single user only. |
 
@@ -649,7 +649,7 @@ with `EBUSY` while a program still has the alias open. The startup line
 and `Riptide STATUS` show the state:
 
 ```
-Libraries: bsdsocket.library 4, riptide.library 2, usergroup.library 4; compat alias: miami.library 21
+Libraries: bsdsocket.library 4, riptide.library 3, usergroup.library 4; compat alias: miami.library 21
 ```
 
 ### Example: Ethernet with DHCP
@@ -1781,6 +1781,104 @@ kind of rules.
 | `qos limit N` | `net.inet.ip.qos_limit` | 128 | 8..1024 frames per band |
 | `qos priodscp on\|off` | `net.inet.ip.qos_prio_dscp` | on | DSCP from SO_PRIORITY |
 
+## Sending UDP fast: pacing, batches, no checksum
+
+For programs that stream datagrams (video, audio, multicast senders)
+Riptide 0.17 has three things Linux programs know.
+
+**Pacing: waiting for send space.** A UDP socket is writable only while
+the interface its last datagram left by has room: the SANA-II driver
+holds fewer than 32 frames (MNI: its pool), or, with QoS on, the
+socket's band holds fewer than `qos limit` frames. When it has no room:
+
+* a **blocking** socket's `send()`/`sendto()`/`sendmsg()` waits until
+  the driver has finished a frame, then sends (`SO_SNDTIMEO` limits the
+  wait: then `EWOULDBLOCK`, as for TCP). No datagram is dropped and
+  none fails with `ENOBUFS` because the driver is busy.
+* a **non-blocking** socket's send fails with `EWOULDBLOCK` (35), not
+  `ENOBUFS`, and nothing is sent. `WaitSelect()` with the socket in the
+  write set returns as soon as there is room again (also
+  `SO_EVENTMASK` `FD_WRITE`), so a sender loops "send until
+  EWOULDBLOCK, WaitSelect for writing".
+
+The first datagram, and one to another interface, is always tried. On a
+68030 or 68040 with an emulated or 100 Mbit/s card the CPU is the limit
+and the queue does not fill (`netstat -s`: "sends that waited for
+transmit room" stays 0); it fills on 10 Mbit/s cards, with QoS
+(`qos inflight 1` keeps a single frame in the driver) and with batches.
+Before 0.17 such a datagram was dropped (an output error of the
+interface) while the send reported success.
+
+**Batches: `RiptideSendMMsg()`, `RiptideRecvMMsg()`.** Linux
+`sendmmsg()`/`recvmmsg()` in riptide.library version 3 (LVO -534 and
+-540, `sdk/`):
+
+```c
+#include <libraries/riptide.h>   /* struct RiptideMMsgHdr */
+#include <proto/riptide.h>
+
+LONG RiptideSendMMsg(LONG fd, struct RiptideMMsgHdr *vec, ULONG vlen, ULONG flags);
+LONG RiptideRecvMMsg(LONG fd, struct RiptideMMsgHdr *vec, ULONG vlen, ULONG flags);
+```
+
+`struct RiptideMMsgHdr` is a `struct msghdr` (name, iov, flags; control
+is ignored) followed by `rmm_Len`, Linux's `struct mmsghdr`. The fd is
+the bsdsocket.library socket of the same task (riptide.library must be
+opened by that task, as for the other socket calls of riptide.library).
+`RiptideSendMMsg()` sends the messages in order and returns how many it
+sent, each one's byte count in `rmm_Len`; it stops at the first that
+fails, and returns -1 with `Errno()` set only when the first one fails.
+A blocking socket waits for room between messages as above; a
+non-blocking one returns the count so far when one would block. `flags`
+are `send()`'s (`MSG_DONTWAIT`, ...). `RiptideRecvMMsg()` receives the
+first message as `flags` say (it may block) and then only what is already
+queued; it sets `rmm_Len`, `msg_namelen` and `msg_flags`
+(`MSG_TRUNC`). There is no timeout argument. Open riptide.library with
+version 3 to use them.
+
+**No checksum: `SO_NO_CHECK`.** `setsockopt(s, SOL_SOCKET,
+SO_RIPTIDE_NO_CHECK, &one, 4)` (0x1101, from the SDK's
+`libraries/riptide.h`; Linux's `SO_NO_CHECK` number 11 is accepted too)
+sends this socket's IPv4 UDP datagrams without a checksum
+(the field is 0, RFC 768); `getsockopt()` reads it back. Only datagram
+sockets take it (others: `ENOPROTOOPT`). IPv6 datagrams always carry a
+checksum (RFC 8200), whatever the option says. Received datagrams are
+checked as before. The global `sysctl net.inet.udp.checksum=0` still
+turns IPv4 UDP checksums off for every socket.
+
+**What it costs: per-call measurements.** `tests/amiga/udpblast.c`
+against a host sink through the bridged FS-UAE (cycle-exact A1200/030 at
+28 MHz and A4000/040 at 25 MHz, uaenet.device; 3000 datagrams, time on
+the Amiga's clock; `tests/amiga/run_fsuae_udpblast.sh`):
+
+| mode | A1200/030 0.16 | A1200/030 0.17 | A4000/040 0.16 | A4000/040 0.17 |
+|---|---|---|---|---|
+| `sendto()` blocking, 1400 B | 474/s, 2108 us | 462/s, 2161 us | 835/s, 1196 us | 811/s, 1232 us |
+| non-blocking + WaitSelect, 1400 B | 475/s, 2101 us | 460/s, 2169 us | 805/s, 1240 us | 810/s, 1233 us |
+| `SO_NO_CHECK`, 1400 B | (no option) | 479/s, 2084 us | (no option) | 854/s, 1170 us |
+| `RiptideSendMMsg()` x16, 1400 B | | 772/s, 1294 us | | 1405/s, 711 us |
+| multicast, 1400 B | 479/s | 474/s | 815/s | 810/s |
+| `sendto()`, 64 B | 557/s, 1795 us | 553/s, 1807 us | 903/s, 1106 us | 898/s, 1113 us |
+| `RiptideSendMMsg()` x16, 64 B | | 1025/s, 974 us | | 1761/s, 567 us |
+| QoS `inflight 1`, `limit 8`: blocking | 451/s, **42 lost** | 428/s, none lost | 802/s, **186 lost** | 756/s, none lost |
+| the same, non-blocking | 455/s, **83 lost** | 436/s, none lost, 34 waits | 791/s, **121 lost** | 757/s, none lost, 2 waits |
+
+(datagrams per second, microseconds per datagram; "lost": accepted by
+the stack but never on the wire.) Run to run the rates vary by a few
+per cent. What this says:
+
+* A single `sendto()` costs about 1.8 ms on the 030 and 1.1 ms on the 040
+  even for 64 bytes: the call, the stack lock, the driver request and
+  the switch to the stack task for its completion. Copying and
+  checksumming 1400 bytes adds only about 0.3 ms and 0.1 ms.
+* A batch of 16 pays the per-call part once: 1.6x (1400 B) to 1.9x
+  (64 B) the datagrams per second on both CPUs.
+* `SO_NO_CHECK` saves about 75 us (030) and 60 us (040) per 1400-byte
+  datagram, 3-5%.
+* The pacing check costs a few microseconds per datagram (within the
+  run-to-run spread). Where it matters, the queue full, 0.16 threw
+  datagrams away while reporting success; 0.17 makes the sender wait.
+
 ## IPv4 multicast
 
 Riptide is a multicast host (RFC 1112): it joins groups, reports them
@@ -1985,6 +2083,8 @@ readable (end of file), one whose connect failed reports the error.
   `RiptideGetFdCallback()` and `RiptideSetFdCallback()`.
 * Version 2 (Riptide 0.15) adds `RiptideConnectName()` at LVO -528, after
   the historical table (see "Happy Eyeballs").
+* Version 3 (Riptide 0.17) adds `RiptideSendMMsg()` and `RiptideRecvMMsg()`
+  at LVO -534 and -540 (see "Sending UDP fast").
 * Fd callbacks must be 68k register callbacks (`RIPTIDECPU_M68KREG`); PPC
   callbacks are refused.
 * Return fixed values:
@@ -2010,7 +2110,7 @@ is out of date):
 | File | |
 |---|---|
 | `sdk/fd/riptide_lib.fd` | FD file (base `_RiptideBase`; the reserved vectors are `##private`), for `fd2pragma`, `fd2sfd` and the like |
-| `sdk/include/libraries/riptide.h` | `RIPTIDE_LIB_NAME`, `RIPTIDE_LIB_VERSION`, `RIPTIDECPU_*`, the `net.riptide.*` MIB numbers, the `RTCN_*` tags and `struct RiptideConnectResult`, `SO_RIPTIDE_PRIORITY` |
+| `sdk/include/libraries/riptide.h` | `RIPTIDE_LIB_NAME`, `RIPTIDE_LIB_VERSION`, `RIPTIDECPU_*`, the `net.riptide.*` MIB numbers, the `RTCN_*` tags and `struct RiptideConnectResult`, `struct RiptideMMsgHdr`, `SO_RIPTIDE_PRIORITY`, `SO_RIPTIDE_NO_CHECK` |
 | `sdk/include/clib/riptide_protos.h` | prototypes |
 | `sdk/include/inline/riptide_protos.h` | vbcc inline calls |
 | `sdk/include/pragmas/riptide_pragmas.h` | SAS/C and DICE `#pragma libcall` |
@@ -2213,6 +2313,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root; `BR_IF`, `BR_PEER`, `BR_NET` choose other veth names and another /24 than `rtbr0`, `rtbr1`, `192.168.77`): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
 | `tests/t_vlan_unit.c`, `tests/t_vlan_wire.c`, `tests/t_vlan_tap.c` (host; TAP needs root) | VLANs: the `interface ... vlan=` keyword and its errors, tags and PCP (fixed and from `SO_PRIORITY`) on transmit, receive by id, priority-tagged, unknown-id, QinQ and runt frames, the MTU clamp, parent down/up/removal, link multicast reference counts, the `ifaces` record, a failed line leaving nothing; two stacks on the simulated wire with VLANs 10 and 20 (UDP up to the MTU and fragmented, 1 MB TCP each way, isolation of a VLAN the peer lacks, removal at run time); against Linux over TAP with an `AF_PACKET` peer (the container kernel may lack 8021q): tagged ND, ARP with PCP 5, ping with 1518 byte frames, frames of another VLAN ignored. |
 | `tests/amiga/run_fsuae_vlan.sh build/amiga` | VLANs on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtv0`/`rtv1`, 192.168.130.0/24 untagged and 192.168.131.0/24 on VLAN 10, or `VL_IF`, `VL_PEER`, `VL_NET`, `VL_NET2`) against `tests/amiga/vlan_peer.py`: ping untagged and on VLAN 10 (also 1496 bytes: 1518 byte tagged frames through uaenet.device), UDP on VLAN 10, PCP 4 on the wire, `ip -d link`, `ifconfig`, `netstat -i`, `STATUS`, VLANs added and removed with `ip` and `ifconfig`, a duplicate id refused. |
+| `tests/t_udptx_unit.c` (host) | UDP sending (0.17) against a driver that holds its frames (4 slots): a non-blocking socket is writable while the driver has room, then not writable and `EWOULDBLOCK` (the interface marked for a wakeup), writable again after a completion; a blocking send waits for the completion; `SO_NO_CHECK` (and Linux's 11) leaves the IPv4 checksum 0, refused on TCP; `rt_api_sendmmsg()` whole, partial and `EWOULDBLOCK`, `rt_api_recvmmsg()` over loopback with lengths and addresses. |
+| `tests/amiga/run_fsuae_udpblast.sh build/amiga` | UDP send rate on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtub0`/`rtub1`, 192.168.150.0/24; `CPUS`, default a1200-030 and a4000-040, cycle-exact): `tests/amiga/udpblast.c` sends 3000 datagrams per mode (blocking, non-blocking with WaitSelect, `SO_NO_CHECK`, `RiptideSendMMsg()` 16 at a time, multicast, 64-byte datagrams) to `tests/amiga/udpsink.py`, which counts them on the wire and those without a checksum; a second boot with `qos inflight 1`, `qos limit 8` makes the senders wait for room. Prints a table of rates and per-call times; `CHECK=1` fails on a lost or failed datagram, a checksum where there should be none (or the reverse), or a non-blocking sender that never had to wait. |
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |

@@ -499,6 +499,44 @@ connects going with `rt_api_select()`, starting the next one every
 `RiptideConnectName()` (LVO -528, beyond the historical table so the
 compat alias keeps its layout).
 
+## Sending UDP: pacing, batches, no checksum (0.17)
+
+**Pacing.** A UDP socket remembers the interface its last datagram left
+by (`so->tx_ifindex`, from `rt_netif_tx_last`, which `rt_netif_xmit()`
+sets; for a VLAN the parent). `udp_send()` asks `rt_netif_tx_room()`
+for that interface before it builds a datagram: with QoS bands, whether
+the socket's band (`rt_qos_sock_prio()`) is below `qos_limit`; without,
+whether the driver holds fewer than its `tx_slots` (SANA-II: 32). No
+room: the socket sets `tx_wait`, the interface `tx_waiters`, and the
+send says `EWOULDBLOCK`, so `sock_sendit()` sleeps on the socket's wait
+queue for a blocking socket (honouring `SO_SNDTIMEO`) and a non-blocking
+one returns. `udp_poll()` reports `POLLOUT` only with room (and arms the
+same flags), so WaitSelect() is the pacing signal.
+`rt_drv_tx_done()`, after `rt_qos_run()`, wakes the waiters with
+`rt_udp_tx_wake()` once the interface has room again (`RT_SEV_WRITE`:
+WaitSelect, select, `FD_WRITE` events). `rt_netif_down()` wakes them too, so a
+blocked sender does not outlive its interface. An `ENOBUFS` from the output path
+with no room left becomes `EWOULDBLOCK` too. The first datagram, and one
+to another interface, is sent as before; drivers without completions
+(`tx_slots` 0, loopback) always have room. The cost is one interface
+lookup by index and a compare per datagram; `udpstat.TxNoRoom` counts
+the sends that waited.
+
+**Batches.** `rt_api_sendmmsg()` sends up to n messages under one lock
+(`fd_get()` again for each, since a sleep may let the socket go),
+stopping at the first error; `rt_api_recvmmsg()` takes the first message
+as the flags say and the rest with `MSG_DONTWAIT`. riptide.library 3
+exports them as `RiptideSendMMsg()`/`RiptideRecvMMsg()` (LVO -534/-540),
+converting the caller's `struct mmsghdr` array in chunks of 16. Most of
+a single `sendto()`'s cost on a 68030/040 is not the copy or the
+checksum but the call itself: the library entry, the lock, the switch to
+the (higher priority) stack task that takes the driver's completion, and
+back; a batch pays those once per 16 datagrams.
+
+**No checksum.** `SO_NO_CHECK` (0x1101, Linux's 11) sets `so->no_check`
+on datagram sockets; `udp_send()` then copies without summing and leaves
+the field 0 for IPv4. IPv6 ignores it (RFC 8200 requires the checksum).
+
 ## IPv6
 
 Riptide is a dual-stack host (RFC 8200, 4291, 4861, 4862, 8981, 7217,

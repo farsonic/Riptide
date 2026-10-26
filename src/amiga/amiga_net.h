@@ -156,9 +156,15 @@ struct if_nameindex {
 
 /* riptide.library */
 #define RIPTIDE_LIB_NAME     "riptide.library"
-#define RIPTIDE_LIB_VERSION  2
+#define RIPTIDE_LIB_VERSION  3
 #define RIPTIDE_LIB_REVISION 0
-#define RIPTIDE_LIB_VERSTR   "2.0"
+#define RIPTIDE_LIB_VERSTR   "3.0"
+
+/* RiptideSendMMsg()/RiptideRecvMMsg() (version 3): Linux struct mmsghdr */
+struct RiptideMMsgHdr {
+	struct msghdr rmm_Hdr;
+	ULONG rmm_Len;
+};
 
 /* RiptideConnectName() tags and result (as sdk/include/libraries/riptide.h) */
 #define RTCN_Dummy    (TAG_USER + 0x52430000)

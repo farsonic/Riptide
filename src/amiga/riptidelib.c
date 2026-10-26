@@ -763,6 +763,66 @@ LONG riptide_RiptideConnectName(RTREG(a6) struct Library *base, RTREG(a0) CONST_
 	return r;
 }
 
+/* RiptideSendMMsg/RecvMMsg: through rt_mmsg in chunks (one stack lock
+ * each); struct iovec has the layout of rt_iov */
+#define MMSG_CHUNK 16
+
+static LONG mmsg(struct Library *base, LONG fd, struct RiptideMMsgHdr *vec, ULONG vlen, ULONG flags, int rx)
+{
+	CTX;
+	struct rt_mmsg m[MMSG_CHUNK];
+	ULONG done = 0, i, k;
+	int r = 0;
+
+	if (vlen && !vec)
+		return fail(c, RT_EFAULT);
+	while (done < vlen) {
+		k = vlen - done < MMSG_CHUNK ? vlen - done : MMSG_CHUNK;
+		for (i = 0; i < k; i++) {
+			struct msghdr *h = &vec[done + i].rmm_Hdr;
+			m[i].iov = (struct rt_iov *)h->msg_iov;
+			m[i].iovcnt = (int)h->msg_iovlen;
+			m[i].name = h->msg_name;
+			m[i].namelen = h->msg_name ? h->msg_namelen : 0;
+			m[i].len = 0;
+			m[i].msgflags = 0;
+		}
+		/* after the first chunk a receive takes only what is queued */
+		r = rx ? rt_api_recvmmsg(&c->sc, (int)fd, m, k, (int)flags | (done ? RT_MSG_DONTWAIT : 0)) :
+		         rt_api_sendmmsg(&c->sc, (int)fd, m, k, (int)flags);
+		if (r <= 0)
+			break;
+		for (i = 0; i < (ULONG)r; i++) {
+			vec[done + i].rmm_Len = m[i].len;
+			if (rx) {
+				vec[done + i].rmm_Hdr.msg_flags = m[i].msgflags;
+				if (vec[done + i].rmm_Hdr.msg_name)
+					vec[done + i].rmm_Hdr.msg_namelen = m[i].namelen;
+			}
+		}
+		done += (ULONG)r;
+		if ((ULONG)r < k)
+			break;
+	}
+	if (done)
+		return (LONG)done;
+	if (r < 0)
+		return fail(c, -r);
+	return 0;
+}
+
+LONG riptide_RiptideSendMMsg(RTREG(a6) struct Library *base, RTREG(d0) LONG fd, RTREG(a0) APTR vec,
+                             RTREG(d1) ULONG vlen, RTREG(d2) ULONG flags)
+{
+	return mmsg(base, fd, vec, vlen, flags, 0);
+}
+
+LONG riptide_RiptideRecvMMsg(RTREG(a6) struct Library *base, RTREG(d0) LONG fd, RTREG(a0) APTR vec,
+                             RTREG(d1) ULONG vlen, RTREG(d2) ULONG flags)
+{
+	return mmsg(base, fd, vec, vlen, flags, 1);
+}
+
 void riptide_RiptideSupportedCPUs(RTREG(a6) struct Library *base, RTREG(a0) ULONG *apis,
                               RTREG(a1) ULONG *callbacks, RTREG(a2) ULONG *kernel)
 {
