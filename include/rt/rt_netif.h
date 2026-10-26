@@ -123,7 +123,8 @@ struct rt_netif {
 	u16   nvlan;             /* parent: VLAN interfaces on it */
 	int (*vlan_rx)(struct rt_netif *nif, int on);
 	/* UDP pacing: datagram sockets wait for transmit room here
-	 * (rt_netif_tx_room()); rt_drv_tx_done() wakes them */
+	 * (rt_netif_tx_room()); rt_drv_tx_done() wakes them, the stall timer
+	 * when the driver stops completing frames (rt_netif_tx_wait()) */
 	u8    tx_waiters;
 };
 
@@ -152,6 +153,7 @@ struct rt_drv_stats {
 	u32 rx_nobuf, rx_errors, tx_errors;
 	struct rt_drv_err rxerr[RT_DRV_NERR], txerr[RT_DRV_NERR];
 	u32 tx_slots, tx_inflight, tx_inflight_max, tx_full;
+	u32 tx_progress_ms;      /* last completion, or the start from idle */
 	u32 reset_ms;            /* rt_now_ms() at the last reset */
 	u32 warn_ms;             /* last "reads ran out" warning */
 	u32 warn_empty;          /* empty count at that warning */
@@ -264,6 +266,15 @@ extern u32 rt_netif_tx_last;
  * true for interfaces without counted slots and for one that is down
  * (the send then fails on its own). Lock held. */
 int  rt_netif_tx_room(struct rt_netif *nif, u8 prio);
+/* A driver that holds frames but has completed none for this long is
+ * stalled (a SANA-II device that stopped replying, offline hardware):
+ * rt_netif_tx_room() then says yes, so senders do not wait for it
+ * forever, and frames are dropped as they were before pacing. */
+#define RT_NETIF_TX_STALL_MS 1000
+int  rt_netif_tx_stalled(const struct rt_netif *nif);
+/* A sender found no room: mark nif for rt_drv_tx_done()'s wakeup and arm
+ * the stall timer, which wakes the waiters when the driver stalls. */
+void rt_netif_tx_wait(struct rt_netif *nif);
 
 /* The loopback interface "lo0" (127.0.0.1/8), created by rt_init(). */
 extern struct rt_netif *rt_loopback_if;

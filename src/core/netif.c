@@ -475,6 +475,41 @@ void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, con
 
 u32 rt_netif_tx_last;
 
+/* one timer for all interfaces: it wakes every UDP sender that waits
+ * for room, and they look again (a stalled driver now has room) */
+static struct rt_timer tx_stall_timer;
+
+static void tx_stall_fire(void *arg)
+{
+	struct rt_netif *n;
+
+	for (n = netif_list; n; n = n->next) {
+		if (n->tx_waiters) {
+			n->tx_waiters = 0;
+			rt_udp_tx_wake(n);
+		}
+	}
+}
+
+void rt_netif_tx_wait(struct rt_netif *nif)
+{
+	const struct rt_drv_stats *d = nif->drv;
+	u32 left = RT_NETIF_TX_STALL_MS, due;
+
+	nif->tx_waiters = 1;
+	if (d && d->tx_inflight) {
+		s32 el = (s32)(rt_now_ms() - d->tx_progress_ms);
+		left = el >= RT_NETIF_TX_STALL_MS ? 1 : (u32)(RT_NETIF_TX_STALL_MS - el);
+	}
+	if (!tx_stall_timer.fn)
+		rt_timer_init(&tx_stall_timer, tx_stall_fire, NULL);
+	/* a completion meanwhile at most makes it fire early: the waiters
+	 * look again and wait again */
+	due = rt_now_ms() + left;
+	if (!rt_timer_pending(&tx_stall_timer) || (s32)(tx_stall_timer.expires - due) > 0)
+		rt_timer_mod(&tx_stall_timer, due);
+}
+
 int rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
 	RT_PROF_EV(RT_EV_DRV_TX);

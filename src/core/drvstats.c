@@ -134,6 +134,8 @@ void rt_drv_tx_start(struct rt_netif *nif, u32 len)
 		return;
 	d->tx_frames++;
 	d->tx_bytes += len;
+	if (!d->tx_inflight)
+		d->tx_progress_ms = rt_now_ms();
 	d->tx_inflight++;
 	if (d->tx_inflight > d->tx_inflight_max)
 		d->tx_inflight_max = d->tx_inflight;
@@ -147,6 +149,7 @@ void rt_drv_tx_done(struct rt_netif *nif, s32 err)
 		return;
 	if (d->tx_inflight)
 		d->tx_inflight--;
+	d->tx_progress_ms = rt_now_ms();
 	if (err) {
 		d->tx_errors++;
 		rt_drv_count_err(d->txerr, err);

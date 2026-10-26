@@ -517,7 +517,13 @@ same flags), so WaitSelect() is the pacing signal.
 WaitSelect, select, `FD_WRITE` events). `rt_netif_down()` wakes them too, so a
 blocked sender does not outlive its interface. An `ENOBUFS` from the output path
 with no room left becomes `EWOULDBLOCK` too. The first datagram, and one
-to another interface, is sent as before; drivers without completions
+to another interface, is sent as before. A driver that holds frames
+but has completed none for `RT_NETIF_TX_STALL_MS` (1 s;
+`tx_progress_ms` is the last completion or the start from idle) is
+stalled: `rt_netif_tx_room()` says yes, and one timer in netif.c
+(`rt_netif_tx_wait()`, armed for the stall deadline) wakes the waiters,
+so a blocking sender, the resolver's DNS query for one, never sleeps on
+a device that stopped replying; drivers without completions
 (`tx_slots` 0, loopback) always have room. The cost is one interface
 lookup by index and a compare per datagram; `udpstat.TxNoRoom` counts
 the sends that waited.

@@ -4,7 +4,8 @@
  * transmit room; EWOULDBLOCK instead of a dropped datagram; a blocking
  * sender sleeps until the driver finishes a frame), SO_NO_CHECK, and
  * rt_api_sendmmsg()/rt_api_recvmmsg(). The fake driver keeps the frames
- * it gets, like a SANA-II device with all its write requests busy.
+ * it gets, like a SANA-II device with all its write requests busy, and
+ * may never complete them (a stalled driver).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <pthread.h>
@@ -316,7 +317,71 @@ static void test_down(struct rt_sockctx *c)
 	rt_lock();
 	rt_netif_up(&eth0);
 	rt_unlock();
+	complete_all();          /* what coming up sent */
 	rt_api_close(c, fd);
+}
+
+/* The driver stops completing frames (as uaenet.device did in the tools
+ * suite: 32 writes outstanding for good). A blocking sender must not
+ * sleep forever: after RT_NETIF_TX_STALL_MS the stall timer wakes it and
+ * the interface counts as having room again. */
+static volatile int poller_stop;
+
+static void *poller(void *arg)
+{
+	(void)arg;
+	while (!poller_stop) {
+		rt_lock();
+		rt_stack_poll();
+		rt_unlock();
+		usleep(10000);
+	}
+	return NULL;
+}
+
+static double now_s(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static void test_stall(struct rt_sockctx *c)
+{
+	struct rt_sockaddr_in to = bcast(9006);
+	char data[100];
+	pthread_t th;
+	double t0, t1;
+	int fd = udp_socket(c, 0), nb = udp_socket(c, 1), i, r;
+
+	memset(data, 's', sizeof(data));
+	for (i = 0; i < SLOTS; i++)
+		CHECK(rt_api_sendto(c, fd, data, sizeof(data), 0, &to, sizeof(to)) == (int)sizeof(data));
+	/* not stalled yet: a non-blocking sender still waits for room */
+	CHECK(rt_api_sendto(c, nb, data, sizeof(data), 0, &to, sizeof(to)) == (int)sizeof(data));
+	CHECK(rt_api_sendto(c, nb, data, sizeof(data), 0, &to, sizeof(to)) == -RT_EWOULDBLOCK);
+	CHECK(!rt_netif_tx_stalled(&eth0));
+	poller_stop = 0;
+	pthread_create(&th, NULL, poller, NULL);
+	t0 = now_s();
+	r = rt_api_sendto(c, fd, data, sizeof(data), 0, &to, sizeof(to));
+	t1 = now_s();
+	CHECK(r == (int)sizeof(data));   /* sent (the fake driver takes it) */
+	CHECK(t1 - t0 >= 0.8 && t1 - t0 < 5.0);
+	CHECK(rt_netif_tx_stalled(&eth0));
+	/* stalled: no more waiting, writable at once */
+	CHECK(writable(c, nb));
+	t0 = now_s();
+	CHECK(rt_api_sendto(c, fd, data, sizeof(data), 0, &to, sizeof(to)) == (int)sizeof(data));
+	CHECK(now_s() - t0 < 0.5);
+	poller_stop = 1;
+	pthread_join(th, NULL);
+	/* the driver recovers: pacing again */
+	complete_all();
+	CHECK(!rt_netif_tx_stalled(&eth0));
+	rt_api_close(c, fd);
+	rt_api_close(c, nb);
 }
 
 int main(void)
@@ -332,6 +397,7 @@ int main(void)
 	test_nocheck(&c);
 	test_mmsg(&c);
 	test_down(&c);
+	test_stall(&c);
 	printf("t_udptx_unit: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

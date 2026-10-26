@@ -746,8 +746,10 @@ static int udp_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
  * (driver slots or QoS band full), the socket is not writable and a send
  * says EWOULDBLOCK: sock_sendit() then sleeps for a blocking socket, a
  * non-blocking one waits with WaitSelect(). rt_drv_tx_done() wakes the
- * waiters (rt_udp_tx_wake()). The first datagram, and one to another
- * interface, is sent as before. */
+ * waiters (rt_udp_tx_wake()); so does a stall timer when the driver
+ * completes nothing for RT_NETIF_TX_STALL_MS, after which the interface
+ * counts as having room (its frames are dropped as before pacing). The
+ * first datagram, and one to another interface, is sent as before. */
 static int udp_tx_room(struct rt_socket *so)
 {
 	struct rt_netif *n;
@@ -762,7 +764,7 @@ static int udp_tx_room(struct rt_socket *so)
 	if (rt_netif_tx_room(n, rt_qos_sock_prio(so)))
 		return 1;
 	so->tx_wait = 1;
-	n->tx_waiters = 1;
+	rt_netif_tx_wait(n);
 	return 0;
 }
 
