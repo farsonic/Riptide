@@ -36,6 +36,14 @@ const char riptideprefs_version[] = "$VER: RiptidePrefs " RIPTIDE_VERSION_STRING
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
 
+/* MUI with our classes, and the message windows' input loops inside
+ * commands, need far more than a Shell's 4 KB: without it a message
+ * window overflowed the stack and corrupted memory */
+#define RP_STACK 65536
+#if defined(__VBCC__)
+size_t __stack = RP_STACK;      /* vbcc's start-up swaps to a stack this big */
+#endif
+
 /* lower case of an ASCII letter */
 static char lc(char c)
 {
@@ -126,10 +134,25 @@ int main(int argc, char **argv)
 	return prefs_main(!rp_wb);
 }
 #else
+struct rp_stackswap {           /* exec's struct StackSwapStruct */
+	APTR  stk_Lower;
+	ULONG stk_Upper;
+	APTR  stk_Pointer;
+};
+/* mui_thunks.S: fn(arg) on the stack sss describes (exec StackSwap()) */
+LONG rp_bigstack(LONG (*fn)(LONG), LONG arg, struct rp_stackswap *sss);
+
+static LONG prefs_entry(LONG from_cli)
+{
+	return prefs_main((int)from_cli);
+}
+
 long amiga_main(char *s, long l)
 {
 	struct Process *me;
 	struct Message *wbmsg = NULL;
+	struct rp_stackswap sss;
+	APTR stk;
 	int rc;
 
 	(void)s;
@@ -141,7 +164,20 @@ long amiga_main(char *s, long l)
 		wbmsg = GetMsg(&me->pr_MsgPort);
 		rp_wb = 1;
 	}
-	rc = DOSBase ? prefs_main(!rp_wb) : CL_FAIL;
+	rc = CL_FAIL;
+	if (DOSBase) {
+		/* the editor on a stack of its own (see RP_STACK) */
+		stk = AllocVec(RP_STACK, MEMF_ANY);
+		if (stk) {
+			sss.stk_Lower = stk;
+			sss.stk_Upper = (ULONG)stk + RP_STACK;
+			sss.stk_Pointer = (APTR)sss.stk_Upper;
+			rc = (int)rp_bigstack(prefs_entry, !rp_wb, &sss);
+			FreeVec(stk);
+		} else {
+			rc = prefs_main(!rp_wb);
+		}
+	}
 	if (DOSBase)
 		CloseLibrary((struct Library *)DOSBase);
 	if (wbmsg) {

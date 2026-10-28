@@ -1,4 +1,5 @@
-| Riptide - RiptidePrefs (MUI), GCC build: BOOPSI calls in registers.
+| Riptide - RiptidePrefs, GCC build: BOOPSI calls in registers, and a
+| stack of its own for the editor.
 | BOOPSI calls a class dispatcher with a0 = class, a2 = object and
 | a1 = message; GCC passes arguments on the stack. vbcc needs none of
 | this (its dispatchers take __reg() arguments, amiga.lib does the rest).
@@ -15,6 +16,28 @@ rp_hook_call:
 	move.l	56(%sp),%a1
 	move.l	8(%a0),%a3
 	jsr	(%a3)
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+
+| LONG rp_bigstack(LONG (*fn)(LONG), LONG arg, struct StackSwapStruct *sss):
+| fn(arg) on the stack of sss (exec StackSwap(), -732), then back
+	.globl	rp_bigstack
+rp_bigstack:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	48(%sp),%a2
+	move.l	52(%sp),%d2
+	move.l	56(%sp),%a3
+	move.l	4.w,%a6
+	move.l	%a3,%a0
+	jsr	-732(%a6)
+	move.l	%d2,-(%sp)
+	jsr	(%a2)
+	addq.l	#4,%sp
+	move.l	%d0,%d3
+	move.l	4.w,%a6
+	move.l	%a3,%a0
+	jsr	-732(%a6)
+	move.l	%d3,%d0
 	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
 
