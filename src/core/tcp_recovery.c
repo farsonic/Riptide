@@ -1,6 +1,6 @@
 /*
  * Riptide - TCP loss recovery: SACK scoreboard (RFC 2018/2883), RACK-TLP
- * loss detection (RFC 8985), Proportional Rate Reduction (RFC 6937),
+ * loss detection (RFC 8985), Proportional Rate Reduction (RFC 9937),
  * NewReno for non-SACK peers, RTO recovery with F-RTO (RFC 5682), undo of
  * spurious reductions (DSACK / Eifel timestamps) and the congestion state
  * machine (Open/Disorder/CWR/Recovery/Loss). Also the receiver side SACK
@@ -45,9 +45,11 @@ void tcp_mark_skb_lost(struct tcp_sock *tp, struct rt_buf *b)
 			/* a retransmission that is lost again */
 			cb->sacked &= ~TCPCB_SACKED_RETRANS;
 			tp->retrans_out--;
+			tp->lost++;
 		}
 	} else {
 		tp->lost_out++;
+		tp->lost++;
 		cb->sacked |= TCPCB_LOST;
 	}
 }
@@ -391,7 +393,14 @@ void tcp_rack_update_reo_wnd(struct tcp_sock *tp, u32 prior_delivered)
 	}
 }
 
-/* ---- PRR (RFC 6937) and cwnd reduction ---- */
+/* ---- PRR (RFC 9937) and cwnd reduction ---- */
+
+/* RFC 9937 6.1: RecoverFS is what may be delivered during the episode:
+ * SND.NXT - SND.UNA less what was SACKed before it started, plus what the
+ * ACK that started it delivered (added by the first tcp_cwnd_reduction()).
+ * Linux still divides by prior_cwnd, which is too large when the sender
+ * was application limited or much was SACKed before recovery (after
+ * reordering), and makes PRR send too slowly at first. */
 void tcp_init_cwnd_reduction(struct tcp_sock *tp)
 {
 	tp->high_seq = tp->snd_nxt;
@@ -400,12 +409,16 @@ void tcp_init_cwnd_reduction(struct tcp_sock *tp)
 	tp->prior_cwnd = tp->snd_cwnd;
 	tp->prr_delivered = 0;
 	tp->prr_out = 0;
+	tp->prr_recover_fs = tp->packets_out - RT_MIN(tp->sacked_out, tp->packets_out);
+	tp->prr_fs_pending = 1;
 	tp->snd_ssthresh = tp->ca_ops->ssthresh(tp);
 	if (tp->ecn_flags & TCP_ECN_OK)
 		tp->ecn_flags |= TCP_ECN_QUEUE_CWR;
 }
 
-/* Linux tcp_cwnd_reduction(): PRR-SSRB */
+/* RFC 9937 6.2 (Linux tcp_cwnd_reduction()): proportional reduction while
+ * inflight > ssthresh; below it PRR-CRB, switching to PRR-SSRB only on a
+ * SafeACK (SND.UNA advanced and the ACK marked nothing newly lost). */
 void tcp_cwnd_reduction(struct tcp_sock *tp, int newly_acked_sacked, int newly_lost, int flag)
 {
 	s32 sndcnt = 0;
@@ -413,10 +426,15 @@ void tcp_cwnd_reduction(struct tcp_sock *tp, int newly_acked_sacked, int newly_l
 
 	if (newly_acked_sacked <= 0 || !tp->prior_cwnd)
 		return;
+	if (tp->prr_fs_pending) {
+		tp->prr_recover_fs += (u32)newly_acked_sacked;
+		tp->prr_fs_pending = 0;
+	}
 	tp->prr_delivered += (u32)newly_acked_sacked;
 	if (delta < 0) {
-		u64 dividend = (u64)tp->snd_ssthresh * tp->prr_delivered + tp->prior_cwnd - 1;
-		sndcnt = (s32)(dividend / tp->prior_cwnd) - (s32)tp->prr_out;
+		u32 fs = RT_MAX(tp->prr_recover_fs, 1u);
+		u64 dividend = (u64)tp->snd_ssthresh * tp->prr_delivered + fs - 1;
+		sndcnt = (s32)(dividend / fs) - (s32)tp->prr_out;
 	} else {
 		sndcnt = RT_MAX((s32)tp->prr_delivered - (s32)tp->prr_out, newly_acked_sacked);
 		if ((flag & FLAG_SND_UNA_ADVANCED) && !newly_lost)

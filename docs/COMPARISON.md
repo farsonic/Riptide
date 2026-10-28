@@ -120,7 +120,7 @@ robustness are unproven. Section 9 lists where it is behind.
 | SACK (RFC 2018) | Yes, early implementation, bitmask default 208 (SACK + NewReno + "modified fast retransmit") | No SACK switch among the documented tunables [RS-DOC] (**unverified**) | Yes, on (`net.inet.tcp.sack`) |
 | D-SACK (RFC 2883) | No | **Unverified** | Yes, on (`dsack`) |
 | RACK-TLP (RFC 8985) | No | **Unverified** | Yes: RACK loss detection and tail loss probes (`recovery`) |
-| PRR (RFC 6937) | No | **Unverified** | Yes |
+| PRR (RFC 9937) | No | **Unverified** | Yes: RecoverFS from the data in flight, SSRB only on ACKs that mark no new loss |
 | F-RTO (RFC 5682) and undo | No | **Unverified** | F-RTO on (`frto` 2); Eifel/D-SACK undo of spurious recoveries |
 | Timestamps / PAWS, window scaling (RFC 7323) | Implemented, `rfc1323` = 0 by default; enabled per interface by a heuristic | Implemented; `tcp.do_rfc1323`, `tcp.do_timestamps`, `tcp.do_win_scale` switches [RS-DOC]; defaults not documented | Both on (`timestamps`, `window_scaling`), with PAWS |
 | ECN (RFC 3168) | No | **Unverified** | Accepted when the peer asks (`ecn` 2); requesting is `ecn` 1 |

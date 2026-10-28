@@ -395,7 +395,10 @@ struct tcp_sock {
 	u32 highest_sack_seq;          /* seq of highest SACKed segment */
 	u32 reordering, reord_seen;
 	u32 delivered, delivered_ce;
+	u32 lost;                      /* segments ever marked lost (Linux tp->lost) */
 	u32 prr_delivered, prr_out;
+	u32 prr_recover_fs;            /* RFC 9937 RecoverFS (packets) */
+	u8  prr_fs_pending;            /* add the triggering ACK's delivery to it */
 	u32 high_seq, undo_marker;
 	s32 undo_retrans;
 	u32 retrans_stamp;             /* ms of first retransmission (0 none) */
