@@ -294,8 +294,17 @@ host and under `qemu-m68k`):
   records it); TCP re-arms its retransmit timer with every segment and
   ACK, usually for a later time. No measurable gain: most kicks left come
   from the Riptide process itself, where they cost a signal.
-* **Compiler.** The per-packet core files are built with vbcc `-O3`
-  (`HOT_OBJ` in `Makefile.amiga`).
+* **Compiler.** The per-packet core files are built at `-O3` (`HOT_SRC`
+  in `Makefile.amiga`) by both toolchains. The GCC build is the faster
+  one: `BENCH TX` on the emulated A1200 takes about 1745 µs per segment
+  against 2234 µs for vbcc, and the speed lab gets 697/455 KB/s down/up
+  on the 68020 (vbcc 608/417) and 2510/1485 KB/s on the 68040 (vbcc
+  2094/1300). Half of the difference came from `memcpy()`/`memset()`:
+  `-ffreestanding` turns GCC's built-ins off, so every header field
+  copy was a call; `src/amiga/include/string.h` maps them to
+  `__builtin_memcpy()`/`__builtin_memset()` again. vbcc expands small
+  copies itself; its `-inline-size` settings and `-O3` everywhere did not
+  help (larger code, and the 68020's 256-byte instruction cache).
 
 On the emulated A1200 (68020, 14 MHz) these took the send path from 3231
 to about 2220 µs per segment in `BENCH TX`, and netbench uploads from

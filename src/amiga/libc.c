@@ -4,6 +4,7 @@
  * to (memcpy/memset/memmove/memcmp for structure copies and clears).
  * SPDX-License-Identifier: GPL-2.0-only
  */
+#define RT_LIBC_IMPL    /* the functions themselves, not the inline forms */
 #include <stdint.h>
 #include <string.h>
 
