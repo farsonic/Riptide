@@ -6,6 +6,8 @@
 #   make -f Makefile.amiga sdk              regenerate the riptide.library SDK in sdk/
 #   make -f Makefile.amiga package          Installer package: build/package/Riptide/,
 #                                           build/riptide-<version>.lha (or .zip) and .adf
+#   Releases (from 0.20) are packaged from the gcc build, which is faster:
+#   make -f Makefile.amiga TOOLCHAIN=gcc package
 #
 # vbcc needs VBCC (default /opt/vbcc) and the NDK 3.2 headers (NDK, default
 # /opt/ndk3.2). The GCC build needs neither: it uses src/amiga/os.
