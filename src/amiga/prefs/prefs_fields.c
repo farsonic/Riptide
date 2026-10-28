@@ -15,7 +15,7 @@ const struct rp_page rp_pages[RP_NPAGES] = {
 	  "How the Amiga gets its IPv4 address: from a DHCP server, or typed in here." },
 	{ "Extra addresses", "Extra addresses", "A.B.C.D/BITS or A.B.C.D netmask M (up to 8)",
 	  "More IPv4 addresses on the same card, for example to reach a second network on the same cable." },
-	{ "VLANs", "VLANs", "ID dhcp|A.B.C.D/BITS|up [pcp=0-7] (up to 8)",
+	{ "VLANs", "VLANs", "ID dhcp|A.B.C.D/BITS|up [pcp= mtu= ipv4= ipv6= qos=]",
 	  "Tagged networks (802.1Q) on the same card. Each VLAN is an interface of its own." },
 	{ "Names", "Names", "Empty fields are left out of the file",
 	  "The Amiga's name, its domain and the name servers that turn names into addresses." },
@@ -406,8 +406,9 @@ int rp_list_entry_valid(int page, const char *s, char *err, int errlen)
 		return 0;
 	}
 	if (page == P_VLAN && !rp_valid_vlan(s)) {
-		rt_strlcpy(err, "VLAN: the id (1-4094), then dhcp, an address\nA.B.C.D/BITS or up, and pcp=0-7 or "
-		           "pcp=priority\nif the frames need a priority; e.g. 10 dhcp", (size_t)errlen);
+		rt_strlcpy(err, "VLAN: the id (1-4094), then dhcp, an address\nA.B.C.D/BITS or up, and if needed "
+		           "pcp=0-7|priority,\nmtu=68-65535, ipv4=, ipv6=, qos=on|off, tcpwindow=N;\ne.g. 10 dhcp pcp=4",
+		           (size_t)errlen);
 		return 0;
 	}
 	if (page == P_QRULE && !rp_valid_qrule(s)) {
@@ -422,4 +423,414 @@ const char *rp_list_full_msg(int page)
 {
 	return page == P_ALIAS ? "At most 8 extra addresses" : page == P_VLAN ? "At most 8 VLANs" :
 	       "At most 16 QoS rules";
+}
+
+/* ======================================================================
+ * The forms of the list pages
+ * ====================================================================== */
+static const char *const cy_vmode[] = { "DHCP", "Static address", "Up, no IPv4 address", "Not started", NULL };
+static const char *const cy_pcp[] = { "Default (0)", "0 Best effort", "1 Background", "2 Excellent effort",
+	"3 Critical", "4 Video", "5 Voice", "6 Internetwork", "7 Network control", "From traffic priority",
+	NULL };
+static const char *const cy_onoff[] = { "Default", "On", "Off", NULL };
+static const char *const cy_proto[] = { "TCP and UDP", "TCP", "UDP", NULL };
+static const char *const cy_side[] = { "Either end", "This Amiga", "The other end", NULL };
+static const char *const cy_prio[] = { "Not set", "Interactive", "Default", "Bulk", "0", "1", "2", "3", "4",
+	"5", "6", "7", NULL };
+static const char *const qprio_word[] = { "", "interactive", "default", "bulk" };
+static const char *const vkeys[3] = { "ipv4", "ipv6", "qos" };
+
+const struct rp_lfield rp_lfields[] = {
+	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_IPv4 address", NULL,
+	  "The extra address, with the size of its network: 10.0.1.2/24, or 10.0.1.2 and a netmask below." },
+	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_Netmask", NULL,
+	  "The network's mask, e.g. 255.255.255.0, when the address has no /BITS. Empty: from the address." },
+	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_Broadcast", NULL,
+	  "The broadcast address of that network. Empty: worked out from the address and mask." },
+
+	{ P_VLAN, LF_NUM, 0, 0, 1, 4094, "VLAN _ID", NULL,
+	  "The VLAN number (1-4094) the switch uses for this network." },
+	{ P_VLAN, LF_INFO, LF_SAMEROW, 0, 0, 0, "Name", NULL,
+	  "The interface this VLAN becomes: the card's name, a dot and the VLAN number." },
+	{ P_VLAN, LF_CYCLE, 0, 0, 0, 0, "Address _mode", cy_vmode,
+	  "How the VLAN gets its IPv4 address: from a DHCP server, typed in below, none (it only comes up, "
+	  "e.g. for IPv6), or not started at all." },
+	{ P_VLAN, LF_STR, 0, RP_ADDR, 0, 0, "IP_v4 address", NULL,
+	  "With a static address: the address and the size of its network, e.g. 192.168.10.2/24." },
+	{ P_VLAN, LF_CYCLE, 0, 0, 0, 0, "Priorit_y (PCP)", cy_pcp,
+	  "The priority in the VLAN tag of every frame sent (802.1p). From traffic priority uses each "
+	  "connection's priority (QoS)." },
+	{ P_VLAN, LF_NUM, 0, 0, 68, 65535, "M_TU", NULL,
+	  "The largest packet on this VLAN. Empty: 4 bytes less than the card's (1496)." },
+	{ P_VLAN, LF_NUM, LF_SAMEROW, 0, 0, 16777216, "TCP _window", NULL,
+	  "A limit for TCP's receive window on this VLAN, like the card's. Empty: no limit." },
+	{ P_VLAN, LF_CYCLE, 0, 0, 0, 0, "IPv_4", cy_onoff,
+	  "IPv4 on this VLAN. Default: as for the whole stack." },
+	{ P_VLAN, LF_CYCLE, LF_SAMEROW, 0, 0, 0, "IPv_6", cy_onoff,
+	  "IPv6 on this VLAN. Default: as for the whole stack." },
+	{ P_VLAN, LF_CYCLE, 0, 0, 0, 0, "_QoS", cy_onoff,
+	  "Priority queues on this VLAN. Default: as the QoS page says." },
+
+	{ P_QRULE, LF_CYCLE, 0, 0, 0, 0, "Pro_tocol", cy_proto,
+	  "Which connections the rule is for: TCP, UDP or both." },
+	{ P_QRULE, LF_STR, 0, 48, 0, 0, "P_orts", NULL,
+	  "Up to 8 port numbers separated by commas, e.g. 22,23. Empty: by program only." },
+	{ P_QRULE, LF_CYCLE, 0, 0, 0, 0, "_Which end", cy_side,
+	  "Whose port it is: either end of the connection, this Amiga's, or the other computer's." },
+	{ P_QRULE, LF_STR, 0, 32, 0, 0, "Pro_gram", NULL,
+	  "The name of a program, e.g. AmiFTP or wget* (* matches the rest). Empty: by port only." },
+	{ P_QRULE, LF_CYCLE, 0, 0, 0, 0, "Priorit_y", cy_prio,
+	  "How urgent the matching connections are: interactive ones go out first, bulk ones last." },
+	{ P_QRULE, LF_STR, 0, 8, 0, 0, "DSCP _mark", NULL,
+	  "A DSCP value for the routers on the way, e.g. EF, CS1, AF41 or 0-63. Empty: none." },
+};
+const int rp_nlfields = (int)(sizeof(rp_lfields) / sizeof(rp_lfields[0]));
+
+void rp_lflabel(int fi, char *buf, int len)
+{
+	const char *s = rp_lfields[fi].label;
+	int i = 0;
+
+	for (; *s && i < len - 1; s++)
+		if (*s != '_')
+			buf[i++] = *s;
+	buf[i] = 0;
+}
+
+char rp_lfkey(int fi)
+{
+	const char *u = strchr(rp_lfields[fi].label, '_');
+	char ch = u ? u[1] : 0;
+	return ch >= 'A' && ch <= 'Z' ? (char)(ch + 32) : ch;
+}
+
+static int lf_eq(const char *a, const char *b)
+{
+	return rt_strcasecmp(a, b) == 0;
+}
+
+/* "key=value": the value, or NULL */
+static const char *lf_kv(const char *w, const char *key)
+{
+	size_t l = strlen(key);
+	return !rt_strncasecmp(w, key, l) && w[l] == '=' ? w + l + 1 : NULL;
+}
+
+/* the next word of *s into w (len bytes); 0 at the end */
+static int lf_word(const char **s, char *w, size_t len)
+{
+	size_t k = 0;
+
+	while (**s == ' ')
+		(*s)++;
+	if (!**s)
+		return 0;
+	for (; **s && **s != ' '; (*s)++)
+		if (k < len - 1)
+			w[k++] = **s;
+	w[k] = 0;
+	return 1;
+}
+
+static void lf_set(struct rp_lvals *v, int fi, const char *t)
+{
+	rt_strlcpy(v->tx[fi], t, RP_LFTEXT);
+}
+
+void rp_lform_update(int page, struct rp_lvals *v, const char *ifname)
+{
+	if (page == P_VLAN)
+		rt_snprintf(v->tx[LV_NAME], RP_LFTEXT, "%s.%s", ifname, v->tx[LV_ID][0] ? v->tx[LV_ID] : "?");
+}
+
+void rp_lform_get(int page, const char *entry, const char *ifname, struct rp_lvals *v)
+{
+	char w[RP_LONG];
+	const char *s = entry ? entry : "", *x;
+	int i, first = 1, mode = 0;
+
+	for (i = 0; i < rp_nlfields; i++)
+		if (rp_lfields[i].page == page) {
+			v->cy[i] = 0;
+			v->tx[i][0] = 0;
+		}
+	while (lf_word(&s, w, sizeof(w))) {
+		if (page == P_ALIAS) {
+			if (first)
+				lf_set(v, LA_ADDR, w);
+			else if ((lf_eq(w, "netmask") || lf_eq(w, "broadcast")) && lf_word(&s, w + 16, sizeof(w) - 16))
+				lf_set(v, lf_eq(w, "netmask") ? LA_MASK : LA_BCAST, w + 16);
+		} else if (page == P_VLAN) {
+			if (first)
+				lf_set(v, LV_ID, w);
+			else if (lf_eq(w, "dhcp"))
+				mode = 1;
+			else if (lf_eq(w, "up"))
+				mode = 3;
+			else if ((x = lf_kv(w, "pcp")) != NULL)
+				v->cy[LV_PCP] = lf_eq(x, "priority") ? 9 : 1 + (int)rt_strtoul(x, NULL, 10);
+			else if ((x = lf_kv(w, "mtu")) != NULL)
+				lf_set(v, LV_MTU, x);
+			else if ((x = lf_kv(w, "tcpwindow")) != NULL)
+				lf_set(v, LV_TCPWIN, x);
+			else if (!strchr(w, '=')) {
+				mode = 2;
+				lf_set(v, LV_ADDR, w);
+			} else
+				for (i = 0; i < 3; i++)
+					if ((x = lf_kv(w, vkeys[i])) != NULL)
+						v->cy[LV_IP4 + i] = lf_eq(x, "on") ? 1 : 2;
+		} else if (page == P_QRULE) {
+			if ((x = lf_kv(w, "proto")) != NULL)
+				v->cy[LQ_PROTO] = lf_eq(x, "tcp") ? 1 : 2;
+			else if ((x = lf_kv(w, "port")) != NULL || (x = lf_kv(w, "lport")) != NULL ||
+			         (x = lf_kv(w, "rport")) != NULL) {
+				v->cy[LQ_SIDE] = w[0] == 'l' || w[0] == 'L' ? 1 : w[0] == 'r' || w[0] == 'R' ? 2 : 0;
+				lf_set(v, LQ_PORTS, x);
+			} else if ((x = lf_kv(w, "program")) != NULL)
+				lf_set(v, LQ_PROG, x);
+			else if ((x = lf_kv(w, "priority")) != NULL || (x = lf_kv(w, "prio")) != NULL)
+				v->cy[LQ_PRIO] = lf_eq(x, "interactive") ? 1 : lf_eq(x, "default") || lf_eq(x, "normal") ? 2 :
+				                 lf_eq(x, "bulk") || lf_eq(x, "background") ? 3 :
+				                 4 + (int)rt_strtoul(x, NULL, 10);
+			else if ((x = lf_kv(w, "dscp")) != NULL)
+				lf_set(v, LQ_DSCP, x);
+		}
+		first = 0;
+	}
+	if (page == P_VLAN) {
+		/* a new VLAN: DHCP; an entry without a mode: not started */
+		v->cy[LV_MODE] = mode ? mode - 1 : entry && entry[0] ? 3 : 0;
+		if (v->cy[LV_PCP] < 0 || v->cy[LV_PCP] > 9)
+			v->cy[LV_PCP] = 0;
+	}
+	if (page == P_QRULE && (v->cy[LQ_PRIO] < 0 || v->cy[LQ_PRIO] > 11))
+		v->cy[LQ_PRIO] = 0;
+	rp_lform_update(page, v, ifname);
+}
+
+int rp_lform_disabled(int fi, const struct rp_lvals *v)
+{
+	if (fi == LV_ADDR)
+		return v->cy[LV_MODE] != 1;
+	return 0;
+}
+
+/* a field's text without surrounding spaces */
+static void lf_trim(const struct rp_lvals *v, int fi, char *buf, size_t len)
+{
+	const char *s = v->tx[fi];
+	size_t n;
+
+	while (*s == ' ')
+		s++;
+	rt_strlcpy(buf, s, len);
+	n = strlen(buf);
+	while (n && buf[n - 1] == ' ')
+		buf[--n] = 0;
+}
+
+static int lf_bad(int fi, const char *why, int *pfi, char *err, int errlen)
+{
+	*pfi = fi;
+	rt_strlcpy(err, why, (size_t)errlen);
+	return -1;
+}
+
+/* a number field: 0 when empty or in lo..hi (or 0 with zero_ok), else -1 */
+static int lf_num(const char *t, long lo, long hi, int zero_ok)
+{
+	const char *e;
+	unsigned long x;
+
+	if (!*t)
+		return 0;
+	x = rt_strtoul(t, &e, 10);
+	if (*e || e == t || x > 0x7fffffffUL || ((long)x < lo && !(zero_ok && x == 0)) || (long)x > hi)
+		return -1;
+	return 0;
+}
+
+/* append to the entry being built */
+static void lf_add(char *entry, int len, size_t *n, const char *fmt, const char *a, const char *b)
+{
+	if (*n < (size_t)len)
+		*n += (size_t)rt_snprintf(entry + *n, (size_t)len - *n, fmt, a, b);
+}
+
+int rp_lform_put(int page, const struct rp_lvals *v, char *entry, int len, int *fi, char *err, int errlen)
+{
+	char a[RP_LFTEXT], b[RP_LFTEXT], c[RP_LFTEXT], d[8];
+	size_t n = 0;
+	int i;
+
+	*fi = -1;
+	entry[0] = 0;
+	if (page == P_ALIAS) {
+		lf_trim(v, LA_ADDR, a, sizeof(a));
+		lf_trim(v, LA_MASK, b, sizeof(b));
+		lf_trim(v, LA_BCAST, c, sizeof(c));
+		if (!rp_valid_ip4(a, 1))
+			return lf_bad(LA_ADDR, "enter an IPv4 address, e.g. 10.0.1.2/24", fi, err, errlen);
+		if (b[0] && !rp_valid_ip4(b, 0))
+			return lf_bad(LA_MASK, "enter a mask such as 255.255.255.0, or leave it empty", fi, err, errlen);
+		if (c[0] && !rp_valid_ip4(c, 0))
+			return lf_bad(LA_BCAST, "enter an IPv4 address, or leave it empty", fi, err, errlen);
+		lf_add(entry, len, &n, "%s%s", a, "");
+		if (b[0])
+			lf_add(entry, len, &n, " netmask %s%s", b, "");
+		if (c[0])
+			lf_add(entry, len, &n, " broadcast %s%s", c, "");
+		return n + 1 < (size_t)len && rp_valid_alias(entry) ? 0 :
+		       lf_bad(LA_ADDR, "this address cannot be written", fi, err, errlen);
+	}
+	if (page == P_VLAN) {
+		static const char *const modes[4] = { " dhcp", "", " up", "" };
+		static const char *const onoff[3] = { "", "on", "off" };
+		lf_trim(v, LV_ID, a, sizeof(a));
+		if (!a[0] || lf_num(a, 1, 4094, 0) < 0)
+			return lf_bad(LV_ID, "enter the VLAN number, 1..4094", fi, err, errlen);
+		rt_snprintf(d, sizeof(d), "%lu", rt_strtoul(a, NULL, 10));
+		lf_add(entry, len, &n, "%s%s", d, "");
+		if (v->cy[LV_MODE] == 1) {
+			lf_trim(v, LV_ADDR, b, sizeof(b));
+			if (!strchr(b, '/') || !rp_valid_ip4(b, 1))
+				return lf_bad(LV_ADDR, "enter the address and its network size, e.g. 192.168.10.2/24", fi, err,
+				              errlen);
+			lf_add(entry, len, &n, " %s%s", b, "");
+		} else {
+			lf_add(entry, len, &n, "%s%s", modes[v->cy[LV_MODE] & 3], "");
+		}
+		if (v->cy[LV_PCP] == 9) {
+			lf_add(entry, len, &n, " pcp=priority%s%s", "", "");
+		} else if (v->cy[LV_PCP] > 0) {
+			rt_snprintf(d, sizeof(d), "%d", v->cy[LV_PCP] - 1);
+			lf_add(entry, len, &n, " pcp=%s%s", d, "");
+		}
+		lf_trim(v, LV_MTU, a, sizeof(a));
+		if (lf_num(a, 68, 65535, 0) < 0)
+			return lf_bad(LV_MTU, "enter 68..65535, or leave it empty", fi, err, errlen);
+		if (a[0])
+			lf_add(entry, len, &n, " mtu=%s%s", a, "");
+		for (i = 0; i < 3; i++)
+			if (v->cy[LV_IP4 + i] == 1 || v->cy[LV_IP4 + i] == 2)
+				lf_add(entry, len, &n, " %s=%s", vkeys[i], onoff[v->cy[LV_IP4 + i]]);
+		lf_trim(v, LV_TCPWIN, a, sizeof(a));
+		if (lf_num(a, 536, 16777216, 1) < 0)
+			return lf_bad(LV_TCPWIN, "enter 0 or 536..16777216, or leave it empty", fi, err, errlen);
+		if (a[0])
+			lf_add(entry, len, &n, " tcpwindow=%s%s", a, "");
+		return n + 1 < (size_t)len && rp_valid_vlan(entry) ? 0 :
+		       lf_bad(LV_ID, "this VLAN cannot be written", fi, err, errlen);
+	}
+	if (page == P_QRULE) {
+		static const char *const side[3] = { "port", "lport", "rport" };
+		static const char *const proto[3] = { "", "tcp", "udp" };
+		const char *p;
+		int ports = 1;
+		lf_trim(v, LQ_PORTS, a, sizeof(a));
+		lf_trim(v, LQ_PROG, b, sizeof(b));
+		lf_trim(v, LQ_DSCP, c, sizeof(c));
+		for (p = a; *p; p++)
+			ports += *p == ',';
+		if (a[0] && (strchr(a, '-') || strchr(a, ' ') || !rp_valid_ports(a) || ports > 8))
+			return lf_bad(LQ_PORTS, "enter up to 8 port numbers separated by commas, e.g. 22,23", fi, err,
+			              errlen);
+		if (b[0] && (strlen(b) >= 32 || strchr(b, ',') || strchr(b, ' ') || !rp_valid_programs(b)))
+			return lf_bad(LQ_PROG, "enter one program name, e.g. AmiFTP or wget*", fi, err, errlen);
+		if (!a[0] && !b[0])
+			return lf_bad(LQ_PORTS, "give ports or a program (or both)", fi, err, errlen);
+		if (c[0]) {
+			rt_snprintf(entry, (size_t)len, "port=1 dscp=%s", c);   /* the mark alone */
+			if (strchr(c, ' ') || !rp_valid_qrule(entry))
+				return lf_bad(LQ_DSCP, "enter EF, CS0-CS7, AF11-AF43 or 0..63, or leave it empty", fi, err,
+				              errlen);
+			entry[0] = 0;
+		} else if (v->cy[LQ_PRIO] <= 0) {
+			return lf_bad(LQ_PRIO, "choose a priority, or give a DSCP mark", fi, err, errlen);
+		}
+		if (v->cy[LQ_PROTO] == 1 || v->cy[LQ_PROTO] == 2)
+			lf_add(entry, len, &n, "proto=%s%s ", proto[v->cy[LQ_PROTO]], "");
+		if (a[0])
+			lf_add(entry, len, &n, "%s=%s ", side[v->cy[LQ_SIDE] >= 0 && v->cy[LQ_SIDE] < 3 ? v->cy[LQ_SIDE] : 0], a);
+		if (b[0])
+			lf_add(entry, len, &n, "program=%s%s ", b, "");
+		if (v->cy[LQ_PRIO] >= 1 && v->cy[LQ_PRIO] <= 3) {
+			lf_add(entry, len, &n, "priority=%s%s ", qprio_word[v->cy[LQ_PRIO]], "");
+		} else if (v->cy[LQ_PRIO] >= 4 && v->cy[LQ_PRIO] <= 11) {
+			rt_snprintf(d, sizeof(d), "%d", v->cy[LQ_PRIO] - 4);
+			lf_add(entry, len, &n, "priority=%s%s ", d, "");
+		}
+		if (c[0])
+			lf_add(entry, len, &n, "dscp=%s%s", c, "");
+		while (n && n < (size_t)len && entry[n - 1] == ' ')
+			entry[--n] = 0;
+		return n + 1 < (size_t)len && rp_valid_qrule(entry) ? 0 :
+		       lf_bad(LQ_PORTS, "this rule cannot be written", fi, err, errlen);
+	}
+	return lf_bad(0, "this page has no form", fi, err, errlen);
+}
+
+void rp_list_row(int page, const char *entry, const char *ifname, char *buf, int len)
+{
+	struct rp_lvals v;
+	size_t n = 0;
+	int i;
+
+	buf[0] = 0;
+	rp_lform_get(page, entry, ifname, &v);
+	if (page == P_ALIAS) {
+		lf_add(buf, len, &n, "%s%s", v.tx[LA_ADDR], "");
+		if (v.tx[LA_MASK][0])
+			lf_add(buf, len, &n, ", netmask %s%s", v.tx[LA_MASK], "");
+		if (v.tx[LA_BCAST][0])
+			lf_add(buf, len, &n, ", broadcast %s%s", v.tx[LA_BCAST], "");
+	} else if (page == P_VLAN) {
+		static const char *const mode[4] = { "DHCP", "", "up, no IPv4 address", "not started" };
+		static const char *const onoff[3] = { "", "on", "off" };
+		static const char *const what[3] = { "IPv4", "IPv6", "QoS" };
+		char d[8];
+		lf_add(buf, len, &n, "%s: %s", v.tx[LV_NAME], v.cy[LV_MODE] == 1 ? v.tx[LV_ADDR] : mode[v.cy[LV_MODE] & 3]);
+		if (v.cy[LV_PCP] == 9) {
+			lf_add(buf, len, &n, ", PCP from traffic%s%s", "", "");
+		} else if (v.cy[LV_PCP] > 0) {
+			rt_snprintf(d, sizeof(d), "%d", v.cy[LV_PCP] - 1);
+			lf_add(buf, len, &n, ", PCP %s%s", d, "");
+		}
+		if (v.tx[LV_MTU][0])
+			lf_add(buf, len, &n, ", MTU %s%s", v.tx[LV_MTU], "");
+		for (i = 0; i < 3; i++)
+			if (v.cy[LV_IP4 + i] == 1 || v.cy[LV_IP4 + i] == 2)
+				lf_add(buf, len, &n, ", %s %s", what[i], onoff[v.cy[LV_IP4 + i]]);
+		if (v.tx[LV_TCPWIN][0])
+			lf_add(buf, len, &n, ", TCP window %s%s", v.tx[LV_TCPWIN], "");
+	} else if (page == P_QRULE) {
+		static const char *const proto[3] = { "", "TCP ", "UDP " };
+		static const char *const side[3] = { "ports", "local ports", "remote ports" };
+		const char *pr = proto[v.cy[LQ_PROTO] >= 0 && v.cy[LQ_PROTO] < 3 ? v.cy[LQ_PROTO] : 0];
+		char d[24];
+		if (v.tx[LQ_PORTS][0]) {
+			rt_snprintf(d, sizeof(d), "%s%s", pr, side[v.cy[LQ_SIDE] >= 0 && v.cy[LQ_SIDE] < 3 ? v.cy[LQ_SIDE] : 0]);
+			lf_add(buf, len, &n, "%s %s", d, v.tx[LQ_PORTS]);
+		}
+		if (v.tx[LQ_PROG][0])
+			lf_add(buf, len, &n, n ? ", program %s%s" : "%sprogram %s", n ? v.tx[LQ_PROG] : pr,
+			       n ? "" : v.tx[LQ_PROG]);
+		if (v.cy[LQ_PRIO] >= 1 && v.cy[LQ_PRIO] <= 3) {
+			lf_add(buf, len, &n, ": %s%s", qprio_word[v.cy[LQ_PRIO]], "");
+		} else if (v.cy[LQ_PRIO] >= 4) {
+			rt_snprintf(d, sizeof(d), "%d", v.cy[LQ_PRIO] - 4);
+			lf_add(buf, len, &n, ": priority %s%s", d, "");
+		}
+		if (v.tx[LQ_DSCP][0])
+			lf_add(buf, len, &n, v.cy[LQ_PRIO] ? ", DSCP %s%s" : ": DSCP %s%s", v.tx[LQ_DSCP], "");
+	} else {
+		rt_strlcpy(buf, entry, (size_t)len);
+	}
+}
+
+const char *rp_lform_note(int page)
+{
+	return page == P_ALIAS ? "Up to 8 extra addresses" : page == P_VLAN ? "Up to 8 VLANs on this card" :
+	       page == P_QRULE ? "Up to 16 rules" : rp_pages[page].note;
 }

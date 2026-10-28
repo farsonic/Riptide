@@ -432,7 +432,13 @@ static int event_loop(void)
 		UWORD code;
 		struct Gadget *gad;
 
-		WaitPort(win->UserPort);
+		Wait((1UL << win->UserPort->mp_SigBit) | rp_single_sig());
+		if (rp_single_poll()) {
+			/* another RiptidePrefs was started: this one comes to the front */
+			ScreenToFront(win->WScreen);
+			WindowToFront(win);
+			ActivateWindow(win);
+		}
 		stale = 0;
 		while ((im = GT_GetIMsg(win->UserPort)) != NULL) {
 			int id, i;

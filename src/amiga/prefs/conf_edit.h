@@ -62,13 +62,15 @@ extern const char *const rp_cc_names[];     /* "cubic", "reno", "ledbat" */
 /* lists: extra IPv4 addresses ("ifconfig IF alias SPEC"), QoS rules
  * ("qos rule SPEC") and VLANs of the interface; entries are packed (no
  * empty ones in between). A VLAN entry is "ID [dhcp|A.B.C.D/BITS|up]
- * [pcp=N|pcp=priority]" for the line "interface IF.ID vlan=ID parent=IF
- * [dhcp|address=A.B.C.D/BITS|up] [pcp=...]". */
+ * [pcp=N|pcp=priority] [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off]
+ * [tcpwindow=N]" (the keys in this order) for the line "interface IF.ID
+ * vlan=ID parent=IF [dhcp|address=A.B.C.D/BITS|up] [pcp=...] ...". */
 #define RP_NALIAS   8
-#define RP_ALIASLEN 64
+#define RP_ALIASLEN 72
 #define RP_NQRULE   16
 #define RP_NVLAN    8
-#define RP_VLANLEN  48
+#define RP_VLANLEN  112
+#define RP_VLAN_NKEYS 6     /* pcp mtu ipv4 ipv6 qos tcpwindow */
 enum { RP_LIST_ALIAS, RP_LIST_QRULE, RP_LIST_VLAN };
 
 struct rp_model {
@@ -103,7 +105,7 @@ struct rp_model {
 	char ss[RP_NSS][RP_SSLEN];            /* string sysctls, "" = no line */
 	char alias[RP_NALIAS][RP_ALIASLEN];   /* "A.B.C.D/BITS" or "A.B.C.D netmask M" */
 	char qrule[RP_NQRULE][RP_LONG];       /* the words after "qos rule" */
-	char vlan[RP_NVLAN][RP_VLANLEN];      /* "ID MODE [pcp=N]" (see above) */
+	char vlan[RP_NVLAN][RP_VLANLEN];      /* "ID MODE [pcp=N] ..." (see above) */
 };
 
 struct rp_line {
@@ -167,7 +169,7 @@ int  rp_valid_ip(const char *s);           /* IPv4 or IPv6 literal */
 int  rp_valid_tz(const char *s);           /* "auto" or [+-]HH[:MM] (timezone) */
 int  rp_valid_alias(const char *s);        /* A.B.C.D[/BITS] [netmask M] [broadcast B] */
 int  rp_valid_qrule(const char *s);        /* key=value words of "qos rule" */
-int  rp_valid_vlan(const char *s);         /* "ID [dhcp|A.B.C.D/BITS|up] [pcp=0-7|pcp=priority]" */
+int  rp_valid_vlan(const char *s);         /* a VLAN entry (see above) */
 int  rp_valid_ports(const char *s);        /* P,P-Q,... (empty: valid) */
 int  rp_valid_programs(const char *s);     /* name,name*,... without spaces */
 

@@ -85,4 +85,51 @@ int  rp_list_entry_valid(int page, const char *s, char *err, int errlen);
 /* the message when a list page is full */
 const char *rp_list_full_msg(int page);
 
+/* The forms of the list pages (the MUI editor): an entry of the Extra
+ * addresses, VLANs or QoS rules list as fields of its own instead of one
+ * line to type. rp_lfields[] holds them, page by page in order; values
+ * are kept in struct rp_lvals by field index. */
+enum { LF_NUM, LF_STR, LF_CYCLE, LF_INFO };   /* LF_INFO: shown, not edited */
+#define LF_SAMEROW 1            /* next to the field before, on its row */
+struct rp_lfield {
+	unsigned char page, type, flags;
+	unsigned char size;         /* LF_STR: longest text */
+	long min, max;              /* LF_NUM */
+	const char *label;          /* '_' marks the keyboard shortcut */
+	const char *const *cy;      /* LF_CYCLE: the labels */
+	const char *help;
+};
+/* the fields, in this order in rp_lfields[] */
+enum {
+	LA_ADDR, LA_MASK, LA_BCAST,                                     /* Extra addresses */
+	LV_ID, LV_NAME, LV_MODE, LV_ADDR, LV_PCP, LV_MTU, LV_TCPWIN,     /* VLANs */
+	LV_IP4, LV_IP6, LV_QOS,
+	LQ_PROTO, LQ_PORTS, LQ_SIDE, LQ_PROG, LQ_PRIO, LQ_DSCP,          /* QoS rules */
+	RP_NLFIELDS
+};
+extern const struct rp_lfield rp_lfields[];
+extern const int rp_nlfields;
+#define RP_NLFIELDS_MAX 24
+#define RP_LFTEXT 64
+struct rp_lvals {
+	int cy[RP_NLFIELDS_MAX];                /* LF_CYCLE: the label chosen */
+	char tx[RP_NLFIELDS_MAX][RP_LFTEXT];    /* LF_NUM, LF_STR, LF_INFO: the text */
+};
+/* An entry (NULL or "": a new one) into the form of its page. */
+void rp_lform_get(int page, const char *entry, const char *ifname, struct rp_lvals *v);
+/* The form into an entry: 0, or -1 with *fi the field to show and err why. */
+int  rp_lform_put(int page, const struct rp_lvals *v, char *entry, int len, int *fi, char *err, int errlen);
+/* a field that does not apply with the others' values (IPv4 address
+ * unless Static) */
+int  rp_lform_disabled(int fi, const struct rp_lvals *v);
+/* LF_INFO fields again after a change (the VLAN's interface name) */
+void rp_lform_update(int page, struct rp_lvals *v, const char *ifname);
+/* an entry as the list shows it: "eth0.10: DHCP, priority 4, MTU 1400" */
+void rp_list_row(int page, const char *entry, const char *ifname, char *buf, int len);
+/* the line under a form: how many entries fit, what needs a restart */
+const char *rp_lform_note(int page);
+/* the label without '_', and its shortcut key in lower case (0: none) */
+void rp_lflabel(int fi, char *buf, int len);
+char rp_lfkey(int fi);
+
 #endif

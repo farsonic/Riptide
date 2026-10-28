@@ -161,6 +161,9 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIA_Application_Sleep       0x80425711UL
 #define MUIA_Application_UseCommodities 0x80425ee5UL
 #define MUIA_Application_UseRexx     0x80422387UL
+#define MUIA_Application_SingleTask  0x8042a2c8UL
+#define MUIA_Application_DoubleStart 0x80423bc6UL
+#define MUIA_Application_Iconified   0x8042a07fUL
 #define MUIA_Window_Title            0x8042ad3dUL
 #define MUIA_Window_ID               0x804201bdUL
 #define MUIA_Window_RootObject       0x8042cba5UL
@@ -230,6 +233,8 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIM_FindUData               0x8042c196UL
 #define MUIM_Window_AddEventHandler  0x804203b7UL
 #define MUIM_Window_RemEventHandler  0x8042679eUL
+#define MUIM_Window_ToFront          0x8042554fUL
+#define MUIM_Window_ScreenToFront    0x804227a4UL
 #define MUIM_Setup                   0x80428354UL
 #define MUIM_Cleanup                 0x8042d985UL
 #define MUIM_AskMinMax               0x80423874UL
@@ -271,6 +276,7 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 
 #define MUI_EventHandlerRC_Eat       1
 #define MUI_MAXMAX                   10000
+#define MUIE_SingleTask              6           /* MUI_Error(): another copy is running */
 #define MADF_DRAWOBJECT              1
 #define MADF_DRAWUPDATE              2
 #define MPEN_SHINE                   0

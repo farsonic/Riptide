@@ -15,11 +15,13 @@ enum {
 	/* Settings menu */
 	ID_DARK = 300, ID_TIPS,
 	/* not menu items: the window reporting */
-	ID_CANCEL = 400, ID_PAGE,
+	ID_CANCEL = 400, ID_PAGE, ID_FRONT,
 	/* the buttons of a message: ID_DLGBTN + button */
 	ID_DLGBTN = 450,
 	/* list pages: ID_LIST + page * 4 + LIST_SEL/ADD/REPL/DEL */
 	ID_LIST = 500,
+	/* a field of a list page's form changed: ID_LFIELD + field */
+	ID_LFIELD = 900,
 	/* a check box or cycle gadget changed: ID_FIELD + field */
 	ID_FIELD = 1000
 };

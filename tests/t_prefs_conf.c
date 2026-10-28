@@ -550,7 +550,8 @@ static const char *vlan_conf =
 	"dhcp eth0\n"
 	"interface eth0.10 vlan=10 parent=eth0 address=10.10.0.2/24 pcp=4   # office\n"
 	"interface eth0.20  vlan=20 parent=eth0 dhcp\n"
-	"interface eth0.30 vlan=30 parent=eth0 mtu=1400\n"     /* other options: not in the list */
+	"interface eth0.30 vlan=30 parent=eth0 mtu=1400 ipv6=off\n"
+	"interface eth0.31 vlan=31 parent=eth0 foo=1\n"       /* unknown options: not in the list */
 	"interface wlan.5 vlan=5 parent=eth0 up\n"            /* another name: not in the list */
 	"hostname a\n";
 
@@ -600,10 +601,11 @@ static void test_vlan(void)
 
 	roundtrip("vlans", vlan_conf);
 	CHECK(rp_conf_load(&c, vlan_conf, strlen(vlan_conf)) == 0);
-	CHECK(rp_list_count(&c, RP_LIST_VLAN) == 2);
+	CHECK(rp_list_count(&c, RP_LIST_VLAN) == 3);
 	CHECK(!strcmp(rp_list_get(&c, RP_LIST_VLAN, 0), "10 10.10.0.2/24 pcp=4"));
 	CHECK(!strcmp(rp_list_get(&c, RP_LIST_VLAN, 1), "20 dhcp"));
-	CHECK(rp_other_count(&c) == 2);          /* eth0.30 and wlan.5 */
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_VLAN, 2), "30 mtu=1400 ipv6=off"));
+	CHECK(rp_other_count(&c) == 2);          /* eth0.31 and wlan.5 */
 	/* change one (keeps its comment), delete one, add two */
 	CHECK(rp_list_set(&c, RP_LIST_VLAN, 0, "10 10.10.0.3/24 pcp=priority") == 0);
 	CHECK(rp_list_set(&c, RP_LIST_VLAN, 1, "") == 0);
@@ -613,9 +615,10 @@ static void test_vlan(void)
 	CHECK(!strcmp(t, "interface eth0 device=uaenet.device unit=2\n"
 	                 "dhcp eth0\n"
 	                 "interface eth0.10 vlan=10 parent=eth0 address=10.10.0.3/24 pcp=priority   # office\n"
+	                 "interface eth0.30 vlan=30 parent=eth0 mtu=1400 ipv6=off\n"
 	                 "interface eth0.40 vlan=40 parent=eth0 up\n"
 	                 "interface eth0.50 vlan=50 parent=eth0\n"
-	                 "interface eth0.30 vlan=30 parent=eth0 mtu=1400\n"
+	                 "interface eth0.31 vlan=31 parent=eth0 foo=1\n"
 	                 "interface wlan.5 vlan=5 parent=eth0 up\n"
 	                 "hostname a\n") || (fprintf(stderr, "%s", t), 0));
 	free(t);
@@ -637,7 +640,8 @@ static void test_vlan(void)
 	CHECK(strstr(t, "interface net0.10 vlan=10 parent=net0 address=10.10.0.3/24   # office\n") &&
 	      strstr(t, "interface net0.20 vlan=20 parent=net0 dhcp\n") &&
 	      strstr(t, "interface net0.60 vlan=60 parent=net0 dhcp pcp=1\n") &&
-	      strstr(t, "interface eth0.30 vlan=30 parent=eth0 mtu=1400\n"));
+	      strstr(t, "interface net0.30 vlan=30 parent=net0 mtu=1400 ipv6=off\n") &&
+	      strstr(t, "interface eth0.31 vlan=31 parent=eth0 foo=1\n"));
 	free(t);
 	rp_conf_free(&c);
 	/* at most 8 */
@@ -655,6 +659,179 @@ static void test_vlan(void)
 	CHECK(!rp_valid_vlan("") && !rp_valid_vlan("0") && !rp_valid_vlan("4095") && !rp_valid_vlan("x") &&
 	      !rp_valid_vlan("10 dhcp up") && !rp_valid_vlan("10 10.0.0.1") && !rp_valid_vlan("10 pcp=8") &&
 	      !rp_valid_vlan("10 pcp=1 pcp=2") && !rp_valid_vlan("10 foo"));
+	/* the other per-VLAN settings (src/core/vlan.c) */
+	CHECK(rp_valid_vlan("10 dhcp pcp=4 mtu=1400 ipv4=off ipv6=on qos=on tcpwindow=8192") &&
+	      rp_valid_vlan("10 tcpwindow=0") && rp_valid_vlan("10 mtu=68") && rp_valid_vlan("10 qos=off up"));
+	CHECK(!rp_valid_vlan("10 mtu=67") && !rp_valid_vlan("10 mtu=65536") && !rp_valid_vlan("10 mtu=") &&
+	      !rp_valid_vlan("10 tcpwindow=535") && !rp_valid_vlan("10 tcpwindow=16777217") &&
+	      !rp_valid_vlan("10 ipv4=maybe") && !rp_valid_vlan("10 mtu=1400 mtu=1300") && !rp_valid_vlan("10 vlan=3"));
+	/* a hand-written line with all of them: in the list, written back as it was */
+	{
+		static const char in[] = "interface eth0.7 vlan=7 parent=eth0 tcpwindow=4096 qos=on ipv4=off dhcp "
+		                         "mtu=1000 pcp=priority ipv6=off\n";
+		roundtrip("vlan keys", in);
+		CHECK(rp_conf_load(&c, in, strlen(in)) == 0);
+		CHECK(rp_list_count(&c, RP_LIST_VLAN) == 1 &&
+		      !strcmp(rp_list_get(&c, RP_LIST_VLAN, 0),
+		              "7 dhcp pcp=priority mtu=1000 ipv4=off ipv6=off qos=on tcpwindow=4096"));
+		CHECK(rp_list_add(&c, RP_LIST_VLAN, "8 192.168.8.2/24 mtu=1400 ipv4=on") == 0);
+		t = text_of(&c);
+		CHECK(!strcmp(t, "interface eth0.7 vlan=7 parent=eth0 tcpwindow=4096 qos=on ipv4=off dhcp mtu=1000 "
+		                 "pcp=priority ipv6=off\n"
+		                 "interface eth0.8 vlan=8 parent=eth0 address=192.168.8.2/24 mtu=1400 ipv4=on\n") ||
+		      (fprintf(stderr, "%s", t), 0));
+		free(t);
+		rp_conf_free(&c);
+	}
+}
+
+/* the forms of the list pages: an entry into fields and back unchanged */
+static int lform_round(int page, const char *entry)
+{
+	struct rp_lvals v;
+	char out[RP_LONG], err[120];
+	int fi;
+
+	rp_lform_get(page, entry, "eth0", &v);
+	if (rp_lform_put(page, &v, out, sizeof(out), &fi, err, sizeof(err)) < 0 || strcmp(out, entry)) {
+		fprintf(stderr, "lform %d: '%s' -> '%s' (%s)\n", page, entry, out, fi >= 0 ? err : "");
+		return 0;
+	}
+	return 1;
+}
+
+/* a form into an entry: the field refused, -1 for none */
+static int lform_try(int page, struct rp_lvals *v, char *out, char *err)
+{
+	int fi;
+	if (rp_lform_put(page, v, out, RP_LONG, &fi, err, 120) == 0)
+		return -1;
+	return fi;
+}
+
+static void test_lforms(void)
+{
+	struct rp_lvals v;
+	char out[RP_LONG], err[120], row[160];
+	int i, p;
+
+	CHECK(rp_nlfields == RP_NLFIELDS && rp_nlfields <= RP_NLFIELDS_MAX);
+	/* the fields of a page in one run; keys unique and not those of the
+	 * pages (P), the buttons (S, U, A, C) or the list (Add, Replace, Delete) */
+	for (p = 0; p < RP_NPAGES; p++) {
+		char keys[RP_NLFIELDS_MAX];
+		int nk = 0, k;
+		for (i = 0; i < rp_nlfields; i++) {
+			char key;
+			if (rp_lfields[i].page != p)
+				continue;
+			CHECK(rp_page_list(p) >= 0 && rp_page_list(p) != RP_LIST_OTHER);
+			CHECK(i == 0 || rp_lfields[i - 1].page == p || !(rp_lfields[i].flags & LF_SAMEROW));
+			CHECK(rp_lfields[i].help && strlen(rp_lfields[i].help) > 20 && strlen(rp_lfields[i].help) < 160);
+			CHECK(rp_lfields[i].type != LF_CYCLE || rp_lfields[i].cy);
+			key = rp_lfkey(i);
+			if (rp_lfields[i].type == LF_INFO) {
+				CHECK(!key);
+				continue;
+			}
+			CHECK(key && !strchr("psuacrde", key));
+			for (k = 0; k < nk; k++)
+				if (keys[k] == key)
+					fprintf(stderr, "FAIL form of page %d: key %c twice\n", p, key), failures++;
+			keys[nk++] = key;
+		}
+	}
+	/* entries the forms show and write back unchanged */
+	CHECK(lform_round(P_ALIAS, "10.0.1.2/24"));
+	CHECK(lform_round(P_ALIAS, "10.0.1.2 netmask 255.255.255.0"));
+	CHECK(lform_round(P_ALIAS, "10.0.1.2 netmask 255.255.255.0 broadcast 10.0.1.255"));
+	CHECK(lform_round(P_VLAN, "10 dhcp"));
+	CHECK(lform_round(P_VLAN, "10"));
+	CHECK(lform_round(P_VLAN, "4094 up pcp=0"));
+	CHECK(lform_round(P_VLAN, "10 dhcp pcp=4"));
+	CHECK(lform_round(P_VLAN, "20 192.168.20.2/24 pcp=priority mtu=1400 ipv4=on ipv6=off qos=on tcpwindow=0"));
+	CHECK(lform_round(P_QRULE, "port=22,23 priority=interactive"));
+	CHECK(lform_round(P_QRULE, "proto=udp rport=53 dscp=EF"));
+	CHECK(lform_round(P_QRULE, "proto=tcp lport=21 program=AmiFTP priority=bulk dscp=cs1"));
+	CHECK(lform_round(P_QRULE, "program=wget* priority=3"));
+	/* readable rows */
+	rp_list_row(P_VLAN, "10 dhcp pcp=4 mtu=1400 ipv6=off", "eth0", row, sizeof(row));
+	CHECK(!strcmp(row, "eth0.10: DHCP, PCP 4, MTU 1400, IPv6 off") || (fprintf(stderr, "%s\n", row), 0));
+	rp_list_row(P_VLAN, "20 192.168.20.2/24 pcp=priority", "eth0", row, sizeof(row));
+	CHECK(!strcmp(row, "eth0.20: 192.168.20.2/24, PCP from traffic") || (fprintf(stderr, "%s\n", row), 0));
+	rp_list_row(P_VLAN, "30", "net0", row, sizeof(row));
+	CHECK(!strcmp(row, "net0.30: not started"));
+	rp_list_row(P_ALIAS, "10.0.1.2 netmask 255.255.255.0", "eth0", row, sizeof(row));
+	CHECK(!strcmp(row, "10.0.1.2, netmask 255.255.255.0"));
+	rp_list_row(P_QRULE, "proto=tcp port=22,23 priority=interactive", "eth0", row, sizeof(row));
+	CHECK(!strcmp(row, "TCP ports 22,23: interactive") || (fprintf(stderr, "%s\n", row), 0));
+	rp_list_row(P_QRULE, "program=AmiFTP dscp=CS1", "eth0", row, sizeof(row));
+	CHECK(!strcmp(row, "program AmiFTP: DSCP CS1") || (fprintf(stderr, "%s\n", row), 0));
+	rp_list_row(P_QRULE, "lport=21 program=AmiFTP priority=5", "eth0", row, sizeof(row));
+	CHECK(!strcmp(row, "local ports 21, program AmiFTP: priority 5") || (fprintf(stderr, "%s\n", row), 0));
+
+	/* a new VLAN: DHCP; its name follows the number */
+	rp_lform_get(P_VLAN, NULL, "eth0", &v);
+	CHECK(v.cy[LV_MODE] == 0 && !strcmp(v.tx[LV_NAME], "eth0.?"));
+	CHECK(rp_lform_disabled(LV_ADDR, &v));
+	CHECK(lform_try(P_VLAN, &v, out, err) == LV_ID);
+	strcpy(v.tx[LV_ID], "10");
+	rp_lform_update(P_VLAN, &v, "eth0");
+	CHECK(!strcmp(v.tx[LV_NAME], "eth0.10"));
+	v.cy[LV_PCP] = 5;                           /* "4 Video" */
+	CHECK(lform_try(P_VLAN, &v, out, err) == -1 && !strcmp(out, "10 dhcp pcp=4"));
+	v.cy[LV_MODE] = 1;                          /* static: an address with /BITS */
+	CHECK(!rp_lform_disabled(LV_ADDR, &v));
+	CHECK(lform_try(P_VLAN, &v, out, err) == LV_ADDR);
+	strcpy(v.tx[LV_ADDR], "192.168.10.2");
+	CHECK(lform_try(P_VLAN, &v, out, err) == LV_ADDR);
+	strcpy(v.tx[LV_ADDR], " 192.168.10.2/24 ");
+	strcpy(v.tx[LV_MTU], "60");
+	CHECK(lform_try(P_VLAN, &v, out, err) == LV_MTU && !strcmp(err, "enter 68..65535, or leave it empty"));
+	strcpy(v.tx[LV_MTU], "1400");
+	strcpy(v.tx[LV_TCPWIN], "100");
+	CHECK(lform_try(P_VLAN, &v, out, err) == LV_TCPWIN);
+	v.tx[LV_TCPWIN][0] = 0;
+	v.cy[LV_IP6] = 2;
+	CHECK(lform_try(P_VLAN, &v, out, err) == -1 && !strcmp(out, "10 192.168.10.2/24 pcp=4 mtu=1400 ipv6=off"));
+	CHECK(rp_list_entry_valid(P_VLAN, out, err, sizeof(err)));
+	strcpy(v.tx[LV_ID], "4095");
+	CHECK(lform_try(P_VLAN, &v, out, err) == LV_ID);
+
+	/* extra addresses */
+	rp_lform_get(P_ALIAS, "", "eth0", &v);
+	CHECK(lform_try(P_ALIAS, &v, out, err) == LA_ADDR);
+	strcpy(v.tx[LA_ADDR], "10.0.1.2");
+	strcpy(v.tx[LA_MASK], "255.255.255.0");
+	strcpy(v.tx[LA_BCAST], "10.0.1.x");
+	CHECK(lform_try(P_ALIAS, &v, out, err) == LA_BCAST);
+	v.tx[LA_BCAST][0] = 0;
+	CHECK(lform_try(P_ALIAS, &v, out, err) == -1 && !strcmp(out, "10.0.1.2 netmask 255.255.255.0"));
+	strcpy(v.tx[LA_MASK], "255.255.255.0/8");
+	CHECK(lform_try(P_ALIAS, &v, out, err) == LA_MASK);
+
+	/* QoS rules: ports or a program, and a priority or a mark */
+	rp_lform_get(P_QRULE, NULL, "eth0", &v);
+	CHECK(lform_try(P_QRULE, &v, out, err) == LQ_PORTS);
+	strcpy(v.tx[LQ_PORTS], "22,23");
+	CHECK(lform_try(P_QRULE, &v, out, err) == LQ_PRIO);
+	v.cy[LQ_PRIO] = 1;
+	CHECK(lform_try(P_QRULE, &v, out, err) == -1 && !strcmp(out, "port=22,23 priority=interactive"));
+	strcpy(v.tx[LQ_PORTS], "1,2,3,4,5,6,7,8,9");
+	CHECK(lform_try(P_QRULE, &v, out, err) == LQ_PORTS);
+	strcpy(v.tx[LQ_PORTS], "6881-6889");
+	CHECK(lform_try(P_QRULE, &v, out, err) == LQ_PORTS);
+	v.tx[LQ_PORTS][0] = 0;
+	strcpy(v.tx[LQ_PROG], "Ami FTP");
+	CHECK(lform_try(P_QRULE, &v, out, err) == LQ_PROG);
+	strcpy(v.tx[LQ_PROG], "AmiFTP");
+	strcpy(v.tx[LQ_DSCP], "XX");
+	CHECK(lform_try(P_QRULE, &v, out, err) == LQ_DSCP);
+	strcpy(v.tx[LQ_DSCP], "AF41");
+	v.cy[LQ_PRIO] = 0;
+	v.cy[LQ_PROTO] = 1;
+	CHECK(lform_try(P_QRULE, &v, out, err) == -1 && !strcmp(out, "proto=tcp program=AmiFTP dscp=AF41"));
+	CHECK(rp_list_entry_valid(P_QRULE, out, err, sizeof(err)));
 }
 
 /* resolver: EDNS0 size and TCP fallback (Names page) */
@@ -779,6 +956,7 @@ int main(void)
 	test_p3_valid();
 	test_p3_live();
 	test_vlan();
+	test_lforms();
 	test_dns();
 	test_linklocal();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);

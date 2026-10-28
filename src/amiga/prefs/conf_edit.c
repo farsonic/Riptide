@@ -359,10 +359,15 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 	int i;
 
 	if (eq(k, "interface") && tk->n >= 3 && c->l_iface != l) {
-		/* interface IF.ID vlan=ID parent=IF [dhcp|address=A/BITS|up] [pcp=N] */
+		/* interface IF.ID vlan=ID parent=IF [dhcp|address=A/BITS|up] [pcp=N]
+		 * [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [tcpwindow=N] */
+		static const char *const keys[RP_VLAN_NKEYS] = { "pcp", "mtu", "ipv4", "ipv6", "qos", "tcpwindow" };
+		const char *val[RP_VLAN_NKEYS];
 		char e[RP_VLANLEN], name[24];
-		const char *vid = NULL, *par = NULL, *mode = "", *pcp = NULL, *v;
-		int ok = 1;
+		const char *vid = NULL, *par = NULL, *mode = "", *v;
+		int ok = 1, j;
+		size_t n;
+		memset(val, 0, sizeof(val));
 		for (i = 2; i < tk->n && ok; i++) {
 			if ((v = kv(tk->t[i], "vlan")) != NULL)
 				vid = v;
@@ -370,20 +375,27 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 				par = v;
 			else if ((v = kv(tk->t[i], "address")) != NULL)
 				mode = v;
-			else if ((v = kv(tk->t[i], "pcp")) != NULL)
-				pcp = v;
 			else if (eq(tk->t[i], "dhcp") || eq(tk->t[i], "up"))
 				mode = tk->t[i];
-			else
-				ok = 0;
+			else {
+				for (j = 0; j < RP_VLAN_NKEYS && !(v = kv(tk->t[i], keys[j])); j++)
+					;
+				if (j < RP_VLAN_NKEYS)
+					val[j] = v;
+				else
+					ok = 0;
+			}
 		}
 		if (!ok || !vid || !par || !eq(par, m->ifname))
 			return;
 		rt_snprintf(name, sizeof(name), "%s.%s", m->ifname, vid);
 		if (!eq(tk->t[1], name))
 			return;
-		rt_snprintf(e, sizeof(e), "%s%s%s%s%s", vid, mode[0] ? " " : "", mode, pcp ? " pcp=" : "", pcp ? pcp : "");
-		if (strlen(e) + 1 < sizeof(e) && rp_valid_vlan(e))
+		n = (size_t)rt_snprintf(e, sizeof(e), "%s%s%s", vid, mode[0] ? " " : "", mode);
+		for (j = 0; j < RP_VLAN_NKEYS && n < sizeof(e); j++)
+			if (val[j])
+				n += (size_t)rt_snprintf(e + n, sizeof(e) - n, " %s=%s", keys[j], val[j]);
+		if (n + 1 < sizeof(e) && rp_valid_vlan(e))
 			for (i = 0; i < RP_NVLAN; i++)
 				if (!c->l_vlan[i]) {
 					c->l_vlan[i] = l;
@@ -727,16 +739,16 @@ static int in_list(const char *base, int from, int n, size_t len, const char *te
 	return 0;
 }
 
-/* "interface IF.ID vlan=ID parent=IF [dhcp|address=A/BITS|up] [pcp=N]"
- * for the VLAN entry "ID [MODE] [pcp=N]" */
+/* "interface IF.ID vlan=ID parent=IF [dhcp|address=A/BITS|up] [pcp=N] ..."
+ * for the VLAN entry "ID [MODE] [pcp=N] [mtu=N] ..." */
 static void vlan_line(const char *ifname, const char *e, char *buf, size_t size)
 {
-	char w[3][RP_VLANLEN];
+	char w[RP_VLAN_NKEYS + 2][RP_VLANLEN];
 	int n = 0, k;
 	size_t i;
 
 	memset(w, 0, sizeof(w));
-	while (*e && n < 3) {
+	while (*e && n < RP_VLAN_NKEYS + 2) {
 		while (*e == ' ')
 			e++;
 		for (i = 0; *e && *e != ' '; e++)
@@ -747,7 +759,7 @@ static void vlan_line(const char *ifname, const char *e, char *buf, size_t size)
 	}
 	k = rt_snprintf(buf, size, "interface %s.%s vlan=%s parent=%s", ifname, w[0], w[0], ifname);
 	for (i = 1; i < (size_t)n && (size_t)k < size; i++) {
-		if (!strncmp(w[i], "pcp=", 4) || eq(w[i], "dhcp") || eq(w[i], "up"))
+		if (strchr(w[i], '=') || eq(w[i], "dhcp") || eq(w[i], "up"))
 			k += rt_snprintf(buf + k, size - (size_t)k, " %s", w[i]);
 		else
 			k += rt_snprintf(buf + k, size - (size_t)k, " address=%s", w[i]);
@@ -1189,11 +1201,11 @@ int rp_valid_name(const char *s)
 /* A.B.C.D[/BITS] [netmask M] [broadcast B] */
 int rp_valid_alias(const char *s)
 {
-	char w[4][RP_ALIASLEN];
+	char w[5][RP_ALIASLEN];
 	int n = 0, i;
 	size_t k;
 
-	while (*s && n < 4) {
+	while (*s && n < 5) {
 		while (*s == ' ')
 			s++;
 		for (k = 0; *s && *s != ' '; s++)
@@ -1212,16 +1224,19 @@ int rp_valid_alias(const char *s)
 	return 1;
 }
 
-/* ID [dhcp|up|A.B.C.D/BITS] [pcp=0-7|pcp=priority] */
+/* ID [dhcp|up|A.B.C.D/BITS] [pcp=0-7|pcp=priority] [mtu=68-65535]
+ * [ipv4=on|off] [ipv6=on|off] [qos=on|off] [tcpwindow=0|536-16777216],
+ * each at most once */
 int rp_valid_vlan(const char *s)
 {
-	char w[4][RP_VLANLEN];
-	int n = 0, i, mode = 0, pcp = 0;
+	static const char *const keys[RP_VLAN_NKEYS] = { "pcp", "mtu", "ipv4", "ipv6", "qos", "tcpwindow" };
+	char w[RP_VLAN_NKEYS + 3][RP_VLANLEN];
+	int n = 0, i, j, mode = 0, seen = 0;
 	size_t k;
 	unsigned long id;
-	const char *e;
+	const char *e, *v;
 
-	while (*s && n < 4) {
+	while (*s && n < RP_VLAN_NKEYS + 3) {
 		while (*s == ' ')
 			s++;
 		for (k = 0; *s && *s != ' '; s++)
@@ -1232,15 +1247,24 @@ int rp_valid_vlan(const char *s)
 		while (*s == ' ')
 			s++;
 	}
-	if (*s || !n || n > 3)
+	if (*s || !n || n > RP_VLAN_NKEYS + 2)
 		return 0;
 	id = rt_strtoul(w[0], &e, 10);
 	if (*e || e == w[0] || id < 1 || id > 4094)
 		return 0;
 	for (i = 1; i < n; i++) {
-		if (!strncmp(w[i], "pcp=", 4)) {
-			unsigned long p = rt_strtoul(w[i] + 4, &e, 10);
-			if (pcp++ || !(eq(w[i] + 4, "priority") || (!*e && e != w[i] + 4 && p <= 7)))
+		for (j = 0; j < RP_VLAN_NKEYS && !(v = kv(w[i], keys[j])); j++)
+			;
+		if (j < RP_VLAN_NKEYS) {
+			unsigned long x = rt_strtoul(v, &e, 10);
+			int isnum = *v && !*e;
+			if (seen & (1 << j))
+				return 0;
+			seen |= 1 << j;
+			if (j == 0 ? !(eq(v, "priority") || (isnum && x <= 7)) :
+			    j == 1 ? !(isnum && x >= 68 && x <= 65535) :
+			    j == 5 ? !(isnum && (x == 0 || (x >= 536 && x <= 16777216UL))) :
+			    !(eq(v, "on") || eq(v, "off")))
 				return 0;
 		} else if (eq(w[i], "dhcp") || eq(w[i], "up") || (strchr(w[i], '/') && rp_valid_ip4(w[i], 1))) {
 			if (mode++)

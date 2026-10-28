@@ -933,6 +933,12 @@ route add 10.99.0.0/16 10.20.0.1
 | `dhcp`, `address=A.B.C.D/BITS`, `up` | start DHCP, set an address (and bring it up), or just bring it up (IPv6 link-local and SLAAC) |
 | `tcpwindow=`, `ipv4=`, `ipv6=`, `qos=` | as on any `interface` line |
 
+RiptidePrefs edits VLAN lines with all of these options (the VLANs
+page); a VLAN line with another option, or named other than `IF.ID`,
+stays as it is under "Other lines". Without `dhcp`, `address=` or `up`
+the VLAN is made but not started (it comes up with `ip link set eth0.10
+up`).
+
 `interface eth0.10 delete` removes one (its addresses, routes, sockets'
 bindings and DHCP lease go with it). A line that fails (a bad option, an
 address in use) leaves no half-made interface behind. Any name works
@@ -1113,7 +1119,14 @@ installed; `PAGE` opens on a page (its name, e.g. `PAGE=Ports`, or its
 number from 0), `CMD` runs a command of the MUI editor's menus once the
 window is open (the numbers are in `src/amiga/prefs/mui_ids.h`, e.g.
 `CMD=105` About), `THEME` picks the MUI editor's colours for this run, and
-`DEBUG` writes a log of what the editor does. The GadTools window has a
+`DEBUG` writes a log of what the editor does.
+
+One editor at a time: started again while one is open (from a Shell or
+its icon, either editor), RiptidePrefs brings the open window to the
+front, activates it and ends at once with return code 0. The open editor
+owns the public port `RiptidePrefs` for this; the MUI editor is also a
+single-task MUI application. `USE` and `SAVE` on the command line (no
+window) still work while an editor is open. The GadTools window has a
 **Page** cycle gadget, the MUI one a page list; these are the pages (the
 MUI editor drops the "Advanced: " of the names and lists those pages
 under a heading of their own):
@@ -1122,8 +1135,8 @@ under a heading of their own):
 |---|---|---|
 | Interface | interface name, device, unit, MTU, TCP window, reads; IPv4 and IPv6 on/off (two check boxes) | the first `interface NAME device=...` line (other options such as `raw`, `options=`, `ipv4=`, `ipv6=` or `qos=` are kept), `ipv4 on\|off`, `ipv6 on\|off` |
 | Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway; with DHCP "Link-local if no DHCP" (a 169.254 address while there is no lease, on by default) | `dhcp IF [linklocal off]`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
-| Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS` or `A.B.C.D netmask M`), with DHCP or a static primary address | `ifconfig IF alias SPEC` |
-| VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5` | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...]` |
+| Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS`, or `A.B.C.D` with `netmask M` and/or `broadcast B`), with DHCP or a static primary address. MUI editor: a form with IPv4 address, Netmask and Broadcast | `ifconfig IF alias SPEC` |
+| VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority] [mtu=N] [ipv4=on\|off] [ipv6=on\|off] [qos=on\|off] [tcpwindow=N]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5 mtu=1400`. MUI editor: a form with VLAN ID (and the interface's name it gives), Address mode (DHCP, Static address, Up without an IPv4 address, Not started), IPv4 address, Priority (PCP: Default, 0-7 or From traffic priority), MTU, TCP window, IPv4, IPv6 and QoS (Default, On, Off) | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...] [mtu=...] ...` |
 | Names | host name, domain, up to three DNS servers; EDNS size (empty: default, 0 = off) and DNS over TCP (Default/On/Off) | `hostname`, `domain`, `nameserver`, `sysctl dns.edns_size=N`, `sysctl dns.tcp_fallback=0\|1` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit, ECN (Default/Off/On/Accept only) | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=`, `sysctl net.inet.tcp.ecn=` |
@@ -1134,7 +1147,7 @@ under a heading of their own):
 | Advanced: Memory | socket memory low water, pressure and high water (KB, 16-4194304; empty: from the free memory at start) | `sysctl net.inet.tcp.mem_low=`, `mem_pressure=`, `mem_high=` |
 | Advanced: Happy Eyeballs | Happy Eyeballs (On/Off), attempt delay (ms, 10-2000), resolution delay (ms, 0-1000), prefer (RFC 6724 / IPv6 / IPv4), IPv6 lookup filter (On/Off), the longest time a negative DNS answer is cached (s; empty: 3600, 0 = off) | `sysctl net.inet.he.enable=`, `attempt_delay=`, `resolution_delay=`, `prefer=`, `aaaa_filter=`, `sysctl dns.cache.neg_maxttl=N` |
 | Advanced: QoS | QoS bands (Default/On/Off), frames in flight (1-32), band limit (frames, 8-1024), priority sets DSCP (On/Off) | `qos on\|off`, `sysctl net.inet.ip.qos_inflight=`, `qos_limit=`, `qos_prio_dscp=` |
-| Advanced: QoS rules | a list of up to 16 rules: `[proto=tcp\|udp] port=\|lport=\|rport=P,.. \| program=NAME` and `priority=interactive\|default\|bulk\|0-7` and/or `dscp=EF\|CS1\|AF41\|0-63` | `qos rule ...` |
+| Advanced: QoS rules | a list of up to 16 rules: `[proto=tcp\|udp] port=\|lport=\|rport=P,.. \| program=NAME` and `priority=interactive\|default\|bulk\|0-7` and/or `dscp=EF\|CS1\|AF41\|0-63`. MUI editor: a form with Protocol, Ports, Which end (either, this Amiga's, the other one's), Program, Priority and DSCP mark | `qos rule ...` |
 | Other lines | a list of the lines RiptidePrefs does not edit itself (e.g. `compat ...`, extra interfaces, routes, `background ...`); a line can be edited, replaced, added or deleted | as typed |
 
 The "Advanced:" pages edit the settings of "Connecting, Fast Open,
@@ -1195,8 +1208,13 @@ the guide that Easel, Quill, Ledger and Folio were built by:
 * **Right, the page:** its head (a larger icon, the name and one or two
   sentences about it), then the settings, each with its label (the
   underlined letter is its key, as in the GadTools editor) and a note at
-  the bottom. List pages have the list, the **Line** being edited and
-  **Add**, **Replace**, **Delete**.
+  the bottom. List pages have the list, a form with the settings of one
+  entry and **Add**, **Replace**, **Delete**: the list shows each entry
+  in words ("eth0.10: DHCP, PCP 4, MTU 1400"), clicking one fills the
+  form, Add adds the form as a new entry and Replace puts it in place of
+  the one chosen. A field that is wrong is named in a message and gets
+  the cursor. The Other lines page edits a whole line instead. (The
+  GadTools editor keeps one line to type on every list page.)
 * **Below:** flat **Save**, **Use**, **Apply** and **Cancel** buttons
   (`s`, `u`, `a`, `c`; Esc cancels) and a status line (whether Riptide is
   running, and when there are changes not saved yet).
@@ -2598,7 +2616,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, RiptidePrefs in `SYS:Prefs`, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
 | `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply; the settings table of both editors (`prefs_fields.c`): a help text and a key for every setting, no key twice on a page or taken by P/S/U/A/C, at most seven rows a page, number and string input, validation and list entries. |
 | `tests/amiga/run_vamos_prefs.sh build/amiga/RiptidePrefs` | (in `make -f Makefile.amiga check`) `RiptidePrefs FROM ... SAVE` / `USE` without a window under vamos: the files in `ENVARC:`/`ENV:` equal the input, the second Save leaves `riptide.conf.bak`, error return codes. |
-| `MUI_DIR=... tests/amiga/run_fsuae_prefs_mui.sh build/amiga` | RiptidePrefs' MUI editor on FS-UAE (AROS) with MUI 3.8 (`MUI_DIR`: the `MUI` drawer of Aminet `util/libs/mui38usr.lha`; the AROS ROM lacks diskfont, iffparse, locale, commodities, asl and datatypes.library, so `tests/amiga/mkstublib.py` makes stand-ins that fail every call, and MUI runs without disk fonts, saved MUI settings, catalogs or file requesters, and shows no help bubbles). The keyboard edits of the GadTools test must give the same `riptide.conf`; screenshots of every page on a 640 × 480 256-colour screen (light) and a 640 × 512 8-colour one (dark), and the 640 × 256 Workbench (compact layout, a page lit under the pointer; the AROS ROM opens no screen wider than 640, so larger ones are not tested here); About through `CMD=`, Dark Theme saved and used by the next start, Reset to Defaults with Use, Cancel changing nothing, `GADTOOLS`, and the bubble texts (`DEBUG` log). Run it for `build/amiga-gcc` too. |
+| `MUI_DIR=... tests/amiga/run_fsuae_prefs_single.sh build/amiga` | RiptidePrefs on FS-UAE (AROS) with MUI 3.8: one editor at a time (with the MUI and then the GadTools editor open under a covering window, starting it again as either editor, or as from Workbench, ends that copy with rc 0 and no window, and brings the open one to the front; `USE` still works; Save afterwards), and starting from Workbench: a launcher the script builds (`twb`) starts RiptidePrefs as Workbench does (a process without a CLI and a WBStartup message) and waits for the reply, with a stand-in for Riptide's `RIPTIDE` port that answers and logs every command: Save without changes, Save with a change answering Apply (the command reaches the port) and Later (saved, not applied), and Cancel; each start must be replied and its process gone, and a window and the editor must still open afterwards. |
+| `MUI_DIR=... tests/amiga/run_fsuae_prefs_mui.sh build/amiga` | RiptidePrefs' MUI editor on FS-UAE (AROS) with MUI 3.8 (`MUI_DIR`: the `MUI` drawer of Aminet `util/libs/mui38usr.lha`; the AROS ROM lacks diskfont, iffparse, locale, commodities, asl and datatypes.library, so `tests/amiga/mkstublib.py` makes stand-ins that fail every call, and MUI runs without disk fonts, saved MUI settings, catalogs or file requesters, and shows no help bubbles). The keyboard edits of the GadTools test must give the same `riptide.conf`, the list pages through their forms (an extra address after a refused one, a VLAN with priority 4, a second one made static with an MTU through Replace, a QoS rule); screenshots of every page on a 640 × 480 256-colour screen (light) and a 640 × 512 8-colour one (dark), and the 640 × 256 Workbench (compact layout, a page lit under the pointer; the AROS ROM opens no screen wider than 640, so larger ones are not tested here); About through `CMD=`, Dark Theme saved and used by the next start, Reset to Defaults with Use, Cancel changing nothing, `GADTOOLS`, the three forms in the compact layout, and the bubble texts (`DEBUG` log). Run it for `build/amiga-gcc` too. |
 | `tests/amiga/run_fsuae_prefs.sh build/amiga` | RiptidePrefs on FS-UAE (AROS; no MUI there, so the GadTools editor): opens the window, walks every page (screenshots in OUTDIR), switches to a static address and saves to get the validation requester, edits host name, domain, DNS, NTP, mDNS, an extra address, a VLAN and an Other line with the keyboard (xdotool), saves, and compares `ENVARC:` (exact expected file), `ENV:` and the `.bak`. Run it for `build/amiga-gcc` too. |
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |

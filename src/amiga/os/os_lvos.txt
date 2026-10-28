@@ -112,10 +112,13 @@
 # RiptidePrefs (GadTools GUI)
 @lib intuition IntuitionBase basetype=IntuitionBase
 72  void CloseWindow(struct Window* window a0)
+252 void ScreenToFront(struct Screen* screen a0)
 276 void SetWindowTitles(struct Window* window a0, CONST_STRPTR windowTitle a1, CONST_STRPTR screenTitle a2)
+312 void WindowToFront(struct Window* window a0)
 432 void RefreshGList(struct Gadget* gadgets a0, struct Window* window a1, APTR requester a2, LONG numGad d0)
 438 UWORD AddGList(struct Window* window a0, struct Gadget* gadget a1, ULONG position d0, LONG numGad d1, APTR requester a2)
 444 UWORD RemoveGList(struct Window* remPtr a0, struct Gadget* gadget a1, LONG numGad d0)
+450 LONG ActivateWindow(struct Window* window a0)
 462 LONG ActivateGadget(struct Gadget* gadgets a0, struct Window* window a1, APTR requester a2)
 510 struct Screen* LockPubScreen(CONST_STRPTR name a0)
 516 void UnlockPubScreen(CONST_STRPTR name a0, struct Screen* screen a1)

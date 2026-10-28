@@ -100,6 +100,9 @@ static int prefs_main(int from_cli)
 		rc = CL_ERROR;
 	} else if (args[2] || args[3]) {
 		rc = rp_store(args[3] != 0) < 0 ? CL_ERROR : CL_OK;
+	} else if (rp_single_start()) {
+		/* another editor is open: it comes to the front, this copy ends */
+		rc = CL_OK;
 	} else {
 		IntuitionBase = (struct IntuitionBase *)OpenLibrary((CONST_STRPTR)"intuition.library", 37);
 		GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 37);
@@ -118,6 +121,7 @@ static int prefs_main(int from_cli)
 			CloseLibrary((struct Library *)IntuitionBase);
 		IntuitionBase = NULL;
 		GfxBase = NULL;
+		rp_single_end();
 	}
 	rp_log("exit %d", rc);
 	rp_log_close();
