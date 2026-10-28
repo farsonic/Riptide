@@ -149,6 +149,7 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIC_Listview     "Listview.mui"
 #define MUIC_Text         "Text.mui"
 #define MUIC_Rectangle    "Rectangle.mui"
+#define MUIC_Image        "Image.mui"
 
 #define MUIA_Application_Title       0x804281b8UL
 #define MUIA_Application_Version     0x8042b33fUL
@@ -251,6 +252,13 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIV_Frame_String            4
 #define MUIV_Frame_InputList         6
 #define MUIV_InputMode_RelVerify     1
+#define MUIV_InputMode_Toggle        3
+#define MUIV_Frame_ImageButton       2
+#define MUII_ButtonBack              2
+#define MUII_CheckMark               15
+#define MUIA_ShowSelState            0x8042caacUL
+#define MUIA_Image_Spec              0x804233d5UL
+#define MUIA_Image_FreeVert          0x8042ea28UL
 #define MUIV_List_Active_Off         (-1L)
 #define MUIV_List_Insert_Bottom      (-3L)
 #define MUIV_List_ConstructHook_String (-1L)

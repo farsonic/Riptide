@@ -307,7 +307,10 @@ static Object *field_gadget(int i)
 		g = mui_make(MUIO_String, (ULONG)tr(f->label), f->type == F_STR ? (ULONG)f->size : 11UL);
 		break;
 	case F_CHECK:
-		g = mui_make(MUIO_Checkmark, (ULONG)tr(f->label));
+		/* MUIO_Checkmark stretches with its row (FreeVert): this one keeps its size */
+		g = mui_new(MUIC_Image, MUIA_Frame, MUIV_Frame_ImageButton, MUIA_InputMode, MUIV_InputMode_Toggle,
+		            MUIA_Image_Spec, MUII_CheckMark, MUIA_Image_FreeVert, FALSE, MUIA_Background, MUII_ButtonBack,
+		            MUIA_ShowSelState, FALSE, MUIA_ControlChar, (ULONG)(unsigned char)rp_fkey(i), TAGEND);
 		break;
 	case F_CYCLE:
 		for (k = 0; f->cy[k] && k < 7; k++)

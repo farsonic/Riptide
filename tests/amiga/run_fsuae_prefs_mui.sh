@@ -187,6 +187,9 @@ waitfor() {
 	while [ $t -lt 40 ] && [ ! -s "$dh0/out/$1" ]; do sleep 1; t=$((t + 1)); done
 	[ -s "$dh0/out/$1" ] || { fail "RiptidePrefs did not finish ($1)"; return 1; }
 	grep -q '^rc 0' "$dh0/out/$1" || fail "RiptidePrefs ($1): $(cat "$dh0/out/$1")"
+	# the next RiptidePrefs takes a moment to open: an empty screen is
+	# "stable" too, so give it time before the next settle
+	sleep 4
 }
 # STAGES="1 2 3": the boots to run (default all)
 want() { case " ${STAGES:-1 2 3} " in *" $1 "*) return 0;; esac; return 1; }
