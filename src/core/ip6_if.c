@@ -22,6 +22,7 @@
 #define MAX_RTR_SOLICIT_DELAY     1000u
 #define REACHABLE_TIME            30000u
 #define RETRANS_TIMER             1000u
+#define MAX_NEIGHBOR_ADVERTISEMENT 3
 #define MLD_ROBUSTNESS            2
 #define MLD_UNSOL_INTERVAL        1000u
 #define MLD_V1_PRESENT_S          260u    /* RFC 3810 9.12 Older Version Querier Present Timeout */
@@ -527,12 +528,38 @@ int rt_ip6_is_local(const rt_in6_addr *a)
 	return n && (n->flags & RT_IFF_UP);
 }
 
+/* RFC 9131: tell the first-hop routers about a new global address so the
+ * first packet sent back to it does not wait for (or lose to) neighbour
+ * resolution: unsolicited NAs to ff02::2, Override clear, RetransTimer apart. */
+static void una_send(struct in6_ifaddr *ia)
+{
+	static const rt_in6_addr all_routers = { { 0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2 } };
+	struct ip6_if *ifp = ia->ifp;
+
+	if (!(ifp->nif->flags & RT_IFF_UP) ||
+	    (ia->flags & (RT_IN6_IFF_TENTATIVE | RT_IN6_IFF_DUPLICATED | RT_IN6_IFF_DEPRECATED))) {
+		ia->una_left = 0;
+		return;
+	}
+	ia->una_left--;
+	rt_icmp6stat.OutUnsolicitedNAs++;
+	nd6_send_na(ifp->nif, &all_routers, &ia->addr, 0, 0);
+	if (ia->una_left)
+		rt_timer_after(&ia->dad_timer, ifp->retrans_ms ? ifp->retrans_ms : RETRANS_TIMER);
+}
+
 static void ifa_ready(struct in6_ifaddr *ia)
 {
 	struct ip6_if *ifp = ia->ifp;
 
 	ia->flags &= (u16)~RT_IN6_IFF_TENTATIVE;
 	rt_timer_del(&ia->dad_timer);
+	ia->una_left = 0;
+	if (rt_ip6_gratuitous_na && ifp->nd && !rt_in6_is_linklocal(&ia->addr) &&
+	    !rt_in6_is_loopback(&ia->addr) && !(ia->flags & RT_IN6_IFF_DEPRECATED)) {
+		ia->una_left = MAX_NEIGHBOR_ADVERTISEMENT;
+		una_send(ia);
+	}
 	if (rt_in6_is_linklocal(&ia->addr) && ifp->nd && rt_ip6_accept_rtadv && !rt_ip6_forwarding &&
 	    ifp->rs_left == 0 && ifp->rs_next_ms == 0) {
 		/* RFC 4861 6.3.7: solicit routers after a random delay */
@@ -551,8 +578,11 @@ static void dad_timer_fn(void *arg)
 	struct in6_ifaddr *ia = arg;
 	struct ip6_if *ifp = ia->ifp;
 
-	if (!(ia->flags & RT_IN6_IFF_TENTATIVE))
+	if (!(ia->flags & RT_IN6_IFF_TENTATIVE)) {
+		if (ia->una_left)
+			una_send(ia);
 		return;
+	}
 	if (ia->dad_left == 0) {
 		ifa_ready(ia);
 		return;

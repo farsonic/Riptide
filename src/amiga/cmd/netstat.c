@@ -533,6 +533,7 @@ static void show_stats6(void)
 		if (c->OutRouterSolicits) P("    router solicits: %lu", c->OutRouterSolicits);
 		if (c->OutNeighborSolicits) P("    neighbour solicits: %lu", c->OutNeighborSolicits);
 		if (c->OutNeighborAdvertisements) P("    neighbour advertisements: %lu", c->OutNeighborAdvertisements);
+		if (c->OutUnsolicitedNAs) P("    of which address announcements: %lu", c->OutUnsolicitedNAs);
 		if (c->OutMLDv2Reports) P("    MLDv2 reports: %lu", c->OutMLDv2Reports);
 		FreeVec(d);
 	}

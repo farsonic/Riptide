@@ -22,6 +22,7 @@ s32 rt_ip6_accept_rtadv = 1;
 s32 rt_ip6_use_tempaddr = 0;
 s32 rt_ip6_auto_enable = 1;
 s32 rt_ip6_dad_count = 1;
+s32 rt_ip6_gratuitous_na = 1;
 s32 rt_ip6_addr_gen_mode = 1;
 s32 rt_ip6_mtu_expires = 600;
 char rt_ip6_stable_secret[40];
@@ -41,6 +42,8 @@ static const struct rt_sysctl ip6_sysctl[] = {
 	  &rt_ip6_auto_enable, 0, 1, NULL, "Enable IPv6 on interfaces when they come up" },
 	{ "net.inet6.ip6.dad_count", RT_SYSCTL_INT, RT_SYSCTL_RW, 0, { 0 },
 	  &rt_ip6_dad_count, 0, 10, NULL, "Duplicate address detection probes (0 = off)" },
+	{ "net.inet6.ip6.gratuitous_na", RT_SYSCTL_INT, RT_SYSCTL_RW, 0, { 0 },
+	  &rt_ip6_gratuitous_na, 0, 1, NULL, "Announce new global addresses to routers (RFC 9131)" },
 	{ "net.inet6.ip6.addr_gen_mode", RT_SYSCTL_INT, RT_SYSCTL_RW, 0, { 0 },
 	  &rt_ip6_addr_gen_mode, 0, 1, NULL, "Interface identifiers: 0 EUI-64, 1 RFC 7217 stable privacy" },
 	{ "net.inet6.ip6.stable_secret", RT_SYSCTL_STRING, RT_SYSCTL_RW, 0, { 0 },

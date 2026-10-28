@@ -16,6 +16,7 @@ extern s32 rt_ip6_accept_rtadv;     /* net.inet6.ip6.accept_rtadv */
 extern s32 rt_ip6_use_tempaddr;     /* net.inet6.ip6.use_tempaddr */
 extern s32 rt_ip6_auto_enable;      /* net.inet6.ip6.enable: IPv6 on new interfaces */
 extern s32 rt_ip6_dad_count;        /* net.inet6.ip6.dad_count */
+extern s32 rt_ip6_gratuitous_na;    /* net.inet6.ip6.gratuitous_na */
 extern s32 rt_ip6_addr_gen_mode;    /* 0 EUI-64, 1 RFC 7217 stable privacy */
 extern s32 rt_ip6_mtu_expires;      /* PMTU lifetime (s) */
 extern char rt_ip6_stable_secret[40];
@@ -32,6 +33,7 @@ struct in6_ifaddr {
 	u16 flags;                  /* RT_IN6_IFF_* */
 	u8  plen;
 	u8  dad_left;               /* DAD probes still to send */
+	u8  una_left;               /* RFC 9131 unsolicited NAs still to send */
 	u8  dad_counter;            /* RFC 7217 DAD_Counter */
 	u8  prefix_route;           /* we installed plen's on-link route */
 	u8  nonce[6];               /* RFC 7527 nonce of our DAD probes */
