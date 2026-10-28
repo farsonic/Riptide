@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "rt/rt_types.h"
-#include "prefs/prefs_fields.h"
+#include "prefs_fields.h"
 
 const struct rp_page rp_pages[RP_NPAGES] = {
 	{ "Interface", "Interface", "Interface changes need a restart of Riptide",
@@ -120,7 +120,7 @@ const struct rp_field rp_fields[] = {
 	{ P_NAMES, F_STR,   0, M(dns) + RP_ADDR, RP_ADDR, 0, 0, "DNS server _2", NULL, NULL,
 	  "A second name server, asked when the first one does not answer." },
 	{ P_NAMES, F_STR,   0, M(dns) + 2 * RP_ADDR, RP_ADDR, 0, 0, "DNS server _3", NULL, NULL,
-	  "A third name server." },
+	  "A third name server, asked when the first two do not answer." },
 	{ P_NAMES, F_NUM,   FL_ZERO, SC(RP_SC_DNS_EDNS), 512, 4096, "_EDNS size (0 = off)", NULL, NULL,
 	  "The largest name server answer asked for over UDP, in bytes. 0 turns EDNS off for old servers." },
 	{ P_NAMES, F_CYCLE, 0, SC(RP_SC_DNS_TCP), 0, 0,    "DNS over _TCP", cy_sw, cyv_sw,

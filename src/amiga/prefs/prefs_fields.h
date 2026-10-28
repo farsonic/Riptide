@@ -14,7 +14,7 @@
 #ifndef RT_PREFS_FIELDS_H
 #define RT_PREFS_FIELDS_H
 
-#include "prefs/conf_edit.h"
+#include "conf_edit.h"
 
 enum {
 	P_IFACE, P_ADDR, P_ALIAS, P_VLAN, P_NAMES, P_TIME, P_TCP, P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE,

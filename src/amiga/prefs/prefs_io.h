@@ -51,4 +51,10 @@ void rp_eprefs_save(void);
 
 void *rp_read_file(const char *path, long *len);
 
+/* DEBUG=file: a log of what the editor does (start-up, commands); costs
+ * nothing without it */
+void rp_log_open(const char *path);
+void rp_log_close(void);
+void rp_log(const char *fmt, ...);
+
 #endif

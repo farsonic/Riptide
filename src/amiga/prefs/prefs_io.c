@@ -268,6 +268,41 @@ int rp_list_edit(int page, int sel, const char *text)
 	return rp_list_n(page) - 1;
 }
 
+/* ---- the debug log ---- */
+static BPTR logf;
+
+void rp_log_open(const char *path)
+{
+	if (path)
+		logf = Open((CONST_STRPTR)path, MODE_NEWFILE);
+}
+
+void rp_log_close(void)
+{
+	if (logf)
+		Close(logf);
+	logf = 0;
+}
+
+void rp_log(const char *fmt, ...)
+{
+	char buf[200];
+	va_list ap;
+	int n;
+
+	if (!logf)
+		return;
+	va_start(ap, fmt);
+	n = rt_vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+	va_end(ap);
+	if (n < 0)
+		return;
+	if (n > (int)sizeof(buf) - 2)
+		n = (int)sizeof(buf) - 2;
+	buf[n++] = '\n';
+	Write(logf, buf, n);
+}
+
 /* ---- the editor's own settings ---- */
 #define EPREFS_PATH    "ENVARC:Riptide/RiptidePrefs.prefs"
 #define EPREFS_ENVPATH "ENV:Riptide/RiptidePrefs.prefs"

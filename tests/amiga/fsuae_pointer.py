@@ -3,6 +3,7 @@
 #
 #   fsuae_pointer.py click X Y [COUNT]   move the pointer to screen pixel X,Y
 #                                         and click (COUNT=2: double-click)
+#   fsuae_pointer.py move X Y            only move it there (help bubbles)
 #   fsuae_pointer.py stable SECS [MAX]   wait until the screen has not changed
 #                                         for SECS seconds (at most MAX seconds)
 #   fsuae_pointer.py wait SECS MAX X Y [PREV]
@@ -80,7 +81,7 @@ def click(tx, ty, count=1):
         time.sleep(0.12 if count > 1 else 0.25)
         subprocess.run(["xdotool", "mouseup", "1"], check=True)
         time.sleep(0.12 if count > 1 else 0.3)
-    print("click %d,%d (pointer at %s)" % (tx, ty, p))
+    print("%s %d,%d (pointer at %s)" % ("click" if count else "move", tx, ty, p))
 
 
 def screen_hash(path):
@@ -119,6 +120,9 @@ def main(argv):
     if len(argv) >= 4 and argv[1] == "click":
         click(int(argv[2]), int(argv[3]), int(argv[4]) if len(argv) > 4 else 1)
         return 0
+    if len(argv) == 4 and argv[1] == "move":
+        click(int(argv[2]), int(argv[3]), 0)
+        return 0
     if len(argv) >= 6 and argv[1] == "wait":
         return stable(float(argv[2]), float(argv[3]), (int(argv[4]), int(argv[5])),
                       argv[6] if len(argv) > 6 else None)
@@ -127,7 +131,7 @@ def main(argv):
     if len(argv) == 3 and argv[1] == "shot":
         shot(argv[2])
         return 0
-    sys.stderr.write("usage: fsuae_pointer.py click X Y [COUNT] | stable SECS [MAX] | "
+    sys.stderr.write("usage: fsuae_pointer.py click X Y [COUNT] | move X Y | stable SECS [MAX] | "
                      "wait SECS MAX X Y [PREV] | shot FILE\n")
     return 2
 

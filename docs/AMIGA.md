@@ -1094,17 +1094,29 @@ BIND calls (`res_query()` & co.) do not use the cache, as in BIND.
 ## RiptidePrefs
 
 `RiptidePrefs` is a preferences editor for `riptide.conf` in the style of
-the system's prefs editors: a GadTools window (no MUI) on the Workbench
-screen or another public screen, for AmigaOS 2.04/3.x and AROS. The
-layout follows the screen font. Start it from its icon (`SYS:Prefs`) or
-from a Shell:
+the system's prefs editors, on the Workbench screen or another public
+screen, for AmigaOS 2.04/3.x and AROS. It has two faces with the same
+pages and settings: with **MUI 3.8 or later** installed (muimaster.library
+19; MUI is optional and not part of Riptide) it opens the MUI editor
+described [below](#the-mui-editor), otherwise a GadTools window that needs
+nothing but the ROM. Both follow the screen font. Start it from its icon
+(`SYS:Prefs`) or from a Shell:
 
 ```
 RiptidePrefs [FROM=file] [EDIT] [USE] [SAVE] [PUBSCREEN=name]
+             [GADTOOLS] [PAGE=name] [CMD=n] [THEME=DARK|LIGHT] [DEBUG=file]
 ```
 
 It edits `ENV:Riptide/riptide.conf` (`ENVARC:` when `ENV:` has none, or
-the `FROM` file). The window has a **Page** cycle gadget and these pages:
+the `FROM` file). `GADTOOLS` opens the GadTools editor even with MUI
+installed; `PAGE` opens on a page (its name, e.g. `PAGE=Ports`, or its
+number from 0), `CMD` runs a command of the MUI editor's menus once the
+window is open (the numbers are in `src/amiga/prefs/mui_ids.h`, e.g.
+`CMD=105` About), `THEME` picks the MUI editor's colours for this run, and
+`DEBUG` writes a log of what the editor does. The GadTools window has a
+**Page** cycle gadget, the MUI one a page list; these are the pages (the
+MUI editor drops the "Advanced: " of the names and lists those pages
+under a heading of their own):
 
 | Page | Settings | Lines in riptide.conf |
 |---|---|---|
@@ -1170,6 +1182,59 @@ the page below it (string gadgets, check boxes for IPv4 and IPv6), a hint line
 * `USE` or `SAVE` on the command line copies the file without opening the
   window (`RiptidePrefs FROM=RAM:test.conf SAVE`, or `RiptidePrefs USE`
   to copy `ENVARC:` to `ENV:`).
+
+### The MUI editor
+
+The MUI editor is one window in a theme of its own (light or dark), after
+the guide that Easel, Quill, Ledger and Folio were built by:
+
+* **Left, the page list:** an icon and the name of each page, the
+  settings pages under "Settings" and the others under "Advanced". The
+  page shown has the accent bar; a page lights up under the pointer.
+  `p` and `P` (or the cursor keys) go to the next and previous page.
+* **Right, the page:** its head (a larger icon, the name and one or two
+  sentences about it), then the settings, each with its label (the
+  underlined letter is its key, as in the GadTools editor) and a note at
+  the bottom. List pages have the list, the **Line** being edited and
+  **Add**, **Replace**, **Delete**.
+* **Below:** flat **Save**, **Use**, **Apply** and **Cancel** buttons
+  (`s`, `u`, `a`, `c`; Esc cancels) and a status line (whether Riptide is
+  running, and when there are changes not saved yet).
+* **Help bubbles:** every setting, button and page explains itself when
+  the pointer rests on it (its name in bold and what it does). They follow
+  MUI's own bubble settings and can be turned off in the menu.
+* **Menus** (every command; Amiga key in brackets): *Project*: Open...
+  (O, a riptide.conf to edit), Save As... (A), Save (S), Use (U), Apply
+  (Y), About... (?), Quit (Q). *Edit*: Reset to Defaults (D, every
+  setting back to Riptide's default; lines the editor does not know stay),
+  Last Saved (L, `ENVARC:`), Restore (R, what the editor started with).
+  *Settings*: Dark Theme (T), Help Bubbles (H). Open and Save As need
+  asl.library.
+* **Theme:** the colours are a light and a dark table of named colours,
+  taken as pens with `ObtainBestPen()` on the window's screen, so on a
+  palette screen (AGA, 256 colours or fewer, even the 4-colour Workbench)
+  they share or approach the screen's colours; lines and the chosen page
+  keep a colour of their own there. The icons are drawn in code from
+  short vector descriptions, at any size. The text uses the screen's font
+  (an interface font of RiptidePrefs' own may follow; the drawing code
+  asks for it in one place). The theme and the bubble switch are kept in
+  `ENVARC:Riptide/RiptidePrefs.prefs` (`dark=1`, `bubbles=0`).
+* **Screen sizes:** the window fits a 640 × 480 or 640 × 512 screen and
+  grows with larger ones. Below 400 lines (the 640 × 256 PAL Workbench)
+  it uses a compact layout: the page list without icons and headings, the
+  head on one line, closer rows. When even that does not fit, RiptidePrefs
+  opens the GadTools editor.
+
+The MUI editor is in `src/amiga/prefs/mui_*.c`: `mui_main.c` (the window,
+menus and the one `command()` switch every button, key and menu item goes
+through), `mui_classes.c` (the page list, head, buttons, labels, status
+line and separators, custom classes of MUI's Area class), `mui_theme.c`
+(colours, pens, drawing, icons, bubbles), `mui_lang.c` (`tr()`: every
+string is looked up there, so the editor can be translated) and `mui.h`
+(the MUI definitions it uses, written for Riptide and checked against the
+MUI SDK by `tests/amiga/check_layouts.py`). The pages and settings come
+from `prefs_fields.c`, which the GadTools editor (`gt_prefs.c`) builds its
+pages from too.
 
 Only the first `interface` line with `device=` and its `dhcp`/`ifconfig`/
 `route add default`/`ifconfig IF alias` lines and its VLANs (`interface
@@ -2520,7 +2585,7 @@ Both builds generate their library glue from the LVO tables
 
 | Test | What it checks |
 |---|---|
-| `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the SDK 2.11 of the historical API (`COMPAT_SDK`): the compat alias must keep its vector layout (riptide.library's names are mapped to the historical ones), and `sdk/fd/riptide_lib.fd` must match the table. Set `NDK=`, `COMPAT_SDK=` and `AMITCP_SDK=` to the unpacked archives. |
+| `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the SDK 2.11 of the historical API (`COMPAT_SDK`): the compat alias must keep its vector layout (riptide.library's names are mapped to the historical ones), and `sdk/fd/riptide_lib.fd` must match the table. With `MUI_SDK=` (the `Developer` drawer of Aminet `dev/mui/mui38dev.lha`) also RiptidePrefs' MUI definitions (`src/amiga/prefs/mui.h`: structures, attribute and method numbers) and its muimaster.library vectors. Set `NDK=`, `COMPAT_SDK=` and `AMITCP_SDK=` to the unpacked archives. |
 | `tests/amiga/test_hunk.py FILES` | Loads the executables with amitools and checks their relocations. It also has elf2hunk unit tests: absolute, PC-relative and absolute-symbol relocations, rejecting 16-bit relocations, bss in the hunk size, and a run under vamos. |
 | `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback (127.0.0.1 and ::1, 24- and 28-byte `sockaddr_in6`, a dual-stack listener, the IPv6 resolver calls) with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
 | `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. IPv6: `ip -6` addr/route/neigh changes and listings, `ifconfig inet6`, `ping6`/`ping -6`, `traceroute6`, `host` AAAA and `ip6.arpa`, `nc -6` (also an IPv4 client of a dual-stack listener), `netstat -6`. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. Background transfers: `Riptide BACKGROUND program=nc` makes the next `nc` client LEDBAT and rLEDBAT (`netstat -T`), the socket memory sysctls and the `STATUS` line. |
@@ -2531,9 +2596,10 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_bench.sh build/amiga` | `Riptide BENCH` on FS-UAE (A1200; `FSUAE_MODEL=A4000/040 FSUAE_EXTRA="cpu = 68060"` and so on for other CPUs). |
 | `tests/amiga/run_fsuae_netbench.sh build/amiga` | The speed lab: TCP download and upload throughput (2 MB, median of 3) on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtnb0`/`rtnb1`, 192.168.79.0/24, or `NB_IF`, `NB_PEER`, `NB_NET`) for four cycle-exact CPU presets (A1200 68020/14, 68030/25, A4000 68040/25, 68060/50; `CPUS=`), with `tests/amiga/netbench.c` on the Amiga (data discarded or generated, no disk) and `tests/amiga/netbench_host.py` on the host; a profiled transfer each way (`Riptide PROFILE`; netbench `-I` adds the CPU time left idle, measured by a priority -127 task, and for uploads the time spent in `send()`) and ping. Writes `results.md` and `results.json`; `BASELINE=tests/amiga/netbench-baseline.json` fails a run more than 10 % (`TOLERANCE=`) slower. `AMITCP_DIR=` adds AmiTCP 3.0b2 (see `docs/COMPARISON.md` 11). |
 | `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, RiptidePrefs in `SYS:Prefs`, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
-| `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply. |
+| `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply; the settings table of both editors (`prefs_fields.c`): a help text and a key for every setting, no key twice on a page or taken by P/S/U/A/C, at most seven rows a page, number and string input, validation and list entries. |
 | `tests/amiga/run_vamos_prefs.sh build/amiga/RiptidePrefs` | (in `make -f Makefile.amiga check`) `RiptidePrefs FROM ... SAVE` / `USE` without a window under vamos: the files in `ENVARC:`/`ENV:` equal the input, the second Save leaves `riptide.conf.bak`, error return codes. |
-| `tests/amiga/run_fsuae_prefs.sh build/amiga` | RiptidePrefs on FS-UAE (AROS): opens the window, walks every page (screenshots in OUTDIR), switches to a static address and saves to get the validation requester, edits host name, domain, DNS, NTP, mDNS, an extra address, a VLAN and an Other line with the keyboard (xdotool), saves, and compares `ENVARC:` (exact expected file), `ENV:` and the `.bak`. Run it for `build/amiga-gcc` too. |
+| `MUI_DIR=... tests/amiga/run_fsuae_prefs_mui.sh build/amiga` | RiptidePrefs' MUI editor on FS-UAE (AROS) with MUI 3.8 (`MUI_DIR`: the `MUI` drawer of Aminet `util/libs/mui38usr.lha`; the AROS ROM lacks diskfont, iffparse, locale, commodities, asl and datatypes.library, so `tests/amiga/mkstublib.py` makes stand-ins that fail every call, and MUI runs without disk fonts, saved MUI settings, catalogs or file requesters, and shows no help bubbles). The keyboard edits of the GadTools test must give the same `riptide.conf`; screenshots of every page on a 640 × 480 256-colour screen (light) and a 640 × 512 8-colour one (dark), the 640 × 256 Workbench (compact layout, a page lit under the pointer) and an 800 × 600 screen; About through `CMD=`, Dark Theme saved and used by the next start, Reset to Defaults with Use, Cancel changing nothing, `GADTOOLS`, and the bubble texts (`DEBUG` log). Run it for `build/amiga-gcc` too. |
+| `tests/amiga/run_fsuae_prefs.sh build/amiga` | RiptidePrefs on FS-UAE (AROS; no MUI there, so the GadTools editor): opens the window, walks every page (screenshots in OUTDIR), switches to a static address and saves to get the validation requester, edits host name, domain, DNS, NTP, mDNS, an extra address, a VLAN and an Other line with the keyboard (xdotool), saves, and compares `ENVARC:` (exact expected file), `ENV:` and the `.bak`. Run it for `build/amiga-gcc` too. |
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |

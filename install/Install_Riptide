@@ -418,7 +418,9 @@
                  "accepts any user and password and has no access control.\n\n"
                  "RiptidePrefs: a settings editor for riptide.conf "
                  "(interface, address, names, time, TCP), copied to "
-                 "SYS:Prefs."))
+                 "SYS:Prefs. With MUI 3.8 or later installed it opens a MUI "
+                 "window; without MUI a GadTools one with the same settings, "
+                 "so MUI is not needed."))
       (choices "Network tools" "Documentation" "SDK for developers"
                "ftpd-test (test FTP server, insecure)"
                "RiptidePrefs (settings editor)")
@@ -812,7 +814,10 @@
        "Configuration: " #conf-arc
        (if #write-conf "" " (kept)") "\n"
        (if (IN #opts 1) (cat "Manual: " (tackon #docdir "AMIGA.md") "\n") "")
-       (if (IN #opts 4) (cat "Settings editor: " (tackon #prefsdir "RiptidePrefs") "\n") "")
+       (if (IN #opts 4) (cat "Settings editor: " (tackon #prefsdir "RiptidePrefs")
+                              (if (= (exists "LIBS:muimaster.library" (noreq)) 1) ""
+                                  " (GadTools window; with MUI 3.8 or later it opens a MUI one)")
+                              "\n") "")
        (if #boot "It starts from S:User-Startup at boot.\n" "")
        (if (= #started 1) "\nRiptide is running now.\n" "")
        (if (= #started -1) "\nRiptide did not start; run it in a Shell to see why.\n" "")

@@ -1,0 +1,17 @@
+# Riptide - muimaster.library calls of RiptidePrefs' MUI editor (MUI 3.8,
+# muimaster.library 19). Format: see tools/gen_lvos.py. Checked against
+# the MUI SDK's FD file by tests/amiga/check_layouts.py (MUI_SDK=).
+# SPDX-License-Identifier: GPL-2.0-only
+
+@lib muimaster MUIMasterBase
+30  APTR MUI_NewObjectA(CONST_STRPTR cls a0, const struct TagItem* tags a1)
+36  void MUI_DisposeObject(APTR obj a0)
+42  LONG MUI_RequestA(APTR app d0, APTR win d1, ULONG flags d2, CONST_STRPTR title a0, CONST_STRPTR gadgets a1, CONST_STRPTR format a2, APTR params a3)
+48  APTR MUI_AllocAslRequest(ULONG type d0, const struct TagItem* tags a0)
+54  LONG MUI_AslRequest(APTR req a0, const struct TagItem* tags a1)
+60  void MUI_FreeAslRequest(APTR req a0)
+66  LONG MUI_Error()
+102 void MUI_Redraw(APTR obj a0, ULONG flags d0)
+108 struct MUI_CustomClass* MUI_CreateCustomClass(struct Library* base a0, CONST_STRPTR supername a1, struct MUI_CustomClass* supermcc a2, LONG datasize d0, APTR dispatcher a3)
+114 LONG MUI_DeleteCustomClass(struct MUI_CustomClass* mcc a0)
+120 APTR MUI_MakeObjectA(LONG type d0, ULONG* params a0)

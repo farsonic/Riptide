@@ -3,7 +3,7 @@
  * 2.04+ and AROS; started from Workbench or the CLI).
  *
  *   RiptidePrefs [FROM=file] [EDIT] [USE] [SAVE] [PUBSCREEN=name]
- *                [GADTOOLS] [PAGE=name] [CMD=n] [THEME=DARK|LIGHT]
+ *                [GADTOOLS] [PAGE=name] [CMD=n] [THEME=DARK|LIGHT] [DEBUG=file]
  *
  * Edits ENV:Riptide/riptide.conf (or ENVARC: when ENV: has none, or FROM).
  * "Save" writes ENVARC:Riptide/riptide.conf (the old one becomes
@@ -18,7 +18,7 @@
  * the GadTools one (gt_prefs.c); GADTOOLS asks for the GadTools one.
  * PAGE opens on a page (its name, e.g. PAGE=Ports, or number), CMD runs a
  * menu command once the window is open and THEME picks the MUI editor's
- * colours for this run (for screenshots and testing).
+ * colours for this run (for screenshots and testing); DEBUG writes a log.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stddef.h>
@@ -64,22 +64,23 @@ static int page_arg(const char *s)
 	return -1;
 }
 
-/* CLI: FROM,EDIT/S,USE/S,SAVE/S,PUBSCREEN/K,GADTOOLS/S,PAGE/K,CMD/K/N,THEME/K */
+/* CLI: FROM,EDIT/S,USE/S,SAVE/S,PUBSCREEN/K,GADTOOLS/S,PAGE/K,CMD/K/N,THEME/K,DEBUG/K */
 static int prefs_main(int from_cli)
 {
-	LONG args[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	LONG args[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	struct RDArgs *rda = NULL;
 	struct rp_gui_args ga;
 	int rc = CL_OK;
 
 	if (from_cli) {
 		rda = (struct RDArgs *)ReadArgs(
-			(CONST_STRPTR)"FROM,EDIT/S,USE/S,SAVE/S,PUBSCREEN/K,GADTOOLS/S,PAGE/K,CMD/K/N,THEME/K", args, NULL);
+			(CONST_STRPTR)"FROM,EDIT/S,USE/S,SAVE/S,PUBSCREEN/K,GADTOOLS/S,PAGE/K,CMD/K/N,THEME/K,DEBUG/K", args, NULL);
 		if (!rda) {
 			PrintFault(IoErr(), (CONST_STRPTR)"RiptidePrefs");
 			return CL_ERROR;
 		}
 		rp_from_path = (const char *)args[0];
+		rp_log_open((const char *)args[9]);
 	}
 	ga.pubscreen = (const char *)args[4];
 	ga.page = page_arg((const char *)args[6]);
@@ -98,8 +99,10 @@ static int prefs_main(int from_cli)
 		if (IntuitionBase && GfxBase) {
 			if (!args[5])
 				rc = mui_run(&ga);
-			if (rc == CL_FAIL)
+			if (rc == CL_FAIL) {
+				rp_log("GadTools editor");
 				rc = gt_run(&ga);
+			}
 		}
 		if (GfxBase)
 			CloseLibrary((struct Library *)GfxBase);
@@ -108,6 +111,8 @@ static int prefs_main(int from_cli)
 		IntuitionBase = NULL;
 		GfxBase = NULL;
 	}
+	rp_log("exit %d", rc);
+	rp_log_close();
 	rp_conf_free(&rp_cfg);
 	if (rda)
 		FreeArgs(rda);

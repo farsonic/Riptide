@@ -4,7 +4,8 @@
  * end), parsing, edits that touch only the lines of the changed settings
  * (keeping trailing comments), DHCP <-> static, the "other lines" list,
  * validation and the commands for the running stack; the Phase 3 settings
- * (ipv4, qos, sysctl table, extra addresses, QoS rules) and VLANs.
+ * (ipv4, qos, sysctl table, extra addresses, QoS rules) and VLANs; the
+ * editors' settings table (src/amiga/prefs/prefs_fields.c).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stdio.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 
 #include "../src/amiga/prefs/conf_edit.c"
+#include "../src/amiga/prefs/prefs_fields.c"
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; \
@@ -691,8 +693,79 @@ static void test_dns(void)
 	free(t);
 }
 
+/* the settings table both editors build their pages from */
+static void test_fields(void)
+{
+	struct rp_conf c;
+	char err[200];
+	int i, p, fi;
+
+	CHECK(rp_nfields <= RP_NFIELDS_MAX);
+	CHECK(sizeof(rp_pages) / sizeof(rp_pages[0]) == RP_NPAGES);
+	for (p = 0; p < RP_NPAGES; p++) {
+		char keys[RP_NFIELDS_MAX];
+		int nk = 0, rows = 0, k;
+		CHECK(rp_pages[p].name && rp_pages[p].title && rp_pages[p].note && rp_pages[p].help && rp_pages[p].help[0]);
+		for (i = 0; i < rp_nfields; i++) {
+			char key;
+			if (rp_fields[i].page != p)
+				continue;
+			if (!(rp_fields[i].flags & FL_RIGHT))
+				rows++;
+			key = rp_fkey(i);
+			/* every setting has a key; P (pages), S, U, A, C (buttons) are taken */
+			CHECK(key && !strchr("psuac", key));
+			for (k = 0; k < nk; k++)
+				if (keys[k] == key)
+					fprintf(stderr, "FAIL page %d: key %c twice\n", p, key), failures++;
+			keys[nk++] = key;
+		}
+		/* GadTools: seven rows; list pages have none */
+		CHECK(rows <= 7);
+		CHECK(rp_page_list(p) < 0 || rows == 0);
+	}
+	for (i = 0; i < rp_nfields; i++) {
+		CHECK(rp_fields[i].page < RP_NPAGES);
+		CHECK(rp_fields[i].help && strlen(rp_fields[i].help) > 20 && strlen(rp_fields[i].help) < 160);
+		CHECK(rp_fields[i].type != F_CYCLE || (rp_fields[i].cy && rp_fields[i].cyv));
+	}
+	CHECK(rp_conf_load(&c, "", 0) == 0);
+	/* numbers: empty is "not set", out of range is refused */
+	fi = rp_find(&c.cur, &c.cur.mtu);
+	CHECK(fi >= 0 && rp_fparse(&c.cur, fi, " 1400 ", err, sizeof(err)) == 0 && c.cur.mtu == 1400);
+	CHECK(rp_fparse(&c.cur, fi, "", err, sizeof(err)) == 0 && c.cur.mtu == RP_UNSET);
+	CHECK(rp_fparse(&c.cur, fi, "20", err, sizeof(err)) < 0 && !strcmp(err, "enter 68..65535, or leave it empty"));
+	CHECK(rp_fparse(&c.cur, fi, "12x", err, sizeof(err)) < 0);
+	fi = rp_find(&c.cur, &c.cur.tcpwindow);
+	CHECK(rp_fparse(&c.cur, fi, "0", err, sizeof(err)) == 0 && c.cur.tcpwindow == 0);
+	/* strings lose surrounding spaces */
+	fi = rp_find(&c.cur, c.cur.hostname);
+	CHECK(rp_fparse(&c.cur, fi, "  amy  ", err, sizeof(err)) == 0 && !strcmp(c.cur.hostname, "amy"));
+	/* cycles and dependent settings */
+	fi = rp_find(&c.cur, &c.cur.dhcp);
+	CHECK(rp_fcycle(&c.cur, fi) == 0);
+	c.cur.dhcp = 0;
+	CHECK(rp_fcycle(&c.cur, fi) == 1);
+	CHECK(!rp_fdisabled(&c.cur, rp_find(&c.cur, c.cur.addr)));
+	CHECK(rp_fdisabled(&c.cur, rp_find(&c.cur, &c.cur.linklocal)));
+	/* the whole model: a static address is needed without DHCP */
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && fi == rp_find(&c.cur, c.cur.addr));
+	strcpy(c.cur.addr, "192.168.1.20/24");
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	c.cur.sc[RP_SC_PORT_FIRST] = 50000;
+	c.cur.sc[RP_SC_PORT_LAST] = 40000;
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && fi == rp_find(&c.cur, &c.cur.sc[RP_SC_PORT_LAST]));
+	/* list entries */
+	CHECK(rp_list_entry_valid(P_ALIAS, "10.0.1.2/24", err, sizeof(err)));
+	CHECK(!rp_list_entry_valid(P_ALIAS, "10.0.1.300", err, sizeof(err)) && !strncmp(err, "Extra address", 13));
+	CHECK(rp_list_entry_valid(P_VLAN, "10 dhcp pcp=4", err, sizeof(err)));
+	CHECK(rp_list_entry_valid(P_OTHER, "anything at all", err, sizeof(err)));
+	rp_conf_free(&c);
+}
+
 int main(void)
 {
+	test_fields();
 	test_roundtrips();
 	test_parse();
 	test_edits();

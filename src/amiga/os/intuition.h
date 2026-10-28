@@ -23,6 +23,13 @@ struct RastPort {
 };
 
 struct Window;
+struct ColorMap;
+
+struct ViewPort {
+	struct ViewPort *Next;
+	struct ColorMap *ColorMap;
+	UBYTE  vp_opaque[32];
+};
 
 struct Screen {
 	struct Screen *NextScreen;
@@ -35,7 +42,7 @@ struct Screen {
 	BYTE   BarHeight, BarVBorder, BarHBorder, MenuVBorder, MenuHBorder;
 	BYTE   WBorTop, WBorLeft, WBorRight, WBorBottom;
 	struct TextAttr *Font;
-	UBYTE  scr_ViewPort[40];
+	struct ViewPort ViewPort;
 	struct RastPort RastPort;
 };
 
@@ -186,6 +193,85 @@ struct WBStartup {
 #define CYCLEIDCMP    IDCMP_GADGETUP
 #define STRINGIDCMP   IDCMP_GADGETUP
 #define TEXTIDCMP     0UL
+
+/* graphics: fonts, pens, drawing modes */
+struct TextFont {
+	struct Message tf_Message;
+	UWORD  tf_YSize;
+	UBYTE  tf_Style;
+	UBYTE  tf_Flags;
+	UWORD  tf_XSize;
+	UWORD  tf_Baseline;
+	UWORD  tf_BoldSmear;
+};
+#define JAM1            0
+#define FSF_BOLD        0x02
+#define OBP_Precision   0x84000000UL
+#define PRECISION_GUI   32
+
+/* BOOPSI (intuition/classes.h, classusr.h) */
+typedef ULONG Object;
+typedef struct { ULONG MethodID; } *Msg;
+struct IClass {
+	struct Hook cl_Dispatcher;
+	ULONG  cl_Reserved;
+	struct IClass *cl_Super;
+	UBYTE *cl_ID;
+	UWORD  cl_InstOffset;
+	UWORD  cl_InstSize;
+	ULONG  cl_UserData;
+	ULONG  cl_SubclassCount;
+	ULONG  cl_ObjectCount;
+	ULONG  cl_Flags;
+};
+struct _Object {
+	struct MinNode o_Node;
+	struct IClass *o_Class;
+};
+#define OCLASS(o)       (((struct _Object *)(o) - 1)->o_Class)
+#define INST_DATA(cl, o) ((void *)((UBYTE *)(o) + (cl)->cl_InstOffset))
+struct opSet {
+	ULONG  MethodID;
+	struct TagItem *ops_AttrList;
+	APTR   ops_GInfo;
+};
+struct opGet {
+	ULONG  MethodID;
+	ULONG  opg_AttrID;
+	ULONG *opg_Storage;
+};
+#define OM_NEW          0x101
+#define OM_DISPOSE      0x102
+#define OM_SET          0x103
+#define OM_GET          0x104
+#define OM_ADDMEMBER    0x109
+#define OM_REMMEMBER    0x10A
+
+struct IBox {
+	WORD   Left, Top, Width, Height;
+};
+
+/* menus (libraries/gadtools.h) */
+struct NewMenu {
+	UBYTE  nm_Type;
+	CONST_STRPTR nm_Label;
+	CONST_STRPTR nm_CommKey;
+	UWORD  nm_Flags;
+	LONG   nm_MutualExclude;
+	APTR   nm_UserData;
+};
+#define NM_END          0
+#define NM_TITLE        1
+#define NM_ITEM         2
+#define NM_BARLABEL     ((CONST_STRPTR)-1)
+#define CHECKIT         0x0001
+#define MENUTOGGLE      0x0008
+#define CHECKED         0x0100
+
+#define IDCMP_MENUPICK  0x00000100UL
+#define IECODE_UP_PREFIX 0x80
+#define IEQUALIFIER_LSHIFT 0x0001
+#define IEQUALIFIER_RSHIFT 0x0002
 
 #define PLACETEXT_LEFT  0x0001
 #define PLACETEXT_RIGHT 0x0002
