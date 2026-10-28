@@ -37,7 +37,7 @@ SDK may be missing here.
 | Status | Last release 2000; no longer sold | Commercial, maintained (1.15 in Feb 2024 [RS-1.15]) | Open source, in development (0.15, October 2026) |
 | Licence | Commercial shareware with registration key (RE-NOTES, intro) | Commercial; free 15-minute demo [RS-README] | GPL-2.0-only, full source |
 | Kernel | 4.4BSD-Lite derived (RE-NOTES 5) | BSD derived, see 2.1 | New clean-room core; TCP modelled on Linux |
-| TCP | Reno/NewReno, early SACK, IW 1, 500 ms ticks, T/TCP on | 4.4BSD-style tunables (RFC 1323 switches, `tcp.rttdflt`) [RS-DOC]; modern loss recovery not documented | CUBIC+HyStart, SACK/D-SACK, RACK-TLP, PRR, F-RTO, IW 10, 200 ms RTO min |
+| TCP | Reno/NewReno, early SACK, IW 1, 500 ms ticks, T/TCP on | 4.4BSD-style tunables (RFC 1323 switches, `tcp.rttdflt`) [RS-DOC]; modern loss recovery not documented | CUBIC+HyStart++ (RFC 9406), SACK/D-SACK, RACK-TLP, PRR, F-RTO, IW 10, 200 ms RTO min |
 | Newer TCP features | No | Not documented [RS-DOC] (**unverified**) | TCP Fast Open client (RFC 7413); LEDBAT++ and receive-side LEDBAT (RFC 9840) background transfers chosen by program or port; 20 s connect timeout; TIME_WAIT reuse; `keepalive_all`; `TCP_CORK`; global socket memory limits; PMTU black hole detection (RFC 4821) |
 | Address handling | Not analysed | **Unverified** | Up to 9 IPv4 addresses per interface; IPv4 and IPv6 switchable per interface; Happy Eyeballs v2 (RFC 8305) |
 | Traffic priority | Not analysed | **Unverified** | `SO_PRIORITY`, DSCP/`IP_TOS` marking, `qos rule` lines for old programs, optional priority transmit bands |
@@ -113,7 +113,7 @@ robustness are unproven. Section 9 lists where it is behind.
 
 | Feature | MiamiDx 1.0c (RE-NOTES 5, 6, 7) | Roadshow | Riptide (defaults; sysctl in brackets) |
 |---|---|---|---|
-| Congestion control | 4.4BSD Reno + NewReno | Not documented [RS-DOC] (**unverified**) | CUBIC with HyStart; NewReno and LEDBAT++ selectable (`net.inet.tcp.cc`, `TCP_CONGESTION`) |
+| Congestion control | 4.4BSD Reno + NewReno | Not documented [RS-DOC] (**unverified**) | CUBIC with HyStart++ (RFC 9406; classic HyStart selectable); NewReno and LEDBAT++ selectable (`net.inet.tcp.cc`, `TCP_CONGESTION`) |
 | Background transfers | No | **Unverified** | LEDBAT++ (sender) and rLEDBAT (receiver window, RFC 9840), chosen per socket (`TCP_BACKGROUND`) or by rules on program name and ports (`background`) |
 | Socket memory limit | Not analysed | **Unverified** | Global watermarks like Linux `tcp_mem` (`net.inet.tcp.mem_low`/`mem_pressure`/`mem_high`, from the free memory at start) |
 | Initial window | 1 segment (`initwin` 1) | Not documented (**unverified**) | 10 segments, RFC 6928 (`net.inet.tcp.initcwnd`) |

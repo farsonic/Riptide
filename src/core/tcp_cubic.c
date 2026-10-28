@@ -1,8 +1,9 @@
 /*
- * Riptide - CUBIC congestion control (RFC 9438) with HyStart, following
- * Linux net/ipv4/tcp_cubic.c: integer arithmetic only (BICTCP_HZ time
- * scaling, integer cube root), TCP friendliness, fast convergence, and
- * delay/ACK-train based slow start exit.
+ * Riptide - CUBIC congestion control (RFC 9438) following Linux
+ * net/ipv4/tcp_cubic.c: integer arithmetic only (BICTCP_HZ time scaling,
+ * integer cube root), TCP friendliness, fast convergence. The slow start
+ * exit is HyStart++ (RFC 9406, net.inet.tcp.hystart=2, the default) or
+ * Linux's classic delay/ACK-train HyStart (1).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "tcp.h"
@@ -23,6 +24,15 @@
 #define HYSTART_DELAY_MIN 4000u
 #define HYSTART_DELAY_MAX 16000u
 
+/* RFC 9406 4.3 constants. Riptide does not pace TCP, so L = 8. */
+#define HSPP_N_RTT_SAMPLE  8
+#define HSPP_CSS_DIV_SHIFT 2          /* CSS_GROWTH_DIVISOR = 4 */
+#define HSPP_CSS_ROUNDS    5
+#define HSPP_L             8
+
+/* 0 off, 1 classic Linux HyStart, 2 HyStart++ */
+s32 sysctl_tcp_hystart = 2;
+
 /* 8 * (1024 + 717) / 3 / (1024 - 717): TCP friendly window scaling */
 #define CUBIC_BETA_SCALE  ((8u * (BICTCP_BETA_SCALE + CUBIC_BETA)) / 3u / (BICTCP_BETA_SCALE - CUBIC_BETA))
 #define CUBE_RTT_SCALE    (CUBIC_BIC_SCALE * 10u)
@@ -41,12 +51,19 @@ struct bictcp {
 	u32 ack_cnt;
 	u32 tcp_cwnd;          /* estimated Reno cwnd */
 	u8  sample_cnt;
-	u8  found;
+	u8  found;             /* slow start exit done (either HyStart) */
+	u8  css;               /* HyStart++: in Conservative Slow Start */
+	u8  css_rounds;        /* HyStart++: CSS rounds completed */
 	u32 round_start;       /* µs */
 	u32 end_seq;
 	u32 last_ack;          /* µs */
-	u32 curr_rtt;          /* µs */
+	u32 curr_rtt;          /* µs: this round's min RTT */
+	u32 last_round_rtt;    /* µs: HyStart++ lastRoundMinRTT */
+	u32 css_baseline;      /* µs: HyStart++ cssBaselineMinRtt */
+	u32 css_acc;           /* HyStart++: CSS growth remainder */
 };
+
+typedef char bictcp_fits_ca_priv[sizeof(struct bictcp) <= TCP_CA_PRIV_U64 * 8 ? 1 : -1];
 
 static u32 bictcp_clock_us(void) { return (u32)tcp_clock_us; }
 
@@ -109,8 +126,19 @@ static void bictcp_hystart_reset(struct tcp_sock *tp)
 
 static void cubictcp_init(struct tcp_sock *tp)
 {
-	bictcp_reset(tcp_ca(tp));
+	struct bictcp *ca = tcp_ca(tp);
+
+	bictcp_reset(ca);
 	bictcp_hystart_reset(tp);
+	ca->last_round_rtt = ca->css_baseline = ~0u;
+}
+
+/* HyStart++ runs only in the initial slow start (RFC 9406 4.3); later
+ * slow starts exit at the ssthresh they inherited. */
+static int hspp_active(const struct tcp_sock *tp, const struct bictcp *ca)
+{
+	return sysctl_tcp_hystart == 2 && !ca->found &&
+	       tp->snd_ssthresh == TCP_INFINITE_SSTHRESH;
 }
 
 static void cubictcp_cwnd_event(struct tcp_sock *tp, int event)
@@ -207,6 +235,18 @@ static void cubictcp_cong_avoid(struct tcp_sock *tp, u32 ack, u32 acked)
 	if (!tcp_is_cwnd_limited(tp))
 		return;
 	if (tcp_in_slow_start(tp)) {
+		if (hspp_active(tp, ca)) {
+			/* cwnd += min(N, L), a quarter of that in CSS */
+			if (acked > HSPP_L)
+				acked = HSPP_L;
+			if (ca->css) {
+				ca->css_acc += acked;
+				acked = ca->css_acc >> HSPP_CSS_DIV_SHIFT;
+				ca->css_acc &= (1u << HSPP_CSS_DIV_SHIFT) - 1;
+			}
+			tp->snd_cwnd = RT_MIN(tp->snd_cwnd + acked, tp->snd_cwnd_clamp);
+			return;
+		}
 		acked = tcp_slow_start(tp, acked);
 		if (!acked)
 			return;
@@ -220,6 +260,9 @@ static u32 cubictcp_recalc_ssthresh(struct tcp_sock *tp)
 	struct bictcp *ca = tcp_ca(tp);
 
 	ca->epoch_start = 0;
+	/* loss or ECN in slow start or CSS ends HyStart++ (RFC 9406 4.2) */
+	ca->found = 1;
+	ca->css = 0;
 	/* fast convergence: release bandwidth for new flows */
 	if (tp->snd_cwnd < ca->last_max_cwnd && CUBIC_FAST_CONVERGENCE)
 		ca->last_max_cwnd = (tp->snd_cwnd * (BICTCP_BETA_SCALE + CUBIC_BETA)) /
@@ -232,8 +275,9 @@ static u32 cubictcp_recalc_ssthresh(struct tcp_sock *tp)
 static void cubictcp_state(struct tcp_sock *tp, u8 new_state)
 {
 	if (new_state == TCP_CA_Loss) {
-		bictcp_reset(tcp_ca(tp));
-		bictcp_hystart_reset(tp);
+		cubictcp_init(tp);
+		/* ssthresh is finite now: HyStart++ stays off, as RFC 9406
+		 * asks; classic HyStart runs again as in Linux */
 	}
 }
 
@@ -276,6 +320,55 @@ static void hystart_update(struct tcp_sock *tp, u32 delay)
 	}
 }
 
+/* RFC 9406 4.2, per RTT sample in the initial slow start or CSS. Rounds
+ * end when snd_una passes end_seq (windowEnd). */
+static void hspp_update(struct tcp_sock *tp, u32 delay)
+{
+	struct bictcp *ca = tcp_ca(tp);
+	u32 thresh;
+
+	if (rt_seq_after(tp->snd_una, ca->end_seq)) {
+		if (ca->css && ++ca->css_rounds >= HSPP_CSS_ROUNDS) {
+			/* RTT stayed up through CSS_ROUNDS: congestion avoidance */
+			ca->css = 0;
+			ca->found = 1;
+			tp->snd_ssthresh = tp->snd_cwnd;
+			return;
+		}
+		ca->last_round_rtt = ca->curr_rtt;
+		ca->curr_rtt = ~0u;
+		ca->sample_cnt = 0;
+		ca->end_seq = tp->snd_nxt;
+	}
+	if (ca->curr_rtt > delay)
+		ca->curr_rtt = delay;
+	if (ca->sample_cnt < 255)
+		ca->sample_cnt++;
+	if (ca->sample_cnt < HSPP_N_RTT_SAMPLE)
+		return;
+	if (ca->css) {
+		if (ca->curr_rtt < ca->css_baseline) {
+			/* the RTT rise was not ours: resume slow start */
+			ca->css = 0;
+			ca->css_baseline = ~0u;
+		}
+		return;
+	}
+	if (ca->last_round_rtt == ~0u)
+		return;
+	thresh = ca->last_round_rtt >> 3;
+	if (thresh < HYSTART_DELAY_MIN)
+		thresh = HYSTART_DELAY_MIN;
+	if (thresh > HYSTART_DELAY_MAX)
+		thresh = HYSTART_DELAY_MAX;
+	if (ca->curr_rtt >= ca->last_round_rtt + thresh) {
+		ca->css = 1;
+		ca->css_rounds = 0;
+		ca->css_acc = 0;
+		ca->css_baseline = ca->curr_rtt;
+	}
+}
+
 static void cubictcp_acked(struct tcp_sock *tp, u32 num_acked, s32 rtt_us)
 {
 	struct bictcp *ca = tcp_ca(tp);
@@ -289,7 +382,11 @@ static void cubictcp_acked(struct tcp_sock *tp, u32 num_acked, s32 rtt_us)
 	delay = rtt_us ? (u32)rtt_us : 1;
 	if (ca->delay_min == 0 || ca->delay_min > delay)
 		ca->delay_min = delay;
-	if (!ca->found && tcp_in_slow_start(tp) && tp->snd_cwnd >= HYSTART_LOW_WINDOW)
+	if (!tcp_in_slow_start(tp))
+		return;
+	if (hspp_active(tp, ca))
+		hspp_update(tp, delay);
+	else if (sysctl_tcp_hystart == 1 && !ca->found && tp->snd_cwnd >= HYSTART_LOW_WINDOW)
 		hystart_update(tp, delay);
 }
 
