@@ -108,7 +108,8 @@ int  rt_resolve_addr(u32 addr, char *name, u32 namelen);
 extern int rt_dns_disallowed;   /* RiptideDisallowDNS() */
 extern s32 rt_dns_edns_size;    /* dns.edns_size: EDNS0 UDP payload, 0 = off */
 extern s32 rt_dns_tcp;          /* dns.tcp_fallback: TC answers again over TCP */
-/* "dns edns_size N | edns on|off | tcp on|off | reset | status" (lock held) */
+/* "dns edns_size N | edns on|off | tcp on|off | negttl N | failttl N | flush |
+ * reset | status" (lock held) */
 int  rt_dns_command(int argc, char **argv, char *out, u32 outlen);
 /* BIND style raw interface (res_* / dn_* calls for library clients), called
  * WITHOUT the lock. res_mkquery: only op 0 (QUERY); returns length or -1.

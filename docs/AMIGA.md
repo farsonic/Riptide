@@ -132,7 +132,7 @@ Riptide PROFILE START|STOP|RESET|SHOW
 Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
 Riptide NTP [STATUS|ON|OFF|SYNC|SERVER...|INTERVAL S|STEP MS|BATTCLOCK ON|OFF]
 Riptide MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
-Riptide DNS [STATUS|EDNS_SIZE N|EDNS ON|OFF|TCP ON|OFF|RESET]
+Riptide DNS [STATUS|EDNS_SIZE N|EDNS ON|OFF|TCP ON|OFF|NEGTTL s|FAILTTL s|FLUSH|RESET]
 Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=...] [target=MS]
 ```
 
@@ -149,7 +149,7 @@ Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=.
 | `PROFILE ...` | Control the running stack's profiler (see "Profiling and debug log"). |
 | `DEBUG ...` | With a word instead of a number: control the running stack's debug log (see "Profiling and debug log"). A number is still the log level of a new instance. |
 | `NTP ...`, `MDNS ...`, `TIMEZONE ...` | The `ntp`, `mdns` and `timezone` keywords in the running stack, e.g. `Riptide NTP STATUS`, `Riptide NTP SYNC` (see "Time and .local names"). |
-| `DNS ...` | The `dns` keyword in the running stack: EDNS0 size and TCP fallback of the resolver, e.g. `Riptide DNS`, `Riptide DNS EDNS_SIZE 0` (see "Resolver: EDNS0 and TCP"). |
+| `DNS ...` | The `dns` keyword in the running stack: EDNS0 size, TCP fallback and the cache of the resolver, e.g. `Riptide DNS`, `Riptide DNS EDNS_SIZE 0`, `Riptide DNS FLUSH` (see "Resolver: EDNS0 and TCP"). |
 | `BACKGROUND ...` | The `background` keyword in the running stack: which connections yield to others (see "Background transfers"). Without arguments it shows the rules. |
 
 `QUIT`, `STATUS`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS`, `DNS`, `TIMEZONE` and `BACKGROUND` talk to the running
@@ -177,7 +177,7 @@ domain NAME                        # also the DNS search domain
 search DOMAIN [DOMAIN...]          # the resolver's search list (up to six); "search" alone clears it
 nameserver [add] A.B.C.D           # up to the core's limit, in order
 nameserver del A.B.C.D | nameserver flush
-dns edns_size N | edns on|off | tcp on|off | reset | status
+dns edns_size N | edns on|off | tcp on|off | negttl N | failttl N | flush | reset | status
                                    # resolver, see "Resolver: EDNS0 and TCP"
 host NAME A.B.C.D                  # static host table entry
 route add|del|replace|change DEST[/BITS]|default [netmask M] [via|gw] GATEWAY
@@ -1045,6 +1045,37 @@ The resolver's cache keeps up to 8 addresses per name, as many as
 answers are parsed in full, the first 8 distinct addresses are kept), and
 follows CNAME chains of up to 7 links.
 
+**Negative answers and failures** are cached too (32 entries of their
+own, per fully qualified name, so each search list candidate counts on
+its own):
+
+* **NXDOMAIN** ("no such name", RFC 2308): for as long as the zone's SOA
+  record in the answer allows (the smaller of its TTL and MINIMUM field),
+  at most `dns negttl` seconds (default 3600). It answers every type of
+  query for the name (RFC 8020). An answer without SOA is not cached.
+* **NODATA** (the name exists without records of that type): the same,
+  for that type only, so a name without IPv6 addresses gets its IPv4
+  ones at once and the AAAA question is not asked again.
+* **Failures** (RFC 9520): SERVFAIL, REFUSED, FORMERR and no answer from
+  any server. The same question is not sent again for 1 s, then 2, 4, 8
+  ... seconds while it keeps failing, at most `dns failttl` seconds
+  (default 30); a program asking in a loop gets "try again" at once. A
+  break (Ctrl-C), a lookup that could not send anything (no route) and a
+  change of the name server list are not held against it.
+
+```
+dns negttl 3600        # longest time NXDOMAIN / NODATA is kept, 0..86400 (0 = off)
+dns failttl 30         # longest time a failed lookup is not repeated, 0..300 (0 = off)
+dns flush              # forget the cache, positive and negative
+sysctl dns.cache.neg_maxttl=N   sysctl dns.cache.fail_max=N   sysctl dns.cache.flush=1
+```
+
+`dns status` also shows the cache (e.g. `cache on: 12 names, 3 negative
+(up to 3600 s), 0 failed (up to 30 s); 40 hits, 7 negative, 2 failed`);
+`dns.stats.cache_hits`, `dns.stats.neg_hits` and `dns.stats.fail_hits`
+are the counters. `dns.cache.enabled=0` turns off both caches. The raw
+BIND calls (`res_query()` & co.) do not use the cache, as in BIND.
+
 ## RiptidePrefs
 
 `RiptidePrefs` is a preferences editor for `riptide.conf` in the style of
@@ -1066,7 +1097,7 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 | Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway; with DHCP "Link-local if no DHCP" (a 169.254 address while there is no lease, on by default) | `dhcp IF [linklocal off]`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
 | Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS` or `A.B.C.D netmask M`), with DHCP or a static primary address | `ifconfig IF alias SPEC` |
 | VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5` | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...]` |
-| Names | host name, domain, up to three DNS servers; EDNS size (empty: default, 0 = off) and DNS over TCP (Default/On/Off) | `hostname`, `domain`, `nameserver`, `sysctl dns.edns_size=N`, `sysctl dns.tcp_fallback=0\|1` |
+| Names | host name, domain, up to three DNS servers; EDNS size (empty: default, 0 = off), DNS over TCP (Default/On/Off) and the longest time a negative answer is cached (empty: 3600 s, 0 = off) | `hostname`, `domain`, `nameserver`, `sysctl dns.edns_size=N`, `sysctl dns.tcp_fallback=0\|1`, `sysctl dns.cache.neg_maxttl=N` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=` |
 | Advanced: Connecting | Fast Open (Default/On/Off), Fast Open for every connect with a cookie, Fast Open backoff after lost SYNs (s, 0-86400), first and largest SYN RTO (ms, 200-3000 / 200-120000), SYN backoff (Linear/Doubling), MTU probing for path MTU black holes (Default/Off/On black hole/Always) | `sysctl net.inet.tcp.fastopen=`, `fastopen_all=`, `fastopen_blackhole=`, `syn_rto_initial_ms=`, `syn_rto_max_ms=`, `syn_backoff=`, `mtu_probing=` |

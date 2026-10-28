@@ -137,6 +137,7 @@ static const struct field fields[] = {
 	{ P_NAMES, F_STR,   0, M(dns) + 2 * RP_ADDR, RP_ADDR, 0, 0, "DNS server _3", NULL, NULL },
 	{ P_NAMES, F_NUM,   FL_ZERO, SC(RP_SC_DNS_EDNS), 512, 4096, "_EDNS size (0 = off)", NULL, NULL },
 	{ P_NAMES, F_CYCLE, 0, SC(RP_SC_DNS_TCP), 0, 0,    "DNS over _TCP", cy_sw, cyv_sw },
+	{ P_NAMES, F_NUM,   0, SC(RP_SC_DNS_NEGTTL), 0, 86400, "_Negative cache s (0 = off)", NULL, NULL },
 	{ P_TIME,  F_CHECK, 0, MS(ntp),       0, 0,        "_NTP time sync", NULL, NULL },
 	{ P_TIME,  F_STR,   FL_NTP, MS(ntp_servers), 0, 0, "NTP ser_vers", NULL, NULL },
 	{ P_TIME,  F_STR,   0, MS(timezone),  0, 0,        "_Time zone", NULL, NULL },

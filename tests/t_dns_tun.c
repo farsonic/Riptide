@@ -67,6 +67,17 @@ static u8 *put_aaaa(u8 *p, u16 owner, u32 ttl, int i)
 	return p + 28;
 }
 
+/* an SOA record in the authority section: TTL ttl, MINIMUM min */
+static u8 *put_soa(u8 *p, u32 ttl, u32 min)
+{
+	rt_put_be16(p, 0xc00c); rt_put_be16(p + 2, 6); rt_put_be16(p + 4, 1);
+	rt_put_be32(p + 6, ttl); rt_put_be16(p + 10, 28);
+	memcpy(p + 12, "\002ns\000\002hm\000", 8);
+	memset(p + 20, 0, 16);                  /* serial refresh retry expire */
+	rt_put_be32(p + 36, min);
+	return p + 40;
+}
+
 static u8 *put_opt(u8 *p)
 {
 	p[0] = 0;
@@ -82,7 +93,7 @@ static u32 answer(const u8 *q, u32 len, u8 *r, u32 *limit, int tcp)
 {
 	char name[256];
 	int qe = qname(q, len, name), i, edns = 0, opt = 1;
-	u16 type, an = 0, flags = 0x8180, size = 0;
+	u16 type, an = 0, ns = 0, flags = 0x8180, size = 0;
 	u8 *p;
 
 	if (qe < 0 || (u32)qe + 4 > len)
@@ -172,6 +183,22 @@ static u32 answer(const u8 *q, u32 len, u8 *r, u32 *limit, int tcp)
 		} else {
 			flags |= 0x0200;
 		}
+	} else if (!strcmp(name, "soa-nx.test.lan")) {
+		/* NXDOMAIN with the zone's SOA: cached for min(60, 2) s */
+		flags |= 3;
+		p = put_soa(p, 60, 2);
+		ns = 1;
+	} else if (!strcmp(name, "soa-nodata.test.lan")) {
+		/* an A record, no AAAA (NODATA with SOA: 2 s) */
+		if (type == 1) {
+			p = put_a(p, 12, 60, 0x0a01010au);
+			an = 1;
+		} else {
+			p = put_soa(p, 2, 300);
+			ns = 1;
+		}
+	} else if (!strcmp(name, "servfail.test.lan")) {
+		flags |= 2;    /* SERVFAIL */
 	} else if (!strcmp(name, "noa.test.lan") || !strcmp(name, "www.test.lan")) {
 		an = 0;
 	} else {
@@ -180,7 +207,7 @@ static u32 answer(const u8 *q, u32 len, u8 *r, u32 *limit, int tcp)
 	rt_put_be16(r + 2, flags);
 	rt_put_be16(r + 4, 1);
 	rt_put_be16(r + 6, an);
-	rt_put_be16(r + 8, 0);
+	rt_put_be16(r + 8, ns);
 	rt_put_be16(r + 10, 0);
 	if (edns && opt) {
 		p = put_opt(p);
@@ -439,6 +466,83 @@ int main(void)
 	CHECK(n == (int)sizeof(ans) && (ans[2] & 0x02) && tcp_queries == t + 2);
 	n = rt_res_query("big.test.lan", 1, 1, big, sizeof(big));
 	CHECK(n > 512 && rt_get_be16(big + 6) == 40 && tcp_queries == t + 3);
+
+	/* negative caching (RFC 2308): NXDOMAIN for every type, as long as
+	 * the SOA says (here 2 s) */
+	rt_lock();
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
+	rt_unlock();
+	q0 = queries;
+	CHECK(rt_resolve_name("soa-nx.test.lan.", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 1);
+	CHECK(rt_resolve_name("soa-nx.test.lan.", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 1);
+	CHECK(rt_resolve_name6("soa-nx.test.lan.", a6, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 1);
+	CHECK(rt_resolve_name46("soa-nx.test.lan.", a6, 8, RT_AF_UNSPEC, NULL, 0) == -RT_HOST_NOT_FOUND &&
+	      queries == q0 + 1);
+	{
+		s32 v = 0;
+		u32 vl = sizeof(v);
+		rt_lock();
+		CHECK(rt_sysctl_byname("dns.stats.neg_hits", &v, &vl, NULL, 0) == 0 && v >= 3);
+		rt_unlock();
+	}
+	usleep(2100000);
+	CHECK(rt_resolve_name("soa-nx.test.lan.", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 2);
+	/* NXDOMAIN without SOA is not cached */
+	CHECK(rt_resolve_name("nx2.test.lan.", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 3);
+	CHECK(rt_resolve_name("nx2.test.lan.", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 4);
+	/* NODATA for AAAA does not hide the A record */
+	q0 = queries;
+	CHECK(rt_resolve_name6("soa-nodata.test.lan.", a6, 8, NULL, 0) == -RT_NO_DATA && queries == q0 + 1);
+	CHECK(rt_resolve_name6("soa-nodata.test.lan.", a6, 8, NULL, 0) == -RT_NO_DATA && queries == q0 + 1);
+	n = rt_resolve_name46("soa-nodata.test.lan.", a6, 8, RT_AF_UNSPEC, NULL, 0);
+	CHECK(n == 1 && rt_in6_v4(&a6[0]) == rt_htonl(0x0a01010au) && queries == q0 + 2);   /* A only */
+	rt_lock();
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);   /* flushes the negative ones too */
+	rt_unlock();
+	n = rt_resolve_name46("soa-nodata.test.lan.", a6, 8, RT_AF_UNSPEC, NULL, 0);
+	CHECK(n == 1 && queries == q0 + 4);
+	n = rt_resolve_name46("soa-nodata.test.lan.", a6, 8, RT_AF_INET6, NULL, 0);
+	CHECK(n == -RT_NO_DATA && queries == q0 + 4);
+	/* dns.cache.neg_maxttl 0: not kept */
+	rt_lock();
+	CHECK(rt_config_line("dns negttl 0", NULL, 0, NULL) == 0);
+	rt_unlock();
+	CHECK(rt_resolve_name("soa-nx.test.lan.", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 5);
+	CHECK(rt_resolve_name("soa-nx.test.lan.", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 6);
+	rt_lock();
+	CHECK(rt_config_line("dns negttl 3600", NULL, 0, NULL) == 0);
+	rt_unlock();
+	/* the search list: each candidate on its own */
+	CHECK(rt_resolve_name("soa-nx", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 8);
+	CHECK(rt_resolve_name("soa-nx", addrs, 8, NULL, 0) == -RT_HOST_NOT_FOUND && queries == q0 + 9);
+
+	/* failures (RFC 9520): SERVFAIL is not asked again for 1 s, then 2 s */
+	q0 = queries;
+	CHECK(rt_resolve_name("servfail.test.lan.", addrs, 8, NULL, 0) == -RT_TRY_AGAIN && queries == q0 + 2);
+	CHECK(rt_resolve_name("servfail.test.lan.", addrs, 8, NULL, 0) == -RT_TRY_AGAIN && queries == q0 + 2);
+	CHECK(rt_resolve_name46("servfail.test.lan.", a6, 8, RT_AF_UNSPEC, NULL, 0) == -RT_TRY_AGAIN);
+	usleep(1100000);
+	q0 = queries;
+	CHECK(rt_resolve_name("servfail.test.lan.", addrs, 8, NULL, 0) == -RT_TRY_AGAIN && queries == q0 + 2);
+	usleep(1100000);
+	CHECK(rt_resolve_name("servfail.test.lan.", addrs, 8, NULL, 0) == -RT_TRY_AGAIN && queries == q0 + 2);
+	rt_lock();
+	CHECK(rt_config_line("dns", (char *)big, 400, NULL) == 0 && strstr((char *)big, "1 failed (up to 30 s)"));
+	/* a new server: the failures are forgotten */
+	rt_dns_add_server(rt_htonl(DEAD_IP));
+	rt_dns_remove_server(rt_htonl(DEAD_IP));
+	rt_unlock();
+	CHECK(rt_resolve_name("servfail.test.lan.", addrs, 8, NULL, 0) == -RT_TRY_AGAIN && queries == q0 + 4);
+	rt_lock();
+	CHECK(rt_config_line("dns flush", NULL, 0, NULL) == 0);
+	CHECK(rt_config_line("dns failttl 0", NULL, 0, NULL) == 0);
+	rt_unlock();
+	CHECK(rt_resolve_name("servfail.test.lan.", addrs, 8, NULL, 0) == -RT_TRY_AGAIN && queries == q0 + 6);
+	CHECK(rt_resolve_name("servfail.test.lan.", addrs, 8, NULL, 0) == -RT_TRY_AGAIN && queries == q0 + 8);
+	rt_lock();
+	CHECK(rt_config_line("dns failttl 400", (char *)big, 200, NULL) == -RT_EINVAL);
+	CHECK(rt_config_line("dns failttl 30", NULL, 0, NULL) == 0);
+	rt_unlock();
 
 	/* random source ports */
 	for (i = 1, distinct = 0; i < queries && i < 64; i++)

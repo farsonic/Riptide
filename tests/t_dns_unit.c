@@ -233,6 +233,56 @@ static void test_parse(void)
 
 /* EDNS0 OPT record, TC, answers beyond 512 bytes, many records, CNAME
  * chains up to the limit */
+/* SOA in the authority section (ns records after an answers) */
+static void soa(struct msg *m, u32 ttl, u32 minimum)
+{
+	putptr(m, 12); put16(m, DNS_TYPE_SOA); put16(m, 1); put32(m, ttl); put16(m, 32);
+	putname(m, "ns.x"); putname(m, "hm.x");
+	put32(m, 1); put32(m, 2); put32(m, 3); put32(m, 4); put32(m, minimum);
+}
+
+/* RFC 2308: how long NXDOMAIN / NODATA may be cached */
+static void test_negttl(void)
+{
+	struct msg m;
+
+	/* NXDOMAIN: min(SOA TTL, MINIMUM) */
+	hdr(&m, 9, 0x8183, 0);
+	rt_put_be16(m.b + 8, 1);
+	question(&m, "nx.example", DNS_TYPE_A);
+	soa(&m, 3600, 900);
+	CHECK(parse(&m, 9, "nx.example", DNS_TYPE_A) == -RT_HOST_NOT_FOUND && res.negttl == 900);
+	hdr(&m, 9, 0x8183, 0);
+	rt_put_be16(m.b + 8, 1);
+	question(&m, "nx.example", DNS_TYPE_A);
+	soa(&m, 60, 900);
+	CHECK(parse(&m, 9, "nx.example", DNS_TYPE_A) == -RT_HOST_NOT_FOUND && res.negttl == 60);
+	/* without SOA: 0, not cached */
+	hdr(&m, 9, 0x8183, 0);
+	question(&m, "nx.example", DNS_TYPE_A);
+	CHECK(parse(&m, 9, "nx.example", DNS_TYPE_A) == -RT_HOST_NOT_FOUND && res.negttl == 0);
+	/* NODATA through a CNAME: also bounded by the CNAME's TTL */
+	hdr(&m, 9, 0x8180, 1);
+	rt_put_be16(m.b + 8, 1);
+	question(&m, "a.example", DNS_TYPE_AAAA);
+	putptr(&m, 12); put16(&m, DNS_TYPE_CNAME); put16(&m, 1); put32(&m, 30); put16(&m, 5);
+	putname(&m, "b.x");
+	soa(&m, 300, 300);
+	CHECK(parse(&m, 9, "a.example", DNS_TYPE_AAAA) == 0 && res.negttl == 30);
+	/* a broken SOA: not cached */
+	hdr(&m, 9, 0x8180, 0);
+	rt_put_be16(m.b + 8, 1);
+	question(&m, "a.example", DNS_TYPE_AAAA);
+	soa(&m, 300, 300);
+	rt_put_be16(m.b + m.len - 34, 31);   /* RDLENGTH one short */
+	CHECK(parse(&m, 9, "a.example", DNS_TYPE_AAAA) == 0 && res.negttl == 0);
+	/* a positive answer has none */
+	hdr(&m, 9, 0x8180, 1);
+	question(&m, "a.example", DNS_TYPE_A);
+	rr_a(&m, 12, 300, ip4(10, 0, 0, 1));
+	CHECK(parse(&m, 9, "a.example", DNS_TYPE_A) == 1 && res.negttl == 0);
+}
+
 static void test_edns(void)
 {
 	static struct msg m;
@@ -530,6 +580,12 @@ static void test_config(void)
 	CHECK(rt_config_line("dns", err, sizeof(err), NULL) == 0 && strstr(err, "EDNS0 1232 bytes") &&
 	      strstr(err, "TCP fallback off"));
 	CHECK(rt_config_line("dns tcp on", err, sizeof(err), NULL) == 0 && rt_dns_tcp == 1);
+	CHECK(rt_config_line("dns negttl 600", err, sizeof(err), NULL) == 0);
+	CHECK(rt_config_line("dns negttl 86401", err, sizeof(err), NULL) == -RT_EINVAL && strstr(err, "86400"));
+	CHECK(rt_config_line("dns failttl x", err, sizeof(err), NULL) == -RT_EINVAL && strstr(err, "300"));
+	CHECK(rt_config_line("sysctl dns.cache.neg_maxttl=3600", err, sizeof(err), NULL) == 0);
+	CHECK(rt_config_line("sysctl dns.cache.fail_max=301", err, sizeof(err), NULL) == -RT_EINVAL);
+	CHECK(rt_config_line("dns flush", err, sizeof(err), NULL) == 0);
 	CHECK(rt_config_line("dns reset", err, sizeof(err), NULL) == 0);
 	CHECK(rt_config_line("dns frob", err, sizeof(err), NULL) == -RT_EINVAL && strstr(err, "usage"));
 	CHECK(rt_config_line("sysctl dns.edns_size=512", err, sizeof(err), NULL) == 0 && rt_dns_edns_size == 512);
@@ -602,6 +658,7 @@ int main(void)
 	rt_unlock();
 	test_build();
 	test_parse();
+	test_negttl();
 	test_edns();
 	test_fuzz();
 	test_local_resolve();

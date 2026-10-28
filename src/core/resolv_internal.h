@@ -10,6 +10,7 @@
 
 #define DNS_TYPE_A      1
 #define DNS_TYPE_CNAME  5
+#define DNS_TYPE_SOA    6
 #define DNS_TYPE_PTR    12
 #define DNS_TYPE_AAAA   28
 #define DNS_TYPE_OPT    41
@@ -24,6 +25,9 @@ struct dns_result {
 	int  max;
 	int  naddr;
 	u32  ttl;                 /* smallest TTL seen in the answer chain */
+	u32  negttl;              /* NXDOMAIN / NODATA: how long it may be cached
+	                           * (RFC 2308 5: the SOA's TTL and MINIMUM; 0 =
+	                           * no SOA in the authority section, not cached) */
 	char canon[DNS_NAMEBUF];  /* end of the CNAME chain */
 	char name[DNS_NAMEBUF];   /* PTR result */
 	char target[DNS_NAMEBUF]; /* scratch */

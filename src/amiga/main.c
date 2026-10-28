@@ -38,6 +38,7 @@ static const char help_text[] =
 	"Riptide TIMEZONE [+HH:MM|AUTO]             time zone used for the clock\n"
 	"Riptide MDNS [STATUS|ON|OFF]               the HOSTNAME.local responder\n"
 	"Riptide DNS [STATUS|EDNS_SIZE n|TCP ON|OFF] resolver: EDNS0, TCP fallback\n"
+	"                                           (also FLUSH, NEGTTL s, FAILTTL s)\n"
 	"Riptide BACKGROUND [rules]                 background (LEDBAT) connections\n"
 	"Riptide CAPTURE start|status|stop|save|clear [...]   packet capture to pcap\n"
 	"Riptide PROFILE start|show|stop|reset      where the CPU time goes\n"
