@@ -104,6 +104,10 @@ int  rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 can
 /* Reverse lookup (PTR). Returns 0 and the name, or -h_errno. */
 int  rt_resolve_addr(u32 addr, char *name, u32 namelen);
 extern int rt_dns_disallowed;   /* RiptideDisallowDNS() */
+extern s32 rt_dns_edns_size;    /* dns.edns_size: EDNS0 UDP payload, 0 = off */
+extern s32 rt_dns_tcp;          /* dns.tcp_fallback: TC answers again over TCP */
+/* "dns edns_size N | edns on|off | tcp on|off | reset | status" (lock held) */
+int  rt_dns_command(int argc, char **argv, char *out, u32 outlen);
 /* BIND style raw interface (res_* / dn_* calls for library clients), called
  * WITHOUT the lock. res_mkquery: only op 0 (QUERY); returns length or -1.
  * res_send: answer length (copy truncated to anslen) or -h_errno.

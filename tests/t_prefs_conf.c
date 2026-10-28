@@ -558,6 +558,42 @@ static void test_vlan(void)
 	      !rp_valid_vlan("10 pcp=1 pcp=2") && !rp_valid_vlan("10 foo"));
 }
 
+/* resolver: EDNS0 size and TCP fallback (Names page) */
+static void e_edns_off(struct rp_model *m)
+{
+	m->sc[RP_SC_DNS_EDNS] = 0;
+	m->sc[RP_SC_DNS_TCP] = RP_UNSET;
+}
+
+static void e_dns_new(struct rp_model *m)
+{
+	m->sc[RP_SC_DNS_EDNS] = 1232;
+	m->sc[RP_SC_DNS_TCP] = 0;
+}
+
+static void test_dns(void)
+{
+	static const char in[] = "nameserver 9.9.9.9\nsysctl dns.edns_size=4096   # big\nsysctl dns.tcp_fallback 0\n";
+	struct rp_conf c;
+	char *t;
+
+	roundtrip("dns", in);
+	CHECK(rp_conf_load(&c, in, strlen(in)) == 0);
+	CHECK(c.cur.sc[RP_SC_DNS_EDNS] == 4096 && c.cur.sc[RP_SC_DNS_TCP] == 0);
+	cmds[0] = 0;
+	c.cur.sc[RP_SC_DNS_EDNS] = 512;
+	c.cur.sc[RP_SC_DNS_TCP] = 1;
+	CHECK(rp_live_commands(&c, collect, NULL) == 0);
+	CHECK(!strcmp(cmds, "sysctl dns.edns_size=512;sysctl dns.tcp_fallback=1;"));
+	rp_conf_free(&c);
+	t = edit(in, e_edns_off);
+	CHECK(t && !strcmp(t, "nameserver 9.9.9.9\nsysctl dns.edns_size=0   # big\n"));
+	free(t);
+	t = edit(inst_dhcp, e_dns_new);
+	CHECK(t && strstr(t, "loglevel 1\nsysctl dns.edns_size=1232\nsysctl dns.tcp_fallback=0\n"));
+	free(t);
+}
+
 int main(void)
 {
 	test_roundtrips();
@@ -571,6 +607,7 @@ int main(void)
 	test_p3_valid();
 	test_p3_live();
 	test_vlan();
+	test_dns();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

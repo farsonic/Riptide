@@ -22,6 +22,16 @@
  * ones); those learned from router advertisements (RFC 8106) or DHCPv6
  * expire. AAAA lookups and ip6.arpa PTR lookups use the same machinery;
  * the hosts table holds both families (IPv4 as IPv4-mapped).
+ *
+ * EDNS0 (RFC 6891): our own queries carry an OPT record advertising
+ * dns.edns_size (1232, the DNS Flag Day 2020 value) so answers up to that
+ * size come over UDP. A server that answers FORMERR/NOTIMP to it is asked
+ * again without (once) and remembered as one without EDNS for 10 minutes;
+ * so is one whose answers carry no OPT record. Answers with TC set are
+ * asked again over TCP (RFC 7766, dns.tcp_fallback), from the same server;
+ * if that fails the UDP part is used as before. The BIND style raw calls
+ * (res_send & co.) send the caller's message unchanged (no OPT, as BIND
+ * without RES_USE_EDNS0) and also retry truncated answers over TCP.
  */
 #include "sock_internal.h"
 #include "resolv_internal.h"
@@ -32,19 +42,29 @@
 #define DNS_TIMEOUT_MS   2000
 #define DNS_ATTEMPTS     2
 #define DNS_QBUF         300      /* header + 255 byte name + question */
-#define DNS_ABUF         1024     /* UDP answers are <= 512 without EDNS */
+#define DNS_UDP_MIN      512      /* UDP answers without EDNS (RFC 1035) */
+#define DNS_EDNS_MAX     4096     /* largest dns.edns_size */
+#define DNS_OPT_LEN      11       /* our OPT record: root, type, class, ttl, rdlen */
+#define DNS_TCP_TIMEOUT_MS 5000   /* connect + query + answer over TCP */
+#define DNS_TCP_MAX      16384    /* largest TCP answer we parse */
+#define DNS_NOEDNS_MS    600000u  /* a server without EDNS is remembered */
 #define DNS_CACHE_MAX    32
 #define DNS_CACHE_NAME   128
-#define DNS_CACHE_ADDRS  4
+#define DNS_CACHE_ADDRS  8        /* as many as gethostbyname() returns */
 #define DNS_CACHE_MAXTTL 86400u
 
 int rt_dns_disallowed;
+s32 rt_dns_edns_size = 1232;   /* 0: no EDNS */
+s32 rt_dns_tcp = 1;            /* truncated answers again over TCP */
+u32 rt_dns_stat_tcp, rt_dns_stat_tcp_fail, rt_dns_stat_noedns;
 
 struct dns_server {
 	rt_in6_addr addr;         /* IPv4-mapped for IPv4 */
 	u32 ifindex;              /* zone of link-local servers */
 	u32 expires_s;            /* rt_ip6_seconds() deadline, 0 = never */
 	u8  source;               /* RT_DNS_SRC_* */
+	u8  noedns;               /* answered FORMERR to EDNS or without OPT */
+	u32 noedns_until;         /* rt_now_ms() */
 };
 static struct dns_server dns_servers[DNS_MAX_SERVERS];
 static int dns_nservers;
@@ -130,6 +150,7 @@ int rt_dns_add_server6(const rt_in6_addr *a, u32 ifindex, u32 lifetime_s, int so
 	dns_servers[dns_nservers].source = (u8)source;
 	dns_servers[dns_nservers].expires_s = source == RT_DNS_SRC_STATIC || lifetime_s == RT_IN6_INFINITE ?
 	                                      0 : rt_ip6_seconds() + lifetime_s;
+	dns_servers[dns_nservers].noedns = 0;
 	dns_nservers++;
 	return 0;
 }
@@ -328,6 +349,75 @@ int dns_build_query_class(u8 *buf, u32 buflen, u16 id, const char *name, u16 qcl
 	rt_put_be16(buf + pos, qtype);
 	rt_put_be16(buf + pos + 2, qclass);
 	return (int)(pos + 4);
+}
+
+/* Append an EDNS0 OPT record (RFC 6891 6.1.2: root owner, type 41,
+ * class = our UDP payload size, extended RCODE/version/flags 0, no
+ * options) to the query of length len and set ARCOUNT to 1. Returns the
+ * new length or -1. */
+int dns_add_opt(u8 *buf, u32 len, u32 buflen, u16 udpsize)
+{
+	u8 *p = buf + len;
+
+	if (len < 12 || len + DNS_OPT_LEN > buflen)
+		return -1;
+	p[0] = 0;                              /* root */
+	rt_put_be16(p + 1, DNS_TYPE_OPT);
+	rt_put_be16(p + 3, udpsize);
+	rt_put_be32(p + 5, 0);
+	rt_put_be16(p + 9, 0);
+	rt_put_be16(buf + 10, 1);
+	return (int)(len + DNS_OPT_LEN);
+}
+
+/* Offset after the (possibly compressed) name at off, or 0. */
+static u32 skip_name(const u8 *msg, u32 len, u32 off)
+{
+	while (off < len) {
+		u8 c = msg[off];
+		if (c == 0)
+			return off + 1;
+		if ((c & 0xc0) == 0xc0)
+			return off + 2 <= len ? off + 2 : 0;
+		if (c & 0xc0)
+			return 0;
+		off += 1u + c;
+	}
+	return 0;
+}
+
+/* Is there an OPT record in the additional section? 1 (its UDP payload
+ * size in *udpsize), 0 none, -1 malformed. Walks every section. */
+int dns_find_opt(const u8 *msg, u32 len, u16 *udpsize)
+{
+	u32 off = 12, i, n, p;
+
+	if (len < 12)
+		return -1;
+	for (i = rt_get_be16(msg + 4); i; i--) {
+		p = skip_name(msg, len, off);
+		if (!p || p + 4 > len)
+			return -1;
+		off = p + 4;
+	}
+	n = (u32)rt_get_be16(msg + 6) + rt_get_be16(msg + 8);
+	for (i = 0; i < n + rt_get_be16(msg + 10); i++) {
+		u16 type, rdlen;
+		p = skip_name(msg, len, off);
+		if (!p || p + 10 > len)
+			return -1;
+		type = rt_get_be16(msg + p);
+		rdlen = rt_get_be16(msg + p + 8);
+		if (p + 10 + rdlen > len)
+			return -1;
+		if (i >= n && type == DNS_TYPE_OPT) {
+			if (udpsize)
+				*udpsize = rt_get_be16(msg + p + 2);
+			return 1;
+		}
+		off = p + 10 + rdlen;
+	}
+	return 0;
 }
 
 /* Expand the (possibly compressed) name at 'off'. Every compression pointer
@@ -562,7 +652,14 @@ struct dns_work {
 	char search[64];
 	char qname[DNS_NAMEBUF];
 	u8 q[DNS_QBUF];
-	u8 a[DNS_ABUF];
+	u8 *a;                    /* UDP answers, alen bytes */
+	u32 alen;
+	u16 edns;                 /* our UDP payload size, 0 = no EDNS */
+	u8 tcp;                   /* dns.tcp_fallback */
+	u8 *ans;                  /* raw mode: the answer (a or tcpbuf) */
+	u8 *tcpbuf;               /* answer read over TCP */
+	u32 rawcap;               /* raw mode: the caller's buffer size */
+	const u8 *rawq;           /* raw mode: the caller's query */
 	/* dns_exchange46(): the AAAA query and its result */
 	struct dns_result res6;
 	u8 q6[DNS_QBUF];
@@ -571,13 +668,32 @@ struct dns_work {
 static struct dns_work *work_alloc(u32 *addrs, int max)
 {
 	struct dns_work *w = rt_zalloc(sizeof(*w));
+	u32 now = rt_now_ms();
+	int i;
 
 	if (!w)
 		return NULL;
-	if (rt_ctx_init(&w->ctx, 4, NULL) < 0) {
+	rt_lock();
+	w->edns = (u16)rt_dns_edns_size;
+	w->tcp = rt_dns_tcp != 0;
+	rt_unlock();
+	if (w->edns && w->edns < DNS_UDP_MIN)
+		w->edns = DNS_UDP_MIN;
+	/* answers are as large as we advertise (at least the classic 512);
+	 * short of memory: no EDNS rather than no lookup */
+	w->alen = w->edns > DNS_UDP_MIN ? w->edns : DNS_UDP_MIN;
+	w->a = rt_malloc(w->alen);
+	if (!w->a && w->alen > DNS_UDP_MIN) {
+		w->edns = 0;
+		w->alen = DNS_UDP_MIN;
+		w->a = rt_malloc(w->alen);
+	}
+	if (!w->a || rt_ctx_init(&w->ctx, 4, NULL) < 0) {
+		rt_free(w->a);
 		rt_free(w);
 		return NULL;
 	}
+	w->ans = w->a;
 	w->res.addrs = addrs;
 	w->res.max = max;
 	rt_lock();
@@ -586,13 +702,188 @@ static struct dns_work *work_alloc(u32 *addrs, int max)
 	memcpy(w->servers, dns_servers, sizeof(w->servers));
 	rt_strlcpy(w->search, dns_search, sizeof(w->search));
 	rt_unlock();
+	for (i = 0; i < w->nservers; i++)
+		if (w->servers[i].noedns && (s32)(w->servers[i].noedns_until - now) <= 0)
+			w->servers[i].noedns = 0;
 	return w;
 }
 
 static void work_free(struct dns_work *w)
 {
 	rt_ctx_destroy(&w->ctx);
+	rt_free(w->tcpbuf);
+	rt_free(w->a);
 	rt_free(w);
+}
+
+/* Server s answered FORMERR/NOTIMP to EDNS, or without an OPT record:
+ * no EDNS to it for a while (also for later lookups). */
+static void server_noedns(struct dns_work *w, int s)
+{
+	u32 until = rt_now_ms() + DNS_NOEDNS_MS;
+	int i;
+
+	if (w->servers[s].noedns)
+		return;
+	w->servers[s].noedns = 1;
+	rt_lock();
+	for (i = 0; i < dns_nservers; i++)
+		if (rt_in6_eq(&dns_servers[i].addr, &w->servers[s].addr)) {
+			dns_servers[i].noedns = 1;
+			dns_servers[i].noedns_until = until;
+		}
+	rt_dns_stat_noedns++;
+	rt_unlock();
+	RT_DBG(RT_DBG_DNS, "server %d: no EDNS for %lu s", s + 1, (unsigned long)(DNS_NOEDNS_MS / 1000u));
+}
+
+/* A query built without OPT (length len) followed by our OPT record:
+ * the length to send with or without EDNS (ARCOUNT set to match). */
+static u32 q_edns(u8 *q, u32 len, int on)
+{
+	rt_put_be16(q + 10, on ? 1 : 0);
+	return on ? len + DNS_OPT_LEN : len;
+}
+
+/* Build our query for name into q (DNS_QBUF): the plain length, with the
+ * OPT record after it when EDNS is on; -1 if the name does not fit. */
+static int build_q(struct dns_work *w, u8 *q, u16 id, const char *name, u16 qtype)
+{
+	int len = dns_build_query(q, DNS_QBUF, id, name, qtype);
+
+	if (len < 0 || (w->edns && dns_add_opt(q, (u32)len, DNS_QBUF, w->edns) < 0))
+		return -1;
+	return len;
+}
+
+static int sock_wait(struct dns_work *w, int fd, int wr, u32 deadline)
+{
+	u32 set = 1u << fd;
+	s32 left = (s32)(deadline - rt_now_ms());
+
+	if (left <= 0)
+		return 0;
+	return rt_api_select(&w->ctx, fd + 1, wr ? NULL : &set, wr ? &set : NULL, NULL, left, NULL);
+}
+
+/* Ask server sv the query q (length qlen, without OPT) over TCP (RFC
+ * 7766: two byte length prefix). The answer, at most cap bytes (the rest
+ * is dropped; then TC is set in it as BIND does), goes to w->tcpbuf.
+ * Returns its length or -errno. */
+static int dns_tcp(struct dns_work *w, const struct dns_server *sv, const u8 *q, u32 qlen, u32 cap)
+{
+	int v6 = !rt_in6_is_v4mapped(&sv->addr), fd, r;
+	s32 one = 1, err;
+	u32 deadline = rt_now_ms() + DNS_TCP_TIMEOUT_MS, got = 0, need, len = 0, el;
+	u8 hdr[2];
+
+	rt_free(w->tcpbuf);
+	w->tcpbuf = NULL;
+	fd = rt_api_socket(&w->ctx, v6 ? RT_AF_INET6 : RT_AF_INET, RT_SOCK_STREAM, 0);
+	if (fd < 0)
+		return fd;
+	rt_api_ioctl(&w->ctx, fd, RT_FIONBIO, &one);
+	if (v6) {
+		struct rt_sockaddr_in6 to;
+		memset(&to, 0, sizeof(to));
+		to.sin6_len = sizeof(to);
+		to.sin6_family = RT_AF_INET6;
+		to.sin6_port = rt_htons(DNS_PORT);
+		to.sin6_addr = sv->addr;
+		to.sin6_scope_id = sv->ifindex;
+		r = rt_api_connect(&w->ctx, fd, &to, sizeof(to));
+	} else {
+		struct rt_sockaddr_in to;
+		memset(&to, 0, sizeof(to));
+		to.sin_len = sizeof(to);
+		to.sin_family = RT_AF_INET;
+		to.sin_port = rt_htons(DNS_PORT);
+		to.sin_addr = rt_in6_v4(&sv->addr);
+		r = rt_api_connect(&w->ctx, fd, &to, sizeof(to));
+	}
+	if (r < 0 && r != -RT_EINPROGRESS)
+		goto out;
+	if (r < 0) {
+		r = sock_wait(w, fd, 1, deadline);
+		if (r <= 0) {
+			r = r < 0 ? r : -RT_ETIMEDOUT;
+			goto out;
+		}
+		el = sizeof(err);
+		err = 0;
+		rt_api_getsockopt(&w->ctx, fd, RT_SOL_SOCKET, RT_SO_ERROR, &err, &el);
+		if (err) {
+			r = -(int)err;
+			goto out;
+		}
+	}
+	/* the query: length prefix and message, possibly in pieces */
+	rt_put_be16(hdr, (u16)qlen);
+	for (got = 0; got < qlen + 2; ) {
+		const u8 *p = got < 2 ? hdr + got : q + (got - 2);
+		u32 n = got < 2 ? 2 - got : qlen + 2 - got;
+		r = rt_api_send(&w->ctx, fd, p, n, 0);
+		if (r == -RT_EWOULDBLOCK) {
+			if ((r = sock_wait(w, fd, 1, deadline)) <= 0) {
+				r = r < 0 ? r : -RT_ETIMEDOUT;
+				goto out;
+			}
+			continue;
+		}
+		if (r <= 0) {
+			r = r < 0 ? r : -RT_ECONNRESET;
+			goto out;
+		}
+		got += (u32)r;
+	}
+	/* the answer: length, then up to cap bytes of it */
+	for (got = 0, need = 2; got < need; ) {
+		u8 *p = got < 2 ? hdr + got : w->tcpbuf + (got - 2);
+		u32 n = got < 2 ? 2 - got : need - got;
+		r = rt_api_recv(&w->ctx, fd, p, n, 0);
+		if (r == -RT_EWOULDBLOCK) {
+			if ((r = sock_wait(w, fd, 0, deadline)) <= 0) {
+				r = r < 0 ? r : -RT_ETIMEDOUT;
+				goto out;
+			}
+			continue;
+		}
+		if (r <= 0) {
+			r = r < 0 ? r : -RT_ECONNRESET;
+			goto out;
+		}
+		got += (u32)r;
+		if (got == 2 && !w->tcpbuf) {
+			len = rt_get_be16(hdr);
+			if (len < 12) {
+				r = -RT_ECONNRESET;
+				goto out;
+			}
+			w->tcpbuf = rt_malloc(len < cap ? len : cap);
+			if (!w->tcpbuf) {
+				r = -RT_ENOMEM;
+				goto out;
+			}
+			need = 2 + (len < cap ? len : cap);
+		}
+	}
+	r = (int)(need - 2);
+	if (len > cap)
+		w->tcpbuf[2] |= 0x02;          /* TC: the rest did not fit */
+out:
+	rt_api_close(&w->ctx, fd);
+	rt_lock();
+	if (r < 0)
+		rt_dns_stat_tcp_fail++;
+	else
+		rt_dns_stat_tcp++;
+	rt_unlock();
+	RT_DBG(RT_DBG_DNS, "TCP query to server: %d", r);
+	if (r < 0) {
+		rt_free(w->tcpbuf);
+		w->tcpbuf = NULL;
+	}
+	return r;
 }
 
 /* A socket of the server's family (opened on first use) bound to an
@@ -629,11 +920,118 @@ static int dns_socket(struct dns_work *w, int v6, int *fd)
 	return r;
 }
 
-/* Send query q (ID 'id') to every server, DNS_ATTEMPTS rounds.
- * Parse mode (qname != NULL): the reply must answer (qname, qtype) and is
- * parsed into w->res; returns as dns_parse_response().
- * Raw mode (qname == NULL, res_send): any reply with our ID from the
- * server is accepted, left in w->a; returns its length or -RT_TRY_AGAIN. */
+/* Send len bytes of q to server sv. */
+static int send_q(struct dns_work *w, int fd, const struct dns_server *sv, const u8 *q, u32 len)
+{
+	if (!rt_in6_is_v4mapped(&sv->addr)) {
+		struct rt_sockaddr_in6 to;
+		memset(&to, 0, sizeof(to));
+		to.sin6_len = sizeof(to);
+		to.sin6_family = RT_AF_INET6;
+		to.sin6_port = rt_htons(DNS_PORT);
+		to.sin6_addr = sv->addr;
+		to.sin6_scope_id = sv->ifindex;
+		return rt_api_sendto(&w->ctx, fd, q, len, 0, &to, sizeof(to));
+	} else {
+		struct rt_sockaddr_in to;
+		memset(&to, 0, sizeof(to));
+		to.sin_len = sizeof(to);
+		to.sin_family = RT_AF_INET;
+		to.sin_port = rt_htons(DNS_PORT);
+		to.sin_addr = rt_in6_v4(&sv->addr);
+		return rt_api_sendto(&w->ctx, fd, q, len, 0, &to, sizeof(to));
+	}
+}
+
+/* Wait (until start + limit ms) for a datagram from server sv's port 53
+ * carrying a response with our ID: its length in w->a, 0 on timeout,
+ * -RT_EINTR on a break. */
+static int recv_reply(struct dns_work *w, int fd, const struct dns_server *sv, u32 start, u32 limit,
+                      u16 id, u16 id2)
+{
+	int v6 = !rt_in6_is_v4mapped(&sv->addr), r, ok;
+
+	for (;;) {
+		struct rt_sockaddr_in6 from;
+		u32 el = rt_now_ms() - start, fl = sizeof(from), set;
+		if (el >= limit)
+			return 0;
+		set = 1u << fd;
+		r = rt_api_select(&w->ctx, fd + 1, &set, NULL, NULL, (s32)(limit - el), NULL);
+		if (r == -RT_EINTR)
+			return r;
+		if (r <= 0)
+			return 0;
+		memset(&from, 0, sizeof(from));
+		r = rt_api_recvfrom(&w->ctx, fd, w->a, w->alen, RT_MSG_DONTWAIT, &from, &fl);
+		if (r < 12)
+			continue;
+		if (v6) {
+			ok = rt_in6_eq(&from.sin6_addr, &sv->addr) && from.sin6_port == rt_htons(DNS_PORT);
+		} else {
+			const struct rt_sockaddr_in *f4 = (const struct rt_sockaddr_in *)(const void *)&from;
+			ok = f4->sin_addr == rt_in6_v4(&sv->addr) && f4->sin_port == rt_htons(DNS_PORT);
+		}
+		if (ok && (w->a[2] & 0x80) && (rt_get_be16(w->a) == id || rt_get_be16(w->a) == id2))
+			return r;
+	}
+}
+
+/* rcode of a response */
+#define RCODE(m) ((m)[3] & 0x0f)
+#define TC(m)    (((m)[2] & 0x02) != 0)
+
+/* Parse mode: the answer in w->a (length n) to our query, EDNS used or
+ * not, from server s: remember a server without EDNS; a truncated one is
+ * asked again over TCP (the plain query q, qlen bytes) when allowed.
+ * Returns as dns_parse_response() into *res. */
+static int take_answer(struct dns_work *w, int s, u32 n, int edns, u8 *q, u32 qlen, u16 id,
+                       const char *qname, u16 qtype, struct dns_result *res)
+{
+	int r = dns_parse_response(w->a, n, id, qname, qtype, res);
+
+	if (r == DNS_IGNORE)
+		return r;
+	if (edns && (RCODE(w->a) == 0 || RCODE(w->a) == 3) && dns_find_opt(w->a, n, NULL) == 0)
+		server_noedns(w, s);
+	if (TC(w->a) && w->tcp) {
+		int t;
+		q_edns(q, qlen, 0);
+		t = dns_tcp(w, &w->servers[s], q, qlen, DNS_TCP_MAX);
+		if (t > 0) {
+			int r2 = dns_parse_response(w->tcpbuf, (u32)t, id, qname, qtype, res);
+			if (r2 != DNS_IGNORE)
+				return r2;
+			r = dns_parse_response(w->a, n, id, qname, qtype, res);
+		}
+	}
+	return r;
+}
+
+/* Raw mode: is the answer at m (n bytes) one to hand back, or should the
+ * next server be asked (SERVFAIL/NOTIMP/REFUSED)? */
+static int raw_ok(const u8 *m, int n, u16 id)
+{
+	u16 rc;
+
+	if (n < 12 || rt_get_be16(m) != id || !(m[2] & 0x80))
+		return 0;
+	rc = RCODE(m);
+	return rc != 2 && rc != 4 && rc != 5;
+}
+
+/* Send our query to every server, DNS_ATTEMPTS rounds.
+ * Parse mode (qname != NULL): the query is w->q, qlen bytes without our
+ * OPT record (which build_q() put after it); it goes with EDNS unless the
+ * server cannot take it, and FORMERR/NOTIMP to EDNS gets it once more
+ * without. The reply must answer (qname, qtype) and is parsed into w->res;
+ * returns as dns_parse_response().
+ * Raw mode (qname == NULL, res_send): the caller's query w->rawq goes
+ * unchanged (UDP, or TCP when longer than 512 bytes, as BIND); any reply
+ * with our ID from the server is accepted, w->ans points to it; returns
+ * its length or -RT_TRY_AGAIN.
+ * Both: a truncated (TC) answer is asked again over TCP from the same
+ * server when dns.tcp_fallback is on; if that fails, it is used as is. */
 static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname, u16 qtype)
 {
 	int fd4 = -1, fd6 = -1, att, s, r, result = -RT_TRY_AGAIN;
@@ -643,75 +1041,63 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 	for (att = 0; att < DNS_ATTEMPTS; att++) {
 		for (s = 0; s < w->nservers; s++) {
 			const struct dns_server *sv = &w->servers[s];
-			int v6 = !rt_in6_is_v4mapped(&sv->addr);
-			u32 start = rt_now_ms();
-			int fd = dns_socket(w, v6, v6 ? &fd6 : &fd4);
+			int v6 = !rt_in6_is_v4mapped(&sv->addr), edns, fd;
+			u32 start;
+			if (!qname && qlen > DNS_UDP_MIN) {
+				r = dns_tcp(w, sv, w->rawq, qlen, w->rawcap);
+				if (r > 0 && raw_ok(w->tcpbuf, r, id)) {
+					w->ans = w->tcpbuf;
+					result = r;
+					goto out;
+				}
+				continue;
+			}
+			fd = dns_socket(w, v6, v6 ? &fd6 : &fd4);
 			if (fd < 0)
 				continue;
-			if (v6) {
-				struct rt_sockaddr_in6 to;
-				memset(&to, 0, sizeof(to));
-				to.sin6_len = sizeof(to);
-				to.sin6_family = RT_AF_INET6;
-				to.sin6_port = rt_htons(DNS_PORT);
-				to.sin6_addr = sv->addr;
-				to.sin6_scope_id = sv->ifindex;
-				r = rt_api_sendto(&w->ctx, fd, w->q, qlen, 0, &to, sizeof(to));
-			} else {
-				struct rt_sockaddr_in to;
-				memset(&to, 0, sizeof(to));
-				to.sin_len = sizeof(to);
-				to.sin_family = RT_AF_INET;
-				to.sin_port = rt_htons(DNS_PORT);
-				to.sin_addr = rt_in6_v4(&sv->addr);
-				r = rt_api_sendto(&w->ctx, fd, w->q, qlen, 0, &to, sizeof(to));
-			}
+			edns = qname && w->edns && !sv->noedns;
+		resend:
+			start = rt_now_ms();
+			if (qname)
+				r = send_q(w, fd, sv, w->q, q_edns(w->q, qlen, edns));
+			else
+				r = send_q(w, fd, sv, w->rawq, qlen);
 			if (r < 0)
 				continue;
-			RT_DBG(RT_DBG_DNS, "query %s type %u to server %d, attempt %d", qname ? qname : "(raw)",
-			       (unsigned)qtype, s + 1, att + 1);
+			RT_DBG(RT_DBG_DNS, "query %s type %u to server %d, attempt %d%s", qname ? qname : "(raw)",
+			       (unsigned)qtype, s + 1, att + 1, edns ? ", EDNS" : "");
 			for (;;) {
-				struct rt_sockaddr_in6 from;
-				u32 el = rt_now_ms() - start, fl = sizeof(from), set;
-				int ok;
-				if (el >= DNS_TIMEOUT_MS) {
-					RT_DBG(RT_DBG_DNS, "no answer from server %d in %lu ms", s + 1, (unsigned long)el);
-					break;
-				}
-				set = 1u << fd;
-				r = rt_api_select(&w->ctx, fd + 1, &set, NULL, NULL,
-				                  (s32)(DNS_TIMEOUT_MS - el), NULL);
+				r = recv_reply(w, fd, sv, start, DNS_TIMEOUT_MS, id, id);
 				if (r == -RT_EINTR) {
 					result = -RT_TRY_AGAIN;
 					goto out;
 				}
-				if (r <= 0)
+				if (r <= 0) {
+					RT_DBG(RT_DBG_DNS, "no answer from server %d", s + 1);
 					break;
-				memset(&from, 0, sizeof(from));
-				r = rt_api_recvfrom(&w->ctx, fd, w->a, sizeof(w->a), RT_MSG_DONTWAIT,
-				                    &from, &fl);
-				if (r < 0)
-					continue;
-				if (v6) {
-					ok = rt_in6_eq(&from.sin6_addr, &sv->addr) &&
-					     from.sin6_port == rt_htons(DNS_PORT);
-				} else {
-					const struct rt_sockaddr_in *f4 = (const struct rt_sockaddr_in *)(const void *)&from;
-					ok = f4->sin_addr == rt_in6_v4(&sv->addr) && f4->sin_port == rt_htons(DNS_PORT);
 				}
-				if (!ok)
-					continue;
 				if (!qname) {
-					u16 rc;
-					if (r < 12 || rt_get_be16(w->a) != id || !(w->a[2] & 0x80))
-						continue;
-					rc = w->a[3] & 0x0f;
-					if (rc == 2 || rc == 4 || rc == 5)
+					int t;
+					if (!raw_ok(w->a, r, id))
 						break;      /* SERVFAIL/NOTIMP/REFUSED: next server */
+					w->ans = w->a;
 					result = r;
+					if (TC(w->a) && w->tcp) {
+						t = dns_tcp(w, sv, w->rawq, qlen, w->rawcap);
+						if (t > 0 && raw_ok(w->tcpbuf, t, id)) {
+							w->ans = w->tcpbuf;
+							result = t;
+						}
+					}
 					goto out;
 				}
-				r = dns_parse_response(w->a, (u32)r, id, qname, qtype, &w->res);
+				if (edns && (RCODE(w->a) == 1 || RCODE(w->a) == 4)) {
+					/* FORMERR/NOTIMP: perhaps the OPT record; once without */
+					server_noedns(w, s);
+					edns = 0;
+					goto resend;
+				}
+				r = take_answer(w, s, (u32)r, edns, w->q, qlen, id, qname, qtype, &w->res);
 				if (r == DNS_IGNORE)
 					continue;
 				if (r == -RT_TRY_AGAIN || r == -RT_NO_RECOVERY) {
@@ -735,7 +1121,7 @@ out:
 static int dns_query(struct dns_work *w, const char *name, u16 qtype)
 {
 	u16 id = (u16)rt_random32();
-	int qlen = dns_build_query(w->q, sizeof(w->q), id, name, qtype);
+	int qlen = build_q(w, w->q, id, name, qtype);
 
 	if (qlen < 0)
 		return -RT_NO_RECOVERY;
@@ -924,7 +1310,7 @@ static int mdns_resolve(struct dns_work *w, const char *name, u16 qtype, u32 *a4
 			}
 			if (r <= 0)
 				break;
-			r = rt_api_recvfrom(&w->ctx, fd, w->a, sizeof(w->a), RT_MSG_DONTWAIT, &from, &fl);
+			r = rt_api_recvfrom(&w->ctx, fd, w->a, w->alen, RT_MSG_DONTWAIT, &from, &fl);
 			if (r < 0 || from.sin_port != rt_htons(5353))
 				continue;
 			r = mdns_parse_answer(w->a, (u32)r, id, name, qtype, a4, a6, max, ttl);
@@ -1084,8 +1470,8 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 {
 	int fd4 = -1, fd6 = -1, att, s, r;
 	u16 id4 = (u16)rt_random32(), id6 = (u16)(id4 ^ 0x5a5a);
-	int l4 = dns_build_query(w->q, sizeof(w->q), id4, w->qname, DNS_TYPE_A);
-	int l6 = dns_build_query(w->q6, sizeof(w->q6), id6, w->qname, DNS_TYPE_AAAA);
+	int l4 = build_q(w, w->q, id4, w->qname, DNS_TYPE_A);
+	int l6 = build_q(w, w->q6, id6, w->qname, DNS_TYPE_AAAA);
 
 	*r4 = *r6 = R_PENDING;
 	if (l4 < 0 || l6 < 0 || w->nservers == 0) {
@@ -1095,42 +1481,28 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 	for (att = 0; att < DNS_ATTEMPTS; att++) {
 		for (s = 0; s < w->nservers; s++) {
 			const struct dns_server *sv = &w->servers[s];
-			int v6 = !rt_in6_is_v4mapped(&sv->addr), k;
-			u32 start = rt_now_ms(), got4 = 0;
+			int v6 = !rt_in6_is_v4mapped(&sv->addr), k, edns;
+			u32 start, got4 = 0;
 			int fd = dns_socket(w, v6, v6 ? &fd6 : &fd4);
-			struct rt_sockaddr_in6 to6;
-			struct rt_sockaddr_in to4;
 			if (fd < 0)
 				continue;
-			memset(&to6, 0, sizeof(to6));
-			memset(&to4, 0, sizeof(to4));
-			to6.sin6_len = sizeof(to6);
-			to6.sin6_family = RT_AF_INET6;
-			to6.sin6_port = rt_htons(DNS_PORT);
-			to6.sin6_addr = sv->addr;
-			to6.sin6_scope_id = sv->ifindex;
-			to4.sin_len = sizeof(to4);
-			to4.sin_family = RT_AF_INET;
-			to4.sin_port = rt_htons(DNS_PORT);
-			to4.sin_addr = rt_in6_v4(&sv->addr);
+			edns = w->edns && !sv->noedns;
+		resend:
+			start = rt_now_ms();
 			/* AAAA first, as RFC 8305 3 asks */
 			for (k = 0; k < 2; k++) {
 				int *rr = k ? r4 : r6;
-				const u8 *q = k ? w->q : w->q6;
+				u8 *q = k ? w->q : w->q6;
 				u32 ql = (u32)(k ? l4 : l6);
 				if (final(*rr))
 					continue;
 				*rr = R_PENDING;
-				if (v6)
-					rt_api_sendto(&w->ctx, fd, q, ql, 0, &to6, sizeof(to6));
-				else
-					rt_api_sendto(&w->ctx, fd, q, ql, 0, &to4, sizeof(to4));
+				send_q(w, fd, sv, q, q_edns(q, ql, edns));
 			}
-			RT_DBG(RT_DBG_DNS, "query %s A+AAAA to server %d, attempt %d", w->qname, s + 1, att + 1);
+			RT_DBG(RT_DBG_DNS, "query %s A+AAAA to server %d, attempt %d%s", w->qname, s + 1, att + 1,
+			       edns ? ", EDNS" : "");
 			for (;;) {
-				struct rt_sockaddr_in6 from;
-				u32 now = rt_now_ms(), el = now - start, limit = DNS_TIMEOUT_MS, fl = sizeof(from), set;
-				int ok;
+				u32 now = rt_now_ms(), el = now - start, limit = DNS_TIMEOUT_MS;
 				if (final(*r4) && final(*r6))
 					goto out;
 				if (*r4 > 0 && got4 && !final(*r6) && *r6 == R_PENDING &&
@@ -1141,33 +1513,30 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 						goto out;   /* AAAA late: go with the A records */
 					break;
 				}
-				set = 1u << fd;
-				r = rt_api_select(&w->ctx, fd + 1, &set, NULL, NULL, (s32)(limit - el), NULL);
+				r = recv_reply(w, fd, sv, start, limit, id4, id6);
 				if (r == -RT_EINTR)
 					goto out;
 				if (r <= 0)
 					continue;
-				memset(&from, 0, sizeof(from));
-				r = rt_api_recvfrom(&w->ctx, fd, w->a, sizeof(w->a), RT_MSG_DONTWAIT, &from, &fl);
-				if (r < 12)
-					continue;
-				if (v6) {
-					ok = rt_in6_eq(&from.sin6_addr, &sv->addr) && from.sin6_port == rt_htons(DNS_PORT);
-				} else {
-					const struct rt_sockaddr_in *f4 = (const struct rt_sockaddr_in *)(const void *)&from;
-					ok = f4->sin_addr == rt_in6_v4(&sv->addr) && f4->sin_port == rt_htons(DNS_PORT);
+				if (edns && (RCODE(w->a) == 1 || RCODE(w->a) == 4) &&
+				    ((rt_get_be16(w->a) == id4 && *r4 == R_PENDING) ||
+				     (rt_get_be16(w->a) == id6 && *r6 == R_PENDING))) {
+					/* FORMERR/NOTIMP: perhaps the OPT record; once without */
+					server_noedns(w, s);
+					edns = 0;
+					goto resend;
 				}
-				if (!ok)
-					continue;
 				if (rt_get_be16(w->a) == id4 && *r4 == R_PENDING) {
-					int x = dns_parse_response(w->a, (u32)r, id4, w->qname, DNS_TYPE_A, &w->res);
+					int x = take_answer(w, s, (u32)r, edns, w->q, (u32)l4, id4, w->qname,
+					                    DNS_TYPE_A, &w->res);
 					if (x != DNS_IGNORE) {
 						*r4 = x;
 						if (x > 0)
 							got4 = rt_now_ms();
 					}
 				} else if (rt_get_be16(w->a) == id6 && *r6 == R_PENDING) {
-					int x = dns_parse_response(w->a, (u32)r, id6, w->qname, DNS_TYPE_AAAA, &w->res6);
+					int x = take_answer(w, s, (u32)r, edns, w->q6, (u32)l6, id6, w->qname,
+					                    DNS_TYPE_AAAA, &w->res6);
 					if (x != DNS_IGNORE)
 						*r6 = x;
 				}
@@ -1436,8 +1805,9 @@ int rt_res_send(const u8 *msg, int msglen, u8 *answer, int anslen)
 {
 	struct dns_work *w;
 	int r, disallowed;
+	u16 size;
 
-	if (!msg || msglen < 12 || msglen > DNS_QBUF || !answer || anslen <= 0)
+	if (!msg || msglen < 12 || msglen > 0xffff || !answer || anslen <= 0)
 		return -RT_NO_RECOVERY;
 	rt_lock();
 	disallowed = rt_dns_disallowed;
@@ -1447,12 +1817,22 @@ int rt_res_send(const u8 *msg, int msglen, u8 *answer, int anslen)
 	w = work_alloc(NULL, 0);
 	if (!w)
 		return -RT_TRY_AGAIN;
-	memcpy(w->q, msg, (u32)msglen);
+	/* the caller's own OPT record may ask for larger UDP answers */
+	if (dns_find_opt(msg, (u32)msglen, &size) == 1 && size > w->alen) {
+		u8 *a = rt_malloc(size < DNS_EDNS_MAX ? size : DNS_EDNS_MAX);
+		if (a) {
+			rt_free(w->a);
+			w->a = w->ans = a;
+			w->alen = size < DNS_EDNS_MAX ? size : DNS_EDNS_MAX;
+		}
+	}
+	w->rawq = msg;
+	w->rawcap = (u32)anslen;
 	r = dns_exchange(w, (u32)msglen, rt_get_be16(msg), NULL, 0);
 	if (r > 0) {
 		if (r > anslen)
 			r = anslen;               /* truncated copy, as BIND */
-		memcpy(answer, w->a, (u32)r);
+		memcpy(answer, w->ans, (u32)r);
 	}
 	work_free(w);
 	return r;
@@ -1566,6 +1946,63 @@ int rt_dn_skipname(const u8 *src, const u8 *eom)
 }
 
 /* ======================================================================
+ * "dns" command
+ * ====================================================================== */
+
+int rt_dns_command(int argc, char **argv, char *out, u32 outlen)
+{
+	static const char usage[] = "usage: dns edns_size N (0 = off, 512..4096) | edns on|off | "
+	                            "tcp on|off | reset | status";
+	const char *v = argc >= 3 ? argv[2] : NULL, *e;
+	unsigned long n;
+	int i, k;
+
+	if (out && outlen)
+		out[0] = 0;
+	if (argc < 2 || !rt_strcasecmp(argv[1], "status")) {
+		for (i = k = 0; i < dns_nservers; i++)
+			k += dns_servers[i].noedns && (s32)(dns_servers[i].noedns_until - rt_now_ms()) > 0;
+		if (rt_dns_edns_size)
+			rt_snprintf(out, outlen, "EDNS0 %ld bytes, ", (long)(rt_dns_edns_size < DNS_UDP_MIN ?
+			            DNS_UDP_MIN : rt_dns_edns_size));
+		else
+			rt_snprintf(out, outlen, "EDNS0 off, ");
+		i = (int)strlen(out);
+		rt_snprintf(out + i, outlen > (u32)i ? outlen - (u32)i : 0,
+		            "TCP fallback %s; %d server(s) without EDNS; %lu TCP queries, %lu failed\n",
+		            rt_dns_tcp ? "on" : "off", k, (unsigned long)rt_dns_stat_tcp,
+		            (unsigned long)rt_dns_stat_tcp_fail);
+		return 0;
+	}
+	if (argc == 3 && (!rt_strcasecmp(argv[1], "edns_size") || !rt_strcasecmp(argv[1], "edns"))) {
+		if (!rt_strcasecmp(v, "on") || !rt_strcasecmp(v, "off")) {
+			rt_dns_edns_size = !rt_strcasecmp(v, "on") ? 1232 : 0;
+			return 0;
+		}
+		n = rt_strtoul(v, &e, 10);
+		if (*e || e == v || (n && (n < DNS_UDP_MIN || n > DNS_EDNS_MAX))) {
+			rt_snprintf(out, outlen, "dns: edns_size is 0 (off) or 512..4096");
+			return -RT_EINVAL;
+		}
+		rt_dns_edns_size = (s32)n;
+		return 0;
+	}
+	if (argc == 3 && !rt_strcasecmp(argv[1], "tcp") &&
+	    (!rt_strcasecmp(v, "on") || !rt_strcasecmp(v, "off"))) {
+		rt_dns_tcp = !rt_strcasecmp(v, "on");
+		return 0;
+	}
+	if (argc == 2 && !rt_strcasecmp(argv[1], "reset")) {
+		/* forget which servers lack EDNS */
+		for (i = 0; i < dns_nservers; i++)
+			dns_servers[i].noedns = 0;
+		return 0;
+	}
+	rt_snprintf(out, outlen, "%s", usage);
+	return -RT_EINVAL;
+}
+
+/* ======================================================================
  * sysctl (CTL_DNS 9, dns.cache 0)
  * ====================================================================== */
 
@@ -1599,6 +2036,16 @@ static const struct rt_sysctl resolv_sysctls[] = {
 	  NULL, 0, 1, cache_flush_handler, "write 1 to flush the DNS cache" },
 	{ "dns.cache.enabled", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 0, 2 },
 	  &dns_cache_enabled, 0, 1, NULL, "DNS cache on/off" },
+	{ "dns.edns_size", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 1, 0 },
+	  &rt_dns_edns_size, 0, DNS_EDNS_MAX, NULL, "EDNS0 UDP payload size (0 = no EDNS)" },
+	{ "dns.tcp_fallback", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 1, 1 },
+	  &rt_dns_tcp, 0, 1, NULL, "ask truncated answers again over TCP" },
+	{ "dns.stats.tcp", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 0 },
+	  &rt_dns_stat_tcp, 0, 0, NULL, "queries answered over TCP" },
+	{ "dns.stats.tcp_failed", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 1 },
+	  &rt_dns_stat_tcp_fail, 0, 0, NULL, "TCP queries that failed" },
+	{ "dns.stats.noedns", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 2 },
+	  &rt_dns_stat_noedns, 0, 0, NULL, "servers found without EDNS" },
 };
 
 void rt_resolv_init(void)

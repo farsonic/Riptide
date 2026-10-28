@@ -499,6 +499,36 @@ connects going with `rt_api_select()`, starting the next one every
 `RiptideConnectName()` (LVO -528, beyond the historical table so the
 compat alias keeps its layout).
 
+### Resolver: EDNS0 and TCP fallback
+
+The resolver runs in the caller's task without the lock; its state is a
+heap `struct dns_work` (callers may have 4 KB stacks). `work_alloc()`
+reads `dns.edns_size` and `dns.tcp_fallback` under the lock and allocates
+the UDP answer buffer at the advertised size (at least 512; when that
+allocation fails it falls back to 512 bytes without EDNS0, so a small
+machine still resolves). `build_q()` writes the plain query and our 11
+byte OPT record after it; `q_edns()` sets ARCOUNT and gives the length
+to send with or without it, so one buffer serves both. Per server,
+`dns_server.noedns` (with a 10 minute deadline, copied into the work
+copy and set in the global table by `server_noedns()`) says to leave the
+OPT record out: set on FORMERR/NOTIMP to an EDNS0 query (which is then
+sent once more without it, with a fresh timeout) and on an answer that
+echoes no OPT record. `take_answer()` parses a reply; when TC is set and
+TCP is allowed, `dns_tcp()` asks the same server over a non-blocking TCP
+socket in the work context (connect, then the two byte length prefix and
+the query without OPT, then the answer into a buffer allocated at the
+announced length, capped; one deadline of 5 s for all of it) and parses
+that instead; if TCP fails or its answer does not match, the UDP reply is
+parsed again and used. `dns_exchange46()` does the same for whichever of
+the A and AAAA answers is truncated, synchronously, while the other one
+waits in the socket. Raw mode (`res_send()`) sends the caller's message
+unchanged and goes to TCP on TC or for a message over 512 bytes, as BIND
+does; `w->ans` points to the UDP or TCP buffer. The cache keeps 8
+addresses per name (`DNS_CACHE_ADDRS`), the hostent limit of
+bsdsocket.library and riptide.library. 0x20 case randomisation is not
+done: `dns_name_eq()` ignores case already, and the gain is small next to
+random IDs and ports.
+
 ## Sending UDP: pacing, batches, no checksum (0.17)
 
 **Pacing.** A UDP socket remembers the interface its last datagram left

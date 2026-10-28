@@ -132,6 +132,7 @@ Riptide PROFILE START|STOP|RESET|SHOW
 Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
 Riptide NTP [STATUS|ON|OFF|SYNC|SERVER...|INTERVAL S|STEP MS|BATTCLOCK ON|OFF]
 Riptide MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
+Riptide DNS [STATUS|EDNS_SIZE N|EDNS ON|OFF|TCP ON|OFF|RESET]
 Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=...] [target=MS]
 ```
 
@@ -148,9 +149,10 @@ Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=.
 | `PROFILE ...` | Control the running stack's profiler (see "Profiling and debug log"). |
 | `DEBUG ...` | With a word instead of a number: control the running stack's debug log (see "Profiling and debug log"). A number is still the log level of a new instance. |
 | `NTP ...`, `MDNS ...`, `TIMEZONE ...` | The `ntp`, `mdns` and `timezone` keywords in the running stack, e.g. `Riptide NTP STATUS`, `Riptide NTP SYNC` (see "Time and .local names"). |
+| `DNS ...` | The `dns` keyword in the running stack: EDNS0 size and TCP fallback of the resolver, e.g. `Riptide DNS`, `Riptide DNS EDNS_SIZE 0` (see "Resolver: EDNS0 and TCP"). |
 | `BACKGROUND ...` | The `background` keyword in the running stack: which connections yield to others (see "Background transfers"). Without arguments it shows the rules. |
 
-`QUIT`, `STATUS`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS`, `TIMEZONE` and `BACKGROUND` talk to the running
+`QUIT`, `STATUS`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS`, `DNS`, `TIMEZONE` and `BACKGROUND` talk to the running
 stack through the public message port `RIPTIDE`. You can also signal the
 Riptide process directly:
 
@@ -174,6 +176,8 @@ hostname NAME
 domain NAME                        # also the DNS search domain
 nameserver [add] A.B.C.D           # up to the core's limit, in order
 nameserver del A.B.C.D | nameserver flush
+dns edns_size N | edns on|off | tcp on|off | reset | status
+                                   # resolver, see "Resolver: EDNS0 and TCP"
 host NAME A.B.C.D                  # static host table entry
 route add|del|replace|change DEST[/BITS]|default [netmask M] [via|gw] GATEWAY
       [dev IF] [metric N] [mtu N] [unreachable]
@@ -875,6 +879,61 @@ RiptidePrefs' Apply).
 `#` comments. Its entries go into the static host table, which is checked
 before DNS.
 
+### Resolver: EDNS0 and TCP
+
+Classic DNS over UDP carries at most 512 bytes; CDN names with many
+addresses, long CNAME chains and AAAA answers often need more. Riptide's
+resolver (`gethostbyname()`, `gethostbyaddr()`, `getaddrinfo()`, the
+Happy Eyeballs lookups, `res_query()` & co.) handles larger answers in two
+ways:
+
+* **EDNS0** (RFC 6891): every query carries an OPT record that offers
+  answers of up to **1232 bytes** over UDP (the DNS Flag Day 2020 value,
+  which fits any path MTU of 1280 or more without fragments). The answer
+  buffer is that size and taken only for the lookup. A name server that
+  answers FORMERR or NOTIMP is asked once more without the OPT record; it
+  and a server whose answers carry no OPT record are then asked without
+  EDNS0 for 10 minutes (`dns reset` forgets that at once).
+* **TCP fallback** (RFC 7766): an answer with the TC ("truncated") bit
+  is asked again from the same server over TCP (5 s for connect, query
+  and answer; answers up to 16 KB are read). If TCP fails, what came over
+  UDP is used, as before. This works for A, AAAA (also the parallel A and
+  AAAA queries of `getaddrinfo()`), PTR and the raw `res_*` calls.
+
+```
+dns edns_size 1232     # EDNS0 UDP size: 0 = no EDNS0, 512..4096 (default 1232)
+dns edns on|off        # the same: 1232 or 0
+dns tcp on|off         # TCP fallback (default on)
+dns reset              # forget which servers lack EDNS0
+dns [status]           # e.g. "EDNS0 1232 bytes, TCP fallback on; 0 server(s)
+                       #  without EDNS; 3 TCP queries, 0 failed"
+sysctl dns.edns_size=N   sysctl dns.tcp_fallback=0|1    # the same settings
+```
+
+`sysctl dns.stats.tcp`, `dns.stats.tcp_failed` and `dns.stats.noedns`
+count the TCP queries, the failed ones and the servers found without
+EDNS0. Run time: `Riptide DNS EDNS_SIZE 0`, `Riptide DNS TCP OFF`,
+`Riptide DNS` for the status; RiptidePrefs has both on the Names page.
+
+The raw BIND calls behave as BIND's without `RES_USE_EDNS0`: `res_send()`
+sends the caller's message as it is (an OPT record in it is honoured: the
+UDP buffer grows to its size, up to 4096), goes over TCP when the message
+is longer than 512 bytes or the answer is truncated, and copies at most
+`anslen` bytes back; a TCP answer longer than that comes back cut with TC
+set. A large `anslen` alone does not make it use TCP (BIND does not
+either).
+
+The security properties are unchanged: random query IDs and source ports
+for every query, and answers count only from the server's address and
+port 53 with our ID and question. DNS 0x20 (random upper/lower case in
+the query name) is not used: names are compared without regard to case
+anyway, and some servers and middleboxes do not keep the case.
+
+The resolver's cache keeps up to 8 addresses per name, as many as
+`gethostbyname()`, `gethostbyname2()` and `getaddrinfo()` return (larger
+answers are parsed in full, the first 8 distinct addresses are kept), and
+follows CNAME chains of up to 7 links.
+
 ## RiptidePrefs
 
 `RiptidePrefs` is a preferences editor for `riptide.conf` in the style of
@@ -896,7 +955,7 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 | Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway | `dhcp IF`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
 | Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS` or `A.B.C.D netmask M`), with DHCP or a static primary address | `ifconfig IF alias SPEC` |
 | VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5` | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...]` |
-| Names | host name, domain, up to three DNS servers | `hostname`, `domain`, `nameserver` |
+| Names | host name, domain, up to three DNS servers; EDNS size (empty: default, 0 = off) and DNS over TCP (Default/On/Off) | `hostname`, `domain`, `nameserver`, `sysctl dns.edns_size=N`, `sysctl dns.tcp_fallback=0\|1` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=` |
 | Advanced: Connecting | Fast Open (Default/On/Off), Fast Open for every connect with a cookie, Fast Open backoff after lost SYNs (s, 0-86400), first and largest SYN RTO (ms, 200-3000 / 200-120000), SYN backoff (Linear/Doubling), connect timeout (s, 0-600) | `sysctl net.inet.tcp.fastopen=`, `fastopen_all=`, `fastopen_blackhole=`, `syn_rto_initial_ms=`, `syn_rto_max_ms=`, `syn_backoff=`, `connect_timeout=` |
@@ -1232,7 +1291,9 @@ until Ctrl-C. Output follows Linux ping, including `(DUP!)`, ICMP errors
 cache, DNS). With `-t TYPE` (A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, ANY)
 or a server argument (`host -t mx amiga.org 10.0.2.3`) host sends its own
 DNS query and prints the answer records; `-v` shows the header, `-W` the
-timeout in seconds.
+timeout in seconds. Its query offers EDNS0 (1232 bytes; without it again
+when the server answers FORMERR or NOTIMP), and a truncated answer is
+asked again over TCP (`;; Truncated, retrying in TCP mode.`).
 
 ### sysctl, hostname, nc
 
@@ -2319,6 +2380,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/t_udptx_unit.c` (host) | UDP sending (0.17) against a driver that holds its frames (4 slots): a non-blocking socket is writable while the driver has room, then not writable and `EWOULDBLOCK` (the interface marked for a wakeup), writable again after a completion; a blocking send waits for the completion; one blocked when the interface goes down, or when the driver stops completing frames (stalled for 1 s), wakes up and is not left sleeping; `SO_NO_CHECK` (and Linux's 11) leaves the IPv4 checksum 0, refused on TCP; `rt_api_sendmmsg()` whole, partial and `EWOULDBLOCK`, `rt_api_recvmmsg()` over loopback with lengths and addresses. |
 | `tests/amiga/run_fsuae_udpblast.sh build/amiga` | UDP send rate on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtub0`/`rtub1`, 192.168.150.0/24; `CPUS`, default a1200-030 and a4000-040, cycle-exact): `tests/amiga/udpblast.c` sends 3000 datagrams per mode (blocking, non-blocking with WaitSelect, `SO_NO_CHECK`, `RiptideSendMMsg()` 16 at a time, multicast, 64-byte datagrams) to `tests/amiga/udpsink.py`, which counts them on the wire and those without a checksum; a second boot with `qos inflight 1`, `qos limit 8` makes the senders wait for room. Prints a table of rates and per-call times; `CHECK=1` fails on a lost or failed datagram, a checksum where there should be none (or the reverse), or a non-blocking sender that never had to wait. |
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
+| `tests/amiga/run_fsuae_dns.sh build/amiga` | The resolver's EDNS0 and TCP fallback on FS-UAE bridged to the veth pair `rtd0`/`rtd1` (`FSUAE_PCAP=`, root; `BR_IF`, `BR_PEER`, `BR_NET` choose others) against `tests/amiga/dns_server.py`, which cuts UDP answers at 512 bytes or the query's EDNS0 size and answers in full over TCP: `host NAME` (gethostbyname) of a 40-record name gets its answer over UDP with EDNS0 and no TCP, a 100-record name (A and AAAA) over TCP; `host -t` (its own query) the same; `Riptide DNS` status and `Riptide DNS EDNS_SIZE 0` at run time. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |
 | `tests/t_ledbat_unit.c` (host) | Background transfers and memory limits: the LEDBAT++ controller in a fluid model of a 12 Mbit/s link with 20 ms base RTT and 500 ms of buffer (alone: about 50 ms of queue at 97 % utilisation and periodic slowdowns; against Reno: under 1 % of the link; Reno alone: 400 ms of queue), loss handling; rLEDBAT's window on a bare connection; the `background` keyword in every form AmigaDOS hands it over, the sysctls, rules by program name (`rt_host_set_program()`) and local port, `TCP_BACKGROUND`, an explicit `TCP_CONGESTION` winning; socket memory: 12 connections nobody reads stay at the 1 MB limit (2 MB without), the data is intact once read, the defaults from the free memory. |

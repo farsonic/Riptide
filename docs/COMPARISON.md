@@ -235,7 +235,7 @@ for the plain AmiTCP API or for MiamiDx's documented API do.
 | | MiamiDx | Roadshow | Riptide |
 |---|---|---|---|
 | DHCP client | Yes | Yes [RS-README] | Yes (lease renewal, rebinding, static routes win over DHCP ones) |
-| Resolver | BIND 4.9-era, DNS cache (32 entries) (RE-NOTES 6, 7.9) | "Built-in DNS cache", IDN (ISO Latin 1 to Punycode) [RS-README] | Own resolver with a 32-entry cache, search domain, static host table, PTR lookups; no IDN, no DNSSEC |
+| Resolver | BIND 4.9-era, DNS cache (32 entries) (RE-NOTES 6, 7.9) | "Built-in DNS cache", IDN (ISO Latin 1 to Punycode) [RS-README] | Own resolver with a 32-entry cache (8 addresses per name), search domain, static host table, PTR lookups, EDNS0 (1232-byte UDP answers, fallback for old servers) and TCP fallback for truncated answers; random IDs and ports; no IDN, no DNSSEC |
 | inetd | Yes (built in) | Yes, "inetd style Internet superserver" [RS-README] | No |
 | TCP: handler | Not analysed | Yes [RS-README] | No |
 | Packet capture | `MiamiTCPDump` (miamibpf/miamipcap) | `tcpdump`, BPF [RS-README] | `Riptide CAPTURE` records into a RAM ring with filters and saves pcap files for Wireshark/tcpdump; `rtdiag` bundles capture, profile and debug log for bug reports. No BPF API, no live tcpdump |

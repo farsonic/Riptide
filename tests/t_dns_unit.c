@@ -27,7 +27,7 @@ static int failures, checks;
 static u32 ip4(int a, int b, int c, int d) { return rt_htonl(((u32)a << 24) | ((u32)b << 16) | ((u32)c << 8) | (u32)d); }
 
 /* ---- response builder ---- */
-struct msg { u8 b[1024]; u32 len; };
+struct msg { u8 b[4096]; u32 len; };
 
 static void put8(struct msg *m, u8 v) { m->b[m->len++] = v; }
 static void put16(struct msg *m, u16 v) { rt_put_be16(m->b + m->len, v); m->len += 2; }
@@ -65,7 +65,7 @@ static void rr_a(struct msg *m, u16 owner_ptr, u32 ttl, u32 addr)
 }
 
 static struct dns_result res;
-static u32 addrs[8];
+static u32 addrs[16];
 
 static int parse(struct msg *m, u16 id, const char *q, u16 type)
 {
@@ -229,6 +229,109 @@ static void test_parse(void)
 	CHECK(parse(&m, 7, "h", DNS_TYPE_A) == 1 && addrs[0] == ip4(9, 9, 9, 9));
 	m.len -= 2;
 	CHECK(parse(&m, 7, "h", DNS_TYPE_A) == 0);
+}
+
+/* EDNS0 OPT record, TC, answers beyond 512 bytes, many records, CNAME
+ * chains up to the limit */
+static void test_edns(void)
+{
+	static struct msg m;
+	static rt_in6_addr a6[16];
+	u8 q[300];
+	u16 size = 0;
+	int n, i, l;
+
+	/* OPT appended to a query */
+	n = dns_build_query(q, sizeof(q), 0x4242, "www.example.com", DNS_TYPE_AAAA);
+	l = dns_add_opt(q, (u32)n, sizeof(q), 1232);
+	CHECK(l == n + 11 && rt_get_be16(q + 10) == 1);
+	CHECK(q[n] == 0 && rt_get_be16(q + n + 1) == DNS_TYPE_OPT && rt_get_be16(q + n + 3) == 1232 &&
+	      rt_get_be32(q + n + 5) == 0 && rt_get_be16(q + n + 9) == 0);
+	CHECK(dns_find_opt(q, (u32)l, &size) == 1 && size == 1232);
+	CHECK(dns_find_opt(q, (u32)n, &size) == -1);          /* ARCOUNT 1, record missing */
+	rt_put_be16(q + 10, 0);
+	CHECK(dns_find_opt(q, (u32)n, &size) == 0);
+	CHECK(dns_add_opt(q, (u32)n, (u32)n + 10, 1232) < 0);  /* no room */
+	CHECK(dns_add_opt(q, 8, sizeof(q), 1232) < 0);
+
+	/* answer echoing OPT after an A record; OPT type in the answer
+	 * section does not count; malformed rdlength */
+	hdr(&m, 1, 0x8180, 1);
+	question(&m, "e.test", DNS_TYPE_A);
+	rr_a(&m, 12, 60, ip4(10, 0, 0, 1));
+	CHECK(dns_find_opt(m.b, m.len, NULL) == 0);
+	rt_put_be16(m.b + 10, 1);
+	put8(&m, 0); put16(&m, DNS_TYPE_OPT); put16(&m, 4096); put32(&m, 0); put16(&m, 0);
+	CHECK(dns_find_opt(m.b, m.len, &size) == 1 && size == 4096);
+	CHECK(parse(&m, 1, "e.test", DNS_TYPE_A) == 1);        /* OPT ignored by the parser */
+	m.b[m.len - 1] = 5;
+	CHECK(dns_find_opt(m.b, m.len, &size) == -1);
+	hdr(&m, 1, 0x8180, 1);
+	question(&m, "e.test", DNS_TYPE_A);
+	put8(&m, 0); put16(&m, DNS_TYPE_OPT); put16(&m, 4096); put32(&m, 0); put16(&m, 0);
+	CHECK(dns_find_opt(m.b, m.len, &size) == 0);
+	CHECK(dns_find_opt(m.b, 5, &size) == -1);
+
+	/* TC with data: what fits is used; FORMERR (EDNS refused) */
+	hdr(&m, 2, 0x8380, 2);
+	question(&m, "tc.test", DNS_TYPE_A);
+	rr_a(&m, 12, 60, ip4(10, 0, 0, 7));
+	CHECK(parse(&m, 2, "tc.test", DNS_TYPE_A) == 1 && addrs[0] == ip4(10, 0, 0, 7));
+	hdr(&m, 2, 0x8181, 0);
+	question(&m, "tc.test", DNS_TYPE_A);
+	CHECK(parse(&m, 2, "tc.test", DNS_TYPE_A) == -RT_NO_RECOVERY);
+
+	/* 40 A records: about 700 bytes (only fits with EDNS or TCP); 16 kept */
+	hdr(&m, 3, 0x8180, 40);
+	question(&m, "cdn.test", DNS_TYPE_A);
+	for (i = 0; i < 40; i++)
+		rr_a(&m, 12, 30, ip4(10, 1, 0, i + 1));
+	CHECK(m.len > 512);
+	memset(&res, 0, sizeof(res));
+	res.addrs = addrs;
+	res.max = 16;
+	CHECK(dns_parse_response(m.b, m.len, 3, "cdn.test", DNS_TYPE_A, &res) == 16);
+	CHECK(addrs[0] == ip4(10, 1, 0, 1) && addrs[15] == ip4(10, 1, 0, 16));
+
+	/* 24 AAAA records */
+	hdr(&m, 4, 0x8180, 24);
+	question(&m, "cdn6.test", DNS_TYPE_AAAA);
+	for (i = 0; i < 24; i++) {
+		putptr(&m, 12); put16(&m, DNS_TYPE_AAAA); put16(&m, 1); put32(&m, 30); put16(&m, 16);
+		memset(m.b + m.len, 0, 16);
+		m.b[m.len] = 0x20; m.b[m.len + 1] = 0x01; m.b[m.len + 15] = (u8)(i + 1);
+		m.len += 16;
+	}
+	CHECK(m.len > 512);
+	memset(&res, 0, sizeof(res));
+	res.addrs6 = a6;
+	res.max = 16;
+	CHECK(dns_parse_response(m.b, m.len, 4, "cdn6.test", DNS_TYPE_AAAA, &res) == 16);
+	CHECK(a6[0].b[0] == 0x20 && a6[0].b[15] == 1 && a6[15].b[15] == 16);
+
+	/* CNAME chains: c0 -> c1 -> ... -> cN, then A for cN (names in full) */
+	for (l = 1; l <= 10; l++) {
+		char nm[16], nx[16];
+		hdr(&m, 5, 0x8180, (u16)(l + 1));
+		question(&m, "c0.chain.test", DNS_TYPE_A);
+		for (i = 0; i < l; i++) {
+			u32 at;
+			snprintf(nm, sizeof(nm), "c%d.chain.test", i);
+			snprintf(nx, sizeof(nx), "c%d.chain.test", i + 1);
+			putname(&m, nm); put16(&m, DNS_TYPE_CNAME); put16(&m, 1); put32(&m, 100); put16(&m, 0);
+			at = m.len;
+			putname(&m, nx);
+			rt_put_be16(m.b + at - 2, (u16)(m.len - at));
+		}
+		putname(&m, nx); put16(&m, DNS_TYPE_A); put16(&m, 1); put32(&m, 100); put16(&m, 4);
+		put32(&m, 0x0a636301u);
+		n = parse(&m, 5, "c0.chain.test", DNS_TYPE_A);
+		if (l < DNS_MAX_CNAME)
+			CHECK(n == 1 && addrs[0] == rt_htonl(0x0a636301u) && !strcmp(res.canon, nx));
+		else
+			CHECK(n <= 0);                             /* longer than DNS_MAX_CNAME */
+	}
+	CHECK(m.len > 200);
 }
 
 /* Every truncation and many random mutations of valid responses must be
@@ -416,6 +519,25 @@ static void test_config(void)
 	CHECK(rt_config_line("sysctl dns.cache.enabled=7", err, sizeof(err), NULL) == -RT_EINVAL &&
 	      strstr(err, "bad value"));
 	CHECK(rt_config_line("sysctl no.such=1", err, sizeof(err), NULL) == -RT_ENOENT && strstr(err, "unknown"));
+	/* resolver: EDNS0 and TCP fallback */
+	CHECK(rt_dns_edns_size == 1232 && rt_dns_tcp == 1);
+	CHECK(rt_config_line("dns edns_size 4096", err, sizeof(err), NULL) == 0 && rt_dns_edns_size == 4096);
+	CHECK(rt_config_line("dns edns_size 0", err, sizeof(err), NULL) == 0 && rt_dns_edns_size == 0);
+	CHECK(rt_config_line("dns edns on", err, sizeof(err), NULL) == 0 && rt_dns_edns_size == 1232);
+	CHECK(rt_config_line("dns edns_size 100", err, sizeof(err), NULL) == -RT_EINVAL && strstr(err, "512"));
+	CHECK(rt_config_line("dns edns_size 5000", err, sizeof(err), NULL) == -RT_EINVAL);
+	CHECK(rt_config_line("dns tcp off", err, sizeof(err), NULL) == 0 && rt_dns_tcp == 0);
+	CHECK(rt_config_line("dns", err, sizeof(err), NULL) == 0 && strstr(err, "EDNS0 1232 bytes") &&
+	      strstr(err, "TCP fallback off"));
+	CHECK(rt_config_line("dns tcp on", err, sizeof(err), NULL) == 0 && rt_dns_tcp == 1);
+	CHECK(rt_config_line("dns reset", err, sizeof(err), NULL) == 0);
+	CHECK(rt_config_line("dns frob", err, sizeof(err), NULL) == -RT_EINVAL && strstr(err, "usage"));
+	CHECK(rt_config_line("sysctl dns.edns_size=512", err, sizeof(err), NULL) == 0 && rt_dns_edns_size == 512);
+	CHECK(rt_config_line("sysctl dns.edns_size=4097", err, sizeof(err), NULL) == -RT_EINVAL);
+	CHECK(rt_config_line("sysctl dns.tcp_fallback=0", err, sizeof(err), NULL) == 0 && rt_dns_tcp == 0);
+	CHECK(rt_config_line("sysctl dns.stats.tcp=1", err, sizeof(err), NULL) == -RT_EPERM);
+	rt_dns_edns_size = 1232;
+	rt_dns_tcp = 1;
 	CHECK(rt_config_line("interface eth0 foo.device", err, sizeof(err), unknown_kw) == 0 && unknown_calls == 1);
 	CHECK(rt_config_line("frobnicate", err, sizeof(err), NULL) == -RT_EINVAL && strstr(err, "frobnicate"));
 	CHECK(rt_config_line("frob", err, sizeof(err), unknown_kw) == -RT_EINVAL && !strcmp(err, "bad frob"));
@@ -480,6 +602,7 @@ int main(void)
 	rt_unlock();
 	test_build();
 	test_parse();
+	test_edns();
 	test_fuzz();
 	test_local_resolve();
 	test_config();

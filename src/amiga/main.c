@@ -5,7 +5,7 @@
  *           [CAPTURE start|stop|status|save FILE|clear ...]
  *   Riptide PROFILE START|STOP|RESET|SHOW
  *   Riptide DEBUG CATEGORIES|NONE|SHOW [N]|CLEAR|DUMP FILE|STATUS [SIZE=KB]
- *   Riptide NTP [SYNC|STATUS|...] | MDNS [ON|OFF|STATUS] | TIMEZONE [+HH:MM|AUTO]
+ *   Riptide NTP [SYNC|STATUS|...] | MDNS [ON|OFF|STATUS] | DNS [...] | TIMEZONE [+HH:MM|AUTO]
  *   Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=...]
  *
  * Without QUIT/STATUS/CAPTURE/PROFILE/DEBUG it starts the stack and stays
@@ -37,6 +37,7 @@ static const char help_text[] =
 	"                                           BATTCLOCK ON|OFF)\n"
 	"Riptide TIMEZONE [+HH:MM|AUTO]             time zone used for the clock\n"
 	"Riptide MDNS [STATUS|ON|OFF]               the HOSTNAME.local responder\n"
+	"Riptide DNS [STATUS|EDNS_SIZE n|TCP ON|OFF] resolver: EDNS0, TCP fallback\n"
 	"Riptide BACKGROUND [rules]                 background (LEDBAT) connections\n"
 	"Riptide CAPTURE start|status|stop|save|clear [...]   packet capture to pcap\n"
 	"Riptide PROFILE start|show|stop|reset      where the CPU time goes\n"
@@ -133,7 +134,7 @@ static int send_verb(const char *verb, const char *first, char **more)
  * holds no such verb. */
 static int raw_verb(void)
 {
-	static const char *const verbs[] = { "ntp", "mdns", "timezone", "background", "capture" };
+	static const char *const verbs[] = { "ntp", "mdns", "dns", "timezone", "background", "capture" };
 	const char *a = (const char *)GetArgStr();
 	char line[256];
 	u32 n, i, o;
