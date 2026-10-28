@@ -1,6 +1,7 @@
 /*
  * Riptide - TCP unit and robustness tests: integer cube root (CUBIC),
- * option parsing incl. malformed options, SYN cookie encode/decode, and
+ * PRR (RFC 9937) arithmetic, option parsing incl. malformed options, SYN
+ * cookie encode/decode, and
  * a fuzzer that feeds thousands of random (partly in-window) segments
  * and ICMP errors into rt_tcp_input / rt_tcp_icmp_error for a listener
  * and a live connection. Run under `make SAN=1` to catch memory errors.
@@ -40,6 +41,71 @@ static void test_cubic_root(void)
 			bad++;
 	}
 	CHECKV(bad == 0, "bad %u", bad);
+}
+
+/* PRR (RFC 9937): RecoverFS leaves out what was SACKed before recovery and
+ * adds the triggering ACK's delivery; SSRB only on a SafeACK. */
+static u32 prr_ssthresh;
+static u32 prr_ssthresh_fn(struct tcp_sock *tp) { (void)tp; return prr_ssthresh; }
+static const struct tcp_congestion_ops prr_ops = { "prrtest", NULL, prr_ssthresh_fn, NULL, NULL, NULL, NULL, NULL };
+
+static void prr_start(struct tcp_sock *tp, u32 ssthresh)
+{
+	memset(tp, 0, sizeof(*tp));
+	tp->ca_ops = &prr_ops;
+	prr_ssthresh = ssthresh;
+	/* 100 outstanding, 60 SACKed (58 before this ACK, 2 by it), 5 lost */
+	tp->snd_cwnd = 100;
+	tp->packets_out = 100;
+	tp->sacked_out = 60;
+	tp->lost_out = 5;
+	tcp_init_cwnd_reduction(tp);
+	tp->ca_state = TCP_CA_Recovery;
+}
+
+static void test_prr(void)
+{
+	static struct tcp_sock t;
+	struct tcp_sock *tp = &t;
+	u32 i, inflight;
+
+	/* proportional part: inflight 35 > ssthresh 20 */
+	prr_start(tp, 20);
+	CHECKV(tp->prr_recover_fs == 40, "fs %u", tp->prr_recover_fs);
+	tcp_cwnd_reduction(tp, 2, 5, 0);
+	CHECKV(tp->prr_recover_fs == 42, "fs+ack %u", tp->prr_recover_fs);
+	inflight = tcp_packets_in_flight(tp);
+	/* ceil(20 * 2 / 42) = 1 */
+	CHECKV(tp->snd_cwnd == inflight + 1, "first cwnd %u", tp->snd_cwnd);
+	tcp_cwnd_reduction(tp, 19, 0, FLAG_SND_UNA_ADVANCED);
+	/* half of RecoverFS delivered: half of ssthresh may be sent (with
+	 * prior_cwnd as divisor it would be ceil(420/100) = 5) */
+	CHECKV(tp->snd_cwnd == inflight + 10, "half cwnd %u", tp->snd_cwnd);
+	for (i = 0; i < 21; i++)
+		tcp_cwnd_reduction(tp, 1, 0, FLAG_SND_UNA_ADVANCED);
+	CHECKV(tp->snd_cwnd == inflight + 20, "full cwnd %u", tp->snd_cwnd);
+
+	/* below ssthresh: PRR-CRB, PRR-SSRB only on a SafeACK */
+	prr_start(tp, 50);
+	inflight = tcp_packets_in_flight(tp);
+	tcp_cwnd_reduction(tp, 2, 0, FLAG_SND_UNA_ADVANCED);
+	CHECKV(tp->snd_cwnd == inflight + 3, "safe cwnd %u", tp->snd_cwnd);
+	prr_start(tp, 50);
+	tcp_cwnd_reduction(tp, 2, 1, FLAG_SND_UNA_ADVANCED);
+	CHECKV(tp->snd_cwnd == inflight + 2, "lost cwnd %u", tp->snd_cwnd);
+	prr_start(tp, 50);
+	tcp_cwnd_reduction(tp, 2, 0, 0);
+	CHECKV(tp->snd_cwnd == inflight + 2, "dup cwnd %u", tp->snd_cwnd);
+	/* never beyond ssthresh */
+	prr_start(tp, 36);
+	tcp_cwnd_reduction(tp, 5, 0, FLAG_SND_UNA_ADVANCED);
+	CHECKV(tp->snd_cwnd == 36, "cap cwnd %u", tp->snd_cwnd);
+	/* forced fast retransmit on the first ACK */
+	prr_start(tp, 20);
+	tp->prr_recover_fs = 1000;
+	tp->prr_fs_pending = 0;
+	tcp_cwnd_reduction(tp, 1, 1, 0);
+	CHECKV(tp->snd_cwnd == inflight + 1, "forced cwnd %u", tp->snd_cwnd);
 }
 
 static void test_options(void)
@@ -332,6 +398,7 @@ int main(void)
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	alarm(300);
 	test_cubic_root();
+	test_prr();
 	test_options();
 	if (rt_host_start() != 0)
 		return 1;

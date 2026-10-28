@@ -797,10 +797,10 @@ static int tcp_may_raise_cwnd(const struct tcp_sock *tp, int flag)
 	return flag & FLAG_DATA_ACKED;
 }
 
-static void tcp_cong_control(struct tcp_sock *tp, u32 ack, u32 acked_sacked, int flag)
+static void tcp_cong_control(struct tcp_sock *tp, u32 ack, u32 acked_sacked, u32 lost, int flag)
 {
 	if (tcp_in_cwnd_reduction(tp))
-		tcp_cwnd_reduction(tp, (int)acked_sacked, 0, flag);
+		tcp_cwnd_reduction(tp, (int)acked_sacked, (int)lost, flag);
 	else if (tcp_may_raise_cwnd(tp, flag))
 		tp->ca_ops->cong_avoid(tp, ack, acked_sacked);
 }
@@ -905,6 +905,7 @@ static int tcp_ack(struct tcp_sock *tp, struct rt_buf *b, int flag)
 	u32 prior_snd_una = tp->snd_una;
 	u32 ack_seq = cb->seq, ack = cb->ack_seq;
 	u32 prior_packets = tp->packets_out, prior_fack, prior_delivered = tp->delivered;
+	u32 prior_lost = tp->lost;
 	int rexmit = REXMIT_NONE, num_dupack = 0;
 
 	memset(&sack, 0, sizeof(sack));
@@ -969,7 +970,8 @@ static int tcp_ack(struct tcp_sock *tp, struct rt_buf *b, int flag)
 		return 1;
 	if (flag & FLAG_SET_XMIT_TIMER)
 		tcp_set_xmit_timer(tp);
-	tcp_cong_control(tp, ack, tp->delivered - prior_delivered, flag);
+	/* freshly marked lost: no SafeACK (RFC 9937 6.2) */
+	tcp_cong_control(tp, ack, tp->delivered - prior_delivered, tp->lost - prior_lost, flag);
 	tcp_xmit_recovery(tp, rexmit);
 	return 1;
 
