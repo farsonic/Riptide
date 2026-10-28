@@ -32,7 +32,8 @@ Licence: GPL-2.0-only (the TCP follows Linux's algorithms and structure).
 The core files are owned per area:
 
 * **infra**: `buf.c timer.c printf.c netif.c arp.c ip.c ip_frag.c route.c
-  icmp.c udp.c raw.c loopback.c checksum.c arch.c init.c stats.c capture.c`
+  icmp.c udp.c raw.c loopback.c checksum.c arch.c init.c stats.c capture.c
+  ipv4ll.c`
   (packet capture: every frame passes `rt_netif_input()` or `rt_netif_xmit()`;
   protocol code never calls `nif->link_output()` directly)
 * **tcp**: `tcp*.c` plus internal `src/core/tcp.h`
@@ -446,6 +447,46 @@ each prefix (`install_connected()`), and the route lookup picks the source
 with `rt_netif_src()`: the address whose subnet holds the next hop, then
 the destination's, then the primary. Deleting the primary promotes the
 first additional address.
+
+### DHCP options and IPv4 link-local addresses (dhcp.c, ipv4ll.c)
+
+The DHCP client asks for options 121 (before 3, RFC 3442), 119 and 249.
+Options 119/121/249 are concatenated across instances (RFC 3396) into
+per-message buffers before decoding; the decoders
+(`rt_dhcp_parse_classless()`, `rt_dhcp_parse_search()`) are exported for
+the tests and reject a malformed option as a whole. Compression pointers
+in option 119 must point strictly backwards and before the start of what
+was followed so far, which rules out loops without a jump counter (there
+is one anyway). The client remembers the classless routes it installed
+(`RT_RTF_DHCP`, up to 16, the 0/0 entry kept apart as `router`) and on
+each ACK removes those no longer offered and adds the new ones in option
+order; `unconfigure()` removes them all. The search list goes to the
+resolver through `rt_dns_set_search_auto()`, so a configured `domain` or
+`search` wins, and it is removed on lease loss only if it is still the
+one the client set.
+
+`resolv.c` keeps the search list as one space-separated string (up to six
+domains, 256 bytes) and the first domain for `rt_dns_search_domain()`;
+candidate names follow resolv.conf's ndots:1 order. That is the whole of
+the resolver change.
+
+`ipv4ll.c` is an RFC 3927 state machine per interface (PROBE, ANNOUNCE,
+BOUND) on one `rt_timer`, started by the DHCP client's second timer
+(`ll_timer`, `net.inet.ip.linklocal_wait`, default 10 s) while there is
+no lease. It hooks into `rt_arp_input()` before the RFC 5227 defence of
+static addresses: in PROBE an ARP packet from the candidate or another
+probe for it is a conflict; afterwards one defence per 10 s, a second
+conflict restarts with a random candidate (the first one is an FNV-1a
+hash of the MAC address), and after 10 conflicts candidates come at most
+once a minute. The claimed address is set with `rt_netif_set_addr()` as
+the primary address with a /16 netmask, so the connected route, the
+first ARP announcement, IGMP and mDNS's re-announcement come from the
+existing code; there is no default route. It does not probe while the
+interface has a routable address. A lease calls `rt_ipv4ll_stop()`
+before the leased address is set: the interface has one or the other,
+which keeps source selection trivial (RFC 3927 1.9 allows it). The
+default is on (`net.inet.ip.linklocal=1`); per interface `dhcp IF
+linklocal on|off` overrides it.
 
 ### VLAN interfaces (vlan.c)
 

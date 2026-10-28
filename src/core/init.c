@@ -26,6 +26,7 @@ int rt_init(void)
 	rt_netif_init();
 	rt_route_init();
 	rt_arp_init();
+	rt_ipv4ll_init();
 	rt_ip_init();
 	rt_ip6_init();
 	rt_inet_init();

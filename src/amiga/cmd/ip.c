@@ -1516,6 +1516,20 @@ static int do_dhcp(int argc, char **argv, int i)
 					cl_printf(" lease %lus valid_lft %lusec", (unsigned long)f->dhcp_lease_s,
 					          (unsigned long)f->dhcp_left_s);
 			}
+			if (h.recsize >= offsetof(struct rt_ctl_iface, ll_on) + 1) {
+				static const char *const lls[] = { "", "probing", "announcing", "" };
+				if (f->dhcp_state >= RT_DHCPS_BOUND && f->dhcp_routes)
+					cl_printf(" classless-routes %u", (unsigned)f->dhcp_routes);
+				if (f->ll_addr)
+					cl_printf("\n    link-local %s/16%s%s", cl_ip(f->ll_addr, a),
+					          f->ll_state < 3 && f->ll_state ? " " : "", lls[f->ll_state & 3]);
+				else if (f->ll_state)
+					cl_puts("\n    link-local probing");
+				if (f->ll_conflicts)
+					cl_printf(" conflicts %u", (unsigned)f->ll_conflicts);
+				if (!f->ll_on && f->dhcp_state != RT_DHCPS_NONE)
+					cl_puts("\n    link-local off");
+			}
 			cl_puts("\n");
 		}
 		FreeVec(d);
@@ -1548,7 +1562,10 @@ static int do_dns(int argc, char **argv, int i)
 				cl_printf("nameserver %s%s\n", cl_addr_str(&x, s),
 				          d6->servers[k].source <= 2 ? src[d6->servers[k].source] : "");
 			}
-			if (d6->domain[0])
+			if (h.recsize >= offsetof(struct rt_ctl_dns6, search) + sizeof(d6->search) &&
+			    d6->search[0])
+				cl_printf("search %s\n", d6->search);
+			else if (d6->domain[0])
 				cl_printf("search %s\n", d6->domain);
 			FreeVec(d);
 			return CL_OK;
@@ -1568,9 +1585,18 @@ static int do_dns(int argc, char **argv, int i)
 		return run(cl_line("nameserver %s %s", cl_match(cmd, "add") ? "add" : "del", argv[i]));
 	if (cl_match(cmd, "flush"))
 		return run("nameserver flush");
-	if ((cl_match(cmd, "search") || cl_match(cmd, "domain")) && i < argc)
+	if (cl_match(cmd, "domain") && i < argc)
 		return run(cl_line("domain %s", argv[i]));
-	cl_puts("Usage: ip dns [show] | ip dns { add | del } ADDR | ip dns flush | ip dns search DOMAIN\n");
+	if (cl_match(cmd, "search") && i < argc) {
+		/* up to six domains */
+		char list[256];
+		u32 o = 0;
+		list[0] = 0;
+		for (; i < argc && o < sizeof(list); i++)
+			o += (u32)rt_snprintf(list + o, sizeof(list) - o, "%s%s", o ? " " : "", argv[i]);
+		return run(cl_line("search %s", list));
+	}
+	cl_puts("Usage: ip dns [show] | ip dns { add | del } ADDR | ip dns flush | ip dns search DOMAIN...\n");
 	return CL_ERROR;
 }
 

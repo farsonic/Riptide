@@ -410,6 +410,12 @@ int amiga_status_text(char *buf, u32 len)
 			if (di.state >= RT_DHCPS_BOUND)
 				ADD(", server %s, lease %lu s left", rt_format_ipv4(di.server, a),
 				    (unsigned long)di.left_s);
+			if (di.nroutes)
+				ADD(", %u classless routes", (unsigned)di.nroutes);
+			if (di.ll_addr)
+				ADD(", link-local %s", rt_format_ipv4(di.ll_addr, a));
+			else if (di.ll_state)
+				ADD(", choosing a link-local address");
 			ADD("\n");
 		}
 		{
@@ -475,7 +481,9 @@ int amiga_status_text(char *buf, u32 len)
 	}
 	if (!nns)
 		ADD(" (no servers)");
-	if (rt_domainname[0])
+	if (rt_dns_search_list()[0])
+		ADD(", search %s", rt_dns_search_list());
+	else if (rt_domainname[0])
 		ADD(", search %s", rt_domainname);
 	ADD("\n");
 	rt_unlock();

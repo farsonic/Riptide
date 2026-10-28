@@ -78,6 +78,7 @@ enum { F_STR, F_NUM, F_CHECK, F_CYCLE };
 #define FL_NTP    2             /* disabled without NTP */
 #define FL_ZERO   4             /* F_NUM: 0 is allowed below min */
 #define FL_RIGHT  8             /* F_CHECK: on the previous row, at the right */
+#define FL_DHCP   16            /* disabled with a static address */
 
 struct field {
 	UBYTE page, type, flags;
@@ -126,6 +127,7 @@ static const struct field fields[] = {
 	{ P_ADDR,  F_STR,   FL_STATIC, MS(addr),    0, 0,  "Add_ress", NULL, NULL },
 	{ P_ADDR,  F_STR,   FL_STATIC, MS(netmask), 0, 0,  "_Netmask", NULL, NULL },
 	{ P_ADDR,  F_STR,   FL_STATIC, MS(gateway), 0, 0,  "_Gateway", NULL, NULL },
+	{ P_ADDR,  F_CHECK, FL_DHCP, MS(linklocal), 0, 0,  "_Link-local if no DHCP", NULL, NULL },
 	{ P_NAMES, F_STR,   0, MS(hostname),  0, 0,        "_Host name", NULL, NULL },
 	{ P_NAMES, F_STR,   0, MS(domain),    0, 0,        "_Domain", NULL, NULL },
 	{ P_NAMES, F_STR,   0, M(dns), RP_ADDR, 0, 0,      "DNS server _1", NULL, NULL },
@@ -249,7 +251,8 @@ static char fkey(const char *label)
 
 static int field_disabled(const struct field *f)
 {
-	return ((f->flags & FL_STATIC) && conf.cur.dhcp) || ((f->flags & FL_NTP) && !conf.cur.ntp);
+	return ((f->flags & FL_STATIC) && conf.cur.dhcp) || ((f->flags & FL_DHCP) && !conf.cur.dhcp) ||
+	       ((f->flags & FL_NTP) && !conf.cur.ntp);
 }
 
 static const char *gstr(struct Gadget *g)

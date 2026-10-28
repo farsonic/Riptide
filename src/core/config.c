@@ -1009,6 +1009,20 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		rt_dns_set_search(argv[1]);
 		return 0;
 	}
+	if (!strcmp(k, "search")) {
+		/* search DOMAIN... : the resolver's search list (resolv.conf),
+		 * at most six; "search" alone clears it */
+		char list[256];
+		u32 o = 0;
+		int i;
+		list[0] = 0;
+		for (i = 1; i < argc && o < sizeof(list); i++)
+			o += (u32)rt_snprintf(list + o, sizeof(list) - o, "%s%s", i > 1 ? " " : "", argv[i]);
+		if (o >= sizeof(list))
+			return cfg_err(err, errlen, -RT_ENAMETOOLONG, "search: the list is too long%s", NULL);
+		rt_dns_set_search(list);
+		return 0;
+	}
 	if (!strcmp(k, "nameserver")) {
 		/* nameserver [add] A.B.C.D | nameserver del A.B.C.D | nameserver flush */
 		static const char usage[] = "nameserver [add|del] A.B.C.D|IPV6[%IF] | nameserver flush";
@@ -1119,16 +1133,37 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 	if (!strcmp(k, "background"))
 		return rt_tcp_bg_command(argc, argv, err, errlen);
 	if (!strcmp(k, "dhcp")) {
-		/* dhcp IFNAME [start|stop|release|renew] */
+		/* dhcp IFNAME [start|stop|release|renew] [linklocal on|off] [wait S]
+		 * (linklocal: a 169.254/16 address while there is no lease,
+		 * after S seconds; default net.inet.ip.linklocal{,_wait}) */
 		struct rt_netif *nif;
-		const char *op = argc >= 3 ? argv[2] : "start";
-		if (need_args(argc, 2, err, errlen, "dhcp IFNAME [start|stop|renew]"))
+		const char *op = "start";
+		int i = 2, ll = -2, wait = 0;
+		u32 u;
+		if (need_args(argc, 2, err, errlen,
+		              "dhcp IFNAME [start|stop|renew] [linklocal on|off] [wait S]"))
 			return -RT_EINVAL;
 		nif = rt_netif_find(argv[1]);
 		if (!nif)
 			return cfg_err(err, errlen, -RT_ENXIO, "dhcp: no interface '%s'", argv[1]);
+		if (argc >= 3 && strcmp(argv[2], "linklocal") && strcmp(argv[2], "wait"))
+			op = argv[i++];
+		for (; i < argc; i += 2) {
+			if (i + 1 >= argc)
+				return cfg_err(err, errlen, -RT_EINVAL, "dhcp: '%s' needs a value", argv[i]);
+			if (!strcmp(argv[i], "linklocal") && (!strcmp(argv[i + 1], "on") || !strcmp(argv[i + 1], "off")))
+				ll = !strcmp(argv[i + 1], "on");
+			else if (!strcmp(argv[i], "wait") && parse_uint(argv[i + 1], 3600, &u) == 0 && u >= 1 && u <= 3600)
+				wait = (int)u;
+			else
+				return cfg_err(err, errlen, -RT_EINVAL, "dhcp: bad option '%s'", argv[i]);
+		}
 		if (!strcmp(op, "start")) {
-			r = rt_dhcp_start(nif, NULL);
+			struct rt_dhcp_info di;
+			/* running already: keep its event callback */
+			r = rt_dhcp_get_info(nif, &di) == RT_DHCPS_NONE ? rt_dhcp_start(nif, NULL) : 0;
+			if (r == 0 && (ll != -2 || wait))
+				r = rt_dhcp_set_linklocal(nif, ll, wait);
 		} else if (!strcmp(op, "stop") || !strcmp(op, "release")) {
 			struct rt_dhcp_info di;
 			if (rt_dhcp_get_info(nif, &di) == RT_DHCPS_NONE)

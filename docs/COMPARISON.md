@@ -197,7 +197,7 @@ slightly between runs (seeded but timing dependent).
 | ICMP rate limiting | Not analysed | Echo and timestamp replies can be switched off (`icmp.processecho`, `icmp.procesststamp`) [RS-DOC] | Linux model: global token bucket plus per-destination limit (`net.inet.icmp.ratelimit`, `msgs_per_sec`, `msgs_burst`) |
 | Raw sockets | Yes | Yes, with `IP_HDRINCL` [RS-DOC] | Yes (ICMP, `IP_HDRINCL`) |
 | Forwarding / router | Yes (`ip.forwarding` 1 by default) | `ip.forwarding` tunable [RS-DOC] | IPv4 no; IPv6 basic forwarding (`net.inet6.ip6.forwarding`, off), no router advertisements |
-| ZeroConf (169.254/16) | Not analysed | Yes, as DHCP fallback [RS-README] | No |
+| ZeroConf (169.254/16) | Not analysed | Yes, as DHCP fallback [RS-README] | Yes (0.18): RFC 3927 link-local address when DHCP gets no lease (probing, conflict defence, rate limits), announced by mDNS; on by default, `dhcp IF linklocal off` |
 | Several IPv4 addresses per interface | Not analysed | **Unverified** | Yes (0.15): up to 9 per interface (`ifconfig IF alias`, `ip addr add`, BSD `SIOCAIFADDR`/`SIOCDIFADDR`), source address by subnet, DHCP keeps the primary |
 | VLAN interfaces (802.1Q) | Not analysed (**unverified**) | Not mentioned in [RS-README] or [RS-DOC] (**unverified**) | Yes (0.16): `interface eth0.10 vlan=10 parent=eth0`, `ip link add ... type vlan`, `ifconfig ... create vlan`; several per Ethernet interface, each with its own addresses, DHCP, IPv6 and routes; PCP fixed or from `SO_PRIORITY`; RiptidePrefs page. Needs a SANA-II driver that passes type 0x8100 frames; no QinQ |
 | IPv4 / IPv6 per interface on or off | Not applicable (no IPv6) | **Unverified** | Yes (0.15): `ipv4 [IF] on\|off`, `ipv6 [IF] on\|off` |
@@ -234,8 +234,8 @@ for the plain AmiTCP API or for MiamiDx's documented API do.
 
 | | MiamiDx | Roadshow | Riptide |
 |---|---|---|---|
-| DHCP client | Yes | Yes [RS-README] | Yes (lease renewal, rebinding, static routes win over DHCP ones) |
-| Resolver | BIND 4.9-era, DNS cache (32 entries) (RE-NOTES 6, 7.9) | "Built-in DNS cache", IDN (ISO Latin 1 to Punycode) [RS-README] | Own resolver with a 32-entry cache (8 addresses per name), search domain, static host table, PTR lookups, EDNS0 (1232-byte UDP answers, fallback for old servers) and TCP fallback for truncated answers; random IDs and ports; no IDN, no DNSSEC |
+| DHCP client | Yes | Yes [RS-README] | Yes (lease renewal, rebinding, static routes win over DHCP ones; classless static routes (121/249), domain search list (119); link-local fallback) |
+| Resolver | BIND 4.9-era, DNS cache (32 entries) (RE-NOTES 6, 7.9) | "Built-in DNS cache", IDN (ISO Latin 1 to Punycode) [RS-README] | Own resolver with a 32-entry cache (8 addresses per name), a search list of up to six domains, static host table, PTR lookups, EDNS0 (1232-byte UDP answers, fallback for old servers) and TCP fallback for truncated answers; random IDs and ports; no IDN, no DNSSEC |
 | inetd | Yes (built in) | Yes, "inetd style Internet superserver" [RS-README] | No |
 | TCP: handler | Not analysed | Yes [RS-README] | No |
 | Packet capture | `MiamiTCPDump` (miamibpf/miamipcap) | `tcpdump`, BPF [RS-README] | `Riptide CAPTURE` records into a RAM ring with filters and saves pcap files for Wireshark/tcpdump; `rtdiag` bundles capture, profile and debug log for bug reports. No BPF API, no live tcpdump |
@@ -287,7 +287,7 @@ Riptide is younger and narrower. Be aware of these before choosing it:
 * **No firewall, NAT or packet filter hooks**, no BPF API or live
   tcpdump (only capture to pcap files), no SOCKS, no SSL
   (`RiptideOpenSSL()` returns NULL), no inetd, no `TCP:` handler, no
-  ZeroConf, no IDN.
+  IDN.
 * **No server-side TCP Fast Open** (the client side is there).
 * **Roadshow's API extensions** (routing, interface, DNS, monitoring, BPF,
   `RoadshowData`) are not implemented, so Roadshow-specific tools do not

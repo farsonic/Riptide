@@ -338,6 +338,9 @@ void rt_arp_input(struct rt_netif *nif, struct rt_buf *b)
 		goto drop;
 	if (rt_ip_is_multicast(sip) || sip == RT_INADDR_BROADCAST || rt_ip_is_loopback_net(sip))
 		goto drop;
+	/* RFC 3927 probing and defence of a link-local address */
+	if (rt_ipv4ll_arp(nif, op, sha, sip, tip))
+		goto drop;
 
 	if (rt_netif_has_addr(nif, sip)) {
 		/* Someone else claims our address (RFC 5227 2.4): defend by
@@ -471,6 +474,12 @@ void rt_arp_announce(struct rt_netif *nif, u32 ip)
 	if (rt_netif_has_addr(nif, ip))
 		arp_send(nif, ARPOP_REQUEST, NULL, ip, NULL, ip);
 	else
+		arp_send(nif, ARPOP_REQUEST, NULL, 0, NULL, ip);
+}
+
+void rt_arp_probe(struct rt_netif *nif, u32 ip)
+{
+	if (nif->type == RT_IFT_ETHER)
 		arp_send(nif, ARPOP_REQUEST, NULL, 0, NULL, ip);
 }
 

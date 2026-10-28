@@ -493,6 +493,44 @@ static const char *vlan_conf =
 	"interface wlan.5 vlan=5 parent=eth0 up\n"            /* another name: not in the list */
 	"hostname a\n";
 
+/* "dhcp IF linklocal off" (RFC 3927 fallback, on by default) */
+static void e_ll_off(struct rp_model *m) { m->linklocal = 0; }
+static void e_ll_on(struct rp_model *m) { m->linklocal = 1; }
+static void e_ll_off_static(struct rp_model *m) { m->linklocal = 0; e_static(m); }
+
+static void test_linklocal(void)
+{
+	static const char *ll_off = "hostname a\ndhcp eth0 linklocal off\nloglevel 1\n";
+	struct rp_conf c;
+	char *t;
+
+	roundtrip("linklocal off", ll_off);
+	roundtrip("linklocal on", "dhcp eth0 start linklocal on\n");
+	CHECK(rp_conf_load(&c, inst_dhcp, strlen(inst_dhcp)) == 0);
+	CHECK(c.cur.dhcp == 1 && c.cur.linklocal == 1);
+	rp_conf_free(&c);
+	CHECK(rp_conf_load(&c, ll_off, strlen(ll_off)) == 0);
+	CHECK(c.cur.dhcp == 1 && c.cur.linklocal == 0 && c.l_dhcp && rp_other_count(&c) == 1);
+	rp_conf_free(&c);
+	/* not ours: kept as another line, the default stands */
+	CHECK(rp_conf_load(&c, "dhcp eth0 linklocal maybe\n", 26) == 0);
+	CHECK(c.cur.linklocal == 1 && !c.l_dhcp && rp_other_count(&c) == 1);
+	rp_conf_free(&c);
+
+	t = edit(inst_dhcp, e_ll_off);          /* the dhcp line rewritten in place */
+	CHECK(t && strstr(t, "# 1) DHCP.\ndhcp eth0 linklocal off\n\n# 2) Static.\n"));
+	free(t);
+	t = edit(ll_off, e_ll_on);
+	CHECK(t && !strcmp(t, "hostname a\ndhcp eth0\nloglevel 1\n"));
+	free(t);
+	t = edit(ll_off, e_ll_off_static);     /* static: no dhcp line at all */
+	CHECK(t && !strstr(t, "dhcp") && strstr(t, "ifconfig eth0 192.168.0.50/24 up\n"));
+	free(t);
+	t = edit(static_conf, e_ll_off);        /* static address: nothing changes */
+	CHECK(t && !strcmp(t, static_conf));
+	free(t);
+}
+
 static void test_vlan(void)
 {
 	struct rp_conf c;
@@ -608,6 +646,7 @@ int main(void)
 	test_p3_live();
 	test_vlan();
 	test_dns();
+	test_linklocal();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

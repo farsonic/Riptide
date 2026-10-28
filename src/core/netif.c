@@ -158,6 +158,7 @@ void rt_netif_remove(struct rt_netif *nif)
 	rt_qos_enable(nif, 0);
 	rt_ip6_ifenable(nif, 0);
 	rt_mdns_if_gone(nif);
+	rt_ipv4ll_if_gone(nif);
 	rt_ip_mc_flush(nif);
 	rt_route_flush_if(nif);
 	rt_arp_flush(nif, 0);

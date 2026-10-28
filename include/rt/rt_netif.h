@@ -331,5 +331,11 @@ int  rt_arp_get(const struct rt_netif *nif, u32 ip, struct rt_arp_entry_info *ou
 int  rt_arp_list(struct rt_arp_entry_info *out, int max);
 /* Gratuitous ARP / probe (used by DHCP for conflict detection). */
 void rt_arp_announce(struct rt_netif *nif, u32 ip);
+/* ARP probe for ip (sender address 0.0.0.0, RFC 5227) */
+void rt_arp_probe(struct rt_netif *nif, u32 ip);
+/* ipv4ll.c: ARP input hook (1 = consumed), interface removal, init */
+int  rt_ipv4ll_arp(struct rt_netif *nif, u16 op, const u8 *sha, u32 sip, u32 tip);
+void rt_ipv4ll_if_gone(struct rt_netif *nif);
+void rt_ipv4ll_init(void);
 
 #endif
