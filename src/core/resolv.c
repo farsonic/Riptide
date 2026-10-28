@@ -1,6 +1,6 @@
 /*
- * Riptide - DNS stub resolver (RFC 1035), static hosts table and a small
- * positive cache.
+ * Riptide - DNS stub resolver (RFC 1035), static hosts table, a small
+ * positive cache and a negative one (RFC 2308, RFC 9520).
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * rt_resolve_name()/rt_resolve_addr() are called WITHOUT the stack lock,
@@ -133,6 +133,38 @@ static s32 dns_cache_size = DNS_CACHE_MAX;
 static s32 dns_cache_enabled = 1;
 static u32 dns_cache_clock;
 
+/* Negative cache (RFC 2308) and resolution failures (RFC 9520), per fully
+ * qualified query name (each search list candidate on its own):
+ *  - NXDOMAIN: the name does not exist, for any type (RFC 8020);
+ *  - NODATA: the name exists without records of this type (so an AAAA
+ *    NODATA never hides the A records);
+ *  - FAIL: SERVFAIL, REFUSED, FORMERR or no answer from any server:
+ *    1 s, doubled for each repeated failure up to dns.cache.fail_max s
+ *    (RFC 9520 3: at least 1 s, at most 5 minutes). Not for a break
+ *    (Ctrl-C), nor when no query could be sent at all; forgotten when the
+ *    server list changes. */
+#define DNS_NEG_MAX      32
+#define NEG_NXDOMAIN     1
+#define NEG_NODATA       2
+#define NEG_FAIL         3
+struct neg_ent {
+	char name[DNS_CACHE_NAME];
+	u16  qtype;               /* 0 for NXDOMAIN: every type */
+	u8   kind;                /* NEG_*, 0 = unused */
+	u8   fails;               /* NEG_FAIL: failures in a row */
+	s16  err;                 /* NEG_FAIL: -RT_TRY_AGAIN or -RT_NO_RECOVERY */
+	u32  expires;             /* rt_now_ms() */
+	u32  stamp;               /* for LRU replacement */
+};
+static struct neg_ent dns_neg[DNS_NEG_MAX];
+static s32 dns_neg_maxttl = 3600;   /* dns.cache.neg_maxttl, 0 = no negative caching */
+static s32 dns_fail_max = 30;       /* dns.cache.fail_max, 0 = no failure caching */
+static u32 dns_stat_hits, dns_stat_neg_hits, dns_stat_fail_hits;
+static void neg_flush(int fail_only);
+static int neg_find(const char *name, u16 qtype);
+static void neg_add(const char *name, u16 qtype, int r, u32 negttl);
+static void neg_fail(const char *name, u16 qtype, int err);
+
 /* ======================================================================
  * Configuration (lock held)
  * ====================================================================== */
@@ -193,6 +225,7 @@ int rt_dns_add_server6(const rt_in6_addr *a, u32 ifindex, u32 lifetime_s, int so
 	                                      0 : rt_ip6_seconds() + lifetime_s;
 	dns_servers[dns_nservers].noedns = 0;
 	dns_nservers++;
+	neg_flush(1);                     /* a new server may answer */
 	return 0;
 }
 
@@ -216,6 +249,7 @@ void rt_dns_remove_server6(const rt_in6_addr *a)
 		for (j = i; j + 1 < dns_nservers; j++)
 			dns_servers[j] = dns_servers[j + 1];
 		dns_nservers--;
+		neg_flush(1);
 		return;
 	}
 }
@@ -231,6 +265,7 @@ void rt_dns_remove_server(u32 addr)
 void rt_dns_clear_servers(void)
 {
 	dns_nservers = 0;
+	neg_flush(1);
 }
 
 /* IPv4 servers only (the rt_ctl_dns record and the old API) */
@@ -605,6 +640,39 @@ static int rr_header(const u8 *msg, u32 len, u32 *off, char *name, u32 namelen,
 	return 0;
 }
 
+/* RFC 2308 5: how long a negative answer (NXDOMAIN / NODATA) may be
+ * cached: the smaller of the SOA record's TTL and its MINIMUM field, and
+ * of the TTLs of the CNAME records that led there. 0 when the authority
+ * section has no SOA (then it is not cached, RFC 2308 5). */
+static u32 neg_ttl(const u8 *msg, u32 len, u32 off, u16 an, u16 ns, char *tmp)
+{
+	u32 ttl, min = DNS_CACHE_MAXTTL, p;
+	u16 type, cls, rdlen, i;
+
+	for (i = 0; i < an; i++, off += rdlen) {
+		if (rr_header(msg, len, &off, tmp, DNS_NAMEBUF, &type, &cls, &ttl, &rdlen) < 0)
+			return 0;
+		if (ttl < min)
+			min = ttl;
+	}
+	for (i = 0; i < ns; i++, off += rdlen) {
+		u32 soamin;
+		if (rr_header(msg, len, &off, tmp, DNS_NAMEBUF, &type, &cls, &ttl, &rdlen) < 0)
+			return 0;
+		if (type != DNS_TYPE_SOA || cls != DNS_CLASS_IN)
+			continue;
+		/* MNAME, RNAME, then SERIAL REFRESH RETRY EXPIRE MINIMUM */
+		if (dns_expand(msg, len, off, tmp, DNS_NAMEBUF, &p) < 0 ||
+		    dns_expand(msg, len, p, tmp, DNS_NAMEBUF, &p) < 0 || p + 20 != off + rdlen)
+			return 0;
+		soamin = rt_get_be32(msg + p + 16);
+		if (ttl < min)
+			min = ttl;
+		return soamin < min ? soamin : min;
+	}
+	return 0;
+}
+
 /* Parse a response to the query (id, qname, qtype). Results go to 'res'.
  * Returns:
  *   >0  number of addresses (A) / 1 for a PTR name
@@ -624,6 +692,7 @@ int dns_parse_response(const u8 *msg, u32 len, u16 id, const char *qname, u16 qt
 
 	res->naddr = 0;
 	res->ttl = DNS_CACHE_MAXTTL;
+	res->negttl = 0;
 	res->name[0] = 0;
 	if (len < 12 || rt_get_be16(msg) != id)
 		return DNS_IGNORE;
@@ -641,7 +710,9 @@ int dns_parse_response(const u8 *msg, u32 len, u16 id, const char *qname, u16 qt
 	tc = (flags & 0x0200) != 0;
 	switch (flags & 0x000f) {
 	case 0: break;
-	case 3: return -RT_HOST_NOT_FOUND;
+	case 3:
+		res->negttl = neg_ttl(msg, len, ans_off, an, rt_get_be16(msg + 8), tmp);
+		return -RT_HOST_NOT_FOUND;
 	case 1: case 4: return -RT_NO_RECOVERY;
 	default: return -RT_TRY_AGAIN;
 	}
@@ -717,7 +788,10 @@ int dns_parse_response(const u8 *msg, u32 len, u16 id, const char *qname, u16 qt
 	}
 	if (n > 0)
 		return n;
-	return tc ? -RT_TRY_AGAIN : 0;
+	if (tc)
+		return -RT_TRY_AGAIN;
+	res->negttl = neg_ttl(msg, len, ans_off, an, rt_get_be16(msg + 8), tmp);
+	return 0;
 }
 
 /* ======================================================================
@@ -740,6 +814,8 @@ struct dns_work {
 	u8 *tcpbuf;               /* answer read over TCP */
 	u32 rawcap;               /* raw mode: the caller's buffer size */
 	const u8 *rawq;           /* raw mode: the caller's query */
+	u8 intr;                  /* the last exchange ended with a break */
+	u16 sent;                 /* queries sent by it (0: nothing went out) */
 	/* dns_exchange46(): the AAAA query and its result */
 	struct dns_result res6;
 	u8 q6[DNS_QBUF];
@@ -1116,6 +1192,8 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 {
 	int fd4 = -1, fd6 = -1, att, s, r, result = -RT_TRY_AGAIN;
 
+	w->intr = 0;
+	w->sent = 0;
 	if (w->nservers == 0)
 		return -RT_TRY_AGAIN;
 	for (att = 0; att < DNS_ATTEMPTS; att++) {
@@ -1144,11 +1222,13 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 				r = send_q(w, fd, sv, w->rawq, qlen);
 			if (r < 0)
 				continue;
+			w->sent++;
 			RT_DBG(RT_DBG_DNS, "query %s type %u to server %d, attempt %d%s", qname ? qname : "(raw)",
 			       (unsigned)qtype, s + 1, att + 1, edns ? ", EDNS" : "");
 			for (;;) {
 				r = recv_reply(w, fd, sv, start, DNS_TIMEOUT_MS, id, id);
 				if (r == -RT_EINTR) {
+					w->intr = 1;
 					result = -RT_TRY_AGAIN;
 					goto out;
 				}
@@ -1208,6 +1288,37 @@ static int dns_query(struct dns_work *w, const char *name, u16 qtype)
 	return dns_exchange(w, (u32)qlen, id, name, qtype);
 }
 
+/* After a query (name, qtype) that sent something and was not broken
+ * off: remember a negative answer r (for negttl s) or a failure. */
+static void neg_note(struct dns_work *w, const char *name, u16 qtype, int r, u32 negttl)
+{
+	if (w->intr || !w->sent)
+		return;
+	rt_lock();
+	if (r == 0 || r == -RT_HOST_NOT_FOUND)
+		neg_add(name, qtype, r, negttl);
+	else if (r == -RT_TRY_AGAIN || r == -RT_NO_RECOVERY)
+		neg_fail(name, qtype, r);
+	rt_unlock();
+}
+
+/* dns_query() through the negative cache */
+static int dns_query_neg(struct dns_work *w, const char *name, u16 qtype)
+{
+	int r;
+
+	rt_lock();
+	r = neg_find(name, qtype);
+	rt_unlock();
+	if (r != DNS_IGNORE) {
+		RT_DBG(RT_DBG_DNS, "query %s type %u: cached negative %d", name, (unsigned)qtype, r);
+		return r;
+	}
+	r = dns_query(w, name, qtype);
+	neg_note(w, name, qtype, r, w->res.negttl);
+	return r;
+}
+
 /* ---- hosts table and cache (lock held) ---- */
 
 /* v6 = 0: IPv4 entries into a4; v6 = 1: IPv6 entries into a6 */
@@ -1252,6 +1363,7 @@ static struct cache_ent *cache_find(const char *name, u16 qtype)
 				return NULL;
 			}
 			c->stamp = ++dns_cache_clock;
+			dns_stat_hits++;
 			return c;
 		}
 	}
@@ -1292,6 +1404,130 @@ static void cache_add(const char *name, const char *canon, u16 qtype, const u32 
 	}
 	victim->expires = rt_now_ms() + ttl * 1000u;
 	victim->stamp = ++dns_cache_clock;
+}
+
+/* The negative cache entry of (name, qtype), expired or not; NULL if none */
+static struct neg_ent *neg_lookup(const char *name, u16 qtype, int kind)
+{
+	int i;
+
+	for (i = 0; i < DNS_NEG_MAX; i++) {
+		struct neg_ent *e = &dns_neg[i];
+		if (e->kind && (kind ? e->kind == kind : 1) &&
+		    (e->kind == NEG_NXDOMAIN || e->qtype == qtype) && dns_name_eq(e->name, name))
+			return e;
+	}
+	return NULL;
+}
+
+/* A cached answer for the query (name, qtype): 0 (NODATA),
+ * -RT_HOST_NOT_FOUND, -RT_TRY_AGAIN / -RT_NO_RECOVERY (failure), or
+ * DNS_IGNORE when there is none (lock held). */
+static int neg_find(const char *name, u16 qtype)
+{
+	u32 now = rt_now_ms();
+	int i;
+
+	if (!dns_cache_enabled)
+		return DNS_IGNORE;
+	for (i = 0; i < DNS_NEG_MAX; i++) {
+		struct neg_ent *e = &dns_neg[i];
+		if (!e->kind || (e->kind != NEG_NXDOMAIN && e->qtype != qtype) ||
+		    (s32)(e->expires - now) <= 0 || !dns_name_eq(e->name, name))
+			continue;
+		e->stamp = ++dns_cache_clock;
+		if (e->kind == NEG_FAIL) {
+			dns_stat_fail_hits++;
+			return e->err;
+		}
+		dns_stat_neg_hits++;
+		return e->kind == NEG_NXDOMAIN ? -RT_HOST_NOT_FOUND : 0;
+	}
+	return DNS_IGNORE;
+}
+
+/* a slot for (name, qtype): its own, an unused or expired one, else the
+ * least recently used */
+static struct neg_ent *neg_slot(const char *name, u16 qtype)
+{
+	struct neg_ent *e, *victim = NULL;
+	u32 now = rt_now_ms();
+	int i;
+
+	for (i = 0; i < DNS_NEG_MAX; i++) {
+		e = &dns_neg[i];
+		if (e->kind && e->qtype == qtype && dns_name_eq(e->name, name))
+			return e;
+	}
+	for (i = 0; i < DNS_NEG_MAX; i++) {
+		e = &dns_neg[i];
+		if (!e->kind || (s32)(e->expires - now) <= 0)
+			return e;
+		if (!victim || (s32)(e->stamp - victim->stamp) < 0)
+			victim = e;
+	}
+	return victim;
+}
+
+/* Remember the result r of the query (name, qtype) when it is negative:
+ * 0 (NODATA) or -RT_HOST_NOT_FOUND for negttl seconds (lock held). */
+static void neg_add(const char *name, u16 qtype, int r, u32 negttl)
+{
+	struct neg_ent *e;
+	u16 t = r == -RT_HOST_NOT_FOUND ? 0 : qtype;
+
+	if (!dns_cache_enabled || (r != 0 && r != -RT_HOST_NOT_FOUND) || strlen(name) >= DNS_CACHE_NAME)
+		return;
+	if (negttl > (u32)dns_neg_maxttl)
+		negttl = (u32)dns_neg_maxttl;
+	if (negttl == 0)
+		return;
+	e = neg_slot(name, t);
+	rt_strlcpy(e->name, name, DNS_CACHE_NAME);
+	e->qtype = t;
+	e->kind = r ? NEG_NXDOMAIN : NEG_NODATA;
+	e->fails = 0;
+	e->expires = rt_now_ms() + negttl * 1000u;
+	e->stamp = ++dns_cache_clock;
+}
+
+/* The query (name, qtype) failed with err (-RT_TRY_AGAIN or
+ * -RT_NO_RECOVERY): no new query for 1, 2, 4, ... seconds, at most
+ * dns.cache.fail_max; a failure long after the last one starts at 1 s
+ * again (lock held). */
+static void neg_fail(const char *name, u16 qtype, int err)
+{
+	struct neg_ent *e;
+	u32 now = rt_now_ms(), secs;
+
+	if (!dns_cache_enabled || dns_fail_max <= 0 || strlen(name) >= DNS_CACHE_NAME)
+		return;
+	e = neg_lookup(name, qtype, NEG_FAIL);
+	if (e && e->qtype == qtype && (s32)(now - e->expires) < dns_fail_max * 1000)
+		e->fails = (u8)RT_MIN(e->fails + 1, 16);
+	else if ((e = neg_slot(name, qtype)) != NULL)
+		e->fails = 0;
+	if (!e)
+		return;
+	secs = 1u << RT_MIN(e->fails, 9);
+	if (secs > (u32)dns_fail_max)
+		secs = (u32)dns_fail_max;
+	rt_strlcpy(e->name, name, DNS_CACHE_NAME);
+	e->qtype = qtype;
+	e->kind = NEG_FAIL;
+	e->err = (s16)err;
+	e->expires = now + secs * 1000u;
+	e->stamp = ++dns_cache_clock;
+}
+
+/* Forget the failures (the servers changed) or everything (lock held). */
+static void neg_flush(int fail_only)
+{
+	int i;
+
+	for (i = 0; i < DNS_NEG_MAX; i++)
+		if (!fail_only || dns_neg[i].kind == NEG_FAIL)
+			dns_neg[i].kind = 0;
 }
 
 static void put_canon(char *canon, u32 canonlen, const char *s)
@@ -1512,7 +1748,7 @@ static int resolve(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, int ma
 	for (i = 0; i < ncand; i++) {
 		if (candidate(w, name, i, ncand) < 0)
 			continue;
-		r = dns_query(w, w->qname, qtype);
+		r = dns_query_neg(w, w->qname, qtype);
 		if (r > 0) {
 			rt_lock();
 			cache_add(name, w->res.canon, qtype, a4, a6, r, w->res.ttl);
@@ -1546,17 +1782,25 @@ static int final(int r)
  * into w->res6. Done when both have a final answer, or the A records are
  * in and the AAAA answer is rt_he_resolution_delay ms late (RFC 8305 3:
  * a slow AAAA must not hold up IPv4); a positive AAAA answer waits for the
- * A answer as usual (the IPv4 fallback needs it). */
+ * A answer as usual (the IPv4 fallback needs it). The caller sets *r4
+ * and *r6 to R_PENDING, or to the answer from the negative cache: that
+ * query is then not sent. */
 static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 {
-	int fd4 = -1, fd6 = -1, att, s, r;
+	int fd4 = -1, fd6 = -1, att, s, r, pre4 = *r4 != R_PENDING, pre6 = *r6 != R_PENDING;
+#define DONE4 (pre4 || final(*r4))
+#define DONE6 (pre6 || final(*r6))
 	u16 id4 = (u16)rt_random32(), id6 = (u16)(id4 ^ 0x5a5a);
 	int l4 = build_q(w, w->q, id4, w->qname, DNS_TYPE_A);
 	int l6 = build_q(w, w->q6, id6, w->qname, DNS_TYPE_AAAA);
 
-	*r4 = *r6 = R_PENDING;
+	w->intr = 0;
+	w->sent = 0;
 	if (l4 < 0 || l6 < 0 || w->nservers == 0) {
-		*r4 = *r6 = l4 < 0 || l6 < 0 ? -RT_NO_RECOVERY : -RT_TRY_AGAIN;
+		if (*r4 == R_PENDING)
+			*r4 = l4 < 0 || l6 < 0 ? -RT_NO_RECOVERY : -RT_TRY_AGAIN;
+		if (*r6 == R_PENDING)
+			*r6 = l4 < 0 || l6 < 0 ? -RT_NO_RECOVERY : -RT_TRY_AGAIN;
 		return;
 	}
 	for (att = 0; att < DNS_ATTEMPTS; att++) {
@@ -1575,16 +1819,17 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 				int *rr = k ? r4 : r6;
 				u8 *q = k ? w->q : w->q6;
 				u32 ql = (u32)(k ? l4 : l6);
-				if (final(*rr))
+				if (k ? DONE4 : DONE6)
 					continue;
 				*rr = R_PENDING;
-				send_q(w, fd, sv, q, q_edns(q, ql, edns));
+				if (send_q(w, fd, sv, q, q_edns(q, ql, edns)) >= 0)
+					w->sent++;
 			}
 			RT_DBG(RT_DBG_DNS, "query %s A+AAAA to server %d, attempt %d%s", w->qname, s + 1, att + 1,
 			       edns ? ", EDNS" : "");
 			for (;;) {
 				u32 now = rt_now_ms(), el = now - start, limit = DNS_TIMEOUT_MS;
-				if (final(*r4) && final(*r6))
+				if (DONE4 && DONE6)
 					goto out;
 				if (*r4 > 0 && got4 && !final(*r6) && *r6 == R_PENDING &&
 				    got4 - start + (u32)rt_he_resolution_delay < limit)
@@ -1595,8 +1840,10 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 					break;
 				}
 				r = recv_reply(w, fd, sv, start, limit, id4, id6);
-				if (r == -RT_EINTR)
+				if (r == -RT_EINTR) {
+					w->intr = 1;
 					goto out;
+				}
 				if (r <= 0)
 					continue;
 				if (edns && (RCODE(w->a) == 1 || RCODE(w->a) == 4) &&
@@ -1622,7 +1869,7 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 						*r6 = x;
 				}
 				/* SERVFAIL & co. for both: the next server */
-				if (*r4 != R_PENDING && *r6 != R_PENDING && !(final(*r4) && final(*r6)) &&
+				if (*r4 != R_PENDING && *r6 != R_PENDING && !(DONE4 && DONE6) &&
 				    !(*r4 > 0))
 					break;
 			}
@@ -1640,6 +1887,8 @@ out:
 		rt_api_close(&w->ctx, fd4);
 	if (fd6 >= 0)
 		rt_api_close(&w->ctx, fd6);
+#undef DONE4
+#undef DONE6
 }
 
 /* the stronger of two failures (getaddrinfo's EAI_* mapping) */
@@ -1696,9 +1945,26 @@ int rt_resolve_name46(const char *name, rt_in6_addr *addrs, int max, int family,
 		{
 			int ncand = candidates(w, name), r4, r6;
 			for (i = 0; i < ncand; i++) {
+				int k4, k6;
 				if (candidate(w, name, i, ncand) < 0)
 					continue;
-				dns_exchange46(w, &r4, &r6);
+				rt_lock();
+				k4 = neg_find(w->qname, DNS_TYPE_A);
+				k6 = neg_find(w->qname, DNS_TYPE_AAAA);
+				rt_unlock();
+				if (k4 != DNS_IGNORE && k6 != DNS_IGNORE) {
+					r4 = k4;
+					r6 = k6;
+				} else {
+					/* only the type without a cached answer is asked */
+					r4 = k4 = k4 != DNS_IGNORE ? k4 : R_PENDING;
+					r6 = k6 = k6 != DNS_IGNORE ? k6 : R_PENDING;
+					dns_exchange46(w, &r4, &r6);
+					if (k4 == R_PENDING && (final(r4) || !final(r6)))
+						neg_note(w, w->qname, DNS_TYPE_A, r4, w->res.negttl);
+					if (k6 == R_PENDING && (final(r6) || !final(r4)))
+						neg_note(w, w->qname, DNS_TYPE_AAAA, r6, w->res6.negttl);
+				}
 				if (r4 > 0 || r6 > 0) {
 					rt_lock();
 					if (r4 > 0)
@@ -1779,7 +2045,7 @@ static int resolve_ptr(const char *qname, char *name, u32 namelen)
 	if (!w)
 		return -RT_TRY_AGAIN;
 	rt_strlcpy(w->qname, qname, sizeof(w->qname));
-	r = dns_query(w, w->qname, DNS_TYPE_PTR);
+	r = dns_query_neg(w, w->qname, DNS_TYPE_PTR);
 	if (r > 0) {
 		rt_strlcpy(name, w->res.name, namelen);
 		r = 0;
@@ -2046,7 +2312,8 @@ int rt_dn_skipname(const u8 *src, const u8 *eom)
 int rt_dns_command(int argc, char **argv, char *out, u32 outlen)
 {
 	static const char usage[] = "usage: dns edns_size N (0 = off, 512..4096) | edns on|off | "
-	                            "tcp on|off | reset | status";
+	                            "tcp on|off | negttl N (0..86400) | failttl N (0..300) | "
+	                            "flush | reset | status";
 	const char *v = argc >= 3 ? argv[2] : NULL, *e;
 	unsigned long n;
 	int i, k;
@@ -2066,6 +2333,46 @@ int rt_dns_command(int argc, char **argv, char *out, u32 outlen)
 		            "TCP fallback %s; %d server(s) without EDNS; %lu TCP queries, %lu failed\n",
 		            rt_dns_tcp ? "on" : "off", k, (unsigned long)rt_dns_stat_tcp,
 		            (unsigned long)rt_dns_stat_tcp_fail);
+		{
+			u32 now = rt_now_ms();
+			int np = 0, nn = 0, nf = 0;
+			for (i = 0; i < dns_cache_size && i < DNS_CACHE_MAX; i++)
+				np += dns_cache[i].naddr && (s32)(dns_cache[i].expires - now) > 0;
+			for (i = 0; i < DNS_NEG_MAX; i++) {
+				if (!dns_neg[i].kind || (s32)(dns_neg[i].expires - now) <= 0)
+					continue;
+				if (dns_neg[i].kind == NEG_FAIL)
+					nf++;
+				else
+					nn++;
+			}
+			i = (int)strlen(out);
+			rt_snprintf(out + i, outlen > (u32)i ? outlen - (u32)i : 0,
+			            "cache %s: %d names, %d negative (up to %ld s), %d failed (up to %ld s); "
+			            "%lu hits, %lu negative, %lu failed\n", dns_cache_enabled ? "on" : "off",
+			            np, nn, (long)dns_neg_maxttl, nf, (long)dns_fail_max,
+			            (unsigned long)dns_stat_hits, (unsigned long)dns_stat_neg_hits,
+			            (unsigned long)dns_stat_fail_hits);
+		}
+		return 0;
+	}
+	if (argc == 3 && (!rt_strcasecmp(argv[1], "negttl") || !rt_strcasecmp(argv[1], "failttl"))) {
+		int neg = !rt_strcasecmp(argv[1], "negttl");
+		n = rt_strtoul(v, &e, 10);
+		if (*e || e == v || n > (neg ? 86400ul : 300ul)) {
+			rt_snprintf(out, outlen, neg ? "dns: negttl is 0 (off) to 86400 seconds" :
+			                               "dns: failttl is 0 (off) to 300 seconds");
+			return -RT_EINVAL;
+		}
+		if (neg)
+			dns_neg_maxttl = (s32)n;
+		else
+			dns_fail_max = (s32)n;
+		return 0;
+	}
+	if (argc == 2 && !rt_strcasecmp(argv[1], "flush")) {
+		memset(dns_cache, 0, sizeof(dns_cache));
+		neg_flush(0);
 		return 0;
 	}
 	if (argc == 3 && (!rt_strcasecmp(argv[1], "edns_size") || !rt_strcasecmp(argv[1], "edns"))) {
@@ -2117,8 +2424,10 @@ static int cache_flush_handler(const struct rt_sysctl *e, void *old, u32 *oldlen
 		if (newlen != sizeof(s32))
 			return -RT_EINVAL;
 		memcpy(&v, newp, sizeof(v));
-		if (v)
+		if (v) {
 			memset(dns_cache, 0, sizeof(dns_cache));
+			neg_flush(0);
+		}
 	}
 	return 0;
 }
@@ -2130,6 +2439,10 @@ static const struct rt_sysctl resolv_sysctls[] = {
 	  NULL, 0, 1, cache_flush_handler, "write 1 to flush the DNS cache" },
 	{ "dns.cache.enabled", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 0, 2 },
 	  &dns_cache_enabled, 0, 1, NULL, "DNS cache on/off" },
+	{ "dns.cache.neg_maxttl", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 0, 3 },
+	  &dns_neg_maxttl, 0, 86400, NULL, "longest time NXDOMAIN / NODATA answers are kept, s (0 = never)" },
+	{ "dns.cache.fail_max", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 0, 4 },
+	  &dns_fail_max, 0, 300, NULL, "longest time a failed lookup is not repeated, s (0 = never)" },
 	{ "dns.edns_size", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 1, 0 },
 	  &rt_dns_edns_size, 0, DNS_EDNS_MAX, NULL, "EDNS0 UDP payload size (0 = no EDNS)" },
 	{ "dns.tcp_fallback", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 1, 1 },
@@ -2140,6 +2453,12 @@ static const struct rt_sysctl resolv_sysctls[] = {
 	  &rt_dns_stat_tcp_fail, 0, 0, NULL, "TCP queries that failed" },
 	{ "dns.stats.noedns", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 2 },
 	  &rt_dns_stat_noedns, 0, 0, NULL, "servers found without EDNS" },
+	{ "dns.stats.cache_hits", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 3 },
+	  &dns_stat_hits, 0, 0, NULL, "lookups answered from the cache" },
+	{ "dns.stats.neg_hits", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 4 },
+	  &dns_stat_neg_hits, 0, 0, NULL, "queries answered by a cached NXDOMAIN / NODATA" },
+	{ "dns.stats.fail_hits", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 5 },
+	  &dns_stat_fail_hits, 0, 0, NULL, "queries not repeated after a recent failure" },
 };
 
 void rt_resolv_init(void)
