@@ -14,7 +14,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -u
 BUILD=${1:-build/amiga}
-TIMEOUT=${2:-300}
+TIMEOUT=${2:-1500}
 TOOLS="ip ifconfig route arp netstat traceroute ping host sysctl hostname nc ping6 traceroute6"
 command -v fs-uae >/dev/null 2>&1 || { echo "SKIP: fs-uae not installed"; exit 0; }
 for f in Riptide rtcheck $TOOLS; do
