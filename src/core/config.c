@@ -1114,6 +1114,8 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		return rt_tz_command(argc, argv, err, errlen);
 	if (!strcmp(k, "mdns"))
 		return rt_mdns_command(argc, argv, err, errlen);
+	if (!strcmp(k, "dns"))
+		return rt_dns_command(argc, argv, err, errlen);
 	if (!strcmp(k, "background"))
 		return rt_tcp_bg_command(argc, argv, err, errlen);
 	if (!strcmp(k, "dhcp")) {

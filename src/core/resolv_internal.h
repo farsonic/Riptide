@@ -12,6 +12,7 @@
 #define DNS_TYPE_CNAME  5
 #define DNS_TYPE_PTR    12
 #define DNS_TYPE_AAAA   28
+#define DNS_TYPE_OPT    41
 #define DNS_CLASS_IN    1
 #define DNS_NAMEBUF     256
 #define DNS_MAX_CNAME   8
@@ -32,6 +33,9 @@ struct dns_result {
 int dns_name_eq(const char *a, const char *b);
 int dns_build_query(u8 *buf, u32 buflen, u16 id, const char *name, u16 qtype);
 int dns_build_query_class(u8 *buf, u32 buflen, u16 id, const char *name, u16 qclass, u16 qtype);
+/* EDNS0 OPT record: append to a query / find in a message */
+int dns_add_opt(u8 *buf, u32 len, u32 buflen, u16 udpsize);
+int dns_find_opt(const u8 *msg, u32 len, u16 *udpsize);
 int dns_expand(const u8 *msg, u32 len, u32 off, char *out, u32 outlen, u32 *next);
 int dns_expand_ex(const u8 *msg, u32 len, u32 off, char *out, u32 outlen, u32 *next,
                   int lenient);

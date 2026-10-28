@@ -8,15 +8,17 @@
  * addresses (IPv4 or IPv6) with gethostbyaddr() (static host table, cache
  * and DNS, as every program sees them). With -t (A, NS, CNAME, SOA, PTR,
  * MX, TXT, AAAA, ANY) or a SERVER, host sends its own DNS query over UDP
- * (IPv4 or IPv6) to SERVER or the first configured name server.
+ * (IPv4 or IPv6) to SERVER or the first configured name server, with an
+ * EDNS0 OPT record (1232 bytes; again without it when the server answers
+ * FORMERR or NOTIMP); a truncated answer is asked again over TCP.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "cmdlib.h"
 #include "gen/bsdsocket_calls.h"
 #include "gen/riptide_calls.h"
 
-#define DNSBUF 1024
-struct tv { ULONG secs, micro; };
+#define DNSQ    320           /* query: header, name, question, OPT */
+#define DNSBUF  1232          /* UDP answers: our EDNS0 size */
 
 static u32 wait_ms = 5000;
 static int verbose;
@@ -201,22 +203,98 @@ static void print_rr(const u8 *m, u32 mlen, u32 off, const char *owner, u16 type
 	}
 }
 
+/* UDP: send q (qlen bytes) and wait for the answer with our ID in r
+ * (DNSBUF). Its length, -1 no answer, -2 Ctrl-C. */
+static LONG udp_ask(int s, u8 *q, u32 qlen, u8 *r, u16 id)
+{
+	LONG n = -1;
+	u32 try;
+
+	for (try = 0; try < 2; try++) {
+		u32 t0 = cl_now_us();
+		send(s, q, (LONG)qlen, 0);
+		for (;;) {
+			u32 el = cl_now_us() - t0;
+			int w;
+			if (el >= wait_ms * 1000UL)
+				break;
+			w = cl_wait_fd(s, 0, (wait_ms * 1000UL - el + 999) / 1000);
+			if (w < 0)
+				return -2;
+			if (w == 0)
+				continue;
+			n = recv(s, r, DNSBUF, 0);
+			if (n >= 12 && rt_get_be16(r) == id && (r[2] & 0x80))
+				return n;
+		}
+	}
+	return -1;
+}
+
+static int recv_all(int s, u8 *b, u32 len)
+{
+	u32 got = 0;
+
+	while (got < len) {
+		LONG n;
+		if (cl_wait_fd(s, 0, wait_ms) <= 0)
+			return -1;
+		n = recv(s, b + got, (LONG)(len - got), 0);
+		if (n <= 0)
+			return -1;
+		got += (u32)n;
+	}
+	return 0;
+}
+
+/* TCP (RFC 7766): q (qlen bytes) with a two byte length; the answer in
+ * a new buffer (*rp, FreeVec) or NULL. Its length or -1. */
+static LONG tcp_ask(const struct cl_addr *server, u8 *q, u32 qlen, u8 **rp)
+{
+	u8 hdr[2], *r;
+	u32 len;
+	int s = socket(server->family, RT_SOCK_STREAM, 0);
+
+	*rp = NULL;
+	if (s < 0)
+		return -1;
+	if (cl_connect_addr(s, server, 53, wait_ms) != 0) {
+		CloseSocket(s);
+		return -1;
+	}
+	rt_put_be16(hdr, (u16)qlen);
+	if (send(s, hdr, 2, 0) != 2 || send(s, q, (LONG)qlen, 0) != (LONG)qlen ||
+	    recv_all(s, hdr, 2) < 0 || (len = rt_get_be16(hdr)) < 12 ||
+	    !(r = AllocVec(len, MEMF_ANY))) {
+		CloseSocket(s);
+		return -1;
+	}
+	if (recv_all(s, r, len) < 0) {
+		FreeVec(r);
+		CloseSocket(s);
+		return -1;
+	}
+	CloseSocket(s);
+	*rp = r;
+	return (LONG)len;
+}
+
 static int query(const char *name, u16 type, const struct cl_addr *server)
 {
 	struct rt_sockaddr_in6 sa;
 	u32 salen;
-	u8 *q, *r;
-	u32 qlen, try;
+	u8 *q, *r, *tcpbuf = NULL;
+	u32 qlen;
 	LONG n = -1;
 	int s, rc = CL_ERROR;
 	u16 id;
 
-	q = AllocVec(DNSBUF * 2, MEMF_ANY);
+	q = AllocVec(DNSQ + DNSBUF, MEMF_ANY);
 	if (!q) {
 		cl_error("out of memory");
 		return CL_FAIL;
 	}
-	r = q + DNSBUF;
+	r = q + DNSQ;
 	id = (u16)(cl_now_us() ^ ((u32)FindTask(NULL) >> 3));
 	qlen = build_query(q, name, type, id);
 	if (!qlen) {
@@ -224,48 +302,51 @@ static int query(const char *name, u16 type, const struct cl_addr *server)
 		FreeVec(q);
 		return CL_ERROR;
 	}
+	/* EDNS0 OPT record (RFC 6891): root, type 41, our UDP size */
+	memset(q + qlen, 0, 11);
+	rt_put_be16(q + qlen + 1, 41);
+	rt_put_be16(q + qlen + 3, DNSBUF);
+	rt_put_be16(q + 10, 1);
 	s = socket(server->family, RT_SOCK_DGRAM, 0);
 	salen = cl_sockaddr(server, 53, &sa);
 	if (s < 0 || connect(s, &sa, (LONG)salen) < 0) {
 		cl_error("cannot reach the name server");
 		goto out;
 	}
-	for (try = 0; try < 2 && n < 12; try++) {
-		u32 t0 = cl_now_us();
-		send(s, q, (LONG)qlen, 0);
-		for (;;) {
-			ULONG rd[2] = { 0, 0 }, sigs = SIGBREAKF_CTRL_C;
-			struct tv tmo;
-			u32 el = cl_now_us() - t0;
-			n = -1;
-			if (el >= wait_ms * 1000UL)
-				break;
-			el = wait_ms * 1000UL - el;
-			tmo.secs = el / 1000000UL;
-			tmo.micro = el % 1000000UL;
-			rd[s / 32] |= 1UL << (s % 32);
-			if (WaitSelect(s + 1, rd, NULL, NULL, &tmo, &sigs) <= 0) {
-				if (sigs & SIGBREAKF_CTRL_C) {
-					cl_puts("***Break\n");
-					goto out;
-				}
-				continue;
-			}
-			n = recv(s, r, DNSBUF, 0);
-			if (n >= 12 && rt_get_be16(r) == id && (r[2] & 0x80))
-				break;
-		}
+	n = udp_ask(s, q, qlen + 11, r, id);
+	if (n >= 12 && ((r[3] & 15) == 1 || (r[3] & 15) == 4)) {
+		/* FORMERR/NOTIMP: an old server; again without EDNS */
+		if (verbose)
+			cl_puts(";; no EDNS: retrying without\n");
+		rt_put_be16(q + 10, 0);
+		n = udp_ask(s, q, qlen, r, id);
+	}
+	if (n == -2) {
+		cl_puts("***Break\n");
+		goto out;
 	}
 	if (n < 12) {
 		cl_printf(";; connection timed out; no servers could be reached\n");
 		goto out;
 	}
+	if (r[2] & 0x02) {
+		LONG t;
+		cl_puts(";; Truncated, retrying in TCP mode.\n");
+		rt_put_be16(q + 10, 0);
+		t = tcp_ask(server, q, qlen, &tcpbuf);
+		if (t >= 12 && rt_get_be16(tcpbuf) == id && (tcpbuf[2] & 0x80)) {
+			r = tcpbuf;
+			n = t;
+		} else if (verbose) {
+			cl_puts(";; TCP failed: the truncated answer\n");
+		}
+	}
 	if (verbose)
-		cl_printf(";; ->>HEADER<<- opcode: QUERY, status: %s, id: %u\n;; flags: qr%s%s%s; "
+		cl_printf(";; ->>HEADER<<- opcode: QUERY, status: %s, id: %u\n;; flags: qr%s%s%s%s; "
 		          "QUERY: %u, ANSWER: %u, AUTHORITY: %u, ADDITIONAL: %u\n\n",
-		          rcode_name(r[3] & 15), (unsigned)id, (r[2] & 4) ? " aa" : "", (r[2] & 1) ? " rd" : "",
-		          (r[3] & 0x80) ? " ra" : "", (unsigned)rt_get_be16(r + 4), (unsigned)rt_get_be16(r + 6),
-		          (unsigned)rt_get_be16(r + 8), (unsigned)rt_get_be16(r + 10));
+		          rcode_name(r[3] & 15), (unsigned)id, (r[2] & 4) ? " aa" : "", (r[2] & 2) ? " tc" : "",
+		          (r[2] & 1) ? " rd" : "", (r[3] & 0x80) ? " ra" : "", (unsigned)rt_get_be16(r + 4),
+		          (unsigned)rt_get_be16(r + 6), (unsigned)rt_get_be16(r + 8), (unsigned)rt_get_be16(r + 10));
 	if ((r[3] & 15) != 0) {
 		cl_printf("Host %s not found: %d(%s)\n", name, r[3] & 15, rcode_name(r[3] & 15));
 		goto out;
@@ -306,6 +387,8 @@ bad:
 out:
 	if (s >= 0)
 		CloseSocket(s);
+	if (tcpbuf)
+		FreeVec(tcpbuf);
 	FreeVec(q);
 	return rc;
 }
