@@ -381,3 +381,73 @@ void rp_eprefs_save(void)
 	write_file(EPREFS_PATH, buf, o, 0);
 	write_file(EPREFS_ENVPATH, buf, o, 0);
 }
+
+/* ---- one editor at a time ---- */
+static struct MsgPort *single_port;
+static char single_name[] = RP_PORTNAME;
+
+int rp_single_start(void)
+{
+	struct MsgPort *other;
+	struct Message *m;
+
+	m = AllocVec(sizeof(*m), MEMF_PUBLIC | MEMF_CLEAR);
+	single_port = CreateMsgPort();
+	/* looking and adding in one go: of two copies started at once, one
+	 * makes the port and the other finds it */
+	Forbid();
+	other = FindPort((CONST_STRPTR)single_name);
+	if (other && m) {
+		m->mn_Node.ln_Type = NT_MESSAGE;
+		m->mn_Length = sizeof(*m);
+		PutMsg(other, m);       /* the other editor frees it */
+		m = NULL;
+	} else if (!other && single_port) {
+		single_port->mp_Node.ln_Name = single_name;
+		single_port->mp_Node.ln_Pri = 0;
+		AddPort(single_port);
+	}
+	Permit();
+	rp_free(m);
+	if (other) {
+		if (single_port)
+			DeleteMsgPort(single_port);
+		single_port = NULL;
+		rp_log("another RiptidePrefs is open: asked it to come to the front");
+		return 1;
+	}
+	return 0;
+}
+
+int rp_single_poll(void)
+{
+	struct Message *m;
+	int n = 0;
+
+	if (!single_port)
+		return 0;
+	while ((m = GetMsg(single_port)) != NULL) {
+		FreeVec(m);
+		n = 1;
+	}
+	if (n)
+		rp_log("another RiptidePrefs was started: to the front");
+	return n;
+}
+
+unsigned long rp_single_sig(void)
+{
+	return single_port ? 1UL << single_port->mp_SigBit : 0;
+}
+
+void rp_single_end(void)
+{
+	if (!single_port)
+		return;
+	Forbid();
+	RemPort(single_port);
+	Permit();
+	rp_single_poll();       /* messages that came before RemPort() */
+	DeleteMsgPort(single_port);
+	single_port = NULL;
+}

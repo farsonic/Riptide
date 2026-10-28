@@ -29,6 +29,11 @@ static char *fhelp[NF];                  /* bubble texts, allocated */
 static const char *cyl[NF][8];           /* translated cycle labels */
 static Object *lst[RP_NPAGES], *lline[RP_NPAGES], *lbtn[RP_NPAGES][3], *lhelp_obj[RP_NPAGES][4];
 static char *lhelp[RP_NPAGES][4];
+/* the forms of the list pages (prefs_fields.c's rp_lfields[]) */
+static Object *lfobj[RP_NLFIELDS_MAX], *lflab[RP_NLFIELDS_MAX];
+static char *lfhelp[RP_NLFIELDS_MAX];
+static const char *lcyl[RP_NLFIELDS_MAX][14];
+static struct rp_lvals lv;
 static int page;
 static char status_text[120];
 static const char *pubname;     /* PUBSCREEN=, for the message windows */
@@ -209,17 +214,108 @@ static void update_disabled(void)
 	}
 }
 
+/* does page p edit its entries with a form? */
+static int has_form(int p)
+{
+	int i;
+
+	for (i = 0; i < rp_nlfields; i++)
+		if (rp_lfields[i].page == p)
+			return 1;
+	return 0;
+}
+
+/* the interface's name as typed on the Interface page (the VLANs are
+ * named after it) */
+static const char *cur_ifname(void)
+{
+	int fi = rp_find(&rp_cfg.cur, rp_cfg.cur.ifname);
+	const char *s = fi >= 0 && fobj[fi] ? (const char *)mui_get(fobj[fi], MUIA_String_Contents) : NULL;
+
+	while (s && *s == ' ')
+		s++;
+	return s && *s ? s : rp_cfg.cur.ifname;
+}
+
+/* which fields of the form apply (the address only with Static), and
+ * what the shown-only ones say (the VLAN's name) */
+static void form_disabled(int p)
+{
+	int i;
+
+	for (i = 0; i < rp_nlfields; i++)
+		if (rp_lfields[i].page == p && lfobj[i]) {
+			ULONG dis = (ULONG)rp_lform_disabled(i, &lv);
+			if (rp_lfields[i].type == LF_INFO)
+				mui_set(lfobj[i], MUIA_QLabel_Text, (ULONG)lv.tx[i]);
+			if (mui_get(lfobj[i], MUIA_Disabled) != dis) {
+				mui_set(lfobj[i], MUIA_Disabled, dis);
+				mui_set(lflab[i], MUIA_Disabled, dis);
+			}
+		}
+}
+
+/* the form's values into its gadgets */
+static void form_show(int p)
+{
+	int i;
+
+	for (i = 0; i < rp_nlfields; i++) {
+		if (rp_lfields[i].page != p || !lfobj[i])
+			continue;
+		if (rp_lfields[i].type == LF_CYCLE)
+			mui_nnset(lfobj[i], MUIA_Cycle_Active, (ULONG)lv.cy[i]);
+		else if (rp_lfields[i].type != LF_INFO)
+			mui_nnset(lfobj[i], MUIA_String_Contents, (ULONG)lv.tx[i]);
+	}
+	form_disabled(p);
+}
+
+/* the gadgets' contents into the form's values */
+static void form_read(int p)
+{
+	int i;
+
+	for (i = 0; i < rp_nlfields; i++) {
+		if (rp_lfields[i].page != p || !lfobj[i])
+			continue;
+		if (rp_lfields[i].type == LF_CYCLE)
+			lv.cy[i] = (int)mui_get(lfobj[i], MUIA_Cycle_Active);
+		else if (rp_lfields[i].type != LF_INFO)
+			rt_strlcpy(lv.tx[i], (const char *)mui_get(lfobj[i], MUIA_String_Contents), RP_LFTEXT);
+	}
+	rp_lform_update(p, &lv, cur_ifname());
+}
+
 static void fill_list(int p)
 {
+	char row[160];
 	int i, n = rp_list_n(p);
 
 	if (!lst[p])
 		return;
 	mui_set(lst[p], MUIA_List_Quiet, TRUE);
 	mui_do(lst[p], MUIM_List_Clear);
-	for (i = 0; i < n; i++)
-		mui_do(lst[p], MUIM_List_InsertSingle, (ULONG)rp_list_at(p, i), MUIV_List_Insert_Bottom);
+	for (i = 0; i < n; i++) {
+		const char *e = rp_list_at(p, i);
+		if (has_form(p)) {
+			rp_list_row(p, e, cur_ifname(), row, sizeof(row));
+			e = row;
+		}
+		mui_do(lst[p], MUIM_List_InsertSingle, (ULONG)e, MUIV_List_Insert_Bottom);
+	}
 	mui_set(lst[p], MUIA_List_Quiet, FALSE);
+}
+
+/* a list page's form (or line) ready for a new entry */
+static void form_clear(int p)
+{
+	if (has_form(p)) {
+		rp_lform_get(p, NULL, cur_ifname(), &lv);
+		form_show(p);
+	} else if (lline[p]) {
+		mui_nnset(lline[p], MUIA_String_Contents, (ULONG)"");
+	}
 }
 
 /* everything from the model, after it was replaced (Open, Restore ...) */
@@ -232,7 +328,7 @@ static void refresh_all(void)
 	for (i = 0; i < RP_NPAGES; i++)
 		if (IS_LIST(i)) {
 			fill_list(i);
-			mui_nnset(lline[i], MUIA_String_Contents, (ULONG)"");
+			form_clear(i);
 		}
 	update_disabled();
 }
@@ -360,7 +456,95 @@ static Object *field_page(int p)
 	return cols;
 }
 
-/* a list page: the list, the line being edited and Add/Replace/Delete */
+/* the gadget of a form field */
+static Object *lform_gadget(int i)
+{
+	const struct rp_lfield *f = &rp_lfields[i];
+	Object *g = NULL;
+	int k;
+
+	switch (f->type) {
+	case LF_NUM:
+		g = mui_make(MUIO_String, (ULONG)tr(f->label), 9UL);
+		break;
+	case LF_STR:
+		g = mui_make(MUIO_String, (ULONG)tr(f->label), (ULONG)f->size);
+		break;
+	case LF_CYCLE:
+		for (k = 0; f->cy[k] && k < 13; k++)
+			lcyl[i][k] = tr(f->cy[k]);
+		lcyl[i][k] = NULL;
+		g = mui_make(MUIO_Cycle, (ULONG)tr(f->label), (ULONG)lcyl[i]);
+		break;
+	case LF_INFO:
+		/* as wide as the longest name it shows */
+		g = mui_newc(qlabel_mcc, MUIA_QLabel_Text, (ULONG)"eth0.4094  ", MUIA_QLabel_Kind, QL_TEXT, TAGEND);
+		break;
+	}
+	if (!g)
+		return NULL;
+	if (f->type == LF_CYCLE || f->type == LF_INFO)
+		mui_set(g, MUIA_HorizWeight, 0);
+	if (f->type != LF_INFO)
+		mui_set(g, MUIA_CycleChain, 1);
+	if (f->type == LF_CYCLE)
+		mui_do(g, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
+		       ID_LFIELD + i);
+	else if (f->type != LF_INFO)
+		mui_do(g, MUIM_Notify, MUIA_String_Contents, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
+		       ID_LFIELD + i);
+	return g;
+}
+
+/* The form of a list page: a label and a row per field, the fields
+ * marked LF_SAMEROW on the row of the one before with their own label.
+ * A row of strings fills the width; cycles keep their size. */
+static Object *lform_build(int p)
+{
+	Object *cols = mui_new(MUIC_Group, MUIA_Group_Columns, 2, MUIA_Group_HorizSpacing, 8,
+	                       MUIA_Group_VertSpacing, theme_compact() ? 1 : 3, MUIA_VertWeight, 0, TAGEND);
+	int i, k;
+
+	if (!cols)
+		return NULL;
+	for (i = 0; i < rp_nlfields; i++) {
+		const struct rp_lfield *f = &rp_lfields[i];
+		Object *row, *r;
+		int last = i, fills = 0;
+		if (f->page != p || (f->flags & LF_SAMEROW))
+			continue;
+		while (last + 1 < rp_nlfields && rp_lfields[last + 1].page == p && (rp_lfields[last + 1].flags & LF_SAMEROW))
+			last++;
+		row = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, TAGEND);
+		if (!row)
+			return NULL;
+		for (k = i; k <= last; k++) {
+			char name[48];
+			lfobj[k] = lform_gadget(k);
+			lflab[k] = label(rp_lfields[k].label, QL_LABEL);
+			if (!lfobj[k] || !lflab[k])
+				return NULL;
+			rp_lflabel(k, name, sizeof(name));
+			lfhelp[k] = bubble_dup(name, rp_lfields[k].help);
+			mui_set(lfobj[k], MUIA_ShortHelp, (ULONG)lfhelp[k]);
+			mui_set(lflab[k], MUIA_ShortHelp, (ULONG)lfhelp[k]);
+			if (k > i)
+				mui_do(row, OM_ADDMEMBER, (ULONG)lflab[k]);
+			mui_do(row, OM_ADDMEMBER, (ULONG)lfobj[k]);
+			fills |= rp_lfields[k].type == LF_NUM || rp_lfields[k].type == LF_STR;
+		}
+		if (!fills && (r = rect()) != NULL)
+			mui_do(row, OM_ADDMEMBER, (ULONG)r);
+		mui_do(cols, OM_ADDMEMBER, (ULONG)lflab[i]);
+		mui_do(cols, OM_ADDMEMBER, (ULONG)row);
+	}
+	rp_lform_get(p, NULL, rp_cfg.cur.ifname, &lv);
+	form_show(p);
+	return cols;
+}
+
+/* a list page: the list, then the form of an entry (or, for the other
+ * lines, the line being edited) and Add/Replace/Delete */
 static Object *list_page(int p)
 {
 	static const char *const names[3] = { "A_dd", "_Replace", "D_elete" };
@@ -370,25 +554,39 @@ static Object *list_page(int p)
 		"Puts the line below in place of the entry chosen in the list.",
 		"Removes the entry chosen in the list.",
 	};
-	Object *lv, *row, *btns, *l;
+	static const char *const fhelps[4] = {
+		"The entries of this page. Click one to see and change its settings below.",
+		"Adds the settings below as a new entry.",
+		"Puts the settings below in place of the entry chosen in the list.",
+		"Removes the entry chosen in the list.",
+	};
+	const char *const *hp = has_form(p) ? fhelps : helps;
+	Object *lvo, *row, *btns, *l;
 	int k;
 
 	lst[p] = mui_new(MUIC_List, MUIA_Frame, MUIV_Frame_InputList, MUIA_List_ConstructHook,
 	                 MUIV_List_ConstructHook_String, MUIA_List_DestructHook, MUIV_List_DestructHook_String, TAGEND);
-	lv = mui_new(MUIC_Listview, MUIA_Listview_List, (ULONG)lst[p], MUIA_CycleChain, 1, TAGEND);
-	lline[p] = mui_make(MUIO_String, (ULONG)tr("_Line"), RP_LONG * 2);
-	l = label("_Line", QL_LABEL);
-	if (!lv || !lline[p] || !l)
+	lvo = mui_new(MUIC_Listview, MUIA_Listview_List, (ULONG)lst[p], MUIA_CycleChain, 1, TAGEND);
+	if (!lvo)
 		return NULL;
-	mui_set(lline[p], MUIA_CycleChain, 1);
-	row = hgroup2(l, lline[p]);
-	mui_set(row, MUIA_Group_Spacing, 8);
-	btns = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_SameSize, TRUE, TAGEND);
+	if (has_form(p)) {
+		row = lform_build(p);
+	} else {
+		lline[p] = mui_make(MUIO_String, (ULONG)tr("_Line"), RP_LONG * 2);
+		l = label("_Line", QL_LABEL);
+		if (!lline[p] || !l)
+			return NULL;
+		mui_set(lline[p], MUIA_CycleChain, 1);
+		row = hgroup2(l, lline[p]);
+		if (row)
+			mui_set(row, MUIA_Group_Spacing, 8);
+	}
+	btns = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_SameSize, TRUE, MUIA_VertWeight, 0, TAGEND);
 	if (!row || !btns)
 		return NULL;
-	lhelp[p][0] = bubble_dup("List", helps[0]);
-	mui_set(lv, MUIA_ShortHelp, (ULONG)lhelp[p][0]);
-	lhelp_obj[p][0] = lv;
+	lhelp[p][0] = bubble_dup("List", hp[0]);
+	mui_set(lvo, MUIA_ShortHelp, (ULONG)lhelp[p][0]);
+	lhelp_obj[p][0] = lvo;
 	for (k = 0; k < 3; k++) {
 		char name[16];
 		const char *s;
@@ -400,7 +598,7 @@ static Object *list_page(int p)
 			if (*s != '_')
 				name[n++] = *s;
 		name[n] = 0;
-		lhelp[p][k + 1] = bubble_dup(name, helps[k + 1]);
+		lhelp[p][k + 1] = bubble_dup(name, hp[k + 1]);
 		mui_set(lbtn[p][k], MUIA_ShortHelp, (ULONG)lhelp[p][k + 1]);
 		lhelp_obj[p][k + 1] = lbtn[p][k];
 		mui_do(btns, OM_ADDMEMBER, (ULONG)lbtn[p][k]);
@@ -410,15 +608,15 @@ static Object *list_page(int p)
 	mui_do(lst[p], MUIM_Notify, MUIA_List_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
 	       ID_LIST + p * 4 + LIST_SEL);
 	fill_list(p);
-	return mui_new(MUIC_Group, MUIA_Group_VertSpacing, 4, MUIA_Group_Child, (ULONG)lv, MUIA_Group_Child, (ULONG)row,
-	               MUIA_Group_Child, (ULONG)btns, TAGEND);
+	return mui_new(MUIC_Group, MUIA_Group_VertSpacing, theme_compact() ? 2 : 4, MUIA_Group_Child, (ULONG)lvo,
+	               MUIA_Group_Child, (ULONG)row, MUIA_Group_Child, (ULONG)btns, TAGEND);
 }
 
 static Object *build_page(int p)
 {
 	Object *body = IS_LIST(p) ? list_page(p) : field_page(p), *filler, *note;
 
-	note = label(rp_pages[p].note, QL_NOTE);
+	note = label(has_form(p) ? rp_lform_note(p) : rp_pages[p].note, QL_NOTE);
 	filler = IS_LIST(p) ? NULL : rect();
 	if (!body || !note || (!IS_LIST(p) && !filler))
 		return NULL;
@@ -537,6 +735,8 @@ static int build_window(const char *pubscreen)
 	}
 	mui_do(app, OM_ADDMEMBER, (ULONG)win);
 	mui_do(win, MUIM_Notify, MUIA_Window_CloseRequest, TRUE, (ULONG)app, 2, MUIM_Application_ReturnID, ID_CANCEL);
+	mui_do(app, MUIM_Notify, MUIA_Application_DoubleStart, MUIV_EveryTime, (ULONG)app, 2,
+	       MUIM_Application_ReturnID, ID_FRONT);
 	mui_do(nav, MUIM_Notify, MUIA_Nav_Active, MUIV_EveryTime, (ULONG)pages, 3, MUIM_Set, MUIA_Group_ActivePage,
 	       MUIV_TriggerValue);
 	mui_do(nav, MUIM_Notify, MUIA_Nav_Active, MUIV_EveryTime, (ULONG)head, 3, MUIM_Set, MUIA_Head_Page,
@@ -569,6 +769,11 @@ static void set_tips(int on)
 		for (k = 0; k < 4; k++)
 			if (lhelp_obj[i][k])
 				mui_set(lhelp_obj[i][k], MUIA_ShortHelp, on ? (ULONG)lhelp[i][k] : 0);
+	for (i = 0; i < rp_nlfields; i++)
+		if (lfobj[i]) {
+			mui_set(lfobj[i], MUIA_ShortHelp, on ? (ULONG)lfhelp[i] : 0);
+			mui_set(lflab[i], MUIA_ShortHelp, on ? (ULONG)lfhelp[i] : 0);
+		}
 	for (i = 0; i < 4; i++)
 		if (btn[i])
 			mui_set(btn[i], MUIA_ShortHelp, on ? (ULONG)bhelp[i] : 0);
@@ -652,15 +857,46 @@ static int finish(ULONG id)
 	return 1;
 }
 
+/* the form's field fi shown with a message: what is wrong with it */
+static void form_complain(int fi, const char *err)
+{
+	char msg[300], name[48];
+
+	rp_lflabel(fi, name, sizeof(name));
+	rt_snprintf(msg, sizeof(msg), "%s: %s", tr(name), tr(err));
+	if (lfobj[fi])
+		mui_set(win, MUIA_Window_ActiveObject, (ULONG)lfobj[fi]);
+	rp_message(msg);
+}
+
+/* the Add, Replace and Delete buttons of a list page, and choosing an
+ * entry in its list */
 static void list_cmd(int p, int op)
 {
-	int sel = (int)(LONG)mui_get(lst[p], MUIA_List_Active), r;
-	const char *text = (const char *)mui_get(lline[p], MUIA_String_Contents);
+	int sel = (int)(LONG)mui_get(lst[p], MUIA_List_Active), r, fi;
+	const char *text;
+	char entry[RP_LONG], err[160];
 
 	if (op == LIST_SEL) {
-		if (sel >= 0 && rp_list_at(p, sel))
-			mui_nnset(lline[p], MUIA_String_Contents, (ULONG)rp_list_at(p, sel));
+		if (sel >= 0 && rp_list_at(p, sel)) {
+			if (has_form(p)) {
+				rp_lform_get(p, rp_list_at(p, sel), cur_ifname(), &lv);
+				form_show(p);
+			} else {
+				mui_nnset(lline[p], MUIA_String_Contents, (ULONG)rp_list_at(p, sel));
+			}
+		}
 		return;
+	}
+	if (has_form(p) && op != LIST_DEL) {
+		form_read(p);
+		if (rp_lform_put(p, &lv, entry, sizeof(entry), &fi, err, sizeof(err)) < 0) {
+			form_complain(fi, err);
+			return;
+		}
+		text = entry;
+	} else {
+		text = has_form(p) ? "" : (const char *)mui_get(lline[p], MUIA_String_Contents);
 	}
 	if (op == LIST_ADD)
 		r = rp_list_edit(p, -1, text);
@@ -671,12 +907,13 @@ static void list_cmd(int p, int op)
 	else
 		return;
 	if (r == -2) {
-		mui_set(win, MUIA_Window_ActiveObject, (ULONG)lline[p]);
+		if (!has_form(p))
+			mui_set(win, MUIA_Window_ActiveObject, (ULONG)lline[p]);
 		return;
 	}
 	fill_list(p);
 	if (op == LIST_DEL)
-		mui_nnset(lline[p], MUIA_String_Contents, (ULONG)"");
+		form_clear(p);
 	mui_nnset(lst[p], MUIA_List_Active, r >= 0 ? (ULONG)r : (ULONG)MUIV_List_Active_Off);
 }
 
@@ -696,14 +933,37 @@ static int command(ULONG id)
 		show_status();
 		return 0;
 	}
+	if (id >= ID_LFIELD && id < ID_LFIELD + (ULONG)rp_nlfields) {
+		/* a form field changed: which fields apply, the VLAN's name */
+		int p = rp_lfields[id - ID_LFIELD].page;
+		form_read(p);
+		form_disabled(p);
+		return 0;
+	}
 	if (id >= ID_LIST && id < ID_LIST + RP_NPAGES * 4) {
 		list_cmd((int)(id - ID_LIST) / 4, (int)(id - ID_LIST) % 4);
 		show_status();
 		return 0;
 	}
 	switch (id) {
+	case ID_FRONT:
+		/* another RiptidePrefs was started: this window to the front */
+		mui_set(app, MUIA_Application_Iconified, FALSE);
+		mui_set(win, MUIA_Window_Open, TRUE);
+		mui_do(win, MUIM_Window_ScreenToFront);
+		mui_do(win, MUIM_Window_ToFront);
+		mui_set(win, MUIA_Window_Activate, TRUE);
+		return 0;
 	case ID_PAGE:
 		page = (int)mui_get(nav, MUIA_Nav_Active);
+		/* the interface may have been renamed: the VLANs follow */
+		if (page == P_VLAN) {
+			int sel = (int)(LONG)mui_get(lst[page], MUIA_List_Active);
+			fill_list(page);
+			mui_nnset(lst[page], MUIA_List_Active, sel >= 0 ? (ULONG)sel : (ULONG)MUIV_List_Active_Off);
+			form_read(page);
+			form_show(page);
+		}
 		return 0;
 	case ID_SAVE:
 	case ID_USE:
@@ -800,6 +1060,11 @@ static void free_all(void)
 			lhelp[i][k] = NULL;
 			lhelp_obj[i][k] = NULL;
 		}
+	for (i = 0; i < RP_NLFIELDS_MAX; i++) {
+		rp_free(lfhelp[i]);
+		lfhelp[i] = NULL;
+		lfobj[i] = lflab[i] = NULL;
+	}
 	for (i = 0; i < 4; i++) {
 		rp_free(bhelp[i]);
 		bhelp[i] = NULL;
@@ -840,9 +1105,17 @@ int mui_run(const struct rp_gui_args *a)
 	              MUIA_Application_Copyright, (ULONG)"GPL-2.0", MUIA_Application_Author, (ULONG)"The Riptide authors",
 	              MUIA_Application_Description, (ULONG)tr("Preferences for the Riptide TCP/IP stack"),
 	              MUIA_Application_Base, (ULONG)"RIPTIDEPREFS", MUIA_Application_UseCommodities, FALSE,
-	              MUIA_Application_UseRexx, FALSE, TAGEND);
+	              MUIA_Application_UseRexx, FALSE, MUIA_Application_SingleTask, TRUE, TAGEND);
 	if (!app) {
-		rp_log("cannot make the application");
+		/* SingleTask: another MUI RiptidePrefs runs (one that did not
+		 * make the port of rp_single_start()); it comes to the front
+		 * through MUIA_Application_DoubleStart, this copy just ends */
+		if (MUI_Error() == MUIE_SingleTask) {
+			rp_log("another MUI RiptidePrefs runs");
+			r = CL_OK;
+		} else {
+			rp_log("cannot make the application");
+		}
 		goto out;
 	}
 	if (build_window(a->pubscreen) < 0) {
@@ -878,8 +1151,10 @@ int mui_run(const struct rp_gui_args *a)
 			rp_log("command %ld", (long)id);
 		if (id && command((ULONG)id))
 			break;
+		if (rp_single_poll())
+			command(ID_FRONT);
 		if (sigs) {
-			sigs = Wait(sigs | SIGBREAKF_CTRL_C);
+			sigs = Wait(sigs | SIGBREAKF_CTRL_C | rp_single_sig());
 			if (sigs & SIGBREAKF_CTRL_C)
 				break;
 		}

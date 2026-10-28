@@ -217,28 +217,48 @@ settle a03b-invalid
 key Return
 settle a03c-dismissed
 key Return m
-# Extra addresses: a bad one (requester), then 10.0.1.2/24
+# a string field emptied (the cursor may be anywhere in it)
+clear() {
+	key "$1" shift+Right
+	key BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace
+	key BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace
+}
+# Extra addresses (a form): a bad one (requester), then 10.0.1.2/24
 key p
 settle a03d-extra
-key l
+key i
 typ '10.0.1.300'
 key Return d
 settle a03e-extra-invalid
 key Return
 settle a03f-extra-dismissed
-key Return l
-key Right Right Right Right Right Right Right Right Right Right
-key BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace BackSpace
+key Return
+clear i
 typ '10.0.1.2/24'
 key Return d
 settle a03g-extra-added
-# VLANs: one with DHCP and priority 4
+# VLANs (a form): 10 with DHCP and priority 4; then 20, made static with
+# an MTU through Replace
 key p
 settle a03h-vlans
-key l
-typ '10 dhcp pcp=4'
-key Return d
+key i
+typ 10
+key Return
+key y y y y y
+settle a03h2-vlan-form
+key d
 settle a03i-vlans-added
+clear i
+typ 20
+key Return d
+key m
+settle a03i2-vlan-static
+key v
+typ '192.168.20.2/24'
+key Return t
+typ 1400
+key Return r
+settle a03j-vlans-edited
 # Names: replace the host name, add a domain and a name server
 key p
 settle a04-names
@@ -301,12 +321,14 @@ key p
 settle a09j-qos
 key q
 settle a09k-qos-edited
-# QoS rules: add one
+# QoS rules (a form): ports 22,23, interactive
 key p
 settle a09l-qosrules
-key l
-typ 'port=22,23 priority=interactive'
-key Return d
+key o
+typ '22,23'
+key Return y
+settle a09l2-qosrules-form
+key d
 settle a09m-qosrules-added
 key p
 settle a10-other
@@ -328,6 +350,7 @@ interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440
 dhcp eth0
 ifconfig eth0 alias 10.0.1.2/24
 interface eth0.10 vlan=10 parent=eth0 dhcp pcp=4
+interface eth0.20 vlan=20 parent=eth0 address=192.168.20.2/24 pcp=4 mtu=1400
 nameserver 192.168.1.1
 hostname zeus    # the old name
 domain example.org
@@ -390,6 +413,12 @@ DH0:C/RiptidePrefs CMD=200
 Echo "rc $RC" >DH0:out/zz_3e
 DH0:C/RiptidePrefs GADTOOLS
 Echo "rc $RC" >DH0:out/zz_3f
+DH0:C/RiptidePrefs PAGE=2
+Echo "rc $RC" >DH0:out/zz_3g
+DH0:C/RiptidePrefs PAGE=3
+Echo "rc $RC" >DH0:out/zz_3h
+DH0:C/RiptidePrefs PAGE=14
+Echo "rc $RC" >DH0:out/zz_3i
 EOF
 settle c01-workbench-compact
 # the pointer over a page lights it
@@ -415,6 +444,16 @@ waitfor zz_3e
 settle c08-gadtools
 key Escape c
 waitfor zz_3f
+# the forms of the list pages in the compact layout
+settle c09-compact-extra
+key Escape
+waitfor zz_3g
+settle c10-compact-vlans
+key Escape
+waitfor zz_3h
+settle c11-compact-qosrules
+key Escape
+waitfor zz_3i
 cleanup_uae
 grep -q '^dark=1' "$dh0/ENV/Riptide/RiptidePrefs.prefs" 2>/dev/null || fail "Dark Theme was not saved"
 grep -q '^hostname' "$dh0/ENV/Riptide/riptide.conf" && fail "Reset to Defaults + Use kept the host name"

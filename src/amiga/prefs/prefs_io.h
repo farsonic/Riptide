@@ -51,6 +51,19 @@ void rp_eprefs_save(void);
 
 void *rp_read_file(const char *path, long *len);
 
+/* One editor at a time: the public port RP_PORTNAME belongs to the
+ * editor that is open. rp_single_start() makes it, or, when another
+ * editor has it, asks that one to come to the front and returns 1 (this
+ * copy then ends). The message is not replied: the editor that gets it
+ * frees it, so the second copy never waits for a busy first one. */
+#define RP_PORTNAME "RiptidePrefs"
+int  rp_single_start(void);
+void rp_single_end(void);
+/* the port's signal (0: no port) */
+unsigned long rp_single_sig(void);
+/* 1 when another copy asked since the last call (the window comes to the front) */
+int  rp_single_poll(void);
+
 /* DEBUG=file: a log of what the editor does (start-up, commands); costs
  * nothing without it */
 void rp_log_open(const char *path);
