@@ -71,6 +71,8 @@ $(BUILD)/libspeedtest.a: $(ST_OBJ)
 $(BUILD)/speedtest: $(BUILD)/apps/speedtest/st_posix_main.o $(BUILD)/libspeedtest.a $(BUILD)/libriptide.a
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+# the RiptidePrefs model test includes these sources
+$(BUILD)/tests/t_prefs_conf: $(wildcard src/amiga/prefs/conf_edit.* src/amiga/prefs/prefs_fields.*)
 $(BUILD)/tests/%: tests/%.c $(BUILD)/libriptide.a $(BUILD)/libspeedtest.a $(ST_HDR) $(wildcard tests/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Isrc/apps/speedtest -o $@ $< $(BUILD)/libspeedtest.a $(BUILD)/libriptide.a $(LDFLAGS) -lm

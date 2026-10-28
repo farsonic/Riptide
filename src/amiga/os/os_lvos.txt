@@ -91,6 +91,7 @@
 828 LONG MatchNext(struct AnchorPath* anchor d1)
 834 void MatchEnd(struct AnchorPath* anchor d1)
 858 void FreeArgs(APTR args d1)
+882 LONG AddPart(STRPTR dirname d1, CONST_STRPTR filename d2, ULONG size d3)
 906 LONG GetVar(CONST_STRPTR name d1, STRPTR buffer d2, LONG size d3, ULONG flags d4)
 948 LONG PutStr(CONST_STRPTR str d1)
 
@@ -120,6 +121,10 @@
 516 void UnlockPubScreen(CONST_STRPTR name a0, struct Screen* screen a1)
 588 LONG EasyRequestArgs(struct Window* window a0, const struct EasyStruct* easyStruct a1, ULONG* idcmpPtr a2, const APTR args a3)
 606 struct Window* OpenWindowTagList(const APTR newWindow a0, const struct TagItem* tagList a1)
+636 APTR NewObjectA(struct IClass* classPtr a0, CONST_STRPTR classID a1, const struct TagItem* tagList a2)
+642 void DisposeObject(APTR object a0)
+648 ULONG SetAttrsA(APTR object a0, const struct TagItem* tagList a1)
+654 ULONG GetAttr(ULONG attrID d0, APTR object a0, ULONG* storagePtr a1)
 
 @lib gadtools GadToolsBase basetype=Library
 30  struct Gadget* CreateGadgetA(ULONG kind d0, struct Gadget* gad a0, const struct NewGadget* ng a1, const struct TagItem* taglist a2)
@@ -137,5 +142,15 @@
 
 @lib graphics GfxBase basetype=GfxBase
 54  WORD TextLength(struct RastPort* rp a1, CONST_STRPTR string a0, ULONG count d0)
+60  LONG Text(struct RastPort* rp a1, CONST_STRPTR string a0, ULONG count d0)
+66  LONG SetFont(struct RastPort* rp a1, const struct TextFont* textFont a0)
+90  ULONG SetSoftStyle(struct RastPort* rp a1, ULONG style d0, ULONG enable d1)
+198 void InitRastPort(struct RastPort* rp a1)
+240 void Move(struct RastPort* rp a1, LONG x d0, LONG y d1)
+246 void Draw(struct RastPort* rp a1, LONG x d0, LONG y d1)
 306 void RectFill(struct RastPort* rp a1, LONG xMin d0, LONG yMin d1, LONG xMax d2, LONG yMax d3)
+324 LONG WritePixel(struct RastPort* rp a1, LONG x d0, LONG y d1)
 342 void SetAPen(struct RastPort* rp a1, ULONG pen d0)
+354 void SetDrMd(struct RastPort* rp a1, ULONG drawMode d0)
+840 LONG ObtainBestPenA(struct ColorMap* cm a0, ULONG r d1, ULONG g d2, ULONG b d3, const struct TagItem* tags a1)
+948 void ReleasePen(struct ColorMap* cm a0, ULONG n d0)

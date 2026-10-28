@@ -95,7 +95,19 @@ GUI_STRUCTS = (
       'ng_VisualInfo', 'ng_UserData') +
     S('EasyStruct', 'es_Flags', 'es_Title', 'es_TextFormat', 'es_GadgetFormat') +
     S('WBArg', 'wa_Lock', 'wa_Name') +
-    S('WBStartup', 'sm_Process', 'sm_NumArgs', 'sm_ArgList')
+    S('WBStartup', 'sm_Process', 'sm_NumArgs', 'sm_ArgList') +
+    # the MUI editor (src/amiga/prefs/mui.h)
+    [('struct Screen', 'ViewPort', 'struct Screen', 'ViewPort')] +
+    S('ViewPort', 'ColorMap') +
+    # TextFont and FileRequester: up to the last field used
+    [('struct TextFont', f, 'struct TextFont', f) for f in
+     ('tf_YSize', 'tf_Style', 'tf_Flags', 'tf_XSize', 'tf_Baseline', 'tf_BoldSmear')] +
+    S('IClass', 'cl_Dispatcher', 'cl_Super', 'cl_ID', 'cl_InstOffset', 'cl_InstSize', 'cl_Flags') +
+    S('_Object', 'o_Node', 'o_Class') +
+    S('opSet', 'ops_AttrList', 'ops_GInfo') +
+    S('opGet', 'opg_AttrID', 'opg_Storage') +
+    S('IBox', 'Left', 'Top', 'Width', 'Height') +
+    S('NewMenu', 'nm_Type', 'nm_Label', 'nm_CommKey', 'nm_Flags', 'nm_MutualExclude', 'nm_UserData')
 )
 GUI_CONSTS = '''GFLG_SELECTED GFLG_DISABLED IDCMP_REFRESHWINDOW IDCMP_MOUSEBUTTONS IDCMP_MOUSEMOVE IDCMP_GADGETDOWN
 IDCMP_GADGETUP IDCMP_CLOSEWINDOW IDCMP_RAWKEY IDCMP_VANILLAKEY IDCMP_INTUITICKS WA_Left WA_Top WA_Width WA_Height
@@ -105,7 +117,50 @@ GTLV_Top GTLV_Labels GTTX_Text GTCY_Labels GTCY_Active GTST_String GTST_MaxChars
 GTLV_ShowSelected GTLV_Selected GTTX_Border GT_Underscore GTCB_Scaled GTLV_MakeVisible BUTTON_KIND CHECKBOX_KIND
 INTEGER_KIND LISTVIEW_KIND CYCLE_KIND STRING_KIND TEXT_KIND ARROWIDCMP BUTTONIDCMP CHECKBOXIDCMP INTEGERIDCMP
 LISTVIEWIDCMP CYCLEIDCMP STRINGIDCMP TEXTIDCMP PLACETEXT_LEFT PLACETEXT_RIGHT PLACETEXT_ABOVE PLACETEXT_IN
-NG_HIGHLABEL'''.split()
+NG_HIGHLABEL JAM1 FSF_BOLD OBP_Precision PRECISION_GUI OM_NEW OM_DISPOSE OM_SET OM_GET OM_ADDMEMBER OM_REMMEMBER
+NM_END NM_TITLE NM_ITEM NM_BARLABEL CHECKIT MENUTOGGLE CHECKED IDCMP_MENUPICK IECODE_UP_PREFIX IEQUALIFIER_LSHIFT
+IEQUALIFIER_RSHIFT'''.split()
+# the MUI SDK (MUI_SDK= its Developer drawer): RiptidePrefs' own MUI header
+MUI_STRUCTS = (
+    S('MUI_GlobalInfo', 'mgi_ApplicationObject') +
+    S('MUI_NotifyData', 'mnd_GlobalInfo', 'mnd_UserData', 'mnd_ObjectID') +
+    S('MUI_MinMax', 'MinWidth', 'MinHeight', 'MaxWidth', 'MaxHeight', 'DefWidth', 'DefHeight') +
+    S('MUI_RenderInfo', 'mri_WindowObject', 'mri_Screen', 'mri_DrawInfo', 'mri_Pens', 'mri_Window', 'mri_RastPort',
+      'mri_Flags') +
+    S('MUI_AreaData', 'mad_RenderInfo', 'mad_Font', 'mad_MinMax', 'mad_Box', 'mad_addleft', 'mad_addtop',
+      'mad_subwidth', 'mad_subheight', 'mad_Flags') +
+    [('struct rt_mui_objhead', 'mad', 'struct __dummyXFC2__', 'mad')] +
+    S('MUI_CustomClass', 'mcc_UserData', 'mcc_UtilityBase', 'mcc_IntuitionBase', 'mcc_Super', 'mcc_Class') +
+    S('MUI_EventHandlerNode', 'ehn_Node', 'ehn_Priority', 'ehn_Flags', 'ehn_Object', 'ehn_Class', 'ehn_Events') +
+    S('MUIP_AskMinMax', 'MinMaxInfo') + S('MUIP_Draw', 'flags') + S('MUIP_HandleEvent', 'imsg', 'muikey') +
+    S('MUIP_CreateShortHelp', 'mx', 'my') +
+    [('struct rt_filereq', f, 'struct FileRequester', f) for f in ('fr_File', 'fr_Drawer')]
+)
+MUI_CONSTS = '''MUIA_Application_Title MUIA_Application_Version MUIA_Application_Copyright MUIA_Application_Author
+MUIA_Application_Description MUIA_Application_Base MUIA_Application_Window MUIA_Application_Sleep
+MUIA_Application_UseCommodities MUIA_Application_UseRexx MUIA_Window_Title MUIA_Window_ID MUIA_Window_RootObject
+MUIA_Window_Open MUIA_Window_CloseRequest MUIA_Window_Menustrip MUIA_Window_PublicScreen MUIA_Window_ActiveObject
+MUIA_Window_Window MUIA_Window_Screen MUIA_Window_ScreenTitle MUIA_Window_LeftEdge MUIA_Window_TopEdge
+MUIA_Window_Sleep MUIA_Window_RefWindow MUIA_Window_Activate MUIA_Group_Child MUIA_Group_Horiz MUIA_Group_Columns MUIA_Group_PageMode MUIA_Group_ActivePage
+MUIA_Group_Spacing MUIA_Group_HorizSpacing MUIA_Group_VertSpacing MUIA_Group_SameSize MUIA_InnerLeft
+MUIA_InnerRight MUIA_InnerTop MUIA_InnerBottom MUIA_HorizWeight MUIA_VertWeight MUIA_Frame MUIA_Background
+MUIA_ShortHelp MUIA_ControlChar MUIA_CycleChain MUIA_Disabled MUIA_FillArea MUIA_InputMode MUIA_Selected
+MUIA_Pressed MUIA_FixHeight MUIA_UserData MUIA_NoNotify MUIA_String_Contents MUIA_String_MaxLen
+MUIA_String_Acknowledge MUIA_Cycle_Entries MUIA_Cycle_Active MUIA_List_ConstructHook MUIA_List_DestructHook
+MUIA_List_Active MUIA_List_Quiet MUIA_Listview_List MUIA_Menuitem_Checked MUIA_Menuitem_Enabled
+MUIM_Application_NewInput MUIM_Application_ReturnID MUIM_Application_PushMethod MUIM_Notify MUIM_Set
+MUIM_NoNotifySet MUIM_List_Clear MUIM_List_InsertSingle MUIM_List_Jump MUIM_FindUData MUIM_Window_AddEventHandler
+MUIM_Window_RemEventHandler MUIM_Setup MUIM_Cleanup MUIM_AskMinMax MUIM_Draw MUIM_Show MUIM_Hide MUIM_HandleEvent
+MUIM_CreateShortHelp MUIM_DeleteShortHelp MUIM_Group_InitChange MUIM_Group_ExitChange MUIV_EveryTime
+MUIV_TriggerValue MUIV_NotTriggerValue MUIV_Application_ReturnID_Quit MUIV_Window_LeftEdge_Centered
+MUIV_Window_TopEdge_Centered MUIV_Frame_None MUIV_Frame_String MUIV_Frame_InputList MUIV_InputMode_RelVerify
+MUIV_InputMode_Toggle MUIV_Frame_ImageButton MUII_ButtonBack MUII_CheckMark MUIA_ShowSelState MUIA_Image_Spec
+MUIA_Image_FreeVert
+MUIV_List_Active_Off MUIV_List_Insert_Bottom MUIV_List_ConstructHook_String MUIV_List_DestructHook_String
+MUIO_Checkmark MUIO_Cycle MUIO_String MUIO_MenustripNM MUI_EventHandlerRC_Eat MUI_MAXMAX MADF_DRAWOBJECT
+MADF_DRAWUPDATE MPEN_SHINE MPEN_HALFSHINE MPEN_BACKGROUND MPEN_HALFSHADOW MPEN_SHADOW MPEN_TEXT MPEN_FILL MPEN_MARK
+MUIKEY_PRESS MUIKEY_UP MUIKEY_DOWN'''.split()
+MUI_RT_CONSTS = '''ASL_FileRequest ASLFR_TitleText ASLFR_InitialFile ASLFR_InitialDrawer ASLFR_DoSaveMode'''.split()
 SANA_STRUCTS = (
     S('IOSana2Req', 'ios2_WireError', 'ios2_PacketType', 'ios2_SrcAddr', 'ios2_DstAddr',
       'ios2_DataLength', 'ios2_Data', 'ios2_StatData', 'ios2_BufferManagement') +
@@ -305,6 +360,7 @@ def check_lvos(table, lib, fd, rename=None, allow_extra=()):
 def main():
     ndk = os.environ.get('NDK')
     compat = os.environ.get('COMPAT_SDK')
+    # MUI_SDK: the Developer drawer of mui38dev.lha (C/Include, FD)
     amitcp = os.environ.get('AMITCP_SDK')
     if not ndk or not os.path.isdir(ndk):
         print('SKIP: set NDK=<path to NDK3.2> (and COMPAT_SDK, AMITCP_SDK)')
@@ -319,8 +375,17 @@ def main():
                             [inc])
         ok &= check_against(tmp, 'ndk-gui', GUI_STRUCTS, GUI_CONSTS, ['exec.h', 'dos.h', 'intuition.h'],
                             ['exec/types.h', 'intuition/intuition.h', 'intuition/screens.h',
-                             'libraries/gadtools.h', 'graphics/text.h', 'graphics/rastport.h',
+                             'intuition/classes.h', 'intuition/classusr.h', 'libraries/gadtools.h',
+                             'graphics/text.h', 'graphics/rastport.h', 'graphics/view.h', 'devices/inputevent.h',
                              'workbench/startup.h'], [inc])
+        mui = os.environ.get('MUI_SDK')
+        if mui and os.path.isdir(mui):
+            ok &= check_against(tmp, 'mui-sdk', MUI_STRUCTS, MUI_CONSTS,
+                                ['exec.h', 'intuition.h', os.path.join(ROOT, 'tests/amiga/mui_check.h')],
+                                ['exec/types.h', 'libraries/mui.h', 'libraries/asl.h'],
+                                [os.path.join(mui, 'C', 'Include'), inc], rt_consts=MUI_RT_CONSTS)
+            ok &= check_lvos(os.path.join(ROOT, 'src/amiga/prefs/mui_lvos.txt'), 'muimaster',
+                             os.path.join(mui, 'FD', 'muimaster_lib.fd'))
         sana = os.path.join(ndk, 'SANA+RoadshowTCP-IP', 'include')
         if os.path.isdir(sana):
             ok &= check_against(tmp, 'sana2', SANA_STRUCTS, SANA_CONSTS, ['exec.h', 'devices.h'],
