@@ -31,6 +31,8 @@ endif
 CFLAGS  ?= -O2 -g
 CFLAGS  += -std=gnu99 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
            -Wshadow -Wpointer-arith -Wstrict-prototypes -Iinclude $(ARCHFLAGS)
+# rebuild objects when a header they include changes
+CFLAGS  += -MMD -MP
 ifeq ($(SAN),1)
   CFLAGS  += -fsanitize=address,undefined -fno-omit-frame-pointer
   LDFLAGS += -fsanitize=address,undefined
@@ -90,3 +92,5 @@ clean:
 	rm -rf build
 
 .PHONY: all check clean
+
+-include $(LIB_OBJ:.o=.d) $(ST_OBJ:.o=.d)
