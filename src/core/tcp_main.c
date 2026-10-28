@@ -2401,6 +2401,7 @@ void rt_tcp_init(void)
 	secs_now = 1;
 	rt_sysctl_register(tcp_sysctls, (int)RT_ARRAY_SIZE(tcp_sysctls));
 	tcp_fastopen_init();
+	tcp_mtup_module_init();
 	tcp_ledbat_init();
 	tcp_mem_init();
 }

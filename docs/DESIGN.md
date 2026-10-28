@@ -340,6 +340,29 @@ Open, keepalive, cork"); this is how they are built.
   (soft in RFC 1122) end a connect: the default ends it on the second
   report, which also covers Riptide's own ARP/ND failures (they answer
   queued packets with ICMP host unreachable).
+* **Path MTU black holes** (`tcp_mtup.c`, Linux `icsk_mtup`: `tcp_mtup_init()`,
+  `tcp_mtu_probe()`, `tcp_mtup_probe_success()`/`_failed()` and the timer's
+  `tcp_mtu_probing()`; RFC 4821). Per connection `mtup_search_low`/`_high`
+  are MTUs including the IP and base TCP headers; `tcp_sync_mss()` clamps
+  `high` to the path MTU and, once probing is enabled, the MSS to `low`.
+  `tcp_write_timeout()` calls `tcp_mtu_blackhole()` next to the route
+  refresh after `retries1` timeouts: the first call enables probing (MSS
+  from `base_mss`), later ones halve. `tcp_mtu_probe()`, at the start of
+  `tcp_write_xmit()`, coalesces the head of the unsent queue into one skb
+  of the midpoint size (with Linux's conditions: CA Open, cwnd >= 11, no
+  SACK blocks to send, `probe + (reordering + 1) * mss` bytes queued and
+  in the window), sends it and takes one from cwnd. An ACK past its end
+  (`tcp_clean_rtx_queue()`) raises `low` and rescales cwnd; fast
+  retransmit with `snd_una` at its start (`tcp_fastretrans_alert()`, before
+  entering recovery) lowers `high` and retransmits it as normal segments
+  without a cwnd reduction (`tcp_simple_retransmit()`); unlike Linux, any
+  retransmission of the probe's range (an RTO, TLP) also counts as a
+  failure, so a probe never ends as a success after being resent in
+  pieces. The retransmit path already fragments skbs larger than the MSS.
+  Black holes are remembered per destination (16 entries, LRU, for
+  `probe_interval` s) and `tcp_mtup_init()` starts such a connection with
+  probing on at the remembered size; the IP layer's PMTU cache is left
+  alone. Host tests silence the hole with `rt_host_impair.max_len`.
 * **Keepalive for all.** `keepalive_all` sets `ka_auto` at attach and on
   accepted children; `keepalive_time_when()` then uses it as the idle
   time. An explicit `SO_KEEPALIVE` clears `ka_auto`.

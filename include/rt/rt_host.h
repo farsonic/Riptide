@@ -80,11 +80,13 @@ struct rt_host_impair {
 	u32 rate_kbit;       /* serialisation rate limit, 0 = unlimited */
 	u32 queue_limit;     /* max packets waiting (default 1000; tail drop) */
 	u32 seed;            /* PRNG seed, 0 = random */
+	u32 max_len;         /* silently drop packets longer than this (a PMTU
+	                      * black hole: no ICMP), 0 = no limit */
 };
 /* Call WITHOUT the lock. Counters of what was done are kept per netif. */
 void rt_host_impair(struct rt_netif *nif, const struct rt_host_impair *cfg);
 struct rt_host_impair_stats {
-	u32 sent, dropped, duplicated, reordered, queue_drops;
+	u32 sent, dropped, duplicated, reordered, queue_drops, too_big;
 };
 void rt_host_impair_get_stats(struct rt_netif *nif, struct rt_host_impair_stats *st);
 

@@ -273,8 +273,10 @@ static int tcp_write_timeout(struct tcp_sock *tp)
 	} else {
 		/* black hole / route change: re-resolve the route and its
 		 * path MTU after retries1 timeouts (Linux dst_negative_advice) */
-		if (retransmits_timed_out(tp, (u32)sysctl_tcp_retries1, 0))
+		if (retransmits_timed_out(tp, (u32)sysctl_tcp_retries1, 0)) {
+			tcp_mtu_blackhole(tp);   /* Linux tcp_mtu_probing() */
 			tcp_refresh_route(tp);
+		}
 		retry_until = (u32)sysctl_tcp_retries2;
 		if (tp->dead) {
 			int alive = tp->icsk_rto < TCP_RTO_MAX;

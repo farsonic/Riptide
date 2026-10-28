@@ -666,7 +666,7 @@ static int show_stats(void)
 		P("%lu keepalive probes sent", t->TCPKeepAlive);
 		P("%lu TIME_WAIT connections reused", t->TimeWaitRecycled);
 		/* Riptide 0.15 counters: only from a stack that has them */
-		if (((struct rt_ctl_hdr *)d)->recsize >= sizeof(*t)) {
+		if (((struct rt_ctl_hdr *)d)->recsize >= offsetof(struct rt_tcp_stats, TCPMTUPBlackhole)) {
 			P("%lu connects with data in the SYN (TCP Fast Open)", t->TCPFastOpenActive);
 			P("%lu TCP Fast Open SYN data not acknowledged", t->TCPFastOpenActiveFail);
 			P("%lu TCP Fast Open cookie requests", t->TCPFastOpenCookieReqd);
@@ -679,6 +679,10 @@ static int show_stats(void)
 			P("%lu ms under memory pressure", t->TCPMemoryPressuresMs);
 			P("%lu segments dropped at the socket memory limit", t->TCPMemLimitDrops);
 		}
+		P("%lu MTU probes acknowledged", t->TCPMTUPSuccess);
+		P("%lu MTU probes lost", t->TCPMTUPFail);
+		if (((struct rt_ctl_hdr *)d)->recsize >= sizeof(*t))
+			P("%lu MSS reductions on a suspected path MTU black hole", t->TCPMTUPBlackhole);
 		FreeVec(d);
 	}
 	if (all || opt_u) {

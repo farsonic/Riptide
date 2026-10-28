@@ -365,6 +365,36 @@ static void e_none_p3(struct rp_model *m)
 	m->qos = 1;
 }
 
+/* the "MTU probing" cycle (Advanced: Connecting): net.inet.tcp.mtu_probing */
+static const char *mtup_conf =
+	"interface eth0 device=uaenet.device unit=2\n"
+	"sysctl net.inet.tcp.mtu_probing=2   # always\n"
+	"sysctl net.inet.tcp.keepidle=60\n";
+
+static void e_mtup_off(struct rp_model *m) { m->sc[RP_SC_MTU_PROBING] = 0; }
+static void e_mtup_default(struct rp_model *m) { m->sc[RP_SC_MTU_PROBING] = RP_UNSET; }
+static void e_mtup_on(struct rp_model *m) { m->sc[RP_SC_MTU_PROBING] = 1; }
+
+static void test_mtup(void)
+{
+	struct rp_conf c;
+	char *t;
+
+	roundtrip("mtu probing", mtup_conf);
+	CHECK(rp_conf_load(&c, mtup_conf, strlen(mtup_conf)) == 0);
+	CHECK(c.cur.sc[RP_SC_MTU_PROBING] == 2 && rp_other_count(&c) == 0);
+	rp_conf_free(&c);
+	t = edit(mtup_conf, e_mtup_off);
+	CHECK(t && strstr(t, "sysctl net.inet.tcp.mtu_probing=0   # always\nsysctl net.inet.tcp.keepidle=60\n"));
+	free(t);
+	t = edit(mtup_conf, e_mtup_default);
+	CHECK(t && !strstr(t, "mtu_probing") && strstr(t, "keepidle=60"));
+	free(t);
+	t = edit(inst_dhcp, e_mtup_on);
+	CHECK(t && strstr(t, "\nsysctl net.inet.tcp.mtu_probing=1\n"));
+	free(t);
+}
+
 static void test_p3_edits(void)
 {
 	struct rp_conf c;
@@ -568,6 +598,7 @@ int main(void)
 	test_live();
 	test_p3_parse();
 	test_p3_edits();
+	test_mtup();
 	test_p3_valid();
 	test_p3_live();
 	test_vlan();

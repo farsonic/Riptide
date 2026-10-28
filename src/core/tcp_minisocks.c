@@ -378,6 +378,7 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->ecn_flags = req->ecn_ok ? TCP_ECN_OK : 0;
 	tp->rx_opt.mss_clamp = req->peer_mss;
 	mtu = tcp_route_mtu(&tp->daddr, tp->scope);
+	tcp_mtup_init(tp);
 	tcp_sync_mss(tp, mtu);
 	tp->advmss = req->mss;
 	if (tp->rx_opt.tstamp_ok)

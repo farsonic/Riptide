@@ -1,6 +1,7 @@
 /*
  * Riptide - transmit-side link impairment for host tests (a tiny netem):
- * loss, duplication, reordering, delay + jitter and a rate limit, applied
+ * loss, duplication, reordering, delay + jitter, a rate limit and a size
+ * limit without ICMP (a path MTU black hole), applied
  * by wrapping a netif's link_output.
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -115,6 +116,11 @@ static int impair_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw
 	if (!im) {
 		rt_buf_free(b);
 		return -RT_ENODEV;
+	}
+	if (im->cfg.max_len && b->len > im->cfg.max_len) {
+		im->st.too_big++;
+		rt_buf_free(b);
+		return 0;
 	}
 	if (chance(im, im->cfg.loss)) {
 		im->st.dropped++;

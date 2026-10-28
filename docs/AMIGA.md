@@ -350,6 +350,56 @@ ended on ICMP unreachable, corked segments sent by the 200 ms limit,
 keepalive probes and reused TIME_WAIT connections. `nc -F` connects with
 Fast Open and `nc -K SECS` turns keepalive on.
 
+### Path MTU black holes
+
+A link with a smaller MTU on the way (PPPoE DSL 1492, a VPN, some cable
+and mobile links) is normally found by path MTU discovery: the router in
+front of it drops a full sized packet and says so with an ICMP
+"fragmentation needed" (IPv6: "packet too big"), and Riptide lowers the
+size for that destination (`ip route show cache`). Firewalls that drop
+that ICMP make a *black hole*: the connection opens, small requests work,
+and the first full sized segments vanish without a trace, so a download
+or upload hangs until the program gives up. Riptide detects this as
+Linux does (packetization layer path MTU discovery, RFC 4821):
+
+| sysctl `net.inet.tcp.` | type, range | default | |
+|---|---|---|---|
+| `mtu_probing` | 0-2 | 1 | 0 off (only ICMP lowers the size); 1 on a suspected black hole; 2 always (every connection starts at `base_mss` and probes upwards) |
+| `base_mss` | 48-65495 | 1024 | the MSS a black hole falls back to first |
+| `mtu_probe_floor` | 48-65495 | 48 | the lowest MSS further halving goes to |
+| `probe_threshold` | bytes, 1-65535 | 8 | the search for the largest size that gets through stops when the range is this narrow |
+| `probe_interval` | seconds, 1-86400 | 600 | after this long a finished search starts again (the path may have improved), and a remembered black hole is forgotten |
+| `mtu_cache` | text (read; writing clears) | | destinations with a black hole: `ADDR mtu N age S s` |
+
+With `mtu_probing` 1, when the same segment has timed out
+`tcp_retries1` (3) times, which is about 6 s with fast round trips, the
+connection drops to segments of `base_mss` (1024 bytes of data; another
+run of timeouts halves that) and goes on. It then probes upwards: now and
+then one segment of a size halfway between the largest that got through
+and the smallest that did not is sent among the normal ones; an
+acknowledged probe raises the size, a lost one (seen by fast retransmit,
+without counting as congestion) lowers the upper bound. After about six
+probes the connection uses the largest size that gets through (probes
+need several segments of unsent data queued, as in Linux: a program that
+writes 2 KB at a time, like `nc`, keeps the fallback size). The
+destination is remembered for `probe_interval` seconds (16 entries), so
+the next connection to it starts at that size instead of stalling again.
+This TCP memory does not change the path MTU of the IP layer: UDP is not
+affected by a guess. IPv4 and IPv6 alike; when the ICMP does arrive,
+normal path MTU discovery handles it first and no probing is needed.
+
+`netstat -s` counts black hole reductions and MTU probes acknowledged
+and lost (Linux: `TCPMTUPFail`, `TCPMTUPSuccess`). RiptidePrefs sets
+`mtu_probing` on its "Advanced: Connecting" page ("MTU probing": Default,
+Off, On black hole, Always). Measured against Linux over TUN with the
+router's ICMP dropped (`tests/t_mtup_tun.c`): a 1 MB upload that stalls
+for good with `mtu_probing` 0 completes in 6.4 s with 1 (6.4 s more than
+with the ICMP getting through), almost all of it the three timeouts
+before the black hole is suspected; a second connection to the same
+address takes the normal time. On an emulated A1200 (FS-UAE, `nc`,
+`tests/amiga/run_fsuae_pmtu.sh`) a 1 MB upload through a 1400 byte hole
+takes about 10 s instead of 7 s.
+
 ### Time and .local names
 
 **NTP.** `ntp pool.ntp.org` (or up to four names or addresses) starts the
@@ -899,8 +949,8 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 | Names | host name, domain, up to three DNS servers | `hostname`, `domain`, `nameserver` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=` |
-| Advanced: Connecting | Fast Open (Default/On/Off), Fast Open for every connect with a cookie, Fast Open backoff after lost SYNs (s, 0-86400), first and largest SYN RTO (ms, 200-3000 / 200-120000), SYN backoff (Linear/Doubling), connect timeout (s, 0-600) | `sysctl net.inet.tcp.fastopen=`, `fastopen_all=`, `fastopen_blackhole=`, `syn_rto_initial_ms=`, `syn_rto_max_ms=`, `syn_backoff=`, `connect_timeout=` |
-| Advanced: Ports | ICMP unreachable during a connect (Keep trying / 2nd report / At once), TIME_WAIT reuse (Off/On/Loopback only), TIME_WAIT limit (0-65536), local port range (1024-65535) | `sysctl net.inet.tcp.syn_icmp_abort=`, `tw_reuse=`, `max_tw_buckets=`, `net.inet.ip.portrange.first=`, `.last=` |
+| Advanced: Connecting | Fast Open (Default/On/Off), Fast Open for every connect with a cookie, Fast Open backoff after lost SYNs (s, 0-86400), first and largest SYN RTO (ms, 200-3000 / 200-120000), SYN backoff (Linear/Doubling), MTU probing for path MTU black holes (Default/Off/On black hole/Always) | `sysctl net.inet.tcp.fastopen=`, `fastopen_all=`, `fastopen_blackhole=`, `syn_rto_initial_ms=`, `syn_rto_max_ms=`, `syn_backoff=`, `mtu_probing=` |
+| Advanced: Ports | connect timeout (s, 0-600), ICMP unreachable during a connect (Keep trying / 2nd report / At once), TIME_WAIT reuse (Off/On/Loopback only), TIME_WAIT limit (0-65536), local port range (1024-65535) | `sysctl net.inet.tcp.connect_timeout=`, `syn_icmp_abort=`, `tw_reuse=`, `max_tw_buckets=`, `net.inet.ip.portrange.first=`, `.last=` |
 | Advanced: Keepalive | keepalive for every TCP connection (idle seconds, 0 = off), idle time, probe interval (s, 1-32767), probe count (1-127) | `sysctl net.inet.tcp.keepalive_all=`, `keepidle=`, `keepintvl=`, `keepcnt=` |
 | Advanced: Background | default congestion control (CUBIC/Reno/LEDBAT), background mode (Off/Receive/Send/Both), background programs (`AmiFTP,wget*`), remote and local ports (`20,21,6881-6889`), LEDBAT target (ms, 5-1000), LEDBAT slowdowns (On/Off) | `sysctl net.inet.tcp.cc=`, `bg_mode=`, `bg_programs=`, `bg_ports=`, `bg_lports=`, `ledbat_target=`, `ledbat_slowdown=` |
 | Advanced: Memory | socket memory low water, pressure and high water (KB, 16-4194304; empty: from the free memory at start) | `sysctl net.inet.tcp.mem_low=`, `mem_pressure=`, `mem_high=` |
@@ -910,7 +960,7 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 | Other lines | a list of the lines RiptidePrefs does not edit itself (e.g. `compat ...`, extra interfaces, routes, `background ...`); a line can be edited, replaced, added or deleted | as typed |
 
 The "Advanced:" pages edit the settings of "Connecting, Fast Open,
-keepalive, cork", "Background transfers", "Socket memory limits", "Happy
+keepalive, cork", "Path MTU black holes", "Background transfers", "Socket memory limits", "Happy
 Eyeballs" and "Priorities and quality of service" in this document (the
 extra addresses: "Several IPv4 addresses per interface"); Default (or an
 empty field) leaves the line out, so Riptide's built-in value applies.
@@ -2312,6 +2362,9 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_installer.sh` | Installs with the real Installer 43.3 (`INSTALLER43=`, Aminet `util/misc/Installer-43_3.lha`) on FS-UAE, at Novice level, driving the GUI with xdotool (`tests/amiga/fsuae_pointer.py`). With `LHA68K=` (Amiga LhA 2.15, Aminet `util/arc/lha_68k.lha`) it first unpacks `build/riptide-<version>.lha` with LhA on the Amiga. Checks the installed files, the configuration and the User-Startup block, then boots again and checks that Riptide starts from `S:User-Startup` with the generated configuration and that `rtcheck -v` passes. |
 | `tests/amiga/run_fsuae.sh build/amiga` | Full system test. It boots FS-UAE (A1200 with the built-in AROS Kickstart, headless through Xvfb) from a directory hard drive whose Startup-Sequence runs `rtcheck`. `rtcheck` starts Riptide, runs the checks against the live stack with real multitasking, and then checks that `QUIT` is refused while the libraries are open and accepted after they are closed. The live checks include blocking connect, WaitSelect timeouts through timer.device, Ctrl-C → EINTR, and extra signals. It also opens riptide.library and the compat alias (own base, shared per-task context), checks that `compat aliases off` is refused while the alias is open and removes it once closed, and starts Riptide a second time with `compat aliases off` in the configuration. |
 | `tests/t_tcpopt_tun.c` (host, root) | Against the Linux kernel over TUN, the Linux end in a network namespace with `tcp_fastopen=3` and iptables rules as middleboxes: Fast Open (cookie request, data in the SYN with `TCP_FASTOPEN_CONNECT` and `sendto(MSG_FASTOPEN)` as seen by Linux's `TCP_INFO`, a deferred connect that reads or waits first, a server without TFO, SYN-data dropped once and twice, three lost at three servers switching TFO off, `fastopen 0`), the connect timeout and the SYN backoff (times and SYN counts), ICMP host/port unreachable with each `syn_icmp_abort`, `TCP_KEEPINIT`, `SO_SNDTIMEO`, TIME_WAIT with 20 ports (`EADDRNOTAVAIL` without reuse, 20 reused with it) and 3000 short connections, keepalive probes and a silently dead peer, `keepalive_all` and an explicit `SO_KEEPALIVE` 0, and segment counts for Nagle, `TCP_NODELAY`, `TCP_CORK` with its 200 ms limit, `TCP_NOPUSH` and `MSG_MORE` (bytes checked at Linux). |
+| `tests/t_mtup_wire.c` | Path MTU black holes between two Riptide stacks over the simulated wire, packets over 1400 bytes silently dropped: 1 MB uploads and downloads over IPv4 and IPv6 complete with `mtu_probing` 1 (black hole after about 6 s, probes up to MSS 1347/1327), the next connection to the same address starts at the remembered size without a timeout (`mtu_cache`), `mtu_probing` 0 stalls until `TCP_USER_TIMEOUT`, and `mtu_probing` 2 probes from `base_mss` up to the full 1448 on a clean path and to 1347 through the hole. |
+| `tests/t_mtup_tun.c` (host, root) | The same against Linux over TUN through a Linux router namespace with a 1400 byte link: the router's ICMP "fragmentation needed" dropped by iptables (upload, a Linux client downloading from a Riptide listener, `mtu_probing` 0 stalling), an iptables length filter, and normal path MTU discovery when the ICMP passes; IPv6 too where the host kernel has it. |
+| `tests/amiga/run_fsuae_pmtu.sh build/amiga` | Through bsdsocket.library on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtpm0`/`rtpm1`, 192.168.170.0/24, or `PM_IF`, `PM_PEER`, `PM_NET`; the Linux end in a namespace with MTU 1400, advmss 1460 and ICMP dropped, `tests/amiga/pmtu_peer.py`): a 1 MB `nc` upload, a 1 MB download and a 1 MB pull from `nc -l` all complete, `mtu_cache` lists the peer, and `netstat -s` counts the black holes. `PM_MTU=1500` runs it without the hole. |
 | `tests/amiga/run_fsuae_tcpopt.sh build/amiga` | The same through bsdsocket.library on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtf0`/`rtf1`, 192.168.101.0/24, or `TF_IF`, `TF_PEER`, `TF_NET`; the Linux end in a namespace with `tests/amiga/tcpopt_peer.py`): `nc -F` three times (the second and third requests arrive in the SYN), `net.inet.tcp.fastopen_cache`, a connect timed out by `connect_timeout`, one ended by ICMP host unreachable, `nc -K 1` keepalive probes, and the `netstat -s` counters. |
 | `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root; `BR_IF`, `BR_PEER`, `BR_NET` choose other veth names and another /24 than `rtbr0`, `rtbr1`, `192.168.77`): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
 | `tests/t_vlan_unit.c`, `tests/t_vlan_wire.c`, `tests/t_vlan_tap.c` (host; TAP needs root) | VLANs: the `interface ... vlan=` keyword and its errors, tags and PCP (fixed and from `SO_PRIORITY`) on transmit, receive by id, priority-tagged, unknown-id, QinQ and runt frames, the MTU clamp, parent down/up/removal, link multicast reference counts, the `ifaces` record, a failed line leaving nothing; two stacks on the simulated wire with VLANs 10 and 20 (UDP up to the MTU and fragmented, 1 MB TCP each way, isolation of a VLAN the peer lacks, removal at run time); against Linux over TAP with an `AF_PACKET` peer (the container kernel may lack 8021q): tagged ND, ARP with PCP 5, ping with 1518 byte frames, frames of another VLAN ignored. |
