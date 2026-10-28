@@ -57,6 +57,7 @@
 #define RT_CTL_IGMPSTAT  31       /* net.riptide.igmpstat  one struct rt_igmp_stats */
 #define RT_CTL_ADDRS4    40       /* net.riptide.addrs4    struct rt_ctl_addr4[] (every IPv4 address) */
 #define RT_CTL_QOS       41       /* net.riptide.qos       struct rt_ctl_qos[] (transmit bands) */
+#define RT_CTL_STATUS    42       /* net.riptide.status    one struct rt_ctl_status (0.23) */
 
 struct rt_ctl_hdr {
 	u16 version;              /* RT_CTL_VERSION */
@@ -376,6 +377,8 @@ struct rt_ctl_tcpinfo {
 	u32  rledbat_wnd;         /* rLEDBAT's window limit, bytes (0: off) */
 	u32  ledbat_qdelay_us;    /* queueing delay LEDBAT/rLEDBAT measures */
 	u32  ledbat_base_us;      /* its base (minimum) RTT */
+	/* 0.23 (check recsize) */
+	char prog[16];            /* the program that made the socket ("": not known) */
 };
 #define RT_CTL_TCPBG_RECV   0x01  /* rLEDBAT wanted */
 #define RT_CTL_TCPBG_SEND   0x02  /* LEDBAT wanted */
@@ -397,6 +400,47 @@ struct rt_ctl_dns6 {
 	char domain[64];
 	char search[256];         /* 0.18: the search list, space separated (check recsize) */
 };
+
+/* ---- the stack at a glance (net.riptide.status, 0.23) ----
+ * Reading it also runs the CPU meter for the next 5 seconds: the Riptide
+ * process then counts the time it waits for work (cpu_idle, in ticks of
+ * cpu_hz per second). Between two reads that both have cpu_on set, the
+ * process was busy for 1 - (idle1 - idle0) / (now1 - now0) of the time. */
+#define RT_CTL_NTP_OFF     0      /* NTP not on */
+#define RT_CTL_NTP_WAIT    1      /* on, not synced yet */
+#define RT_CTL_NTP_SYNCED  2      /* the last sync worked */
+#define RT_CTL_NTP_FAILED  3      /* the last try failed */
+struct rt_ctl_status {
+	char version[16];         /* "0.23" */
+	u32  uptime_s;            /* since Riptide started */
+	/* socket buffer memory (tcp_mem.c), KB */
+	u32  mem_used_kb, mem_pressure_kb, mem_high_kb;
+	u32  buf_kb;              /* all packet buffers */
+	u8   mem_state;           /* 0 normal, 1 under pressure, 2 at the limit */
+	/* NTP */
+	u8   ntp_state;           /* RT_CTL_NTP_* */
+	u8   ntp_stratum;
+	u8   pad;
+	u32  ntp_ago_s;           /* since the last good sync, 0xffffffff = never */
+	u32  ntp_next_s;          /* until the next try */
+	s32  ntp_off_ms;          /* the clock's offset at the last sync (+: it was behind) */
+	u32  ntp_delay_us;        /* round trip to the server */
+	char ntp_server[48];      /* the server of the last sync */
+	char ntp_error[48];       /* why the last try failed */
+	/* resolver */
+	u32  dns_hits, dns_neg_hits, dns_fail_hits;
+	/* the CPU meter (see above) */
+	u32  cpu_hz, cpu_now, cpu_idle;
+	u8   cpu_on;              /* the meter was running before this read */
+	u8   pad2[3];
+};
+
+/* the CPU meter: the OS layer adds the time its stack process waits for
+ * work to rt_cpu_idle while rt_cpu_meter is set (rt_cpu_meter_poll()
+ * turns it off 5 s after the last read of net.riptide.status) */
+extern volatile u8 rt_cpu_meter;
+extern u32 rt_cpu_idle;
+void rt_cpu_meter_poll(void);
 
 /* ---- core entry points (src/core/ctl.c), lock held ---- */
 void rt_ctl_init(void);

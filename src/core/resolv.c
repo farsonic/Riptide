@@ -2432,6 +2432,14 @@ static int cache_flush_handler(const struct rt_sysctl *e, void *old, u32 *oldlen
 	return 0;
 }
 
+/* the cache counters for net.riptide.status */
+void rt_dns_cache_stats(u32 *hits, u32 *neg_hits, u32 *fail_hits)
+{
+	*hits = (u32)dns_stat_hits;
+	*neg_hits = (u32)dns_stat_neg_hits;
+	*fail_hits = (u32)dns_stat_fail_hits;
+}
+
 static const struct rt_sysctl resolv_sysctls[] = {
 	{ "dns.cache.size", RT_SYSCTL_INT, RT_SYSCTL_RW, 3, { 9, 0, 0 },
 	  &dns_cache_size, 0, DNS_CACHE_MAX, NULL, "DNS cache entries in use" },

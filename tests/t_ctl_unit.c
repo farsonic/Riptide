@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "rt/riptide.h"
+#include "rt/rt_host.h"
 #include "../src/core/infra.h"
 
 #include "t_infra_stubs.h"
@@ -574,6 +575,64 @@ static void test_sockets(struct rt_sockctx *ctx)
 	rt_api_close(ctx, raw);
 }
 
+/* net.riptide.status, the CPU meter and the program of a TCP socket */
+static void test_status(struct rt_sockctx *ctx)
+{
+	struct rt_ctl_status st;
+	struct rt_sockaddr_in sin;
+	u32 used, pr, hi;
+	int fd, n, i, found = 0;
+
+	rt_lock();
+	rt_cpu_meter = 0;
+	rt_unlock();
+	CHECK(fetch("net.riptide.status", sizeof(st)) == 1);
+	memcpy(&st, rec(0, sizeof(st)), sizeof(st));
+	CHECK(!strcmp(st.version, RIPTIDE_VERSION_STRING));
+	CHECK(st.cpu_on == 0 && st.cpu_hz > 0);
+	CHECK(st.ntp_state == RT_CTL_NTP_OFF && st.ntp_ago_s == 0xffffffffu);
+	rt_lock();
+	CHECK(rt_tcp_mem_info(&used, &pr, &hi) == st.mem_state);
+	rt_unlock();
+	CHECK(st.mem_pressure_kb == pr && st.mem_high_kb == hi && st.mem_pressure_kb < st.mem_high_kb);
+	/* the read turned the meter on; idle time comes from the OS layer */
+	CHECK(rt_cpu_meter == 1);
+	rt_cpu_idle += 1234;
+	CHECK(fetch("net.riptide.status", sizeof(st)) == 1);
+	memcpy(&st, rec(0, sizeof(st)), sizeof(st));
+	CHECK(st.cpu_on == 1 && st.cpu_idle == rt_cpu_idle);
+	/* and goes off 5 s after the last read */
+	rt_host_advance_clock(4000);
+	rt_lock();
+	rt_cpu_meter_poll();
+	CHECK(rt_cpu_meter == 1);
+	rt_unlock();
+	rt_host_advance_clock(1500);
+	rt_lock();
+	rt_cpu_meter_poll();
+	CHECK(rt_cpu_meter == 0);
+	rt_unlock();
+
+	/* tcpinfo names the program that made the socket */
+	rt_host_set_program("AmiFTP");
+	fd = rt_api_socket(ctx, RT_AF_INET, RT_SOCK_STREAM, 0);
+	rt_host_set_program("");
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_len = sizeof(sin);
+	sin.sin_family = RT_AF_INET;
+	sin.sin_port = rt_htons(2121);
+	CHECK(rt_api_bind(ctx, fd, &sin, sizeof(sin)) == 0);
+	CHECK(rt_api_listen(ctx, fd, 1) == 0);
+	n = fetch("net.riptide.tcpinfo", sizeof(struct rt_ctl_tcpinfo));
+	for (i = 0; i < n; i++) {
+		const struct rt_ctl_tcpinfo *t = rec(i, sizeof(*t));
+		if (t->lport == 2121 && t->state == RT_TCPS_LISTEN && !strcmp(t->prog, "AmiFTP"))
+			found = 1;
+	}
+	CHECK(found);
+	rt_api_close(ctx, fd);
+}
+
 /* IPv6 configuration verbs and the IPv6 tables */
 static int find_addr6(const char *a, u8 plen)
 {
@@ -739,6 +798,7 @@ int main(void)
 	test_ioctls(&ctx, fd);
 	test_commands();
 	test_sockets(&ctx);
+	test_status(&ctx);
 	test_ipv6(&ctx);
 	rt_api_close(&ctx, fd);
 	rt_ctx_destroy(&ctx);

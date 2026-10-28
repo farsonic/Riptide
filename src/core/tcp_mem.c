@@ -110,6 +110,15 @@ static u32 mem_state(void)
 	return tcp_under_memory_pressure() ? 1u : 0u;
 }
 
+/* the socket memory fields of net.riptide.status */
+u8 rt_tcp_mem_info(u32 *used_kb, u32 *pressure_kb, u32 *high_kb)
+{
+	*used_kb = tcp_mem_used() >> 10;
+	*pressure_kb = (u32)sysctl_tcp_mem_pressure;
+	*high_kb = (u32)sysctl_tcp_mem_high;
+	return (u8)mem_state();
+}
+
 void rt_tcp_mem_status(char *buf, u32 len)
 {
 	static const char *const st[3] = { "", ", under pressure", ", at the limit" };

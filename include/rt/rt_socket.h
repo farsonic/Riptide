@@ -153,6 +153,7 @@ struct rt_socket {
 	u8   no_check;                /* no UDP checksum over IPv4 */
 	u8   tx_wait;                 /* waits for room on tx_ifindex */
 	u32  tx_ifindex;              /* 0: not known yet */
+	char prog[16];                /* the program that made it ("": Riptide itself, 0.23) */
 };
 #define RT_SOQ_PRIO      0x01     /* the program set SO_PRIORITY */
 #define RT_SOQ_RULE_PRIO 0x02     /* priority from a rule */

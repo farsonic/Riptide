@@ -377,6 +377,7 @@ int rt_api_socket(struct rt_sockctx *c, int domain, int type, int protocol)
 	}
 	fd_install(c, fd, so, 1);
 	rt_qos_sock_rules(so, NULL, 0, 0);
+	rt_os_program_name(so->prog, sizeof(so->prog));
 	RT_DBG(RT_DBG_SOCKET, "socket(%d, %d, %d) = %d", domain, type, protocol, fd);
 	rt_unlock();
 	return fd;
@@ -519,6 +520,7 @@ int rt_api_accept(struct rt_sockctx *c, int fd, void *a, u32 *alen)
 			ch->rule_dscp = so->rule_dscp;
 		}
 		ch->qos_prog = so->qos_prog;
+		memcpy(ch->prog, so->prog, sizeof(ch->prog));
 		qos_ports(ch, 0, 0);
 		if (a) {
 			memset(&sin, 0, sizeof(sin));

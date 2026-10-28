@@ -1736,6 +1736,8 @@ static void tcp_fill_ctl_info(struct tcp_sock *tp, struct rt_ctl_tcpinfo *r)
 		if (tp->rl)
 			r->rledbat_wnd = tcp_rledbat_window(tp);
 	}
+	if (tp->so)
+		memcpy(r->prog, tp->so->prog, sizeof(r->prog));
 }
 
 /* net.riptide.tcpinfo (ctl.c): returns the total count */

@@ -31,6 +31,9 @@ int  rt_tz_command(int argc, char **argv, char *out, u32 outlen);
 void rt_ntp_dhcp_servers(const struct rt_netif *nif, const u32 *addrs, int n);
 /* One status line (no newline), "" when NTP is off */
 void rt_ntp_status(char *buf, u32 len);
+/* the NTP fields of net.riptide.status (rt_ctl.h) */
+struct rt_ctl_status;
+void rt_ntp_ctl(struct rt_ctl_status *st);
 
 /* ---- mDNS ---- */
 /* "mdns on|off|status" */

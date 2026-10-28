@@ -540,6 +540,32 @@ static void fmt_off(char *b, u32 len, s32 s, s32 u)
 	}
 }
 
+/* the NTP part of net.riptide.status */
+void rt_ntp_ctl(struct rt_ctl_status *st)
+{
+	s32 next = (s32)(ntp.next_ms - rt_now_ms());
+
+	st->ntp_ago_s = 0xffffffffu;
+	if (!ntp.enabled) {
+		st->ntp_state = RT_CTL_NTP_OFF;
+		return;
+	}
+	st->ntp_state = ntp.last_err[0] ? RT_CTL_NTP_FAILED : ntp.synced ? RT_CTL_NTP_SYNCED : RT_CTL_NTP_WAIT;
+	st->ntp_next_s = next > 0 ? (u32)next / 1000u : 0;
+	rt_strlcpy(st->ntp_error, ntp.last_err, sizeof(st->ntp_error));
+	if (!ntp.synced)
+		return;
+	st->ntp_ago_s = (rt_now_ms() - ntp.last_ms) / 1000u;
+	st->ntp_stratum = ntp.stratum;
+	/* years off before the first sync: the most that fits */
+	if (ntp.off_sec > 2000000 || ntp.off_sec < -2000000)
+		st->ntp_off_ms = ntp.off_sec < 0 ? -2000000000 : 2000000000;
+	else
+		st->ntp_off_ms = ntp.off_sec * 1000 + ntp.off_usec / 1000;
+	st->ntp_delay_us = ntp.delay_us;
+	rt_strlcpy(st->ntp_server, ntp.last_name, sizeof(st->ntp_server));
+}
+
 void rt_ntp_status(char *buf, u32 len)
 {
 	char off[32];

@@ -710,6 +710,7 @@ void amiga_stack_loop(void)
 				ai->poll(ai);
 		rt_rx_batch_end();
 		ms = rt_stack_poll();
+		rt_cpu_meter_poll();
 		RT_PROF_EXIT(RT_PROF_STACK);
 		rt_unlock();
 		amiga_log_flush();
@@ -728,10 +729,16 @@ void amiga_stack_loop(void)
 		if (ms == 0) {
 			sigs = SetSignal(0, wait) & wait;
 		} else {
-			u32 t0;
+			u32 t0, m0 = 0;
+			int meter = rt_cpu_meter;
 			arm_timer(ms);
 			t0 = RT_PROF_T0();
+			/* the CPU meter (RiptidePrefs' Status page): the time spent waiting */
+			if (meter)
+				m0 = rt_prof_ticks();
 			sigs = Wait(wait);
+			if (meter)
+				rt_cpu_idle += rt_prof_ticks() - m0;
 			RT_PROF_ADD(RT_PROF_IDLE, t0);
 		}
 		if (timer_pending && CheckIO(&treq->tr_node)) {
