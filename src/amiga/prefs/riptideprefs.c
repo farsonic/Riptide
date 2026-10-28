@@ -105,6 +105,8 @@ static const char *const cy_icmp[] = { "Default", "Keep trying", "2nd report", "
 static const long cyv_icmp[] = { RP_UNSET, 0, 1, 2 };
 static const char *const cy_mtup[] = { "Default", "Off", "On black hole", "Always", NULL };
 static const long cyv_mtup[] = { RP_UNSET, 0, 1, 2 };
+static const char *const cy_ecn[] = { "Default", "Off", "On", "Accept only", NULL };
+static const long cyv_ecn[] = { RP_UNSET, 0, 1, 2 };
 static const char *const cy_tw[] = { "Default", "Off", "On", "Loopback only", NULL };
 static const long cyv_tw[] = { RP_UNSET, 0, 1, 2 };
 static const char *const cy_cc[] = { "Default", "CUBIC", "Reno", "LEDBAT", NULL };
@@ -144,6 +146,7 @@ static const struct field fields[] = {
 	{ P_TCP,   F_CYCLE, 0, MS(quickack),  0, 0,        "_Quick ACK", cy_ack, cyv_ack },
 	{ P_TCP,   F_NUM,   0, MS(delack_segs), 1, 64,     "Delayed ACK se_gments", NULL, NULL },
 	{ P_TCP,   F_NUM,   0, MS(delack_ms), 1, 500,      "Delayed ACK _limit (ms)", NULL, NULL },
+	{ P_TCP,   F_CYCLE, 0, SC(RP_SC_ECN), 0, 0,        "_ECN", cy_ecn, cyv_ecn },
 	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_FASTOPEN), 0, 0,   "_Fast Open", cy_sw, cyv_sw },
 	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_FASTOPEN_ALL), 0, 0, "Fast Open _defer all", cy_sw, cyv_sw },
 	{ P_CONN,  F_NUM,   0, SC(RP_SC_FO_BLACKHOLE), 0, 86400, "Fast Open _backoff (s)", NULL, NULL },

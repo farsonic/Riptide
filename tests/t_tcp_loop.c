@@ -787,7 +787,7 @@ static void test_negotiation(void)
 
 	CHECK(pair(5030, &lfd, &cfd, &afd));
 	t_get_info(&cs, cfd, &ti);
-	CHECKV(ti.tcpi_options == 7, "opts %x", ti.tcpi_options);   /* TS SACK WS */
+	CHECKV(ti.tcpi_options == 0xf, "opts %x", ti.tcpi_options);  /* TS SACK WS ECN */
 	CHECK(rt_api_getsockopt(&cs, cfd, RT_IPPROTO_TCP, RT_TCP_CONGESTION, name, &len) == 0 &&
 	      strcmp(name, "cubic") == 0);
 	CHECK(rt_api_setsockopt(&cs, cfd, RT_IPPROTO_TCP, RT_TCP_CONGESTION, "reno", 4) == 0);
@@ -802,20 +802,20 @@ static void test_negotiation(void)
 	t_sysctl("net.inet.tcp.rfc1323", 0);
 	CHECK(pair(5031, &lfd, &cfd, &afd));
 	t_get_info(&cs, cfd, &ti);
-	CHECKV(ti.tcpi_options == 2, "opts %x", ti.tcpi_options);   /* SACK only */
+	CHECKV(ti.tcpi_options == 0xa, "opts %x", ti.tcpi_options);  /* SACK and ECN only */
 	rt_api_close(&cs, cfd);
 	rt_api_close(&ss, afd);
 	rt_api_close(&ss, lfd);
 	t_sysctl("net.inet.tcp.rfc1323", 1);
 
-	t_sysctl("net.inet.tcp.ecn", 1);
+	t_sysctl("net.inet.tcp.ecn", 2);
 	CHECK(pair(5032, &lfd, &cfd, &afd));
 	t_get_info(&cs, cfd, &ti);
-	CHECKV(ti.tcpi_options == 0xf, "opts %x", ti.tcpi_options);  /* + ECN */
+	CHECKV(ti.tcpi_options == 7, "opts %x", ti.tcpi_options);    /* accept only: no ECN */
 	rt_api_close(&cs, cfd);
 	rt_api_close(&ss, afd);
 	rt_api_close(&ss, lfd);
-	t_sysctl("net.inet.tcp.ecn", 2);
+	t_sysctl("net.inet.tcp.ecn", 1);
 }
 
 

@@ -1247,9 +1247,10 @@ int tcp_retransmit_skb(struct tcp_sock *tp, struct rt_buf *b)
 		return -RT_ENOMEM;
 	/* RFC 3168 6.1.1: a retransmitted SYN gives up on ECN */
 	if ((cb->tcp_flags & TCPHDR_SYN) && (cb->tcp_flags & (TCPHDR_ECE | TCPHDR_CWR)) &&
-	    tp->state == RT_TCPS_SYN_SENT) {
+	    tp->state == RT_TCPS_SYN_SENT && sysctl_tcp_ecn_fallback) {
 		cb->tcp_flags &= ~(TCPHDR_ECE | TCPHDR_CWR);
 		tp->ecn_flags &= ~TCP_ECN_OK;
+		rt_tcpstat.TCPECNFallback++;
 	}
 	err = tcp_transmit_skb(tp, b, 1);
 	if (err)

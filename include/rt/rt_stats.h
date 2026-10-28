@@ -55,6 +55,11 @@ struct rt_tcp_stats {
 	u32 TCPMemLimitDrops;      /* segments dropped above net.inet.tcp.mem_high */
 	/* 0.18 */
 	u32 TCPMTUPBlackhole;      /* MSS lowered on a suspected PMTU black hole */
+	/* 0.20: ECN (RFC 3168) */
+	u32 TCPECNNegotiated;      /* connections that use ECN */
+	u32 TCPECNNotAgreed;       /* ECN-setup SYNs the peer answered without ECN */
+	u32 TCPECNFallback;        /* ECN-setup SYNs resent without ECN */
+	u32 TCPECNEceRcvd;         /* ACKs with ECE (congestion experienced) */
 };
 
 struct rt_igmp_stats {

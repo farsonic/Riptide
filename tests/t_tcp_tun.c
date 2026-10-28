@@ -446,9 +446,8 @@ int main(int argc, char **argv)
 	transfer("riptide connects", 0, 1, big, LINUX_IP, 8002, 7);
 	transfer("linux connects", 1, 0, big, LINUX_IP, 8003, 7);
 	transfer("linux connects", 1, 1, big, LINUX_IP, 8004, 7);
-	t_sysctl("net.inet.tcp.ecn", 1);
+	/* ECN requested by default; Linux accepts it */
 	transfer("ecn requested", 0, 0, big / 4, LINUX_IP, 8005, 0xf);
-	t_sysctl("net.inet.tcp.ecn", 2);
 
 	/* small link MTU on the Linux side: Linux advertises MSS 536 */
 	sh("ip link set dev %s mtu 576", tun_name);

@@ -395,6 +395,35 @@ static void test_mtup(void)
 	free(t);
 }
 
+/* the "ECN" cycle (TCP page): net.inet.tcp.ecn */
+static const char *ecn_conf =
+	"interface eth0 device=uaenet.device unit=2\n"
+	"sysctl net.inet.tcp.ecn=2\n";
+
+static void e_ecn_off(struct rp_model *m) { m->sc[RP_SC_ECN] = 0; }
+static void e_ecn_default(struct rp_model *m) { m->sc[RP_SC_ECN] = RP_UNSET; }
+static void e_ecn_on(struct rp_model *m) { m->sc[RP_SC_ECN] = 1; }
+
+static void test_ecn(void)
+{
+	struct rp_conf c;
+	char *t;
+
+	roundtrip("ecn", ecn_conf);
+	CHECK(rp_conf_load(&c, ecn_conf, strlen(ecn_conf)) == 0);
+	CHECK(c.cur.sc[RP_SC_ECN] == 2 && rp_other_count(&c) == 0);
+	rp_conf_free(&c);
+	t = edit(ecn_conf, e_ecn_off);
+	CHECK(t && strstr(t, "sysctl net.inet.tcp.ecn=0\n"));
+	free(t);
+	t = edit(ecn_conf, e_ecn_default);
+	CHECK(t && !strstr(t, "tcp.ecn"));
+	free(t);
+	t = edit(inst_dhcp, e_ecn_on);
+	CHECK(t && strstr(t, "\nsysctl net.inet.tcp.ecn=1\n"));
+	free(t);
+}
+
 static void test_p3_edits(void)
 {
 	struct rp_conf c;
@@ -673,6 +702,7 @@ int main(void)
 	test_p3_parse();
 	test_p3_edits();
 	test_mtup();
+	test_ecn();
 	test_p3_valid();
 	test_p3_live();
 	test_vlan();
