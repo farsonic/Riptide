@@ -945,8 +945,10 @@ static int tcp_ack(struct tcp_sock *tp, struct rt_buf *b, int flag)
 		if (tp->rx_opt.sack_off)
 			flag |= tcp_sacktag_write_queue(tp, b, prior_snd_una, &sack);
 		if ((cb->tcp_flags & TCPHDR_ECE) && !(cb->tcp_flags & TCPHDR_SYN) &&
-		    (tp->ecn_flags & TCP_ECN_OK))
+		    (tp->ecn_flags & TCP_ECN_OK)) {
 			flag |= FLAG_ECE;
+			rt_tcpstat.TCPECNEceRcvd++;
+		}
 	}
 	tcp_ecn_accept_cwr(tp, b);
 	tp->err_soft = 0;
@@ -1577,10 +1579,16 @@ static int tcp_rcv_synsent_state_process(struct tcp_sock *tp, struct rt_buf *b)
 			tp->rx_opt.snd_wscale = tp->rx_opt.rcv_wscale = 0;
 			tp->window_clamp = RT_MIN(tp->window_clamp, 65535u);
 		}
-		/* RFC 3168: ECN-setup SYN-ACK has ECE without CWR */
-		if ((tp->ecn_flags & TCP_ECN_OK) &&
-		    (!(fl & TCPHDR_ECE) || (fl & TCPHDR_CWR)))
-			tp->ecn_flags &= ~TCP_ECN_OK;
+		/* RFC 3168: ECN-setup SYN-ACK has ECE without CWR (both: a
+		 * middlebox reflecting the SYN's flags) */
+		if (tp->ecn_flags & TCP_ECN_OK) {
+			if (!(fl & TCPHDR_ECE) || (fl & TCPHDR_CWR)) {
+				tp->ecn_flags &= ~TCP_ECN_OK;
+				rt_tcpstat.TCPECNNotAgreed++;
+			} else {
+				rt_tcpstat.TCPECNNegotiated++;
+			}
+		}
 		tp->snd_wl1 = cb->seq;
 		tp->rx_opt.sack_off = 0;
 		tcp_ack(tp, b, FLAG_SLOWPATH);

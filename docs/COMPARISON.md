@@ -123,7 +123,7 @@ robustness are unproven. Section 9 lists where it is behind.
 | PRR (RFC 9937) | No | **Unverified** | Yes: RecoverFS from the data in flight, SSRB only on ACKs that mark no new loss |
 | F-RTO (RFC 5682) and undo | No | **Unverified** | F-RTO on (`frto` 2); Eifel/D-SACK undo of spurious recoveries |
 | Timestamps / PAWS, window scaling (RFC 7323) | Implemented, `rfc1323` = 0 by default; enabled per interface by a heuristic | Implemented; `tcp.do_rfc1323`, `tcp.do_timestamps`, `tcp.do_win_scale` switches [RS-DOC]; defaults not documented | Both on (`timestamps`, `window_scaling`), with PAWS |
-| ECN (RFC 3168) | No | **Unverified** | Accepted when the peer asks (`ecn` 2); requesting is `ecn` 1 |
+| ECN (RFC 3168) | No | **Unverified** | Yes: asked for on outgoing connections and accepted (`ecn` 1, as Apple and many Linux distributions); a resent SYN falls back to no ECN |
 | RTO estimator | 4.4BSD, 500 ms slow ticks, minimum about 1 s | `tcp.rttdflt` tunable [RS-DOC]; granularity **unverified** | RFC 6298 with Linux's estimator; RTT sampled in microseconds; RTO min 200 ms (`rto_min_ms`) |
 | Timer granularity | 2 Hz slow timer, 5 Hz fast timer; in 4.4BSD-Lite the `tcpcb` keeps timers and RTT state as 16-bit tick counts (`t_timer[]`, `t_srtt`, `t_rttvar`); RE-NOTES does not record MiamiDx's exact layout | **Unverified** | Millisecond timers (`rt_now_ms()`), driven by timer.device |
 | Delayed ACK | 200 ms fast timer | **Unverified** | Delayed ACK with quickack mode after start and loss, as Linux |

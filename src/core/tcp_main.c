@@ -15,7 +15,8 @@ s32 sysctl_tcp_timestamps = 1;
 s32 sysctl_tcp_window_scaling = 1;
 s32 sysctl_tcp_sack = 1;
 s32 sysctl_tcp_dsack = 1;
-s32 sysctl_tcp_ecn = 2;
+s32 sysctl_tcp_ecn = 1;
+s32 sysctl_tcp_ecn_fallback = 1;
 s32 sysctl_tcp_initcwnd = 10;
 s32 sysctl_tcp_rto_min_ms = 200;
 s32 sysctl_tcp_syncookies = 1;
@@ -2351,7 +2352,8 @@ static const struct rt_sysctl tcp_sysctls[] = {
 	INT_RW("net.inet.tcp.window_scaling", NO_MIB, sysctl_tcp_window_scaling, 0, 1, "RFC 7323 window scaling"),
 	INT_RW("net.inet.tcp.sack", NO_MIB, sysctl_tcp_sack, 0, 1, "RFC 2018 SACK"),
 	INT_RW("net.inet.tcp.dsack", NO_MIB, sysctl_tcp_dsack, 0, 1, "RFC 2883 D-SACK"),
-	INT_RW("net.inet.tcp.ecn", NO_MIB, sysctl_tcp_ecn, 0, 2, "ECN: 1 request, 2 accept"),
+	INT_RW("net.inet.tcp.ecn", NO_MIB, sysctl_tcp_ecn, 0, 2, "ECN: 0 off, 1 request and accept, 2 accept only"),
+	INT_RW("net.inet.tcp.ecn_fallback", NO_MIB, sysctl_tcp_ecn_fallback, 0, 1, "Retransmitted SYN without ECN"),
 	{ "net.inet.tcp.cc", RT_SYSCTL_STRING, RT_SYSCTL_RW, NO_MIB, sysctl_tcp_cc, 0,
 	  sizeof(sysctl_tcp_cc), tcp_sysctl_cc, "Congestion control (cubic, reno, ledbat)" },
 	INT_RW("net.inet.tcp.hystart", NO_MIB, sysctl_tcp_hystart, 0, 2,

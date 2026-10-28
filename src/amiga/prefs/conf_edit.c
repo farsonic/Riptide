@@ -21,7 +21,7 @@ const char *const rp_sc_names[RP_NSC] = {
 	"net.inet.he.attempt_delay", "net.inet.he.resolution_delay", "net.inet.he.prefer",
 	"net.inet.he.aaaa_filter", "net.inet.ip.qos_inflight", "net.inet.ip.qos_limit",
 	"net.inet.ip.qos_prio_dscp", "dns.edns_size", "dns.tcp_fallback", "net.inet.tcp.mtu_probing",
-	"dns.cache.neg_maxttl"
+	"dns.cache.neg_maxttl", "net.inet.tcp.ecn"
 };
 const char *const rp_ss_names[RP_NSS] = {
 	"net.inet.tcp.bg_programs", "net.inet.tcp.bg_ports", "net.inet.tcp.bg_lports"

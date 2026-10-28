@@ -229,7 +229,9 @@ so two runs of the same download can be compared without restarting:
 
 | sysctl | default | |
 |---|---|---|
-| `net.inet.tcp.sack`, `timestamps`, `window_scaling`, `ecn` | 1, 1, 1, 2 | the TCP options (`rfc1323` sets timestamps and window scaling together) |
+| `net.inet.tcp.sack`, `timestamps`, `window_scaling` | 1, 1, 1 | the TCP options (`rfc1323` sets timestamps and window scaling together) |
+| `net.inet.tcp.ecn` | 1 | ECN (RFC 3168): 1 asked for on outgoing connections and accepted on incoming ones, 2 accepted only, 0 off (before 0.20 the default was 2) |
+| `net.inet.tcp.ecn_fallback` | 1 | a retransmitted SYN goes without ECN, and the connection does not use it (RFC 3168 6.1.1.1: a middlebox may drop ECN-setup SYNs) |
 | `net.inet.tcp.recvspace`, `sendspace` | 32768, 32768 | initial buffer sizes |
 | `net.inet.tcp.rmem_max`, `moderate_rcvbuf` | 65536, 1 | receive buffer auto-tuning and its limit (host test builds: 262144) |
 | `net.inet.tcp.delack_segs` | 2 | send an ACK every N full-sized segments (1 = every segment) |
@@ -237,6 +239,19 @@ so two runs of the same download can be compared without restarting:
 | `net.inet.tcp.quickack` | 0 | 1 = never delay ACKs |
 | `net.inet.tcp.cc` | cubic | congestion control for new connections (`cubic`, `reno`, `ledbat`) |
 | `net.inet.tcp.hystart` | 2 | CUBIC's slow start exit: 2 HyStart++ (RFC 9406), 1 Linux's classic HyStart, 0 none (slow start until a loss) |
+
+**ECN.** Riptide asks for Explicit Congestion Notification on the
+connections it opens, as Apple's systems and many Linux distributions do:
+a router with an AQM (fq_codel, CAKE, PIE, as in many home routers) can
+then mark packets instead of dropping them, and the sender slows down
+without a retransmission. Data segments are sent ECT(0); SYNs, ACKs and
+retransmissions are not. A peer that does not answer with ECE alone (no
+ECN, or ECE and CWR reflected by a middlebox) gets none, and a SYN that
+has to be resent goes without ECN. `netstat -s` counts connections using
+ECN, requests not agreed, SYNs resent without ECN, segments received with
+"congestion experienced" and ACKs with the ECN echo. `IP_TOS` sets the
+DSCP only; the two ECN bits stay the stack's. RiptidePrefs: the TCP
+page, "ECN" (Default, Off, On, Accept only).
 
 `delack_segs` counts like Linux: an ACK goes out once more than N-1
 segments are unacknowledged, but only if the window it advertises is not
@@ -1099,7 +1114,7 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 | VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5` | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...]` |
 | Names | host name, domain, up to three DNS servers; EDNS size (empty: default, 0 = off) and DNS over TCP (Default/On/Off) | `hostname`, `domain`, `nameserver`, `sysctl dns.edns_size=N`, `sysctl dns.tcp_fallback=0\|1` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
-| TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=` |
+| TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit, ECN (Default/Off/On/Accept only) | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=`, `sysctl net.inet.tcp.ecn=` |
 | Advanced: Connecting | Fast Open (Default/On/Off), Fast Open for every connect with a cookie, Fast Open backoff after lost SYNs (s, 0-86400), first and largest SYN RTO (ms, 200-3000 / 200-120000), SYN backoff (Linear/Doubling), MTU probing for path MTU black holes (Default/Off/On black hole/Always) | `sysctl net.inet.tcp.fastopen=`, `fastopen_all=`, `fastopen_blackhole=`, `syn_rto_initial_ms=`, `syn_rto_max_ms=`, `syn_backoff=`, `mtu_probing=` |
 | Advanced: Ports | connect timeout (s, 0-600), ICMP unreachable during a connect (Keep trying / 2nd report / At once), TIME_WAIT reuse (Off/On/Loopback only), TIME_WAIT limit (0-65536), local port range (1024-65535) | `sysctl net.inet.tcp.connect_timeout=`, `syn_icmp_abort=`, `tw_reuse=`, `max_tw_buckets=`, `net.inet.ip.portrange.first=`, `.last=` |
 | Advanced: Keepalive | keepalive for every TCP connection (idle seconds, 0 = off), idle time, probe interval (s, 1-32767), probe count (1-127) | `sysctl net.inet.tcp.keepalive_all=`, `keepidle=`, `keepintvl=`, `keepcnt=` |
@@ -2534,6 +2549,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_linklocal.sh build/amiga` | IPv4 link-local on bridged FS-UAE without a DHCP server (`FSUAE_PCAP=`, root; veth `rtl0`/`rtl1`, 192.168.180.0/24, or `LL_IF`, `LL_PEER`, `LL_NET`) against `tests/amiga/linklocal_peer.py`: ARP probes and announcements, the mDNS announcement of `amiga.local`, Linux resolving it and pinging the address, the Amiga pinging 169.254.1.1, `ip dhcp`, `ip route` (no default route), `ip addr`, `STATUS`. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |
+| `tests/t_ecn_unit.c` (host) | ECN against a scripted peer on a fake point-to-point interface: the ECN-setup SYN (not ECT), a SYN-ACK with ECE only turns ECN on, one without ECE or with ECE and CWR does not; `ecn` 2 and 0 send no ECN-setup SYN; a retransmitted SYN drops ECE/CWR (and keeps them with `ecn_fallback` 0); ECT(0) on new data but not on ACKs or retransmissions; CE received is echoed with ECE until the peer's CWR; an ECE received reduces cwnd once per window and the next new data carries CWR; `IP_TOS` keeps the ECN bits; the `netstat -s` counters. |
 | `tests/t_cubic_unit.c` (host) | CUBIC's slow start exit on a bare connection, round by round with synthetic RTTs: HyStart++ keeps slow start at a steady RTT, enters CSS (a quarter of the growth) on a rise, resumes slow start when the RTT falls, ends in congestion avoidance after 5 CSS rounds; at most 8 segments per stretch ACK; no HyStart++ after a loss; classic HyStart and `hystart=0`. |
 | `tests/t_ledbat_unit.c` (host) | Background transfers and memory limits: the LEDBAT++ controller in a fluid model of a 12 Mbit/s link with 20 ms base RTT and 500 ms of buffer (alone: about 50 ms of queue at 97 % utilisation and periodic slowdowns; against Reno: under 1 % of the link; Reno alone: 400 ms of queue), loss handling; rLEDBAT's window on a bare connection; the `background` keyword in every form AmigaDOS hands it over, the sysctls, rules by program name (`rt_host_set_program()`) and local port, `TCP_BACKGROUND`, an explicit `TCP_CONGESTION` winning; socket memory: 12 connections nobody reads stay at the 1 MB limit (2 MB without), the data is intact once read, the defaults from the free memory. |
 | `tests/t_ledbat_tun.c` (host, root) | Background transfers against Linux CUBIC over TUN. Downloads: Riptide reads the TUN device at 8 Mbit/s (`rt_host_tun_rx_rate()`), so the kernel's tun queue (300 packets) is the bottleneck; a normal download fills it (about 270 ms RTT), a background one (rLEDBAT by a `lport` rule) keeps the RTT near 65 ms at 96 % of the link, and next to a normal one it gets about 1 %. Uploads: Riptide's transmit rate limit; LEDBAT alone 63 ms RTT (CUBIC 235 ms), against CUBIC about 1 %. |

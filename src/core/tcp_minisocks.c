@@ -376,6 +376,8 @@ static struct tcp_sock *tcp_create_child(struct tcp_sock *lp, struct tcp_request
 	tp->window_limit = tcp_route_window(&tp->daddr, tp->scope);
 	tp->rcv_ssthresh = req->rcv_wnd;
 	tp->ecn_flags = req->ecn_ok ? TCP_ECN_OK : 0;
+	if (req->ecn_ok)
+		rt_tcpstat.TCPECNNegotiated++;
 	tp->rx_opt.mss_clamp = req->peer_mss;
 	mtu = tcp_route_mtu(&tp->daddr, tp->scope);
 	tcp_mtup_init(tp);

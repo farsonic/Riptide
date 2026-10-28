@@ -682,8 +682,15 @@ static int show_stats(void)
 		}
 		P("%lu MTU probes acknowledged", t->TCPMTUPSuccess);
 		P("%lu MTU probes lost", t->TCPMTUPFail);
-		if (((struct rt_ctl_hdr *)d)->recsize >= sizeof(*t))
+		if (((struct rt_ctl_hdr *)d)->recsize >= offsetof(struct rt_tcp_stats, TCPECNNegotiated))
 			P("%lu MSS reductions on a suspected path MTU black hole", t->TCPMTUPBlackhole);
+		P("%lu segments received with ECN congestion experienced", t->TCPECNMarks);
+		if (((struct rt_ctl_hdr *)d)->recsize >= sizeof(*t)) {
+			P("%lu connections using ECN", t->TCPECNNegotiated);
+			P("%lu ECN requests not agreed by the peer", t->TCPECNNotAgreed);
+			P("%lu SYNs resent without ECN", t->TCPECNFallback);
+			P("%lu acknowledgments with ECN echo received", t->TCPECNEceRcvd);
+		}
 		FreeVec(d);
 	}
 	if (all || opt_u) {
