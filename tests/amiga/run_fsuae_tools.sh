@@ -367,7 +367,7 @@ expect netstat_l 'LISTEN'
 expect netstat_T '^TCP connection details \(w/o servers\)' \
 	'^tcp +127\.0\.0\.1:7777 127\.0\.0\.1:[0-9]+ ESTABLISHED' \
 	'^  (cubic|reno) (open|disorder) age [0-9.]+m?s  rtt [0-9.]+/[0-9.]+ ms min' \
-	'^  opts ts sack ws wscale [0-9]+/[0-9]+ mss [0-9]+/[0-9]+' '^  wnd snd [0-9]+ rcv [0-9]+' \
+	'^  opts ts sack ws ecn wscale [0-9]+/[0-9]+ mss [0-9]+/[0-9]+' '^  wnd snd [0-9]+ rcv [0-9]+' \
 	'^  rx [0-9]+ bytes, [0-9]+ segs' '^  acks out [0-9]+ \(delayed [0-9]+, dup 0' \
 	'^  retrans 0  fast recovery 0  rto 0' '^  time busy [0-9.]+m?s' '^       unread [0-9.]+m?s zero-wnd'
 reject netstat_T 'LISTEN'
