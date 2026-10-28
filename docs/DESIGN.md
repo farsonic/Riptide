@@ -417,6 +417,26 @@ and the tun queue, whose packets the kernel orphans, is the bottleneck.
 The container's Linux defaults to BBR, which builds no standing queue;
 the test uses CUBIC senders.
 
+## Slow start exit (tcp_cubic.c)
+
+CUBIC leaves the initial slow start with HyStart++ (RFC 9406,
+`net.inet.tcp.hystart=2`, the default) rather than Linux's classic
+HyStart (1), which ends slow start for good on the first delay rise or
+long ACK train and so stops early on bursty paths (Wi-Fi, DOCSIS).
+HyStart++ measures rounds by `end_seq` (windowEnd) and keeps the minimum
+of at least 8 RTT samples per round. When a round's minimum is at least
+`clamp(last/8, 4 ms, 16 ms)` above the last round's, it enters
+Conservative Slow Start: cwnd grows by a quarter of the acknowledged
+segments (a shift, remainders carried). If the RTT drops back below the
+CSS baseline, slow start resumes; after 5 CSS rounds, counting the
+partial one, `ssthresh = cwnd` and congestion avoidance takes over. Riptide
+does not pace TCP, so each ACK grows cwnd by at most L = 8 segments. A
+loss or ECN mark ends it (`ssthresh()` sets `found`), and later slow
+starts (after an RTO, with a finite ssthresh) are plain, as the RFC asks.
+`ssthresh` stays infinite during CSS, so the rest of the stack still
+sees slow start. The state fits in `ca_priv` (72 of 80 bytes, checked at
+compile time). `tests/t_cubic_unit.c` drives the hooks round by round.
+
 ## Socket memory (tcp_mem.c)
 
 The use is the sum of `rmem_alloc + wmem_queued` over the connections

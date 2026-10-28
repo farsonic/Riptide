@@ -2354,6 +2354,8 @@ static const struct rt_sysctl tcp_sysctls[] = {
 	INT_RW("net.inet.tcp.ecn", NO_MIB, sysctl_tcp_ecn, 0, 2, "ECN: 1 request, 2 accept"),
 	{ "net.inet.tcp.cc", RT_SYSCTL_STRING, RT_SYSCTL_RW, NO_MIB, sysctl_tcp_cc, 0,
 	  sizeof(sysctl_tcp_cc), tcp_sysctl_cc, "Congestion control (cubic, reno, ledbat)" },
+	INT_RW("net.inet.tcp.hystart", NO_MIB, sysctl_tcp_hystart, 0, 2,
+	       "CUBIC slow start exit: 0 off, 1 HyStart, 2 HyStart++ (RFC 9406)"),
 	INT_RW("net.inet.tcp.initcwnd", NO_MIB, sysctl_tcp_initcwnd, 1, 100, "Initial cwnd (RFC 6928)"),
 	INT_RW("net.inet.tcp.rto_min_ms", NO_MIB, sysctl_tcp_rto_min_ms, 10, 2000, "Minimum RTO"),
 	INT_RW("net.inet.tcp.syncookies", NO_MIB, sysctl_tcp_syncookies, 0, 2, "SYN cookies"),

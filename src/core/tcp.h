@@ -509,7 +509,7 @@ struct tcp_tw {
 
 /* ---- tunables (tcp_main.c) ---- */
 extern s32 sysctl_tcp_timestamps, sysctl_tcp_window_scaling, sysctl_tcp_sack,
-           sysctl_tcp_dsack, sysctl_tcp_ecn, sysctl_tcp_initcwnd,
+           sysctl_tcp_dsack, sysctl_tcp_ecn, sysctl_tcp_initcwnd, sysctl_tcp_hystart,
            sysctl_tcp_rto_min_ms, sysctl_tcp_syncookies, sysctl_tcp_synack_retries,
            sysctl_tcp_syn_retries, sysctl_tcp_retries1, sysctl_tcp_retries2,
            sysctl_tcp_keepcnt, sysctl_tcp_fin_timeout, sysctl_tcp_tw_reuse,
