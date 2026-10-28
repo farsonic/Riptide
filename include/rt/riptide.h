@@ -95,7 +95,9 @@ int  rt_dns_add_server(u32 addr);
 void rt_dns_remove_server(u32 addr);
 void rt_dns_clear_servers(void);
 int  rt_dns_get_servers(u32 *out, int max);
+/* one domain or a list (spaces or commas), at most six */
 void rt_dns_set_search(const char *domain);
+const char *rt_dns_search_list(void);    /* "a.example b.example", "" = none */
 int  rt_hosts_add(const char *name, u32 addr);   /* static host table */
 void rt_hosts_clear(void);
 /* Forward lookup; numeric strings and the static table are handled
@@ -178,9 +180,41 @@ int  rt_dhcp_bound(const struct rt_netif *nif);
 struct rt_dhcp_info {
 	int state;
 	u32 server, router, addr, lease_s, left_s;
+	u32 ll_addr;          /* link-local address (network order), 0 = none */
+	u8  ll_state;         /* RT_LL_* */
+	u8  nroutes;          /* classless static routes (option 121/249) */
+	u32 ll_conflicts;
 };
 int  rt_dhcp_get_info(const struct rt_netif *nif, struct rt_dhcp_info *info);
 /* Restart the lease (DHCPREQUEST now when bound, else rediscover). */
 int  rt_dhcp_renew(struct rt_netif *nif);
+/* Option decoding, exported for tests. Classless routes (121/249, RFC
+ * 3442): count (at most max stored), -1 if malformed. Domain search (119,
+ * RFC 3397): space-separated list, count or -1 if malformed. */
+#define RT_DHCP_MAX_ROUTES  16
+#define RT_DHCP_SEARCH_MAX  6
+#define RT_DHCP_SEARCH_LEN  256
+struct rt_dhcp_route { u32 dst, mask, gw; };    /* network order, gw 0 = on-link */
+int  rt_dhcp_parse_classless(const u8 *p, u32 len, struct rt_dhcp_route *out, int max);
+int  rt_dhcp_parse_search(const u8 *p, u32 len, char *out, u32 outlen);
+/* Link-local fallback for nif's DHCP client: on (1), off (0), -1 =
+ * follow net.inet.ip.linklocal, -2 = unchanged; wait_s > 0 overrides
+ * net.inet.ip.linklocal_wait.
+ * Takes effect at once (off drops a link-local address). */
+int  rt_dhcp_set_linklocal(struct rt_netif *nif, int on, int wait_s);
+int  rt_dhcp_get_linklocal(const struct rt_netif *nif, int *wait_s);
+
+/* ---- IPv4 link-local addresses (src/core/ipv4ll.c, RFC 3927) ---- */
+#define RT_LL_OFF      0
+#define RT_LL_PROBE    1      /* choosing a 169.254 address */
+#define RT_LL_ANNOUNCE 2      /* claimed, announcing */
+#define RT_LL_BOUND    3
+extern s32 rt_ll_enable;      /* net.inet.ip.linklocal */
+extern s32 rt_ll_wait_s;      /* net.inet.ip.linklocal_wait */
+int  rt_ipv4ll_is_ll(u32 addr);                  /* 169.254/16? */
+int  rt_ipv4ll_start(struct rt_netif *nif);       /* dhcp.c, tests */
+void rt_ipv4ll_stop(struct rt_netif *nif);        /* drops the address */
+/* the claimed address (0 = none); state RT_LL_*, conflicts so far */
+u32  rt_ipv4ll_info(const struct rt_netif *nif, u8 *state, u32 *conflicts);
 
 #endif

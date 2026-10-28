@@ -94,6 +94,11 @@ static void fill_iface(struct rt_ctl_iface *r, const struct rt_netif *n)
 		r->vlan_pcp = n->vlan_pcp_prio ? RT_CTL_VLAN_PCP_PRIO : n->vlan_pcp;
 	}
 	r->nvlan = (u8)RT_MIN(n->nvlan, 255u);
+	r->ll_addr = di.ll_addr;
+	r->ll_state = di.ll_state;
+	r->dhcp_routes = di.nroutes;
+	r->ll_conflicts = (u8)RT_MIN(di.ll_conflicts, 255u);
+	r->ll_on = (u8)rt_dhcp_get_linklocal(n, NULL);
 }
 
 /* ---- IPv4 addresses ---- */
@@ -569,6 +574,7 @@ static int h_dns6(const struct rt_sysctl *e, void *old, u32 *oldlen, const void 
 		d.servers[i].source = src[i];
 	}
 	rt_strlcpy(d.domain, rt_dns_search_domain(), sizeof(d.domain));
+	rt_strlcpy(d.search, rt_dns_search_list(), sizeof(d.search));
 	return dump_emit(old, oldlen, sizeof(d), 1, &d);
 }
 

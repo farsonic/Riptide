@@ -305,6 +305,7 @@ static void model_defaults(struct rp_model *m)
 	m->unit = 0;
 	m->mtu = m->reads = m->tcpwindow = RP_UNSET;
 	m->dhcp = 1;
+	m->linklocal = 1;
 	m->ipv6 = 1;
 	m->mdns = -1;
 	m->quickack = m->delack_segs = m->delack_ms = RP_UNSET;
@@ -389,10 +390,14 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 					break;
 				}
 	} else if (eq(k, "dhcp")) {
+		/* dhcp IF [start] [linklocal on|off] */
+		i = tk->n >= 3 && eq(tk->t[2], "start") ? 3 : 2;
 		if (!c->l_dhcp && tk->n >= 2 && eq(tk->t[1], m->ifname) &&
-		    (tk->n == 2 || (tk->n == 3 && eq(tk->t[2], "start")))) {
+		    (tk->n == i || (tk->n == i + 2 && eq(tk->t[i], "linklocal") &&
+		                    (eq(tk->t[i + 1], "on") || eq(tk->t[i + 1], "off"))))) {
 			c->l_dhcp = l;
 			m->dhcp = 1;
+			m->linklocal = tk->n == i || eq(tk->t[i + 1], "on");
 		}
 	} else if (eq(k, "ifconfig") && tk->n >= 4 && eq(tk->t[1], m->ifname) &&
 	           (eq(tk->t[2], "alias") || eq(tk->t[2], "add"))) {
@@ -618,6 +623,7 @@ static int iface_changed(const struct rp_model *o, const struct rp_model *n)
 static int addr_changed(const struct rp_model *o, const struct rp_model *n)
 {
 	return o->dhcp != n->dhcp || str_changed(o->ifname, n->ifname) ||
+	       (n->dhcp && o->linklocal != n->linklocal) ||
 	       (!n->dhcp && (str_changed(o->addr, n->addr) || str_changed(o->netmask, n->netmask) ||
 	                     str_changed(o->gateway, n->gateway)));
 }
@@ -848,7 +854,7 @@ static int sync_lines(struct rp_conf *c)
 			}
 			r |= put(c, &c->l_ifconfig, NULL, NULL);
 			r |= put(c, &c->l_route, NULL, NULL);
-			rt_snprintf(buf, sizeof(buf), "dhcp %s", n->ifname);
+			rt_snprintf(buf, sizeof(buf), "dhcp %s%s", n->ifname, n->linklocal ? "" : " linklocal off");
 			r |= put(c, &c->l_dhcp, anchor, buf);
 		} else {
 			if (c->l_dhcp && !c->l_ifconfig)

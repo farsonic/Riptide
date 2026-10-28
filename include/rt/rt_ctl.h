@@ -108,6 +108,12 @@ struct rt_ctl_iface {
 	u16  vlan_id;             /* 1..4094 */
 	u8   vlan_pcp;            /* tag priority 0..7, RT_CTL_VLAN_PCP_PRIO = the socket's */
 	u8   nvlan;               /* VLAN interfaces on this one */
+	/* 0.18 (check recsize) */
+	u32  ll_addr;             /* IPv4 link-local address (RFC 3927), 0 = none */
+	u8   ll_state;            /* RT_LL_* (riptide.h): 0 off, 1 probing, 2 announcing, 3 bound */
+	u8   dhcp_routes;         /* classless static routes from the lease (option 121/249) */
+	u8   ll_conflicts;        /* link-local address conflicts (saturates at 255) */
+	u8   ll_on;               /* the DHCP client falls back to a link-local address */
 };
 #define RT_CTL_VLAN_PCP_PRIO 0xff
 
@@ -389,6 +395,7 @@ struct rt_ctl_dns6 {
 		u8  pad[3];
 	} servers[RT_CTL_MAXNS];
 	char domain[64];
+	char search[256];         /* 0.18: the search list, space separated (check recsize) */
 };
 
 /* ---- core entry points (src/core/ctl.c), lock held ---- */

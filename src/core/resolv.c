@@ -14,7 +14,8 @@
  *    caller may only have a 4 KB stack.
  *
  * Behaviour follows the resolv.conf defaults: timeout 2 s, attempts 2,
- * ndots 1, one search domain. Queries use a random ID and a fresh socket
+ * ndots 1, a search list of up to six domains (the first is the "domain";
+ * DHCP option 119, RA DNSSL). Queries use a random ID and a fresh socket
  * bound to port 0 (random ephemeral port); replies must come from the
  * server's address and port 53 and echo ID and question.
  *
@@ -48,8 +49,48 @@ struct dns_server {
 };
 static struct dns_server dns_servers[DNS_MAX_SERVERS];
 static int dns_nservers;
-static char dns_search[64];
-static u8 dns_search_auto;    /* dns_search came from DNSSL / DHCPv6 */
+/* The search list, space separated ("lan example.org"); its first domain
+ * is the one rt_dns_search_domain() returns. */
+#define DNS_SEARCH_MAX   6
+#define DNS_SEARCH_LEN   256
+static char dns_search[DNS_SEARCH_LEN];
+static char dns_search_first[64];
+static u8 dns_search_auto;    /* dns_search came from DNSSL / DHCPv6 / DHCP 119 */
+
+/* Domain i of a search list into out (NUL terminated); 0 when the list
+ * has no domain i. */
+static int search_nth(const char *list, int i, char *out, u32 outlen)
+{
+	const char *p = list;
+	u32 n;
+
+	for (;;) {
+		while (*p == ' ')
+			p++;
+		if (!*p)
+			return 0;
+		for (n = 0; p[n] && p[n] != ' '; n++)
+			;
+		if (i-- == 0) {
+			if (n >= outlen)
+				n = outlen - 1;
+			memcpy(out, p, n);
+			out[n] = 0;
+			return 1;
+		}
+		p += n;
+	}
+}
+
+static int search_count(const char *list)
+{
+	char d[64];
+	int n = 0;
+
+	while (search_nth(list, n, d, sizeof(d)))
+		n++;
+	return n;
+}
 
 struct host_ent {
 	struct host_ent *next;
@@ -205,6 +246,11 @@ int rt_dns_get_servers6(rt_in6_addr *out, u32 *ifindex, u8 *source, int max)
 
 const char *rt_dns_search_domain(void)
 {
+	return dns_search_first;
+}
+
+const char *rt_dns_search_list(void)
+{
 	return dns_search;
 }
 
@@ -218,17 +264,51 @@ void rt_dns_set_search_auto(const char *domain)
 	dns_search_auto = 1;
 }
 
+int rt_dns_search_is_auto(void)
+{
+	return dns_search_auto;
+}
+
+/* One domain, or a list separated by spaces or commas: at most six, each
+ * shorter than 64 characters, without leading or trailing dots, no
+ * duplicates. */
 void rt_dns_set_search(const char *domain)
 {
-	if (!domain)
-		domain = "";
-	while (*domain == '.')
-		domain++;
-	rt_strlcpy(dns_search, domain, sizeof(dns_search));
+	const char *p = domain ? domain : "";
+	u32 o = 0, n, k;
+	int count = 0;
+
+	dns_search[0] = 0;
+	while (*p && count < DNS_SEARCH_MAX) {
+		while (*p == ' ' || *p == ',' || *p == '\t' || *p == '.')
+			p++;
+		for (n = 0; p[n] && p[n] != ' ' && p[n] != ',' && p[n] != '\t'; n++)
+			;
+		k = n;
+		while (k && p[k - 1] == '.')
+			k--;
+		if (k && k < 64 && o + k + 2 <= sizeof(dns_search)) {
+			char d[64];
+			int i, dup = 0;
+			memcpy(d, p, k);
+			d[k] = 0;
+			for (i = 0; i < count && !dup; i++) {
+				char e[64];
+				dup = search_nth(dns_search, i, e, sizeof(e)) && !rt_strcasecmp(e, d);
+			}
+			if (!dup) {
+				if (o)
+					dns_search[o++] = ' ';
+				memcpy(dns_search + o, d, k + 1);
+				o += k;
+				count++;
+			}
+		}
+		p += n;
+	}
 	dns_search_auto = 0;
-	/* no trailing dot */
-	if (dns_search[0] && dns_search[strlen(dns_search) - 1] == '.')
-		dns_search[strlen(dns_search) - 1] = 0;
+	if (!search_nth(dns_search, 0, dns_search_first, sizeof(dns_search_first)))
+		dns_search_first[0] = 0;
 }
 
 int rt_hosts_add(const char *name, u32 addr)
@@ -559,7 +639,7 @@ struct dns_work {
 	struct dns_result res;
 	struct dns_server servers[DNS_MAX_SERVERS];
 	int nservers;
-	char search[64];
+	char search[DNS_SEARCH_LEN];
 	char qname[DNS_NAMEBUF];
 	u8 q[DNS_QBUF];
 	u8 a[DNS_ABUF];
@@ -748,19 +828,20 @@ static int dns_query(struct dns_work *w, const char *name, u16 qtype)
 static int hosts_lookup(const char *name, const char *search, u32 *a4, rt_in6_addr *a6, int max)
 {
 	struct host_ent *h;
-	int n = 0;
-	u32 nl = (u32)strlen(name), sl = (u32)strlen(search);
+	int n = 0, i;
+	u32 nl = (u32)strlen(name);
 	int single = strchr(name, '.') == NULL;
+	char d[64];
 
 	if (nl && name[nl - 1] == '.')
 		nl--;
 	for (h = hosts_head; h && n < max; h = h->next) {
 		u32 hl = (u32)strlen(h->name);
 		int m = hl == nl && rt_strncasecmp(h->name, name, nl) == 0;
-		if (!m && single && sl && hl == nl + 1 + sl && h->name[nl] == '.' &&
-		    rt_strncasecmp(h->name, name, nl) == 0 &&
-		    rt_strcasecmp(h->name + nl + 1, search) == 0)
-			m = 1;
+		/* a single label also matches NAME.DOMAIN for a search domain */
+		for (i = 0; !m && single && hl > nl + 1 && h->name[nl] == '.' &&
+		            rt_strncasecmp(h->name, name, nl) == 0 && search_nth(search, i, d, sizeof(d)); i++)
+			m = rt_strcasecmp(h->name + nl + 1, d) == 0;
 		if (!m || rt_in6_is_v4mapped(&h->addr) == (a6 != NULL))
 			continue;
 		if (a6)
@@ -947,11 +1028,9 @@ static int resolve_local(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, 
 {
 	struct cache_ent *c;
 	int n, i, disallowed;
-	char search[64];
 
 	rt_lock();
-	rt_strlcpy(search, dns_search, sizeof(search));
-	n = hosts_lookup(name, search, a4, a6, max);
+	n = hosts_lookup(name, dns_search, a4, a6, max);
 	if (n == 0 && is_localhost(name)) {
 		if (a6)
 			a6[0] = rt_in6addr_loopback;
@@ -982,28 +1061,30 @@ static int resolve_local(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, 
 	return disallowed ? -RT_HOST_NOT_FOUND : 0;
 }
 
-/* the names to ask for (ndots:1, one search domain): 1 or 2 candidates */
+/* the names to ask for (ndots:1): the name itself and NAME.DOMAIN for
+ * every search domain */
 static int candidates(struct dns_work *w, const char *name)
 {
 	u32 nl = (u32)strlen(name);
 
-	return (name[nl - 1] == '.' || !w->search[0]) ? 1 : 2;
+	return name[nl - 1] == '.' ? 1 : 1 + search_count(w->search);
 }
 
 /* candidate i of name into w->qname; 0, or -1 when it does not fit */
 static int candidate(struct dns_work *w, const char *name, int i, int ncand)
 {
 	u32 nl = (u32)strlen(name), dots = 0, k;
-	int with_search;
+	int dom;
+	char d[64];
 
 	for (k = 0; k < nl; k++)
 		dots += name[k] == '.';
-	/* absolute first if the name has a dot */
-	with_search = ncand == 2 && (dots ? i == 1 : i == 0);
-	if (with_search) {
-		if (nl + 1 + strlen(w->search) >= DNS_NAMEBUF)
+	/* with a dot the name itself first, else the search domains first */
+	dom = ncand == 1 ? -1 : dots ? i - 1 : (i < ncand - 1 ? i : -1);
+	if (dom >= 0) {
+		if (!search_nth(w->search, dom, d, sizeof(d)) || nl + 1 + strlen(d) >= DNS_NAMEBUF)
 			return -1;
-		rt_snprintf(w->qname, sizeof(w->qname), "%s.%s", name, w->search);
+		rt_snprintf(w->qname, sizeof(w->qname), "%s.%s", name, d);
 	} else {
 		rt_strlcpy(w->qname, name, sizeof(w->qname));
 	}
@@ -1507,32 +1588,45 @@ int rt_res_querydomain(const char *name, const char *domain, int cls, int type,
 	return r;
 }
 
+/* domain i of the search list (copied under the lock); 0 = none */
+static int search_domain(int i, char *out, u32 outlen)
+{
+	int r;
+
+	rt_lock();
+	r = search_nth(dns_search, i, out, outlen);
+	rt_unlock();
+	return r;
+}
+
 int rt_res_search(const char *dname, int cls, int type, u8 *answer, int anslen)
 {
-	char search[64];
+	char d[64];
 	u32 nl;
-	int r, r2;
+	int r = -RT_HOST_NOT_FOUND, r2, i;
 
 	if (!dname || !*dname)
 		return -RT_NO_RECOVERY;
 	nl = (u32)strlen(dname);
-	rt_lock();
-	rt_strlcpy(search, dns_search, sizeof(search));
-	rt_unlock();
-	if (dname[nl - 1] == '.' || !search[0])
+	if (dname[nl - 1] == '.' || !search_domain(0, d, sizeof(d)))
 		return rt_res_query(dname, cls, type, answer, anslen);
 	if (strchr(dname, '.')) {          /* ndots:1 - absolute first */
 		r = rt_res_query(dname, cls, type, answer, anslen);
 		if (r >= 0 || r == -RT_TRY_AGAIN)
 			return r;
-		r2 = rt_res_querydomain(dname, search, cls, type, answer, anslen);
+	}
+	for (i = 0; search_domain(i, d, sizeof(d)); i++) {
+		r2 = rt_res_querydomain(dname, d, cls, type, answer, anslen);
+		if (r2 >= 0 || r2 == -RT_TRY_AGAIN)
+			return r2;
+		if (i == 0 && !strchr(dname, '.'))
+			r = r2;
+	}
+	if (!strchr(dname, '.')) {
+		r2 = rt_res_query(dname, cls, type, answer, anslen);
 		return r2 >= 0 ? r2 : r;
 	}
-	r = rt_res_querydomain(dname, search, cls, type, answer, anslen);
-	if (r >= 0 || r == -RT_TRY_AGAIN)
-		return r;
-	r2 = rt_res_query(dname, cls, type, answer, anslen);
-	return r2 >= 0 ? r2 : r;
+	return r;
 }
 
 int rt_dn_expand(const u8 *msg, const u8 *eom, const u8 *src, char *dst, int dstsize)

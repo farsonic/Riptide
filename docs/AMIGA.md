@@ -172,6 +172,7 @@ the `ip`, `route`, `sysctl` and `hostname` tools do.
 ```
 hostname NAME
 domain NAME                        # also the DNS search domain
+search DOMAIN [DOMAIN...]          # the resolver's search list (up to six); "search" alone clears it
 nameserver [add] A.B.C.D           # up to the core's limit, in order
 nameserver del A.B.C.D | nameserver flush
 host NAME A.B.C.D                  # static host table entry
@@ -191,7 +192,8 @@ qos on|off [IFNAME] | inflight N | limit N | priodscp on|off | status
 qos rule [proto=tcp|udp] [port=|lport=|rport=P,..] [program=NAME]
       [priority=interactive|default|bulk|0-7] [dscp=EF|CS1|AF41|0-63]
 qos rules flush                    # see "Priorities and quality of service"
-dhcp IFNAME [start|stop|renew]     # run (stop, renew) the DHCP client on IFNAME
+dhcp IFNAME [start|stop|renew] [linklocal on|off] [wait S]
+                                   # run (stop, renew) the DHCP client on IFNAME, see "DHCP"
 arp add A.B.C.D MAC [dev IF] | arp del A.B.C.D [dev IF] | arp flush [dev IF]
 cpu routines auto|generic|020|040|060   # checksum/copy routines (troubleshooting)
 capture start [OPTIONS] | capture stop | capture status | capture save FILE | capture clear
@@ -724,6 +726,64 @@ Riptide fault; reboot the emulated Amiga. It is rare when the host has
 spare CPU (about one bsdsocktest run in 50 to 100 while other emulators
 ran) and common when the host is overloaded.
 
+### DHCP
+
+`dhcp IF` runs the DHCP client (RFC 2131) on IF. Besides the address,
+netmask, router, DNS servers, domain name, host name, MTU and NTP servers
+it asks for:
+
+* **Classless static routes** (option 121, RFC 3442; Microsoft's option
+  249 when a server sends only that). They are installed as DHCP routes
+  (`ip route` shows `proto dhcp`; a router 0.0.0.0 makes an on-link route),
+  replaced when a renewal brings other ones, and removed with the lease.
+  When the option is there the router option (3) is ignored, as the RFC
+  says: the default route is the option's 0.0.0.0/0 entry, and without
+  one there is none. A malformed option is ignored as a whole. At most 16
+  routes are used.
+* **The domain search list** (option 119, RFC 3397). It becomes the
+  resolver's search list (up to six domains; a name without a dot is
+  tried with each, a name with one first as it is), unless `domain` or
+  `search` set one in the configuration. The domain name (option 15)
+  stays the domain; without option 119 it is the search list, as before.
+  `ip dns` and `Riptide STATUS` show the list.
+
+**Link-local address when DHCP fails.** When no lease has come 10 seconds
+after DHCP started (`wait S`, or `sysctl net.inet.ip.linklocal_wait`),
+the interface takes an IPv4 link-local address (RFC 3927, "ZeroConf"
+or "APIPA"): 169.254.1.0 to 169.254.254.255, the first candidate from
+its MAC address (so it is usually the same one again), then random ones.
+Each is probed with three ARP requests first; when another host answers
+or probes for it as well the next one is tried (after ten conflicts at
+most one a minute). The address comes with a 169.254.0.0/16 on-link route
+and no default route, so it reaches only the local link, which is what it
+is for: two computers connected by a cable, or a network whose DHCP
+server is down. mDNS announces `HOSTNAME.local` with it, so the Amiga is
+reachable by name. A later conflict is defended once; a second one within
+ten seconds gives the address up for a new one.
+
+DHCP keeps trying meanwhile, and a lease replaces the link-local
+address (a host has one or the other, never both: RFC 3927 lets the
+link-local one go once a routable address exists). A static address
+(`ifconfig`) is never replaced, and `ifconfig IF 169.254.X.Y/16` sets a
+link-local address by hand.
+
+The fallback is on by default, as on Windows and macOS: without a lease
+the interface has no address at all otherwise, and a 169.254 address
+never takes a route away from anything. `dhcp IF linklocal off` turns it
+off for that interface (it takes effect at once and drops the address),
+`sysctl net.inet.ip.linklocal=0` for every interface whose `dhcp` line
+does not say. RiptidePrefs has a check box for it on the Address page.
+
+`ip dhcp` shows the state:
+
+```
+1> ip dhcp
+eth0: BOUND 192.168.1.20/24 server 192.168.1.1 router 192.168.1.1 lease 86400s valid_lft 86123sec classless-routes 2
+1> ip dhcp
+eth0: SELECTING
+    link-local 169.254.200.17/16
+```
+
 ### TCP window per interface
 
 `tcpwindow=N` on the `interface` line, `ifconfig IF tcpwindow N` or `ip
@@ -893,7 +953,7 @@ the `FROM` file). The window has a **Page** cycle gadget and these pages:
 | Page | Settings | Lines in riptide.conf |
 |---|---|---|
 | Interface | interface name, device, unit, MTU, TCP window, reads; IPv4 and IPv6 on/off (two check boxes) | the first `interface NAME device=...` line (other options such as `raw`, `options=`, `ipv4=`, `ipv6=` or `qos=` are kept), `ipv4 on\|off`, `ipv6 on\|off` |
-| Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway | `dhcp IF`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
+| Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway; with DHCP "Link-local if no DHCP" (a 169.254 address while there is no lease, on by default) | `dhcp IF [linklocal off]`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
 | Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS` or `A.B.C.D netmask M`), with DHCP or a static primary address | `ifconfig IF alias SPEC` |
 | VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5` | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...]` |
 | Names | host name, domain, up to three DNS servers | `hostname`, `domain`, `nameserver` |
@@ -1032,9 +1092,9 @@ default via 10.0.2.2 dev eth0 proto dhcp src 10.0.2.15
 | `ip neigh [show [dev IF]]` | ARP table: `10.0.2.2 dev eth0 lladdr 52:55:0a:00:02:02 REACHABLE` |
 | `ip neigh add\|replace ADDR lladdr MAC [dev IF] [nud permanent]` | entries are always permanent |
 | `ip neigh del ADDR [dev IF]`, `ip neigh flush [dev IF]` | |
-| `ip dhcp [show] [dev IF]` | **Riptide extension:** DHCP state, server, router, lease |
+| `ip dhcp [show] [dev IF]` | **Riptide extension:** DHCP state, server, router, lease, the number of classless static routes, the link-local address (see "DHCP") |
 | `ip dhcp start\|stop\|renew [dev] IF` | **Riptide extension** |
-| `ip dns [show]`, `ip dns add\|del ADDR`, `ip dns flush`, `ip dns search DOMAIN` | **Riptide extension:** resolver configuration (resolv.conf style output) |
+| `ip dns [show]`, `ip dns add\|del ADDR`, `ip dns flush`, `ip dns search DOMAIN...`, `ip dns domain DOMAIN` | **Riptide extension:** resolver configuration (resolv.conf style output) |
 
 **Driver counters.** For SANA-II and MNI interfaces `ip -s link` adds what
 the driver side saw since the last `ip link resetstats`; `ip -s -s link`
@@ -1598,7 +1658,7 @@ byte order, everything else in host order; there are no pointers.
 
 | n | name | records |
 |---|---|---|
-| 1 | `net.riptide.ifaces` | `struct rt_ctl_iface`: name, index, type, flags, MTU, hardware address, address/netmask/broadcast/peer, metric, all packet counters, DHCP state/server/router/lease, driver description, `tcpwindow` (0.12) |
+| 1 | `net.riptide.ifaces` | `struct rt_ctl_iface`: name, index, type, flags, MTU, hardware address, address/netmask/broadcast/peer, metric, all packet counters, DHCP state/server/router/lease, driver description, `tcpwindow` (0.12); link-local address, state and conflicts, classless route count (0.18) |
 | 2 | `net.riptide.routes` | `struct rt_ctl_route`: destination, mask, gateway, interface, flags, proto (kernel/static/dhcp/redirect), metric, MTU, use count, expiry, linkdown |
 | 3 | `net.riptide.neigh` | `struct rt_ctl_neigh`: ARP entries with state (INCOMPLETE/REACHABLE/STALE/PERMANENT) |
 | 4 | `net.riptide.sockets` | `struct rt_ctl_sock`: TCP, UDP and raw sockets with state, queues, RTT, cwnd |
@@ -2319,6 +2379,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/t_udptx_unit.c` (host) | UDP sending (0.17) against a driver that holds its frames (4 slots): a non-blocking socket is writable while the driver has room, then not writable and `EWOULDBLOCK` (the interface marked for a wakeup), writable again after a completion; a blocking send waits for the completion; one blocked when the interface goes down, or when the driver stops completing frames (stalled for 1 s), wakes up and is not left sleeping; `SO_NO_CHECK` (and Linux's 11) leaves the IPv4 checksum 0, refused on TCP; `rt_api_sendmmsg()` whole, partial and `EWOULDBLOCK`, `rt_api_recvmmsg()` over loopback with lengths and addresses. |
 | `tests/amiga/run_fsuae_udpblast.sh build/amiga` | UDP send rate on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtub0`/`rtub1`, 192.168.150.0/24; `CPUS`, default a1200-030 and a4000-040, cycle-exact): `tests/amiga/udpblast.c` sends 3000 datagrams per mode (blocking, non-blocking with WaitSelect, `SO_NO_CHECK`, `RiptideSendMMsg()` 16 at a time, multicast, 64-byte datagrams) to `tests/amiga/udpsink.py`, which counts them on the wire and those without a checksum; a second boot with `qos inflight 1`, `qos limit 8` makes the senders wait for room. Prints a table of rates and per-call times; `CHECK=1` fails on a lost or failed datagram, a checksum where there should be none (or the reverse), or a non-blocking sender that never had to wait. |
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
+| `tests/t_dhcp_ll.c` (host), `tests/t_dhcp_tap.c` (host, root) | DHCP options 121/249 and 119 and IPv4 link-local addresses: the option decoders with malformed input (bad widths, truncation, forward and looping compression pointers, bad labels, too many names); a scripted server on the simulated wire: 121 split over two instances with option 3 ignored, routes replaced on renewal, option 3 again, everything removed on stop, a static search list kept; RFC 3927: the MAC-derived first candidate, probe timing, a conflict by an ARP reply and by another host's probe, two announcements, defence and a second conflict, `dhcp IF linklocal off\|on`, a lease replacing the address, no probing next to a static address. Against Linux over TAP with `tests/interop/dhcp_server.py`: the routes carry a datagram to 10.99.0.1, Linux pings the lease, then the link-local address, a conflict when Linux claims it (gratuitous ARP; `arping -U` when installed), a lease replacing it. |
+| `tests/amiga/run_fsuae_linklocal.sh build/amiga` | IPv4 link-local on bridged FS-UAE without a DHCP server (`FSUAE_PCAP=`, root; veth `rtl0`/`rtl1`, 192.168.180.0/24, or `LL_IF`, `LL_PEER`, `LL_NET`) against `tests/amiga/linklocal_peer.py`: ARP probes and announcements, the mDNS announcement of `amiga.local`, Linux resolving it and pinging the address, the Amiga pinging 169.254.1.1, `ip dhcp`, `ip route` (no default route), `ip addr`, `STATUS`. |
 | `tests/amiga/run_fsuae_netsvc.sh build/amiga` | NTP and mDNS on FS-UAE bridged to the veth pair `rtmd0`/`rtmd1` (`FSUAE_PCAP=`, root): `tests/amiga/netsvc_peer.py` on the host end is an SNTP server and an mDNS peer. The first sync sets the Amiga clock (timer.device, battclock.resource), the next one finds it within 2 s (emulated time drifts); `host` resolves `linuxpeer.local` and the stack's own name over mDNS; the peer sees the probes and announcements and gets answers to QU, QM, legacy unicast and reverse PTR questions. |
 | `tests/t_netsvc_unit.c`, `tests/t_netsvc_wire.c`, `tests/t_ntp_tun.c` (host) | The NTP offset/delay arithmetic, NTP time stamps across the 2036 era change, the `ntp`/`timezone`/`mdns` keywords and the mDNS answer parser; two stacks on the simulated wire (`.local` lookups, a reverse PTR question, a kiss-o'-death, the clock step, a name conflict ending in `beta-2.local`); and a sync against a Linux-side SNTP server whose name the client looks up itself (TUN, root). |
 | `tests/t_ledbat_unit.c` (host) | Background transfers and memory limits: the LEDBAT++ controller in a fluid model of a 12 Mbit/s link with 20 ms base RTT and 500 ms of buffer (alone: about 50 ms of queue at 97 % utilisation and periodic slowdowns; against Reno: under 1 % of the link; Reno alone: 400 ms of queue), loss handling; rLEDBAT's window on a bare connection; the `background` keyword in every form AmigaDOS hands it over, the sysctls, rules by program name (`rt_host_set_program()`) and local port, `TCP_BACKGROUND`, an explicit `TCP_CONGESTION` winning; socket memory: 12 connections nobody reads stay at the 1 MB limit (2 MB without), the data is intact once read, the defaults from the free memory. |

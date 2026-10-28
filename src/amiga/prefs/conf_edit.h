@@ -79,6 +79,7 @@ struct rp_model {
 	char ifextra[RP_LONG];                /* other options, verbatim */
 	/* IPv4 address */
 	int  dhcp;                            /* 1 dhcp, 0 static */
+	int  linklocal;                       /* 1 (default), 0 "dhcp IF linklocal off" */
 	char addr[RP_ADDR];                   /* A.B.C.D or A.B.C.D/BITS */
 	char netmask[RP_ADDR];
 	char gateway[RP_ADDR];

@@ -13,6 +13,18 @@
  * on any interface, configured or not); we always set the BROADCAST flag
  * so servers broadcast OFFER/ACK while we cannot receive unicast.
  *
+ * Classless static routes (option 121, RFC 3442, and Microsoft's 249 when
+ * 121 is absent) are installed as DHCP routes; with them option 3 is
+ * ignored and the default route is the 0.0.0.0/0 entry, if any (RFC 3442
+ * says so). The domain search list (option 119, RFC 3397, compressed
+ * names) feeds the resolver's search list unless one was configured;
+ * option 15 stays the domain name. Repeated options are concatenated
+ * (RFC 3396) for these three.
+ *
+ * Without a lease after net.inet.ip.linklocal_wait seconds (default 10)
+ * ipv4ll.c picks a 169.254/16 address (RFC 3927) while DISCOVERs go on; a
+ * lease replaces it. "dhcp IF linklocal off" turns this off per interface.
+ *
  * Not implemented: INIT-REBOOT, ARP probe/DECLINE, option overload (52).
  */
 #include "sock_internal.h"
@@ -42,6 +54,9 @@
 #define OPT_DNS        6
 #define OPT_HOSTNAME   12
 #define OPT_DOMAIN     15
+#define OPT_SEARCH     119            /* RFC 3397 */
+#define OPT_CLASSLESS  121            /* RFC 3442 */
+#define OPT_MSCLASSLESS 249           /* Microsoft's pre-RFC 121 */
 #define OPT_MTU        26
 #define OPT_NTP        42
 #define OPT_REQIP      50
@@ -59,6 +74,7 @@ enum { ST_INIT, ST_SELECTING, ST_REQUESTING, ST_BOUND, ST_RENEWING, ST_REBINDING
 
 #define DHCP_MAX_DNS 3
 #define DHCP_DAY_S   86400u
+#define DHCP_CAT_MAX 512              /* concatenated 119/121/249 data */
 
 struct dhcp_opts {
 	u8  type;
@@ -70,6 +86,11 @@ struct dhcp_opts {
 	u16 mtu;
 	char domain[64];
 	char hostname[64];
+	/* raw option data, concatenated (RFC 3396) */
+	u16 lsearch, lcls, lmscls;
+	u8  search[DHCP_CAT_MAX];
+	u8  cls[DHCP_CAT_MAX];
+	u8  mscls[DHCP_CAT_MAX];
 };
 
 struct dhcp_client {
@@ -89,6 +110,14 @@ struct dhcp_client {
 	u32 dns[DHCP_MAX_DNS];
 	u8  ndns;
 	u8  set_domain;             /* we set rt_domainname */
+	u8  set_search;             /* we set the resolver search list */
+	u8  nroutes;                /* classless routes in routes[] */
+	u8  ncls;                   /* option 121/249 entries incl. 0/0 */
+	struct rt_dhcp_route routes[RT_DHCP_MAX_ROUTES];   /* not 0/0 */
+	char search[RT_DHCP_SEARCH_LEN];                    /* the list we set */
+	s8  ll_on;                  /* link-local: 1/0, -1 = sysctl */
+	u16 ll_wait_s;              /* 0 = sysctl */
+	struct rt_timer ll_timer;   /* no lease yet: start ipv4ll.c */
 	u32 lease_s, t1_s, t2_s;    /* relative to lease start */
 	u32 acc_s, acc_ms;          /* seconds since lease start + base time */
 };
@@ -151,8 +180,11 @@ static u8 *opt_put(u8 *p, u8 code, u8 len, const void *data)
 /* Build the BOOTP message for 'type' into a new buffer (data at BOOTP). */
 static struct rt_buf *dhcp_build(struct dhcp_client *c, u8 type, u32 ciaddr)
 {
-	static const u8 params[] = { OPT_MASK, OPT_ROUTER, OPT_DNS, OPT_HOSTNAME, OPT_DOMAIN,
-	                             OPT_MTU, OPT_NTP, OPT_LEASE, OPT_SERVERID, OPT_T1, OPT_T2 };
+	/* RFC 3442: 121 before 3, for servers that send options in request
+	 * order */
+	static const u8 params[] = { OPT_MASK, OPT_CLASSLESS, OPT_ROUTER, OPT_DNS, OPT_HOSTNAME,
+	                             OPT_DOMAIN, OPT_SEARCH, OPT_MTU, OPT_NTP, OPT_LEASE,
+	                             OPT_SERVERID, OPT_T1, OPT_T2, OPT_MSCLASSLESS };
 	struct rt_buf *b = rt_buf_alloc(RT_BUF_HEADROOM, DHCP_MAX_LEN);
 	u8 *m, *p, v8[17];
 	u32 secs, len, hl;
@@ -291,6 +323,64 @@ static void notify(struct dhcp_client *c, int ev)
 		c->cb(c->nif, ev);
 }
 
+static int route_in(const struct rt_dhcp_route *r, const struct rt_dhcp_route *list, int n)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+		if (list[i].dst == r->dst && list[i].mask == r->mask && list[i].gw == r->gw)
+			return 1;
+	return 0;
+}
+
+/* Remove our classless routes that are not in keep[] */
+static void routes_remove(struct dhcp_client *c, const struct rt_dhcp_route *keep, int nkeep)
+{
+	int i, n = 0;
+
+	for (i = 0; i < c->nroutes; i++) {
+		const struct rt_dhcp_route *r = &c->routes[i];
+		if (route_in(r, keep, nkeep))
+			c->routes[n++] = *r;
+		else
+			rt_route_delete_match(r->dst, r->mask, r->gw, c->nif, RT_RTF_DHCP);
+	}
+	c->nroutes = (u8)n;
+}
+
+/* Our search list goes with the lease, unless it was replaced since */
+static void search_drop(struct dhcp_client *c)
+{
+	if (c->set_search && rt_dns_search_is_auto() && !strcmp(rt_dns_search_list(), c->search))
+		rt_dns_set_search_auto("");
+	c->set_search = 0;
+	c->search[0] = 0;
+}
+
+static int ll_enabled(const struct dhcp_client *c)
+{
+	return c->ll_on < 0 ? rt_ll_enable != 0 : c->ll_on != 0;
+}
+
+/* No lease yet: a link-local address after linklocal_wait seconds */
+static void ll_arm(struct dhcp_client *c)
+{
+	u8 st;
+
+	rt_ipv4ll_info(c->nif, &st, NULL);
+	if (!ll_enabled(c) || st != RT_LL_OFF || rt_timer_pending(&c->ll_timer))
+		return;
+	rt_timer_after(&c->ll_timer, (c->ll_wait_s ? c->ll_wait_s : (u32)rt_ll_wait_s) * 1000u);
+}
+
+static void ll_timeout(void *arg)
+{
+	struct dhcp_client *c = arg;
+
+	if (c->state < ST_BOUND && ll_enabled(c))
+		rt_ipv4ll_start(c->nif);
+}
+
 static void unconfigure(struct dhcp_client *c)
 {
 	int i;
@@ -299,10 +389,13 @@ static void unconfigure(struct dhcp_client *c)
 		return;
 	if (c->router)   /* only our own route: a static one stays */
 		rt_route_delete_match(0, 0, c->router, c->nif, RT_RTF_DHCP);
+	routes_remove(c, NULL, 0);
+	c->ncls = 0;
 	for (i = 0; i < c->ndns; i++)
 		rt_dns_remove_server(c->dns[i]);
 	if (c->set_domain)
 		rt_domainname[0] = 0;
+	search_drop(c);
 	rt_ntp_dhcp_servers(c->nif, NULL, 0);
 	if (c->nif->addr == c->addr)
 		rt_netif_set_addr(c->nif, 0, 0, 0);
@@ -318,6 +411,7 @@ static void start_init(struct dhcp_client *c, u32 delay_ms)
 	c->tries = 0;
 	c->xid = rt_random32();
 	rt_timer_after(&c->timer, delay_ms);
+	ll_arm(c);
 }
 
 static void lost(struct dhcp_client *c)
@@ -343,11 +437,32 @@ static u32 classful(u32 a)
 static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts *o)
 {
 	struct rt_netif *nif = c->nif;
-	u32 mask = o->mask ? o->mask : classful(yiaddr);
-	int renew = c->addr != 0 && c->addr == yiaddr, i, j;
-	char a[16];
+	u32 mask = o->mask ? o->mask : classful(yiaddr), router = o->router;
+	int renew = c->addr != 0 && c->addr == yiaddr, i, j, ncls = -1, nr = 0;
+	struct rt_dhcp_route cls[RT_DHCP_MAX_ROUTES];
+	char a[16], *search;
 
-	if (c->addr && (c->addr != yiaddr || c->mask != mask || c->router != o->router))
+	/* RFC 3442: with classless routes option 3 is ignored; a malformed
+	 * option counts as absent */
+	if (o->lcls)
+		ncls = rt_dhcp_parse_classless(o->cls, o->lcls, cls, RT_DHCP_MAX_ROUTES);
+	else if (o->lmscls)
+		ncls = rt_dhcp_parse_classless(o->mscls, o->lmscls, cls, RT_DHCP_MAX_ROUTES);
+	if (ncls >= 0) {
+		router = 0;
+		for (i = 0; i < ncls; i++) {
+			if (cls[i].mask == 0) {
+				if (!router && cls[i].gw)
+					router = cls[i].gw;
+			} else {
+				cls[nr++] = cls[i];
+			}
+		}
+	}
+
+	rt_timer_del(&c->ll_timer);
+	rt_ipv4ll_stop(nif);       /* a lease replaces the link-local address */
+	if (c->addr && (c->addr != yiaddr || c->mask != mask || c->router != router))
 		unconfigure(c);     /* parameters changed: start over */
 	if (!c->addr || nif->addr != yiaddr) {
 		if (rt_netif_set_addr(nif, yiaddr, mask,
@@ -365,13 +480,26 @@ static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts
 		nif->mtu = o->mtu;
 		rt_vlan_parent_changed(nif);
 	}
-	if (o->router) {
+	if (router) {
 		/* (Re)install on every ACK: the route may have been removed by
 		 * hand. A static default route still wins (route.c orders DHCP
 		 * routes last), and one with the same gateway makes this fail. */
-		c->router = o->router;
-		rt_route_add(0, 0, o->router, nif, RT_RTF_UP | RT_RTF_DHCP, 0);
+		c->router = router;
+		rt_route_add(0, 0, router, nif, RT_RTF_UP | RT_RTF_DHCP, 0);
 	}
+	/* classless routes: drop those that went away, (re)add the rest in
+	 * option order (a router may be reachable only through an earlier
+	 * one); router 0.0.0.0 means on-link */
+	routes_remove(c, cls, nr);
+	for (i = 0; i < nr; i++) {
+		int r = rt_route_add(cls[i].dst, cls[i].mask, cls[i].gw, nif, RT_RTF_UP | RT_RTF_DHCP, 0);
+		if (r < 0 && r != -RT_EEXIST)
+			rt_log(RT_LOG_WARN, "dhcp: %s: cannot add route to %s", nif->name,
+			       rt_format_ipv4(cls[i].dst, a));
+		else if (!route_in(&cls[i], c->routes, c->nroutes))
+			c->routes[c->nroutes++] = cls[i];
+	}
+	c->ncls = ncls > 0 ? (u8)ncls : 0;
 	/* DNS servers: drop ours that disappeared, add new ones */
 	for (i = 0; i < c->ndns; i++) {
 		for (j = 0; j < o->ndns; j++)
@@ -386,8 +514,25 @@ static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts
 			c->dns[c->ndns++] = o->dns[j];
 	if (o->domain[0] && (!rt_domainname[0] || c->set_domain)) {
 		rt_strlcpy(rt_domainname, o->domain, sizeof(rt_domainname));
-		rt_dns_set_search(o->domain);
 		c->set_domain = 1;
+	}
+	/* search list: option 119, else the domain name; one configured by
+	 * hand ("domain", "search") stays */
+	search = rt_zalloc(RT_DHCP_SEARCH_LEN);
+	if (search) {
+		if (!o->lsearch || rt_dhcp_parse_search(o->search, o->lsearch, search,
+		                                        RT_DHCP_SEARCH_LEN) <= 0)
+			rt_strlcpy(search, o->domain, RT_DHCP_SEARCH_LEN);
+		if (search[0]) {
+			rt_dns_set_search_auto(search);    /* not over a static one */
+			if (rt_dns_search_is_auto()) {
+				rt_strlcpy(c->search, rt_dns_search_list(), sizeof(c->search));
+				c->set_search = 1;
+			}
+		} else {
+			search_drop(c);
+		}
+		rt_free(search);
 	}
 	rt_ntp_dhcp_servers(nif, o->ntp, o->nntp);
 	if (o->hostname[0] && !rt_hostname[0])
@@ -510,6 +655,18 @@ static void parse_options(const u8 *p, u32 len, struct dhcp_opts *o)
 				memcpy(&a, v + k, 4);
 				if (a && a != RT_INADDR_BROADCAST)
 					out[(*n)++] = a;
+			}
+			break;
+		}
+		case OPT_SEARCH:
+		case OPT_CLASSLESS:
+		case OPT_MSCLASSLESS: {
+			/* RFC 3396: repeated instances are concatenated */
+			u8 *buf = code == OPT_SEARCH ? o->search : code == OPT_CLASSLESS ? o->cls : o->mscls;
+			u16 *bl = code == OPT_SEARCH ? &o->lsearch : code == OPT_CLASSLESS ? &o->lcls : &o->lmscls;
+			if (*bl + l <= DHCP_CAT_MAX) {
+				memcpy(buf + *bl, v, l);
+				*bl = (u16)(*bl + l);
 			}
 			break;
 		}
@@ -684,6 +841,8 @@ int rt_dhcp_start(struct rt_netif *nif, void (*cb)(struct rt_netif *nif, int eve
 		c->chaddr[0] = (u8)((c->chaddr[0] & 0xfe) | 0x02);
 	}
 	rt_timer_init(&c->timer, dhcp_timeout, c);
+	rt_timer_init(&c->ll_timer, ll_timeout, c);
+	c->ll_on = -1;
 	c->next = dhcp_clients;
 	dhcp_clients = c;
 	start_init(c, rt_random32() % 256u);
@@ -701,6 +860,8 @@ void rt_dhcp_stop(struct rt_netif *nif)
 		return;
 	*pp = c->next;
 	rt_timer_del(&c->timer);
+	rt_timer_del(&c->ll_timer);
+	rt_ipv4ll_stop(nif);
 	if (c->addr && (c->state == ST_BOUND || c->state == ST_RENEWING ||
 	                c->state == ST_REBINDING)) {
 		c->xid = rt_random32();
@@ -729,9 +890,11 @@ int rt_dhcp_get_info(const struct rt_netif *nif, struct rt_dhcp_info *info)
 	struct dhcp_client *c = client_of(nif);
 
 	memset(info, 0, sizeof(*info));
+	info->ll_addr = rt_ipv4ll_info(nif, &info->ll_state, &info->ll_conflicts);
 	if (!c)
 		return RT_DHCPS_NONE;
 	info->state = state_map[c->state];
+	info->nroutes = c->ncls;
 	if (c->state == ST_BOUND || c->state == ST_RENEWING || c->state == ST_REBINDING) {
 		u32 el = lease_elapsed(c);
 		info->server = c->server;
@@ -762,4 +925,141 @@ int rt_dhcp_renew(struct rt_netif *nif)
 		start_init(c, 0);
 	}
 	return 0;
+}
+
+int rt_dhcp_set_linklocal(struct rt_netif *nif, int on, int wait_s)
+{
+	struct dhcp_client *c = client_of(nif);
+
+	if (!c)
+		return -RT_ENOENT;
+	if (wait_s < 0 || wait_s > 3600)
+		return -RT_EINVAL;
+	if (on >= -1)
+		c->ll_on = (s8)(on < 0 ? -1 : on != 0);
+	if (wait_s)
+		c->ll_wait_s = (u16)wait_s;
+	if (!ll_enabled(c)) {
+		rt_timer_del(&c->ll_timer);
+		rt_ipv4ll_stop(nif);
+	} else if (c->state < ST_BOUND) {
+		rt_timer_del(&c->ll_timer);    /* the wait may have changed */
+		ll_arm(c);
+	}
+	return 0;
+}
+
+int rt_dhcp_get_linklocal(const struct rt_netif *nif, int *wait_s)
+{
+	const struct dhcp_client *c = client_of(nif);
+
+	if (wait_s)
+		*wait_s = c && c->ll_wait_s ? c->ll_wait_s : (int)rt_ll_wait_s;
+	if (!c)
+		return rt_ll_enable != 0;
+	return ll_enabled(c);
+}
+
+/* ------------------------------------------------------- option decoding */
+
+/* RFC 3442 compact encoding: width, the significant octets of the
+ * destination, the router. Returns the number of routes (at most max are
+ * kept), -1 when the option is malformed (then all of it is ignored). */
+int rt_dhcp_parse_classless(const u8 *p, u32 len, struct rt_dhcp_route *out, int max)
+{
+	u32 i = 0, w, n, k;
+	int cnt = 0;
+
+	if (len < 5)
+		return -1;
+	while (i < len) {
+		u32 dst = 0;
+		w = p[i++];
+		if (w > 32)
+			return -1;
+		n = (w + 7u) / 8u;
+		if (i + n + 4u > len)
+			return -1;
+		for (k = 0; k < n; k++)
+			dst |= (u32)p[i + k] << (24u - 8u * k);
+		i += n;
+		if (cnt < max) {
+			u32 m = w ? 0xffffffffu << (32u - w) : 0;
+			out[cnt].dst = rt_htonl(dst & m);   /* stray host bits dropped */
+			out[cnt].mask = rt_htonl(m);
+			memcpy(&out[cnt].gw, p + i, 4);
+			cnt++;
+		}
+		i += 4;
+	}
+	return cnt;
+}
+
+/* RFC 3397: DNS names (RFC 1035 encoding; compression pointers are
+ * offsets into the option data) into a space-separated list of at most
+ * RT_DHCP_SEARCH_MAX names. Names of 64 characters or more do not fit the
+ * resolver and are skipped. Returns the number of names, -1 when the
+ * option is malformed (no list at all). */
+int rt_dhcp_parse_search(const u8 *p, u32 len, char *out, u32 outlen)
+{
+	u32 i = 0, o = 0;
+	int cnt = 0;
+
+	if (!outlen)
+		return -1;
+	out[0] = 0;
+	while (i < len) {
+		char name[256];
+		u32 j = i, nl = 0, end = 0, jumps = 0, lim = i, k;
+
+		for (;;) {
+			u8 l;
+			if (j >= len)
+				return -1;
+			l = p[j];
+			if ((l & 0xc0) == 0xc0) {
+				u32 to;
+				if (j + 1 >= len)
+					return -1;
+				to = ((u32)(l & 0x3f) << 8) | p[j + 1];
+				if (!end)
+					end = j + 2;
+				/* strictly backwards, before anything followed
+				 * so far: no loops */
+				if (to >= lim || ++jumps > 64)
+					return -1;
+				lim = to;
+				j = to;
+				continue;
+			}
+			if (l & 0xc0)
+				return -1;
+			if (l == 0) {
+				if (!end)
+					end = j + 1;
+				break;
+			}
+			if (j + 1u + l > len || nl + l + 1u >= sizeof(name))
+				return -1;
+			if (nl)
+				name[nl++] = '.';
+			for (k = 0; k < l; k++) {
+				u8 ch = p[j + 1 + k];
+				if (ch <= 0x20 || ch >= 0x7f || ch == ',')
+					return -1;
+				name[nl++] = (char)ch;
+			}
+			j += 1u + l;
+		}
+		name[nl] = 0;
+		i = end;
+		if (!nl || nl >= 64 || cnt >= RT_DHCP_SEARCH_MAX || o + nl + 2u > outlen)
+			continue;
+		if (o)
+			out[o++] = ' ';
+		memcpy(out + o, name, nl + 1u);
+		o += nl;
+		cnt++;
+	}
+	return cnt;
 }
