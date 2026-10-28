@@ -843,6 +843,14 @@ void tcp_fastretrans_alert(struct tcp_sock *tp, u32 prior_snd_una, int num_dupac
 			tcp_try_to_open(tp, flag);
 			return;
 		}
+		/* MTU probe lost: not congestion, keep cwnd (Linux) */
+		if (tp->ca_state < TCP_CA_CWR && tp->mtup_probe_size &&
+		    tp->snd_una == tp->mtup_probe_seq_start) {
+			tcp_mtup_probe_failed(tp);
+			tp->snd_cwnd++;      /* undo tcp_mtu_probe()'s reduction */
+			tcp_simple_retransmit(tp);
+			return;
+		}
 		tcp_enter_recovery(tp, ece_ack);
 		fast_rexmit = 1;
 		break;

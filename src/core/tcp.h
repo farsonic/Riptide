@@ -357,6 +357,14 @@ struct tcp_sock {
 	u16 mss_cache;                 /* current effective send MSS */
 	u16 advmss;                    /* MSS we advertise */
 	u16 pmtu_cookie;               /* MTU mss_cache was computed for */
+	/* packetization layer path MTU discovery (RFC 4821, tcp_mtup.c;
+	 * Linux icsk_mtup): MTUs including the IP and TCP base headers */
+	u8  mtup_enabled;              /* probing on: mss_cache <= MSS of search_low */
+	u16 mtup_search_low;           /* largest MTU known to work */
+	u16 mtup_search_high;          /* smallest MTU known (or assumed) to fail, + 1 */
+	u16 mtup_probe_size;           /* MTU of the probe in flight, 0 = none */
+	u32 mtup_probe_seq_start, mtup_probe_seq_end;
+	u32 mtup_probe_ts;             /* tcp_jiffies() when the search (re)started */
 	struct tcp_rx_opt rx_opt;
 	u32 ts_recent, ts_recent_stamp;  /* stamp in seconds */
 	u32 ts_offset;
@@ -734,6 +742,16 @@ void tcp_data_snd_check(struct tcp_sock *tp);
 u32  tcp_current_mss(struct tcp_sock *tp);
 u32  tcp_sync_mss(struct tcp_sock *tp, u32 pmtu);
 u32  tcp_mss_to_mtu(const struct tcp_sock *tp, u32 mss);
+u32  tcp_mtu_to_mss(const struct tcp_sock *tp, u32 pmtu);
+/* path MTU probing and black hole detection (tcp_mtup.c) */
+extern s32 sysctl_tcp_mtu_probing, sysctl_tcp_base_mss, sysctl_tcp_mtu_probe_floor,
+           sysctl_tcp_probe_threshold, sysctl_tcp_probe_interval;
+void tcp_mtup_module_init(void);
+void tcp_mtup_init(struct tcp_sock *tp);
+void tcp_mtu_blackhole(struct tcp_sock *tp);
+void tcp_mtup_probe_success(struct tcp_sock *tp);
+void tcp_mtup_probe_failed(struct tcp_sock *tp);
+void tcp_mtu_check_reprobe(struct tcp_sock *tp);
 u32  __tcp_select_window(struct tcp_sock *tp);
 void tcp_select_initial_window(u32 space, u32 mss, u32 *rcv_wnd, u32 *window_clamp,
                                int wscale_ok, u8 *rcv_wscale);

@@ -38,7 +38,7 @@ SDK may be missing here.
 | Licence | Commercial shareware with registration key (RE-NOTES, intro) | Commercial; free 15-minute demo [RS-README] | GPL-2.0-only, full source |
 | Kernel | 4.4BSD-Lite derived (RE-NOTES 5) | BSD derived, see 2.1 | New clean-room core; TCP modelled on Linux |
 | TCP | Reno/NewReno, early SACK, IW 1, 500 ms ticks, T/TCP on | 4.4BSD-style tunables (RFC 1323 switches, `tcp.rttdflt`) [RS-DOC]; modern loss recovery not documented | CUBIC+HyStart, SACK/D-SACK, RACK-TLP, PRR, F-RTO, IW 10, 200 ms RTO min |
-| Newer TCP features | No | Not documented [RS-DOC] (**unverified**) | TCP Fast Open client (RFC 7413); LEDBAT++ and receive-side LEDBAT (RFC 9840) background transfers chosen by program or port; 20 s connect timeout; TIME_WAIT reuse; `keepalive_all`; `TCP_CORK`; global socket memory limits |
+| Newer TCP features | No | Not documented [RS-DOC] (**unverified**) | TCP Fast Open client (RFC 7413); LEDBAT++ and receive-side LEDBAT (RFC 9840) background transfers chosen by program or port; 20 s connect timeout; TIME_WAIT reuse; `keepalive_all`; `TCP_CORK`; global socket memory limits; PMTU black hole detection (RFC 4821) |
 | Address handling | Not analysed | **Unverified** | Up to 9 IPv4 addresses per interface; IPv4 and IPv6 switchable per interface; Happy Eyeballs v2 (RFC 8305) |
 | Traffic priority | Not analysed | **Unverified** | `SO_PRIORITY`, DSCP/`IP_TOS` marking, `qos rule` lines for old programs, optional priority transmit bands |
 | IPv6 | No | Not documented (unverified, see 4) | Yes: dual-stack host (SLAAC, MLDv2, stateless DHCPv6, RDNSS; see 4) |
@@ -134,6 +134,7 @@ robustness are unproven. Section 9 lists where it is behind.
 | Ephemeral ports | 1024-5000 by default ("tiny and predictable", RE-NOTES 7.8) | **Unverified** | 49152-65535, RFC 6056 algorithm 4 (`net.inet.ip.portrange.*`) |
 | TIME_WAIT | 4.4BSD 2*MSL (inferred, not analysed) | **Unverified** | Mini-sockets, capped (`max_tw_buckets` 1024); `connect()` reuses TIME_WAIT pairs with timestamps (`tw_reuse` 1; Linux: loopback only); orphan limit (`max_orphans`) |
 | Path MTU discovery | On | **Unverified** | On (RFC 1191), cached in `ip route show cache`, expires after `mtu_expires` 600 s |
+| PMTU black holes (ICMP filtered) | Connection stalls | **Unverified** | Packetization layer PMTU discovery (RFC 4821, Linux `tcp_mtu_probing` 1): after three timeouts of a segment the MSS drops to `base_mss` 1024 and probes back up; remembered per destination; IPv4 and IPv6 |
 | Keepalive | 2 h idle, 75 s interval | Standard `SO_KEEPALIVE` [RS-DOC]; times **unverified** | 7200 s idle, 75 s interval, 9 probes (`keepidle`, `keepintvl`, `keepcnt`); per socket `TCP_KEEPIDLE`/`INTVL`/`CNT`; `keepalive_all` for programs that never ask (NAT routers) |
 | T/TCP (RFC 1644) | Implemented, on by default (`rfc1644` 1) | Not documented | Not implemented, on purpose: it is obsolete (moved to Historic by RFC 6247) and lets a spoofed SYN execute a transaction |
 | Socket options | BSD | `TCP_NODELAY` only: "TCP supports one socket option" [RS-DOC] | `TCP_NODELAY`, `TCP_MAXSEG`, `TCP_NOPUSH`, `TCP_CORK`, `MSG_MORE`, `TCP_KEEPINIT`, `TCP_USER_TIMEOUT`, `TCP_FASTOPEN_CONNECT` and other Linux-style knobs (`rt_bsd.h`) |

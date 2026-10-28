@@ -53,6 +53,8 @@ struct rt_tcp_stats {
 	u32 TCPMemoryPressures;    /* times the use crossed net.inet.tcp.mem_pressure */
 	u32 TCPMemoryPressuresMs;  /* time spent under pressure (ended periods) */
 	u32 TCPMemLimitDrops;      /* segments dropped above net.inet.tcp.mem_high */
+	/* 0.18 */
+	u32 TCPMTUPBlackhole;      /* MSS lowered on a suspected PMTU black hole */
 };
 
 struct rt_igmp_stats {

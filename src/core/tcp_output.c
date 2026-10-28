@@ -260,7 +260,7 @@ void tcp_select_initial_window(u32 space, u32 mss, u32 *rcv_wnd, u32 *window_cla
 }
 
 /* ---- MSS ---- */
-static u32 tcp_mtu_to_mss(const struct tcp_sock *tp, u32 pmtu)
+u32 tcp_mtu_to_mss(const struct tcp_sock *tp, u32 pmtu)
 {
 	s32 mss = (s32)pmtu - tp->net_hlen - TCP_HDR_LEN;
 
@@ -294,8 +294,12 @@ u32 tcp_sync_mss(struct tcp_sock *tp, u32 pmtu)
 		pmtu = 68;
 	if (tp->net_hlen == 40 && pmtu < RT_IP6_MIN_MTU)
 		pmtu = RT_IP6_MIN_MTU;
+	if (tp->mtup_search_high > pmtu)
+		tp->mtup_search_high = (u16)pmtu;
 	mss = tcp_mtu_to_mss(tp, pmtu);
 	mss = tcp_bound_to_half_wnd(tp, mss);
+	if (tp->mtup_enabled)
+		mss = RT_MIN(mss, tcp_mtu_to_mss(tp, tp->mtup_search_low));
 	tp->pmtu_cookie = (u16)pmtu;
 	tp->mss_cache = (u16)mss;
 	return mss;
@@ -760,6 +764,7 @@ int tcp_connect_init(struct tcp_sock *tp)
 	tp->tcp_header_len = (u16)(TCP_HDR_LEN + (tp->rx_opt.tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0));
 	tp->rx_opt.mss_clamp = tp->rx_opt.user_mss ? tp->rx_opt.user_mss : TCP_MSS_DEFAULT;
 	tp->max_window = 0;
+	tcp_mtup_init(tp);
 	tcp_sync_mss(tp, tp->pmtu_cookie);
 	tp->advmss = (u16)(tp->pmtu_cookie - tp->net_hlen - TCP_HDR_LEN);
 	if (tp->rx_opt.user_mss && tp->advmss > tp->rx_opt.user_mss)
@@ -1025,6 +1030,92 @@ static void tcp_event_new_data_sent(struct tcp_sock *tp, struct rt_buf *b)
 		tcp_rearm_rto(tp);
 }
 
+/* Linux tcp_mtu_probe() (RFC 4821 7.4): coalesce the head of the unsent
+ * queue into one segment of the size being probed for and send it among
+ * the regular ones. 1: sent; 0: not now, send nothing (wait for cwnd or
+ * window); -1: no probe, carry on normally. */
+static int tcp_mtu_probe(struct tcp_sock *tp)
+{
+	struct rt_buf *b, *nb, *next;
+	struct tcp_skb_cb *ncb;
+	u32 mss_now, probe_size, size_needed, interval, len, copy;
+
+	if (!tp->mtup_enabled || tp->mtup_probe_size || tp->ca_state != TCP_CA_Open ||
+	    tp->snd_cwnd < 11 || tp->rx_opt.num_sacks || tp->rx_opt.dsack)
+		return -1;
+	mss_now = tcp_current_mss(tp);
+	probe_size = tcp_mtu_to_mss(tp, ((u32)tp->mtup_search_high + tp->mtup_search_low) >> 1);
+	size_needed = probe_size + (tp->reordering + 1) * tp->mss_cache;
+	interval = (u32)tp->mtup_search_high - tp->mtup_search_low;
+	if (probe_size > tcp_mtu_to_mss(tp, tp->mtup_search_high) ||
+	    tp->mtup_search_high < tp->mtup_search_low ||
+	    interval < (u32)sysctl_tcp_probe_threshold || probe_size <= mss_now) {
+		tcp_mtu_check_reprobe(tp);
+		return -1;
+	}
+	if (tp->write_seq - tp->snd_nxt < size_needed || tp->snd_wnd < size_needed)
+		return -1;
+	if (rt_seq_after(tp->snd_nxt + size_needed, tcp_wnd_end(tp)))
+		return 0;
+	if (tcp_packets_in_flight(tp) + 2 > tp->snd_cwnd)
+		return tcp_packets_in_flight(tp) ? 0 : -1;
+	/* tcp_can_coalesce_send_queue_head() */
+	len = 0;
+	for (b = tp->send_head; b && len < probe_size; b = b->next) {
+		if (TCP_SKB_CB(b)->tcp_flags & (TCPHDR_SYN | TCPHDR_FIN))
+			return -1;
+		if (len + b->len < probe_size && TCP_SKB_CB(b)->eor)
+			return -1;
+		len += b->len;
+	}
+	if (len < probe_size)
+		return -1;
+
+	nb = tcp_stream_alloc_skb(tp, probe_size);
+	if (!nb)
+		return -1;
+	b = tp->send_head;
+	ncb = TCP_SKB_CB(nb);
+	memset(ncb, 0, sizeof(*ncb));
+	ncb->seq = TCP_SKB_CB(b)->seq;
+	ncb->end_seq = ncb->seq + probe_size;
+	ncb->tcp_flags = TCPHDR_ACK;
+	rt_bufq_insert_after(&tp->wq, b->prev, nb);
+	tp->wmem_queued += tcp_buf_truesize(nb);
+	len = 0;
+	for (; b && len < probe_size; b = next) {
+		next = b->next;
+		copy = RT_MIN(b->len, probe_size - len);
+		rt_copy_buf(rt_buf_put(nb, copy), b->data, copy);
+		tp->wq.bytes += copy;
+		if (copy == b->len) {
+			ncb->tcp_flags |= TCP_SKB_CB(b)->tcp_flags;
+			ncb->eor = TCP_SKB_CB(b)->eor;
+			rt_bufq_unlink(&tp->wq, b);
+			tp->wq_bytes += b->len;           /* the data moved, it is still queued */
+			tcp_wmem_free_skb(tp, b);
+		} else {
+			ncb->tcp_flags |= TCP_SKB_CB(b)->tcp_flags & (u8)~TCPHDR_PSH;
+			/* the rest moves to the front (not rt_buf_pull()): the
+			 * headers pushed in front of it stay aligned */
+			memmove(b->data, b->data + copy, b->len - copy);
+			rt_buf_trim(b, b->len - copy);
+			tp->wq.bytes -= RT_MIN(tp->wq.bytes, copy);
+			TCP_SKB_CB(b)->seq += copy;
+		}
+		len += copy;
+	}
+	tp->send_head = nb;
+	if (tcp_transmit_skb(tp, nb, 1))
+		return -1;
+	tp->snd_cwnd--;
+	tcp_event_new_data_sent(tp, nb);
+	tp->mtup_probe_size = (u16)tcp_mss_to_mtu(tp, nb->len);
+	tp->mtup_probe_seq_start = ncb->seq;
+	tp->mtup_probe_seq_end = ncb->end_seq;
+	return 1;
+}
+
 /* Linux tcp_write_xmit(): send as much of the write queue as cwnd, the
  * peer's window and Nagle allow. push_one: 1 = one segment, 2 = TLP. */
 int tcp_write_xmit(struct tcp_sock *tp, u32 mss_now, int nonagle, int push_one)
@@ -1039,6 +1130,13 @@ int tcp_write_xmit(struct tcp_sock *tp, u32 mss_now, int nonagle, int push_one)
 		s32 delta = (s32)(tcp_jiffies() - tp->lsndtime);
 		if (delta > (s32)tp->icsk_rto)
 			tcp_cwnd_restart(tp, delta);
+	}
+	if (!push_one) {
+		int r = tcp_mtu_probe(tp);
+		if (!r)
+			return 0;
+		if (r > 0)
+			sent = 1;
 	}
 	while ((b = tp->send_head) != NULL) {
 		u32 in_flight = tcp_packets_in_flight(tp);
@@ -1137,6 +1235,11 @@ int tcp_retransmit_skb(struct tcp_sock *tp, struct rt_buf *b)
 		tp->wq_bytes -= RT_MIN(tp->wq_bytes, trim);
 		cb->seq = tp->snd_una;
 	}
+	/* resending any of an MTU probe's range: take it as lost (an RTO or
+	 * loss marking without the fast retransmit check of tcp_recovery.c) */
+	if (tp->mtup_probe_size && rt_seq_before(cb->seq, tp->mtup_probe_seq_end) &&
+	    rt_seq_after(cb->end_seq, tp->mtup_probe_seq_start))
+		tcp_mtup_probe_failed(tp);
 	cur_mss = tcp_current_mss(tp);
 	if (!rt_seq_before(cb->seq, tcp_wnd_end(tp)) && cb->seq != tp->snd_una)
 		return -RT_EAGAIN;

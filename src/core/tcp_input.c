@@ -875,6 +875,8 @@ static int tcp_clean_rtx_queue(struct tcp_sock *tp, u32 prior_fack, u32 prior_sn
 
 	if (flag & FLAG_ACKED) {
 		flag |= FLAG_SET_XMIT_TIMER;
+		if (tp->mtup_probe_size && !rt_seq_after(tp->mtup_probe_seq_end, tp->snd_una))
+			tcp_mtup_probe_success(tp);
 		if (tcp_is_reno(tp)) {
 			tcp_remove_reno_sacks(tp, (int)pkts_acked);
 			if (flag & FLAG_RETRANS_DATA_ACKED)
@@ -1597,6 +1599,7 @@ static int tcp_rcv_synsent_state_process(struct tcp_sock *tp, struct rt_buf *b)
 			tp->rx_opt.tstamp_ok = 0;
 			tp->tcp_header_len = TCP_HDR_LEN;
 		}
+		tcp_mtup_init(tp);
 		tcp_sync_mss(tp, tp->pmtu_cookie);
 		tcp_initialize_rcv_mss(tp);
 		tp->copied_seq = tp->rcv_nxt;
