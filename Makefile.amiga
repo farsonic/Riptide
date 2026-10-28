@@ -39,6 +39,10 @@ PREFS_SRC := riptideprefs conf_edit
 NETTOOLS  += ping6 traceroute6
 TOOLS     += ping6 traceroute6
 
+# The per-packet path, built at -O3 (inlining within a file)
+HOT_SRC   := tcp_input tcp_output tcp_main tcp_timer tcp_recovery tcp_cubic tcp_cong ip inet netif \
+             buf route arp timer socket socket_api checksum qos
+
 ifeq ($(TOOLCHAIN),gcc)
 # ---------------------------------------------------------------- GCC ----
 BUILD   := build/amiga-gcc
@@ -76,6 +80,10 @@ $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_calls.h): $(BUILD)/gen/%_calls.h: src/amig
 $(BUILD)/gen/%_vec.S $(BUILD)/gen/%_impl.h: src/amiga/lib_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/gen_lvos.py impl gcc $< $* $(BUILD)/gen/$*_vec.S $(BUILD)/gen/$*_impl.h
+
+# about 2 % less 68020 time per TCP segment than -O2 (Riptide BENCH TX)
+HOT_OBJ := $(patsubst %,$(BUILD)/core/%.o,$(HOT_SRC))
+$(HOT_OBJ): CFLAGS := $(subst -O2,-O3,$(CFLAGS))
 
 $(BUILD)/%.o: src/%.c $(HDRS) $(GEN_H)
 	@mkdir -p $(dir $@)
@@ -140,10 +148,8 @@ $(BUILD)/gen/%_vec.c $(BUILD)/gen/%_impl.h: src/amiga/lib_lvos.txt tools/gen_lvo
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/gen_lvos.py impl vbcc $< $* $(BUILD)/gen/$*_vec.c $(BUILD)/gen/$*_impl.h
 
-# The per-packet path at -O3 (inlining within a file): about a tenth less
-# 68020 time per TCP segment (Riptide BENCH TX)
-HOT_OBJ := $(patsubst %,$(BUILD)/core/%.o,tcp_input tcp_output tcp_main tcp_timer tcp_recovery \
-             tcp_cubic tcp_cong ip inet netif buf route arp timer socket socket_api checksum qos)
+# about a tenth less 68020 time per TCP segment than -O2 (Riptide BENCH TX)
+HOT_OBJ := $(patsubst %,$(BUILD)/core/%.o,$(HOT_SRC))
 $(HOT_OBJ): CFLAGS := $(subst -O2,-O3,$(CFLAGS))
 
 $(BUILD)/%.o: src/%.c $(HDRS) $(GEN_H)

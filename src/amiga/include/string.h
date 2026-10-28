@@ -20,4 +20,12 @@ char  *strcpy(char *dst, const char *src);
 char  *strncpy(char *dst, const char *src, size_t n);
 char  *strcat(char *dst, const char *src);
 
+/* -ffreestanding turns GCC's built-in memcpy/memset off, so every header
+ * field copy was a call; small fixed-size ones are inlined again (others
+ * still call the functions in libc.c). vbcc inlines them by itself. */
+#if defined(__GNUC__) && !defined(RT_LIBC_IMPL)
+#define memcpy(d, s, n) __builtin_memcpy(d, s, n)
+#define memset(d, c, n) __builtin_memset(d, c, n)
+#endif
+
 #endif

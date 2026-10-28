@@ -2501,6 +2501,10 @@ make -f Makefile.amiga TOOLCHAIN=gcc        # -> build/amiga-gcc/...
 * It links one image at address 0 with `--emit-relocs`.
   `tools/elf2hunk.py` turns that image into a hunk executable with a single
   `HUNK_CODE` and `HUNK_RELOC32`.
+* Its stack is faster: about a fifth less 68020 time per TCP segment than
+  the vbcc build (`BENCH TX`), 15 % more download and 9 % more upload on
+  the emulated A1200, 20 % and 14 % on the A4000/040 (`docs/DESIGN.md`,
+  "Compiler"). `make -f Makefile.amiga TOOLCHAIN=gcc package` packages it.
 
 Both builds generate their library glue from the LVO tables
 `src/amiga/lib_lvos.txt`, `src/amiga/os/os_lvos.txt` and
