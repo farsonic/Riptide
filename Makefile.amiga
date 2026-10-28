@@ -34,7 +34,7 @@ ST_SRC    := st_main st_xml st_http st_util
 # the ftp test, a minimal speedtest HTTP server for the speedtest test
 TESTTOOLS := ftpd-test httpd-test netbench udpblast
 # RiptidePrefs (src/amiga/prefs): GadTools preferences editor for riptide.conf
-PREFS_SRC := riptideprefs conf_edit
+PREFS_SRC := riptideprefs conf_edit prefs_fields prefs_io gt_prefs mui_main
 
 # IPv6 variants of ping and traceroute (ping6.c / traceroute6.c include
 # ping.c / traceroute.c); NETTOOLS is the list of tools linked with cmdlib
