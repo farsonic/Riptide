@@ -150,7 +150,7 @@ static const struct field fields[] = {
 	{ P_CONN,  F_NUM,   0, SC(RP_SC_SYN_RTO_INIT), 200, 3000, "SYN first _RTO (ms)", NULL, NULL },
 	{ P_CONN,  F_NUM,   0, SC(RP_SC_SYN_RTO_MAX), 200, 120000, "SYN _max RTO (ms)", NULL, NULL },
 	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_SYN_BACKOFF), 0, 0, "SYN back_off", cy_backoff, cyv_backoff },
-	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_MTU_PROBING), 0, 0, "MTU _probing", cy_mtup, cyv_mtup },
+	{ P_CONN,  F_CYCLE, 0, SC(RP_SC_MTU_PROBING), 0, 0, "M_TU probing", cy_mtup, cyv_mtup },
 	{ P_PORTS, F_NUM,   0, SC(RP_SC_CONNECT_TIMEOUT), 0, 600, "Connect ti_meout (s)", NULL, NULL },
 	{ P_PORTS, F_CYCLE, 0, SC(RP_SC_SYN_ICMP_ABORT), 0, 0, "_ICMP unreachable", cy_icmp, cyv_icmp },
 	{ P_PORTS, F_CYCLE, 0, SC(RP_SC_TW_REUSE), 0, 0,   "Time-wait _reuse", cy_tw, cyv_tw },

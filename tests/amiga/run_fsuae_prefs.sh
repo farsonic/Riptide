@@ -178,15 +178,18 @@ key m
 settle 08-time-edited
 key p
 settle 09-tcp
-# Advanced: Connecting: Fast Open on, connect timeout 15 s
+# Advanced: Connecting: Fast Open on
 key p
 settle 09a-adv-connecting
-key f t
-typ 15
-key Return
+key f
 settle 09b-adv-connecting-edited
+# Advanced: Ports: connect timeout 15 s
 key p
 settle 09c-adv-ports
+key m
+typ 15
+key Return
+settle 09c-adv-ports-edited
 # Advanced: Keepalive: keepalive for all after 120 s
 key p
 settle 09d-adv-keepalive
