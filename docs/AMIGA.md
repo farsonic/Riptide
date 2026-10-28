@@ -2120,7 +2120,11 @@ bring global addresses (SLAAC), the default router and more specific
 routes (RFC 4191), the link MTU, hop limit and DNS servers and search
 domain (RDNSS/DNSSL, RFC 8106). When the router sets the O (or M) flag
 Riptide also asks a DHCPv6 server for DNS servers and the search domain
-(stateless DHCPv6, RFC 8415). `lo0` has `::1`.
+(stateless DHCPv6, RFC 8415). Once a new global address has passed DAD
+Riptide announces it to the routers (three unsolicited neighbour
+advertisements to ff02::2, a second apart, RFC 9131), so the first reply
+sent to it is not held up or lost while the router resolves it; `netstat
+-s -6` counts them as "address announcements". `lo0` has `::1`.
 
 **Configuration** (riptide.conf or `ip`/`ifconfig`/`route` at run time):
 
@@ -2140,7 +2144,7 @@ sysctl net.inet6.ip6.use_tempaddr=2            # RFC 8981 temporary addresses
 IPv6 sysctls: `net.inet6.ip6.enable` (1), `accept_rtadv` (1),
 `use_tempaddr` (0; 1 create, 2 also prefer temporary addresses),
 `addr_gen_mode` (1), `stable_secret` (empty: derived from the MAC),
-`dad_count` (1), `hlim` (64), `forwarding` (0), `mtu_expires` (600 s),
+`dad_count` (1), `gratuitous_na` (1; RFC 9131 announcements), `hlim` (64), `forwarding` (0), `mtu_expires` (600 s),
 `v6only` (0), and `net.inet6.icmp6.ratelimit` (1000 ms per destination),
 `errppslimit` (100/s), `echo_ignore_multicast` (0).
 

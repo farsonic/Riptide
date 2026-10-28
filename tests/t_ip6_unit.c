@@ -751,6 +751,107 @@ static void test_dad_conflict(void)
 	flush(&eth1_cap);
 }
 
+/* ---- RFC 9131 gratuitous neighbour advertisements ---- */
+/* Takes every captured NA; counts those for target sent to ff02::2 with
+ * R/S/O clear and our link-layer address as the TLLA option. Returns -1
+ * if one is malformed or an announcement names a link-local target. */
+static int take_unas(struct cap *c, const struct rt_netif *n, const rt_in6_addr *target)
+{
+	struct rt_buf *b;
+	const u8 *m;
+	u32 len;
+	int cnt = 0;
+
+	while ((b = take(c, RT_ND_NEIGHBOR_ADVERT, &m, &len)) != NULL) {
+		const struct rt_ip6hdr *ip6 = (const struct rt_ip6hdr *)b->data;
+		struct capcb *cb = (struct capcb *)(void *)b->cb.b;
+		rt_in6_addr t;
+		memcpy(t.b, m + 8, 16);
+		if (rt_in6_eq(&ip6->dst, P("ff02::2"))) {
+			static const u8 mc2[6] = { 0x33, 0x33, 0, 0, 0, 2 };
+			if (len < 32 || m[4] != 0 || m[24] != 2 || m[25] != 1 || memcmp(m + 26, n->hwaddr, 6) ||
+			    ip6->hlim != 255 || !rt_in6_eq(&ip6->src, &t) || rt_in6_is_linklocal(&t) ||
+			    !cb->has_dst || memcmp(cb->dst, mc2, 6))
+				cnt = -1000;
+			else if (rt_in6_eq(&t, target))
+				cnt++;
+		}
+		rt_buf_free(b);
+	}
+	return cnt < 0 ? -1 : cnt;
+}
+
+static void test_gratuitous_na(void)
+{
+	rt_in6_addr a = A("2001:db8:7::7"), d = A("2001:db8:7::8"), q = A("2001:db8:7::9");
+	struct in6_ifaddr *ia;
+	u32 before;
+
+	advance(3000);                  /* earlier tests' announcements end */
+	flush(&eth1_cap);
+	before = rt_icmp6stat.OutUnsolicitedNAs;
+	rt_lock();
+	CHECK(rt_in6_addr_add(&eth1, &a, 64, 0, RT_IN6_INFINITE, RT_IN6_INFINITE) == 0);
+	rt_unlock();
+	ia = in6_ifa_find(&eth1, &a);
+	CHECK(ia && (ia->flags & RT_IN6_IFF_TENTATIVE));
+	/* nothing while tentative (DAD probe within 1 s, then RetransTimer) */
+	advance(900);
+	CHECK(ia && (ia->flags & RT_IN6_IFF_TENTATIVE));
+	CHECK(take_unas(&eth1_cap, &eth1, &a) == 0);
+	/* preferred: the first at once, three in all, a second apart */
+	advance(1200);
+	CHECK(ia && !(ia->flags & RT_IN6_IFF_TENTATIVE));
+	CHECK(take_unas(&eth1_cap, &eth1, &a) == 1);
+	advance(1000);
+	CHECK(take_unas(&eth1_cap, &eth1, &a) == 1);
+	advance(1000);
+	CHECK(take_unas(&eth1_cap, &eth1, &a) == 1);
+	advance(5000);
+	CHECK(take_unas(&eth1_cap, &eth1, &a) == 0);
+	CHECK(rt_icmp6stat.OutUnsolicitedNAs - before == 3);
+	/* a deprecated address is not announced */
+	rt_lock();
+	CHECK(rt_in6_addr_add(&eth1, &d, 64, 0, 600, 0) == 0);
+	rt_unlock();
+	advance(5000);
+	CHECK(take_unas(&eth1_cap, &eth1, &d) == 0);
+	/* the sysctl turns it off */
+	rt_lock();
+	CHECK(rt_sysctl_set_text("net.inet6.ip6.gratuitous_na", "0") == 0);
+	CHECK(rt_in6_addr_add(&eth1, &q, 64, 0, RT_IN6_INFINITE, RT_IN6_INFINITE) == 0);
+	rt_unlock();
+	advance(5000);
+	CHECK(take_unas(&eth1_cap, &eth1, &q) == 0);
+	rt_lock();
+	CHECK(rt_sysctl_set_text("net.inet6.ip6.gratuitous_na", "1") == 0);
+	/* removing an address mid-announcement stops it */
+	CHECK(rt_in6_addr_del(&eth1, &q) == 0);
+	CHECK(rt_in6_addr_add(&eth1, &q, 64, RT_IN6_IFF_NODAD, RT_IN6_INFINITE, RT_IN6_INFINITE) == 0);
+	CHECK(rt_in6_addr_del(&eth1, &q) == 0);
+	CHECK(rt_in6_addr_del(&eth1, &a) == 0 && rt_in6_addr_del(&eth1, &d) == 0);
+	rt_unlock();
+	advance(3000);
+	CHECK(take_unas(&eth1_cap, &eth1, &q) == 1);
+	/* link down and up: global addresses are announced again after DAD,
+	 * the link-local one never (take_unas fails on a link-local target) */
+	rt_lock();
+	CHECK(rt_in6_addr_add(&eth1, &a, 64, 0, RT_IN6_INFINITE, RT_IN6_INFINITE) == 0);
+	rt_unlock();
+	advance(5000);
+	CHECK(take_unas(&eth1_cap, &eth1, &a) == 3);
+	rt_lock();
+	rt_netif_down(&eth1);
+	rt_netif_up(&eth1);
+	rt_unlock();
+	advance(6000);
+	CHECK(take_unas(&eth1_cap, &eth1, &a) == 3);
+	rt_lock();
+	CHECK(rt_in6_addr_del(&eth1, &a) == 0);
+	rt_unlock();
+	flush(&eth1_cap);
+}
+
 /* ---- extension headers ---- */
 static rt_in6_addr gl0;      /* eth0's global SLAAC address */
 
@@ -1289,6 +1390,7 @@ int main(void)
 	test_ra_slaac();
 	test_neighbours();
 	test_dad_conflict();
+	test_gratuitous_na();
 	test_exthdr();
 	test_reassembly();
 	test_fragmentation_pmtu();

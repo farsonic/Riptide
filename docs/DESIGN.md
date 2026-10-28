@@ -647,7 +647,7 @@ the code is in `src/core`:
 |---|---|
 | `inet6_text.c` | Text forms (RFC 4291 2.2 parsing, RFC 5952 output) and address helpers. Self contained, so the Amiga tools link it too. |
 | `ip6.c` | Input (extension header walk, option action bits, hop-by-hop only first, atomic fragments), output (optional Router Alert), forwarding, the sysctls and the 1-second slow timer that drives lifetimes. |
-| `ip6_if.c` | Per-interface state (`nif->ip6`): addresses, DAD (RFC 7527 nonces), SLAAC with the two-hour rule, RFC 7217 identifiers (SipHash-2-4), RFC 8981 temporary addresses, MLDv2 with v1 fallback, router solicitations, source selection (RFC 6724 rules 1-3, 5-8 and a fixed policy table). |
+| `ip6_if.c` | Per-interface state (`nif->ip6`): addresses, DAD (RFC 7527 nonces), RFC 9131 announcements of new global addresses, SLAAC with the two-hour rule, RFC 7217 identifiers (SipHash-2-4), RFC 8981 temporary addresses, MLDv2 with v1 fallback, router solicitations, source selection (RFC 6724 rules 1-3, 5-8 and a fixed policy table). |
 | `nd6.c` | Neighbour cache (RFC 4861 states incl. DELAY/PROBE; router entries) and NS/NA/RS/RA/redirect handling, RA options PIO, MTU, RIO (RFC 4191), RDNSS/DNSSL (RFC 8106). |
 | `route6.c` | Longest-prefix table, default routers with preference, RA routes with lifetimes, PMTU entries (minimum 1280), redirects. |
 | `ip6_frag.c` | Reassembly (RFC 5722: overlaps drop the datagram; RFC 7112: the whole header chain in the first fragment) and fragmentation with random identifiers (RFC 7739). |

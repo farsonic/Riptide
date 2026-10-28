@@ -310,7 +310,7 @@ struct rt_icmp6_stats {
 	    InNeighborSolicits, InNeighborAdvertisements, InRedirects, InMLDQueries,
 	    OutMsgs, OutErrors, OutDestUnreachs, OutPktTooBigs, OutTimeExcds, OutParmProblems,
 	    OutEchoReplies, OutRouterSolicits, OutNeighborSolicits, OutNeighborAdvertisements,
-	    OutMLDv2Reports, OutRateLimited, DadDuplicates;
+	    OutMLDv2Reports, OutRateLimited, DadDuplicates, OutUnsolicitedNAs;
 };
 extern struct rt_ip6_stats   rt_ip6stat;
 extern struct rt_icmp6_stats rt_icmp6stat;

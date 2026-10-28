@@ -5,7 +5,8 @@
 # 192.168.77.1 with an HTTP server and tests/amiga/v6responder.py (an IPv6
 # router for fd00:77::/64). Checks IPv4 ping, two 1 MB downloads with the
 # full TCP window and no retransmissions or out-of-order segments, IPv6
-# address autoconfiguration, the RA default route, and ping6. A second
+# address autoconfiguration, the RA default route, ping6 and the RFC 9131
+# announcement of the new address. A second
 # address on another subnet (ifconfig eth0:1): a download from a server on
 # that subnet comes from it, ip addr / ifconfig / Riptide STATUS list it,
 # "ip addr del" removes it; ip -s link shows the QoS bands (qos=on); nc by name
@@ -142,6 +143,9 @@ expect ping '3 packets transmitted, 3 received'
 expect ip6 'inet6 fe80::[0-9a-f:]+/64 scope link' 'inet6 fd00:77::[0-9a-f:]+/64 scope global dynamic'
 expect route6 '^fd00:77::/64 dev eth0 proto ra' '^default via fe80::[0-9a-f:]+ dev eth0 proto ra'
 expect ping6 '3 packets transmitted, 3 received'
+# RFC 9131: the SLAAC address was announced to the routers (ff02::2)
+grep -Eq 'ICMPv6 type 136 from fd00:77::[0-9a-f:]+ to ff02::2' "$work/v6.log" ||
+	{ echo "FAIL v6.log: no unsolicited NA to ff02::2"; fails=$((fails + 1)); }
 expect netstat ' 0 segments retransmitted' ' 0 packets queued out of order'
 # the second address
 expect body3 'second subnet'
