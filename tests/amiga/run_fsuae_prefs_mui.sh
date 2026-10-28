@@ -2,8 +2,9 @@
 # Riptide - RiptidePrefs' MUI editor on FS-UAE (AROS Kickstart) with MUI
 # 3.8: the same keyboard edits as run_fsuae_prefs.sh must give the same
 # riptide.conf; screenshots of every page in both themes, on a 256-colour
-# 640x480 screen, a 640x512 one, the 640x256 Workbench (compact layout)
-# and an 800x600 one; the help bubble texts (DEBUG log), the pointer
+# 640x480 screen, a 640x512 one and the 640x256 Workbench (compact layout;
+# the AROS ROM opens no screens wider than 640); the help bubble texts
+# (DEBUG log), the pointer
 # lighting a page, menu commands through CMD= (About, Dark Theme, Reset to
 # Defaults), the saved theme, and GADTOOLS.
 #
@@ -187,10 +188,13 @@ waitfor() {
 	[ -s "$dh0/out/$1" ] || { fail "RiptidePrefs did not finish ($1)"; return 1; }
 	grep -q '^rc 0' "$dh0/out/$1" || fail "RiptidePrefs ($1): $(cat "$dh0/out/$1")"
 }
+# STAGES="1 2 3": the boots to run (default all)
+want() { case " ${STAGES:-1 2 3} " in *" $1 "*) return 0;; esac; return 1; }
 # the pages' names, as the page list shows them
 pages="interface address extra vlans names time tcp connecting ports keepalive background memory he qos qosrules other"
 
 # ---- 1: 640x480, 256 colours, light: the edits of run_fsuae_prefs.sh ----
+if want 1; then
 reset_conf
 boot <<'EOF'
 DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log1"
@@ -346,8 +350,10 @@ if ! cmp -s "$work/expect.conf" "$conf"; then
 	diff -u "$work/expect.conf" "$conf" | sed 's/^/  | /'
 fi
 grep -q '^window open' "$dh0/out/log1" 2>/dev/null || fail "the MUI editor did not open (log: $(cat "$dh0/out/log1" 2>/dev/null))"
+fi
 
 # ---- 2: 640x512, 8 colours, dark: every page, then Cancel ----
+if want 2; then
 reset_conf
 boot <<'EOF'
 DH0:C/tpubscreen RPTEST 640 512 3 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST THEME=DARK"
@@ -363,8 +369,10 @@ key Escape
 waitfor zz_2
 cleanup_uae
 cmp -s "$work/orig.conf" "$dh0/ENV/Riptide/riptide.conf" || fail "Cancel changed ENV:Riptide/riptide.conf"
+fi
 
-# ---- 3: the 640x256 Workbench (compact): a bubble, menu commands ----
+# ---- 3: the 640x256 Workbench (compact): bubble texts, menu commands ----
+if want 3; then
 reset_conf
 boot <<'EOF'
 DH0:C/RiptidePrefs DEBUG=DH0:out/log3
@@ -414,22 +422,11 @@ grep -q 'screen 640x256' "$dh0/out/log3" 2>/dev/null || fail "no screen line in 
 # texts the editor gives MUI instead
 grep -q 'bubble field: .*Interface name' "$dh0/out/log3" 2>/dev/null || fail "no bubble text on the first setting"
 grep -q 'bubble page: .*Interface' "$dh0/out/log3" 2>/dev/null || fail "no bubble text from the page list"
-
-# ---- 4: 800x600, 16 colours, light ----
-reset_conf
-rm -f "$dh0/ENV/Riptide/RiptidePrefs.prefs" "$dh0/Prefs/Env-Archive/Riptide/RiptidePrefs.prefs"
-boot <<'EOF'
-DH0:C/tpubscreen RPTEST 800 600 4 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST PAGE=Background"
-Echo "rc $RC" >DH0:out/zz_4
-EOF
-settle d01-800x600
-key Escape
-waitfor zz_4
-cleanup_uae
+fi
 
 cleanup
 if [ $fails -eq 0 ]; then
-	echo "ok   RiptidePrefs MUI editor on FS-UAE ($BUILD): keyboard edits as the GadTools test, both themes, 4 screens, bubble, menus, GADTOOLS"
+	echo "ok   RiptidePrefs MUI editor on FS-UAE ($BUILD): keyboard edits as the GadTools test, both themes, 3 screens, bubble texts, menus, GADTOOLS"
 	echo "     screenshots: $work/*.png"
 	exit 0
 fi

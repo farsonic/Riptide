@@ -98,7 +98,7 @@ static long mui_request(const char *text, const char *buttons)
 	static char dlgspec[32];
 	char labels[4][32];
 	const char *b = tr(buttons);
-	Object *dlg, *dlgroot, *txt, *row;
+	Object *dlg, *dlgroot, *txt, *row, *bt;
 	ULONG sigs = 0;
 	long r = 0;
 	int n = 0, i;
@@ -116,15 +116,18 @@ static long mui_request(const char *text, const char *buttons)
 	}
 	rt_strlcpy(dlgspec, theme_spec(T_WINDOW), sizeof(dlgspec));
 	txt = mui_newc(qlabel_mcc, MUIA_QLabel_Text, (ULONG)text, MUIA_QLabel_Kind, QL_TEXT, TAGEND);
-	row = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_SameSize, TRUE, MUIA_Group_Spacing, 8, TAGEND);
+	row = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, TAGEND);
 	if (!txt || !row || n == 0)
 		return 0;
+	/* the buttons sit right, at their own width */
+	if ((bt = rect()) != NULL)
+		mui_do(row, OM_ADDMEMBER, (ULONG)bt);
 	for (i = 0; i < n; i++) {
 		/* Return presses the first button, Esc the last (one button: both) */
 		ULONG key = i == n - 1 && n > 1 ? 0x45 : i == 0 ? 0x44 : 0;
-		Object *bt = mui_newc(qbutton_mcc, MUIA_QButton_Label, (ULONG)labels[i], MUIA_InputMode,
+		bt = mui_newc(qbutton_mcc, MUIA_QButton_Label, (ULONG)labels[i], MUIA_InputMode,
 		                      MUIV_InputMode_RelVerify, MUIA_ControlChar, (ULONG)(labels[i][1] | 0x20), MUIA_CycleChain,
-		                      1, MUIA_QButton_Key, key, MUIA_QButton_ID, ID_DLGBTN + i, TAGEND);
+		                      1, MUIA_QButton_Key, key, MUIA_QButton_ID, ID_DLGBTN + i, MUIA_HorizWeight, 0, TAGEND);
 		if (!bt)
 			return 0;
 		mui_do(row, OM_ADDMEMBER, (ULONG)bt);
