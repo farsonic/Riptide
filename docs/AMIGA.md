@@ -1809,6 +1809,43 @@ command in the background and waits until bsdsocket.library appears;
 every check on its own numbered line (`ok` or `FAIL`), grouped by section;
 without it only failures and the summary are shown.
 
+### stackprobe
+
+`stackprobe [QUICK] [PERF] [PEER=host] [ONLY=area,...] [JSON=file] [CSV=file] [NAME=label] [VERBOSE]`
+tests which TCP/IP features the running stack offers and how they behave,
+through the public Amiga APIs only, so the same program runs under any
+stack: AmiTCP, Miami, Genesis, Roadshow, AmiTCP_NG, PrismNet, tolunnet
+or Riptide. It is plain 68000 code and needs nothing but a running stack.
+
+Every test ends as `PASS`, `FAIL` (with the error), `--`
+(unsupported: the call is not in the library's jump table, or the stack
+answers ENOPROTOOPT/EOPNOTSUPP), `skip` (needs a network or `PEER=`) or
+`info` (a value, not a verdict). The areas:
+
+| Area | What it tries |
+|---|---|
+| `libs` | which libraries and ports exist: bsdsocket, usergroup, miami, the AS225 socket and inet libraries, miamibpf/miamipcap, AmiTCP 4's ifconfig.library, riptide |
+| `api` | every call of the AmiTCP bsdsocket.library table once (socket to GetSocketEvents) |
+| `tags` | every `SocketBaseTagList()` code of the AmiTCP SDK, the set-and-read-back ones, the errno pointers of 1, 2 and 4 bytes |
+| `netdb` | hosts and reverse lookups, services, protocols, networks |
+| `tcp` | loopback transfer with the data checked; half close; resets (SO_LINGER 0, close with unread data, send after a reset); refused; non-blocking connect, accept and recv; backlog; EADDRINUSE and SO_REUSEADDR in TIME_WAIT; ephemeral ports; MSG_PEEK, MSG_DONTWAIT, MSG_WAITALL; urgent data (MSG_OOB, the except set, SIGURG, SIOCATMARK, SO_OOBINLINE); FIOASYNC |
+| `udp` | loopback datagrams; truncation; 1.5 to 64 KB datagrams; connected UDP and its ECONNREFUSED; broadcast with and without SO_BROADCAST; multicast join, loop and leave; a raw ICMP ping of 127.0.0.1 |
+| `options` | socket, TCP and IP options set and read back, an unknown option, SO_RCVTIMEO and SO_SNDTIMEO |
+| `select` | WaitSelect() timeouts (20, 100, 500 ms, measured), polling, a signal in the mask, Ctrl-C ending a blocking accept(), readable and writable, a descriptor above 64 |
+| `misc` | how many sockets a program gets, a socket handed to another process (ReleaseSocket/ObtainSocket), the errors for bad descriptors, families and protocols |
+| `ipv6` | AF_INET6 TCP and UDP over ::1, IPV6_V6ONLY, an IPv6 listener taking an IPv4 client, `gethostbyname2()` |
+| `ext` | the Roadshow extensions (interface, route and name server lists, the *ent() calls, inet_aton/pton/ntop, In_LocalAddr, ProcessIsServer, BPF), miami.library (getaddrinfo, getnameinfo, if_nameindex ...) and usergroup.library |
+| `perf` | (`PERF`) loopback TCP throughput, connections a second, UDP datagrams a second, the cost of a WaitSelect() poll: stack and CPU together |
+| `peer` | (`PEER=host`, with `tests/amiga/stackprobe_peer.py` on that host) TCP echo round trip, upload, download, a refused connection, UDP echo |
+
+A call is only made when the library's jump table reaches its vector, and
+each test runs under a watchdog: a call that blocks for ever on some stack
+(for example `recv(MSG_DONTWAIT)` where the flag is unknown) is ended by a
+Ctrl-C after 20 s and counts as a failure, so a run always finishes. `JSON=`
+writes the report for `tools/stackprobe_compare.py`, which prints a
+Markdown table of several reports side by side (see `docs/COMPARISON.md`).
+`tests/amiga/run_fsuae_stackprobe.sh` runs it under one stack in FS-UAE.
+
 ## Profiling and debug log
 
 Two diagnostics are built into every Riptide. Both cost next to nothing
