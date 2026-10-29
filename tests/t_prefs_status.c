@@ -346,7 +346,8 @@ static void test_model(void)
 	CHECK(strstr(b, "Next sync in 58 min") != NULL);
 	rp_st_counters_text(&m, b, sizeof(b));
 	CHECK(strstr(b, "Resent: 13 of 5 000 segments (3 in the last second)") != NULL);
-	CHECK(strstr(b, "ECN: 1 connections") != NULL);
+	CHECK(strstr(b, "ECN: 1 connection,") != NULL);
+	CHECK(!strcmp(rp_plural(1), "") && !strcmp(rp_plural(0), "s") && !strcmp(rp_plural(2), "s"));
 	CHECK(strstr(b, "IP: 3 packets dropped in") != NULL);
 	/* a connection goes away, an interface too: the model follows */
 	tcp[1] = tcp[2];

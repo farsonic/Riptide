@@ -53,6 +53,8 @@ void rp_fmt_bytes(char *buf, int len, u32 hi, u32 lo);
 void rp_fmt_rate(char *buf, int len, u32 bytes_per_s);
 /* a count with thin groups: "1 234 567" */
 void rp_fmt_count(char *buf, int len, u32 v);
+/* "s" after a count other than 1 ("1 packet", "2 packets"), else "" */
+const char *rp_plural(unsigned long n);
 /* a duration: "45 s", "12 min", "3 h 05 min", "2 days 4 h" */
 void rp_fmt_dur(char *buf, int len, u32 s);
 /* an uptime: "0:00:45", "3:04:05", "2 days 3:04:05" */

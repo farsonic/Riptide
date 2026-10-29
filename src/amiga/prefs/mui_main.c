@@ -161,6 +161,17 @@ static long mui_request(const char *text, const char *buttons)
 	mui_do(app, OM_ADDMEMBER, (ULONG)dlg);
 	mui_do(dlg, MUIM_Notify, MUIA_Window_CloseRequest, TRUE, (ULONG)app, 2, MUIM_Application_ReturnID,
 	       ID_DLGBTN + n - 1);
+	/* the button that led here (Save, Remove card ...) must not stay drawn
+	 * pressed or lit while the window sleeps */
+	for (i = 0; i < 4; i++)
+		if (btn[i])
+			mui_set(btn[i], MUIA_Selected, FALSE);
+	for (i = 0; i < 2; i++)
+		if (ifbtn[i])
+			mui_set(ifbtn[i], MUIA_Selected, FALSE);
+	for (i = 0; i < RP_NPAGES * 3; i++)
+		if (lbtn[i / 3][i % 3])
+			mui_set(lbtn[i / 3][i % 3], MUIA_Selected, FALSE);
 	mui_set(win, MUIA_Window_Sleep, TRUE);
 	mui_set(dlg, MUIA_Window_Open, TRUE);
 	rp_log("message: %s", text);
@@ -504,13 +515,17 @@ static void refresh_all(void)
 	update_disabled();
 }
 
+/* Open... or Last Saved read a file other than the one the editor started
+ * with (the settings then differ from it even before an edit) */
+static int other_file;
+
 static void show_status(void)
 {
 	int running = FindPort((CONST_STRPTR)RIPTIDE_PORTNAME) != NULL;
 
 	rt_snprintf(status_text, sizeof(status_text), "%s%s", tr(running ? "Riptide is running." :
 	            "Riptide is not running."),
-	            rp_conf_changed(&rp_cfg) ? tr("  Changes not saved yet.") : "");
+	            rp_conf_changed(&rp_cfg) || other_file ? tr("  Changes not saved yet.") : "");
 	mui_set(status, MUIA_Status_Text, (ULONG)status_text);
 }
 
@@ -1087,6 +1102,16 @@ static int load_text(const char *path)
 		FreeVec(text);
 		return -1;
 	}
+	{
+		/* the same as the file the editor started with? */
+		long slen = 0;
+		char *start = rp_read_file(rp_from_path ? rp_from_path : RP_ENV_CONF, &slen);
+		if (!start && !rp_from_path)
+			start = rp_read_file(RP_ENVARC_CONF, &slen);   /* as rp_load() */
+		other_file = !start || slen != len || memcmp(start, text, (size_t)len) != 0;
+		if (start)
+			FreeVec(start);
+	}
 	FreeVec(text);
 	rp_conf_free(&rp_cfg);
 	rp_cfg = c;
@@ -1227,8 +1252,11 @@ static void card_cmd(ULONG id)
 		return;
 	n = rp_iface_users(&rp_cfg.cur, k);
 	if (n) {
-		rt_snprintf(msg, sizeof(msg), tr("Remove %s with its %ld VLANs and addresses?"), rp_cfg.cur.ifc[k].ifname,
-		            (long)n);
+		if (n == 1)
+			rt_snprintf(msg, sizeof(msg), tr("Remove %s with its VLAN or address?"), rp_cfg.cur.ifc[k].ifname);
+		else
+			rt_snprintf(msg, sizeof(msg), tr("Remove %s with its %ld VLANs and addresses?"), rp_cfg.cur.ifc[k].ifname,
+			            (long)n);
 		if (!rp_request(msg, "Remove|Keep"))
 			return;
 	}
@@ -1364,8 +1392,10 @@ static int command(ULONG id)
 		show_status();
 		return 0;
 	case ID_RESTORE:
-		if (rp_load() == 0)
+		if (rp_load() == 0) {
+			other_file = 0;
 			refresh_all();
+		}
 		show_status();
 		return 0;
 	case ID_DARK:

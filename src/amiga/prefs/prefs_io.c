@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "cmd/cmdlib.h"
 #include "prefs/prefs_io.h"
+#include "prefs/prefs_status.h"
 
 struct rp_conf rp_cfg;
 const char *rp_from_path;
@@ -204,9 +205,10 @@ void rp_apply(int ask)
 	memset(&st, 0, sizeof(st));
 	restart = rp_live_commands(&rp_cfg, apply_one, &st);
 	if (st.failed)
-		rt_snprintf(msg, sizeof(msg), "Applied %d of %d settings.\n%s", st.n - st.failed, st.n, st.report);
+		rt_snprintf(msg, sizeof(msg), "Applied %d of %d setting%s.\n%s", st.n - st.failed, st.n,
+		            rp_plural((unsigned long)st.n), st.report);
 	else if (st.n)
-		rt_snprintf(msg, sizeof(msg), "Applied %d settings to Riptide.", st.n);
+		rt_snprintf(msg, sizeof(msg), "Applied %d setting%s to Riptide.", st.n, rp_plural((unsigned long)st.n));
 	else
 		rt_snprintf(msg, sizeof(msg), "Nothing to apply.");
 	if (restart)

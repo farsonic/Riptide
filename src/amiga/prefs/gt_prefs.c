@@ -477,8 +477,9 @@ static void st_refresh(void)
 			rp_st_if_lines(f, nl[2], nl[3], l3, sizeof(nl[2]));
 			rp_st_if_rates(f, nl[4], sizeof(nl[4]));
 		}
-		rt_snprintf(nl[5], sizeof(nl[5]), "TCP: %d connections, %lu segments resent a second",
-		            st_model.nconn_all, (unsigned long)st_model.retrans_ps);
+		rt_snprintf(nl[5], sizeof(nl[5]), "TCP: %d connection%s, %lu segment%s resent a second",
+		            st_model.nconn_all, rp_plural((unsigned long)st_model.nconn_all), (unsigned long)st_model.retrans_ps,
+		            rp_plural(st_model.retrans_ps));
 		{
 			char n[600], *l = n, *e;
 			rp_st_names_text(&st_model, n, sizeof(n));

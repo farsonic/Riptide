@@ -471,7 +471,12 @@ DISPATCHER(qbutton_dispatch)
 	case OM_SET:
 		d = INST_DATA(cl, obj);
 		if ((mc_has_tag(msg, MUIA_Selected) || mc_has_tag(msg, MUIA_Disabled)) && d->shown) {
-			ULONG r = DoSuperMethodA(cl, obj, msg);
+			ULONG r;
+			/* let go (also before a requester takes the input): not lit
+			 * either, until the pointer moves over it again */
+			if (mc_has_tag(msg, MUIA_Selected) && !mc_tagval(msg, MUIA_Selected, 0))
+				d->hot = 0;
+			r = DoSuperMethodA(cl, obj, msg);
 			MUI_Redraw(obj, MADF_DRAWOBJECT);
 			return r;
 		}
