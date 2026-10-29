@@ -9,6 +9,8 @@
 126 void Enable()
 132 void Forbid()
 138 void Permit()
+168 void AddIntServer(LONG intNumber d0, struct Interrupt* interrupt a1)
+174 void RemIntServer(LONG intNumber d0, struct Interrupt* interrupt a1)
 198 APTR AllocMem(ULONG byteSize d0, ULONG requirements d1)
 210 void FreeMem(APTR memoryBlock a1, ULONG byteSize d0)
 216 ULONG AvailMem(ULONG requirements d1)

@@ -689,6 +689,41 @@ int amiga_stack_start(const char *config, int selftest)
 	return 0;
 }
 
+/* The CPU meter (net.riptide.status, RiptidePrefs' Status page): while it
+ * runs, a vertical blank interrupt server (rt_cpu_vbl in rt_m68k.s) counts
+ * 50 or 60 ticks a second and those in which this process was waiting
+ * for work. Sampling costs nothing per packet; the server is only in the
+ * chain while someone reads the table. */
+static struct rt_cpu_samples cpu_samples;
+static struct Interrupt cpu_int;
+static int cpu_int_in;
+
+static void cpu_meter_follow(int on)
+{
+	if (on && !cpu_int_in) {
+		cpu_samples.task = FindTask(NULL);
+		cpu_int.is_Node.ln_Type = NT_INTERRUPT;
+		cpu_int.is_Node.ln_Pri = 0;
+		cpu_int.is_Node.ln_Name = (char *)"Riptide CPU meter";
+		cpu_int.is_Data = &cpu_samples;
+		cpu_int.is_Code = rt_cpu_vbl;
+		AddIntServer(INTB_VERTB, &cpu_int);
+		cpu_int_in = 1;
+	} else if (!on && cpu_int_in) {
+		RemIntServer(INTB_VERTB, &cpu_int);
+		cpu_int_in = 0;
+	}
+}
+
+void rt_cpu_counts(u32 *now, u32 *idle, u32 *hz)
+{
+	u8 f = RT_AMIGA_VBLANKFREQ(SysBase);
+
+	*now = cpu_samples.ticks;
+	*idle = cpu_samples.waiting;
+	*hz = f ? f : 50;
+}
+
 void amiga_stack_loop(void)
 {
 	char msg[128];
@@ -713,6 +748,7 @@ void amiga_stack_loop(void)
 		rt_cpu_meter_poll();
 		RT_PROF_EXIT(RT_PROF_STACK);
 		rt_unlock();
+		cpu_meter_follow(rt_cpu_meter);
 		amiga_log_flush();
 		if (quit_requested == 2)
 			break;
@@ -729,16 +765,10 @@ void amiga_stack_loop(void)
 		if (ms == 0) {
 			sigs = SetSignal(0, wait) & wait;
 		} else {
-			u32 t0, m0 = 0;
-			int meter = rt_cpu_meter;
+			u32 t0;
 			arm_timer(ms);
 			t0 = RT_PROF_T0();
-			/* the CPU meter (RiptidePrefs' Status page): the time spent waiting */
-			if (meter)
-				m0 = rt_prof_ticks();
 			sigs = Wait(wait);
-			if (meter)
-				rt_cpu_idle += rt_prof_ticks() - m0;
 			RT_PROF_ADD(RT_PROF_IDLE, t0);
 		}
 		if (timer_pending && CheckIO(&treq->tr_node)) {
@@ -779,6 +809,7 @@ void amiga_stack_loop(void)
 		if (quit_requested == 2)
 			break;
 	}
+	cpu_meter_follow(0);
 }
 
 void amiga_stack_stop(void)

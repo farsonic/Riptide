@@ -655,9 +655,7 @@ static int h_status(const struct rt_sysctl *e, void *old, u32 *oldlen, const voi
 	st.buf_kb = rt_buf_bytes_total() >> 10;
 	rt_ntp_ctl(&st);
 	rt_dns_cache_stats(&st.dns_hits, &st.dns_neg_hits, &st.dns_fail_hits);
-	st.cpu_hz = rt_prof_hz();
-	st.cpu_now = rt_prof_ticks();
-	st.cpu_idle = rt_cpu_idle;
+	rt_cpu_counts(&st.cpu_now, &st.cpu_idle, &st.cpu_hz);
 	st.cpu_on = rt_cpu_meter;
 	cpu_meter_ms = rt_now_ms();
 	rt_cpu_meter = 1;

@@ -435,12 +435,22 @@ struct rt_ctl_status {
 	u8   pad2[3];
 };
 
-/* the CPU meter: the OS layer adds the time its stack process waits for
- * work to rt_cpu_idle while rt_cpu_meter is set (rt_cpu_meter_poll()
- * turns it off 5 s after the last read of net.riptide.status) */
+/* the CPU meter: while rt_cpu_meter is set the OS layer counts the time
+ * its stack process waits for work (rt_cpu_counts()); rt_cpu_meter_poll()
+ * turns it off 5 s after the last read of net.riptide.status */
 extern volatile u8 rt_cpu_meter;
 extern u32 rt_cpu_idle;
 void rt_cpu_meter_poll(void);
+/* the OS layer's counts for the table: now and idle in ticks of hz per
+ * second (AmigaOS: vertical blank samples; host: rt_prof_ticks() and
+ * rt_cpu_idle) */
+void rt_cpu_counts(u32 *now, u32 *idle, u32 *hz);
+/* what the AmigaOS vertical blank server counts (rt_m68k.s rt_cpu_vbl) */
+struct rt_cpu_samples {
+	void *task;
+	u32  ticks, waiting;
+};
+void rt_cpu_vbl(void);
 
 /* ---- core entry points (src/core/ctl.c), lock held ---- */
 void rt_ctl_init(void);

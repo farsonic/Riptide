@@ -222,7 +222,7 @@ DISPATCHER(graph_dispatch)
 		d = INST_DATA(cl, obj);
 		h = (LONG)d->lines * (theme_fh() + 1) + 4;
 		DoSuperMethodA(cl, obj, msg);
-		mc_minmax(msg, 100, 240, MUI_MAXMAX, h, h, h);
+		mc_minmax(msg, 80, 240, MUI_MAXMAX, 3 * (theme_fh() + 1) + 4, h, h);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -602,7 +602,7 @@ DISPATCHER(table_dispatch)
 	case MUIM_AskMinMax: {
 		LONG h = tb_rowh() * 3 + 4;
 		DoSuperMethodA(cl, obj, msg);
-		mc_minmax(msg, 200, 400, MUI_MAXMAX, h, tb_rowh() * 8, MUI_MAXMAX);
+		mc_minmax(msg, 160, 400, MUI_MAXMAX, h, tb_rowh() * 8, MUI_MAXMAX);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -737,7 +737,7 @@ DISPATCHER(ifview_dispatch)
 		break;
 	case MUIM_AskMinMax:
 		DoSuperMethodA(cl, obj, msg);
-		mc_minmax(msg, 200, 400, MUI_MAXMAX, ifv_blockh(), ifv_blockh() * 3, MUI_MAXMAX);
+		mc_minmax(msg, 160, 400, MUI_MAXMAX, ifv_blockh(), ifv_blockh() * 3, MUI_MAXMAX);
 		return 0;
 	case MUIM_Setup:
 		if (!DoSuperMethodA(cl, obj, msg))
@@ -856,7 +856,7 @@ static int cur_conn;
 static struct { u16 lport, fport; u8 faddr[16]; int set; } cur_key;   /* the chosen connection */
 static const struct rp_hist empty_hist;
 
-static const char *const tab_labels[5] = { "1 Interfaces", "2 Connections", "3 Names and time", "4 Counters", NULL };
+static const char *const tab_labels[5] = { "Interfaces", "Connections", "Names and time", "Counters", NULL };
 
 static struct MUI_CustomClass *mk(int size, APTR disp)
 {

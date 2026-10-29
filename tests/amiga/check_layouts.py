@@ -64,6 +64,7 @@ NDK_STRUCTS = (
     S('timeval', 'tv_secs', 'tv_micro', ref='timeval') +
     S('EClockVal', 'ev_hi', 'ev_lo') +
     S('timerequest', 'tr_node', 'tr_time') +
+    S('Interrupt', 'is_Node', 'is_Data', 'is_Code') +
     S('Locale', 'loc_Flags', 'loc_CountryCode', 'loc_GMTOffset')[1:] +   # partial: no sizeof
     S('TagItem', 'ti_Tag', 'ti_Data') +
     S('Hook', 'h_Entry', 'h_SubEntry', 'h_Data') +
@@ -77,7 +78,8 @@ NDK_STRUCTS = (
     [('EXECBASE_LIBLIST_OFS', '=', 'struct ExecBase', 'LibList'),
      ('EXECBASE_PORTLIST_OFS', '=', 'struct ExecBase', 'PortList'),
      ('EXECBASE_ATTNFLAGS_OFS', '=', 'struct ExecBase', 'AttnFlags'),
-     ('EXECBASE_ECLOCK_OFS', '=', 'struct ExecBase', 'ex_EClockFrequency')]
+     ('EXECBASE_ECLOCK_OFS', '=', 'struct ExecBase', 'ex_EClockFrequency'),
+     ('EXECBASE_VBLANKFREQ_OFS', '=', 'struct ExecBase', 'VBlankFrequency')]
 )
 # intuition/gadtools/graphics/workbench (RiptidePrefs, src/amiga/os/intuition.h);
 # Screen and Window are declared only up to the last field used
@@ -174,7 +176,7 @@ SANA_STRUCTS = (
     S('Sana2SpecialStatRecord', 'Type', 'Count', 'String') +
     S('Sana2SpecialStatHeader', 'RecordCountMax', 'RecordCountSupplied')
 )
-NDK_CONSTS = '''NT_LIBRARY NT_MSGPORT NT_MESSAGE NT_REPLYMSG NT_TASK NT_PROCESS LIBF_CHANGED
+NDK_CONSTS = '''NT_INTERRUPT INTB_VERTB NT_LIBRARY NT_MSGPORT NT_MESSAGE NT_REPLYMSG NT_TASK NT_PROCESS LIBF_CHANGED
 LIBF_SUMUSED LIBF_DELEXP PA_SIGNAL PA_IGNORE SIGBREAKF_CTRL_C SIGBREAKF_CTRL_D SIGBREAKF_CTRL_E
 SIGBREAKF_CTRL_F SIGF_SINGLE IOF_QUICK CMD_READ CMD_WRITE CMD_NONSTD IOERR_ABORTED MEMF_PUBLIC MEMF_CLEAR
 MEMF_ANY TAG_DONE TAG_IGNORE TAG_MORE TAG_SKIP TAG_USER UNIT_MICROHZ UNIT_VBLANK TR_ADDREQUEST
@@ -373,7 +375,7 @@ def main():
         inc = os.path.join(ndk, 'Include_H')
         ok &= check_against(tmp, 'ndk', NDK_STRUCTS, NDK_CONSTS, ['exec.h', 'dos.h', 'devices.h'],
                             ['exec/types.h', 'exec/execbase.h', 'exec/semaphores.h', 'exec/io.h', 'exec/devices.h',
-                             'exec/memory.h', 'exec/errors.h', 'devices/timer.h', 'libraries/locale.h', 'dos/dos.h',
+                             'exec/memory.h', 'exec/errors.h', 'exec/interrupts.h', 'hardware/intbits.h', 'devices/timer.h', 'libraries/locale.h', 'dos/dos.h',
                              'dos/dosextens.h', 'dos/dosasl.h', 'dos/var.h', 'dos/dostags.h', 'utility/tagitem.h', 'utility/hooks.h'],
                             [inc])
         ok &= check_against(tmp, 'ndk-gui', GUI_STRUCTS, GUI_CONSTS, ['exec.h', 'dos.h', 'intuition.h'],

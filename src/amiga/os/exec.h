@@ -66,6 +66,7 @@ static inline void NewMinList(struct MinList *l)
 
 #define NT_UNKNOWN    0
 #define NT_TASK       1
+#define NT_INTERRUPT  2
 #define NT_DEVICE     3
 #define NT_MSGPORT    4
 #define NT_MESSAGE    5
@@ -93,6 +94,14 @@ struct Library {
 #define LIBF_CHANGED  (1 << 1)
 #define LIBF_SUMUSED  (1 << 2)
 #define LIBF_DELEXP   (1 << 3)
+
+/* ---- interrupt servers (exec/interrupts.h, hardware/intbits.h) ---- */
+struct Interrupt {
+	struct Node is_Node;
+	APTR  is_Data;
+	void  (*is_Code)();
+};
+#define INTB_VERTB 5
 
 /* ---- tasks ---- */
 struct Task {
@@ -226,6 +235,7 @@ struct ExecBase;
 #define EXECBASE_THISTASK_OFS  276   /* struct Task *ThisTask */
 #define EXECBASE_ATTNFLAGS_OFS 296   /* UWORD AttnFlags */
 #define EXECBASE_ECLOCK_OFS    568   /* ULONG ex_EClockFrequency */
+#define EXECBASE_VBLANKFREQ_OFS 530  /* UBYTE VBlankFrequency */
 static inline struct List *exec_liblist(struct ExecBase *eb)
 {
 	return (struct List *)((UBYTE *)eb + EXECBASE_LIBLIST_OFS);

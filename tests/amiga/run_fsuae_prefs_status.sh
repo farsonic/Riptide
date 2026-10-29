@@ -224,17 +224,28 @@ want() { case " ${STAGES:-1 2} " in *" $1 "*) return 0;; esac; return 1; }
 if want 1; then
 python3 -I "$here/status_peer.py" $ST_NET.1 "$DL_SIZE" 900 "$work/peer.log" >"$work/peer.err" 2>&1 &
 ppid=$!
+cat > "$dh0/S/prefs0" <<EOF
+DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST PAGE=Interface DEBUG=DH0:out/log0"
+Echo "rc \$RC" >DH0:out/zz_0
+EOF
 cat > "$dh0/S/prefs1" <<EOF
 DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log1"
 Echo "rc \$RC" >DH0:out/zz_1
 EOF
+# the timed downloads: 0 with nothing open, A with RiptidePrefs open on
+# another page, B with its Status page (A and B on the same screen)
 boot <<EOF
 DH0:C/rtcheck START="DH0:C/Riptide >DH0:out/riptide.log CONFIG=DH0:S/riptide.conf" NOCHECK >DH0:out/start
 DH0:C/twait 3
 DH0:C/nc -d $ST_NET.1 7777 >NIL:
+Echo 0 >DH0:out/dl_0
+Run >NIL: Execute DH0:S/prefs0
+DH0:C/twait 15
+DH0:C/nc -d $ST_NET.1 7777 >NIL:
 Echo a >DH0:out/dl_a
+DH0:C/twait DH0:out/zz_0
 Run >NIL: Execute DH0:S/prefs1
-DH0:C/twait 12
+DH0:C/twait 15
 DH0:C/nc -d $ST_NET.1 7777 >NIL:
 Echo b >DH0:out/dl_b
 Run >NIL: DH0:C/nc -d -l 2121 >NIL:
@@ -249,6 +260,8 @@ Echo "rc \$RC" >DH0:out/zz_3
 DH0:C/RiptidePrefs GADTOOLS PAGE=Status
 Echo "rc \$RC" >DH0:out/zz_4
 EOF
+# A done: close the first editor so the second (the Status page) opens
+waitfile dl_a 600 && shot s00-other-page 1 && key Escape
 waitfile ready 600 && {
 	shot s01-interfaces 14
 	key 2
@@ -286,8 +299,8 @@ grep -Eq '^status: running, .* connections, in [0-9]+ out [1-9]' "$dh0/out/log1"
 grep -Eq 'cpu [1-9]' "$dh0/out/log1" || fail "no CPU share in log1"
 grep -q '^status: running' "$dh0/out/log3" 2>/dev/null || fail "the compact Status page did not read the stack"
 n=$(grep -c "^dl [0-9.]* $DL_SIZE\$" "$work/peer.log" 2>/dev/null)
-[ "${n:-0}" -ge 2 ] || fail "the timed downloads did not complete ($(cat "$work/peer.log" 2>/dev/null))"
-for z in zz_1 zz_2 zz_3 zz_4; do grep -q '^rc 0' "$dh0/out/$z" 2>/dev/null || fail "$z: $(cat "$dh0/out/$z" 2>/dev/null)"; done
+[ "${n:-0}" -ge 3 ] || fail "the timed downloads did not complete ($(cat "$work/peer.log" 2>/dev/null))"
+for z in zz_0 zz_1 zz_2 zz_3 zz_4; do grep -q '^rc 0' "$dh0/out/$z" 2>/dev/null || fail "$z: $(cat "$dh0/out/$z" 2>/dev/null)"; done
 fi
 
 # ---- 2: Riptide not running ----
@@ -313,8 +326,9 @@ fi
 
 cleanup
 if [ -f "$work/peer.log" ]; then
-	# the two timed downloads: RiptidePrefs closed, then its Status page open
-	awk -v s="$DL_SIZE" '/^dl / && $3 == s { n++; printf "     download %d: %.1f KB/s (%s s)\n", n, s / 1024 / $2, $2 }' \
+	# the timed downloads: nothing open; RiptidePrefs on another page; its Status page
+	awk -v s="$DL_SIZE" 'BEGIN { split("no RiptidePrefs,another page,Status page", w, ",") }
+		/^dl / && $3 == s { n++; printf "     download %d (%s): %.1f KB/s (%s s)\n", n, w[n], s / 1024 / $2, $2 }' \
 		"$work/peer.log"
 fi
 if [ $fails -eq 0 ]; then
