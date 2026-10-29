@@ -387,7 +387,7 @@ static void test_model(void)
 		CHECK(m.running && m.nif == 0 && !m.have_tcpst && !m.have_st);
 		/* no status table (0.22 or older): only that it runs */
 		rp_st_summary(&m, b, sizeof(b));
-		CHECK(strstr(b, "does not report") != NULL);
+		CHECK(strstr(b, "sends no status") != NULL);
 		rp_st_counters_text(&m, b, sizeof(b));
 		CHECK(strstr(b, "No counters") != NULL);
 	}

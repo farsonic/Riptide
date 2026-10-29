@@ -44,11 +44,13 @@ rm -rf "$dh0"
 mkdir -p "$dh0/C" "$dh0/S" "$dh0/out" "$dh0/go" "$dh0/Libs" "$dh0/MUI" "$dh0/ENV/Riptide" \
 	"$dh0/Prefs/Env-Archive/Riptide"
 cp "$BUILD/RiptidePrefs" "$dh0/C/"
-# icons for the tool type starts (copied next to RiptidePrefs when needed)
-mkdir -p "$dh0/icons"
-${PYTHON:-python3} tools/mkicon.py tool "$dh0/icons/tt1.info" --image prefs \
+# copies with icons for the tool type starts (the ROM has no Copy)
+mkdir -p "$dh0/tt1" "$dh0/tt2"
+cp "$BUILD/RiptidePrefs" "$dh0/tt1/"
+cp "$BUILD/RiptidePrefs" "$dh0/tt2/"
+${PYTHON:-python3} tools/mkicon.py tool "$dh0/tt1/RiptidePrefs.info" --image prefs \
 	--tooltype PAGE=Names --tooltype DEBUG=DH0:out/tt1 >/dev/null
-${PYTHON:-python3} tools/mkicon.py tool "$dh0/icons/tt2.info" --image prefs \
+${PYTHON:-python3} tools/mkicon.py tool "$dh0/tt2/RiptidePrefs.info" --image prefs \
 	--tooltype GADTOOLS --tooltype PAGE=Names --tooltype DEBUG=DH0:out/tt2 >/dev/null
 cp -r "$MUI_DIR/Libs/." "$dh0/Libs/"
 [ -d "$MUI_DIR/Images" ] && cp -r "$MUI_DIR/Images" "$dh0/MUI/"
@@ -194,8 +196,12 @@ int main(int argc, char **argv)
 	long t, n;
 	if (argc < 4 || !(rp = CreateMsgPort()))
 		return 20;
+	static char path[128];
 	seg = LoadSeg((STRPTR)argv[1]);
-	dir = Lock((STRPTR)"DH0:C", ACCESS_READ);
+	/* the program's drawer and name, as Workbench gives them */
+	strncpy(path, argv[1], sizeof(path) - 1);
+	*PathPart((STRPTR)path) = 0;
+	dir = Lock((STRPTR)path, ACCESS_READ);
 	if (!seg || !dir) {
 		say(argv[3], "cannot load\n");
 		return 20;
@@ -208,7 +214,7 @@ int main(int argc, char **argv)
 		return 20;
 	}
 	arg.wa_Lock = dir;
-	arg.wa_Name = (BYTE *)"RiptidePrefs";
+	arg.wa_Name = (BYTE *)FilePart((STRPTR)argv[1]);
 	wbs.sm_Message.mn_Node.ln_Type = NT_MESSAGE;
 	wbs.sm_Message.mn_ReplyPort = rp;
 	wbs.sm_Message.mn_Length = sizeof(wbs);
@@ -458,11 +464,10 @@ DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb3
 DH0:C/tps RiptidePrefs DH0:out/ps3
 DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb4
 DH0:C/tps RiptidePrefs DH0:out/ps4
-Copy DH0:icons/tt1.info DH0:C/RiptidePrefs.info
-DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb5
-Copy DH0:icons/tt2.info DH0:C/RiptidePrefs.info
-DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb6
-Delete DH0:C/RiptidePrefs.info QUIET
+DH0:C/twb DH0:tt1/RiptidePrefs 120 DH0:out/wb5
+DH0:C/tps RiptidePrefs DH0:out/ps5
+DH0:C/twb DH0:tt2/RiptidePrefs 120 DH0:out/wb6
+DH0:C/tps RiptidePrefs DH0:out/ps6
 DH0:C/tcover 3
 Echo "rc $RC" >DH0:out/zz_cover
 DH0:C/RiptidePrefs PAGE=Names

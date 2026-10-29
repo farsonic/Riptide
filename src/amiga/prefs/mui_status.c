@@ -864,6 +864,7 @@ struct ifview_data {
 	int shown;
 	/* what is on screen, for updates */
 	int valid, drawn_nif;
+	const char *drawn_msg;      /* the message shown instead of interfaces */
 	LONG drawn_w, drawn_h;
 	char cache[RP_ST_NIF][IFV_LINES][120];
 	struct gstate gs[RP_ST_NIF];
@@ -886,15 +887,17 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 		gw = 90;
 	tw = r - l - gw - 10;
 	if (!d->m || !d->m->running || !d->m->nif) {
-		if (!update || d->valid) {
+		const char *msg = d->m && d->m->running ? "No interfaces." : "Riptide is not running.";
+		if (!update || d->valid || d->drawn_msg != msg) {
 			if (update)
 				theme_fill(rp, l, _mtop(obj), r, _mbottom(obj), tpen(T_WINDOW));
-			theme_text(rp, l, y + 2, d->m && d->m->running ? "No interfaces." : "Riptide is not running.",
-			           tpen(T_DIM), 0);
+			theme_text(rp, l, y + 2, msg, tpen(T_DIM), 0);
 		}
+		d->drawn_msg = msg;
 		d->valid = 0;
 		return;
 	}
+	d->drawn_msg = NULL;
 	/* everything again when the interfaces or the size changed */
 	if (update && (!d->valid || d->drawn_nif != d->m->nif || d->drawn_w != _mwidth(obj) ||
 	               d->drawn_h != _mheight(obj))) {

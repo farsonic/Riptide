@@ -556,7 +556,7 @@ void rp_st_summary(const struct rp_status_model *m, char *buf, int len)
 		return;
 	}
 	if (!m->have_st) {
-		rt_strlcpy(buf, "Riptide is running but does not report its state (version 0.22 or older?).",
+		rt_strlcpy(buf, "Riptide runs but sends no status (0.22 or older?).",
 		           (size_t)len);
 		return;
 	}
