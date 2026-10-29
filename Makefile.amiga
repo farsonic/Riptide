@@ -206,7 +206,12 @@ all: $(BUILD)/sdk_test
 $(BUILD)/sdk_test: tests/amiga/sdk_test.c $(wildcard sdk/include/*/*.h)
 	@mkdir -p $(dir $@)
 	$(VC) -c99 -O2 -cpu=68020 -I$(NDK)/Include_H -Isdk/include -o $@ $< -lamiga
-SDK_BIN := $(BUILD)/sdk_test
+# the Roadshow API test (tests/amiga/run_fsuae_roadshow.sh), from the SDK too
+all: $(BUILD)/rs_test
+$(BUILD)/rs_test: tests/amiga/rs_test.c $(wildcard sdk/include/*/*.h)
+	@mkdir -p $(dir $@)
+	$(VC) -c99 -O2 -cpu=68020 -I$(NDK)/Include_H -Isdk/include -o $@ $< -lamiga
+SDK_BIN := $(BUILD)/sdk_test $(BUILD)/rs_test
 endif
 
 # ping6 / traceroute6 are ping.c / traceroute.c built for IPv6
