@@ -60,6 +60,7 @@ sound_card = none
 floppy_drive_count = 0
 automatic_input_grab = 0
 video_sync = off
+${KICKSTART:+kickstart_file = $KICKSTART}
 CFG
 xpid=
 if [ -z "${DISPLAY:-}" ]; then
