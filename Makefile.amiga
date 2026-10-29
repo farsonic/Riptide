@@ -3,7 +3,7 @@
 #   make -f Makefile.amiga                  vbcc (default): build/amiga/Riptide, build/amiga/rtcheck
 #   make -f Makefile.amiga TOOLCHAIN=gcc    m68k-linux-gnu-gcc + tools/elf2hunk.py: build/amiga-gcc/...
 #   make -f Makefile.amiga check            vamos self test + hunk/relocation checks
-#   make -f Makefile.amiga sdk              regenerate the riptide.library SDK in sdk/
+#   make -f Makefile.amiga sdk              regenerate the riptide.library and bsdsocket.library SDK in sdk/
 #   make -f Makefile.amiga package          Installer package: build/package/Riptide/,
 #                                           build/riptide-<version>.lha (or .zip) and .adf
 #   Releases (from 0.20) are packaged from the gcc build, which is faster:
@@ -230,9 +230,11 @@ $(BUILD)/stackprobe: $(SP_SRC) src/amiga/stackprobe/stackprobe.h $(SP_GEN)
 # ---------------------------------------------------------------- SDK ----
 sdk:
 	$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide sdk
+	$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt bsdsocket sdk
 
 sdk-check:
-	@rm -rf $(BUILD)/sdk && $(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide $(BUILD)/sdk
+	@rm -rf $(BUILD)/sdk && $(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide $(BUILD)/sdk && \
+		$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt bsdsocket $(BUILD)/sdk
 	@for f in $$(cd $(BUILD)/sdk && find . -type f); do \
 		cmp -s $(BUILD)/sdk/$$f sdk/$$f || { echo "sdk/$$f is out of date: make -f Makefile.amiga sdk"; exit 1; }; \
 	done; echo "ok   sdk/ matches src/amiga/lib_lvos.txt"
