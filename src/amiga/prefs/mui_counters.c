@@ -171,9 +171,12 @@ static void cv_draw(struct cview_data *d, Object *obj, int update)
 	if (!model.running) {
 		char t[100];
 		theme_fill(rp, _mleft(obj), _mtop(obj), _mright(obj), _mbottom(obj), tpen(T_HEAD));
-		rt_strlcpy(t, tr("Riptide is not running. The counts appear when it starts."), sizeof(t));
+		rt_strlcpy(t, tr("Riptide is not running."), sizeof(t));
 		cv_fit(rp, t, _mwidth(obj) - 8);
 		theme_text(rp, _mleft(obj) + 4, _mtop(obj) + 2, t, tpen(T_DIM), 0);
+		rt_strlcpy(t, tr("The counts appear when it starts."), sizeof(t));
+		cv_fit(rp, t, _mwidth(obj) - 8);
+		theme_text(rp, _mleft(obj) + 4, _mtop(obj) + 2 + cv_rowh(), t, tpen(T_DIM), 0);
 		d->valid = 0;
 		return;
 	}

@@ -166,7 +166,8 @@ typ() {
 	sleep ${KEYDELAY:-0.7}
 }
 settle() {
-	$ptr stable 2 60 >/dev/null || fail "screen did not settle before $1"
+	$ptr stable 2 60 ${gone:-} >/dev/null || fail "screen did not settle before $1"
+	gone=
 	$ptr shot "$work/$1.png"
 }
 # boot with the given Startup-Sequence lines (after the assigns)
@@ -188,9 +189,13 @@ waitfor() {
 	while [ $t -lt 40 ] && [ ! -s "$dh0/out/$1" ]; do sleep 1; t=$((t + 1)); done
 	[ -s "$dh0/out/$1" ] || { fail "RiptidePrefs did not finish ($1)"; return 1; }
 	grep -q '^rc 0' "$dh0/out/$1" || fail "RiptidePrefs ($1): $(cat "$dh0/out/$1")"
-	# the next RiptidePrefs takes a moment to open: an empty screen is
-	# "stable" too, so give it time before the next settle
-	sleep 4
+	# the next RiptidePrefs takes a moment to open (MUI longer on a busy
+	# host): an empty screen is "stable" too, so the next settle waits for
+	# a screen other than this one
+	sleep 1
+	gone="$work/gone.png"
+	$ptr shot "$gone"
+	sleep 2
 }
 # STAGES="1 2 3": the boots to run (default all)
 want() { case " ${STAGES:-1 2 3} " in *" $1 "*) return 0;; esac; return 1; }
@@ -450,6 +455,10 @@ Echo "rc $RC" >DH0:out/zz_3h
 DH0:C/RiptidePrefs PAGE=14
 Echo "rc $RC" >DH0:out/zz_3i
 EOF
+# MUI can take a while to start here: an empty Workbench is "stable" too,
+# so wait for the window first
+t=0
+while [ $t -lt 60 ] && ! grep -q '^window open' "$dh0/out/log3" 2>/dev/null; do sleep 1; t=$((t + 1)); done
 settle c01-workbench-compact
 # the pointer over a page lights it
 $ptr move 300 246 >/dev/null
