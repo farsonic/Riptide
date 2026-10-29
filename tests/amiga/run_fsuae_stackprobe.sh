@@ -60,8 +60,11 @@ install_amitcp() {
 	echo 'Assign LIBS: AmiTCP:libs ADD'
 	echo 'Assign DEVS: AmiTCP:devs ADD'
 	echo 'Run >Out:stack.log AmiTCP:AmiTCP'
-	echo 'WaitForPort AMITCP'
-	echo 'AmiTCP:bin/ifconfig lo/0 127.0.0.1 >Out:start.log'
+	# as AmiTCP's HowToInstall configures the loopback interface
+	echo 'SYS:Rexxc/WaitForPort AMITCP'
+	echo 'AmiTCP:bin/ifconfig lo0 localhost >Out:start.log'
+	echo 'AmiTCP:bin/route add localhost localhost >>Out:start.log'
+	echo 'AmiTCP:bin/netstat -rn >>Out:start.log'
 }
 
 # AmiTCP_NG: its self-starting LIBS:bsdsocket.library and usergroup.library,

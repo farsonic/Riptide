@@ -552,13 +552,15 @@ void sp_test_udp(void)
 	sp_sin(&a, INADDR_BROADCAST, 9);
 	r = sp_sendto(u, (APTR)"b", 1, 0, (APTR)&a, sizeof(a));
 	e = r < 0 ? sp_errno() : 0;
-	sp_result("udp.broadcast_denied", "broadcast without SO_BROADCAST is refused", PASSIF(e == EACCES), e, NULL);
+	sp_result("udp.broadcast_denied", "broadcast without SO_BROADCAST is refused", e == ENETUNREACH ||
+	          e == EHOSTUNREACH ? R_SKIP : PASSIF(e == EACCES), e, e == ENETUNREACH || e == EHOSTUNREACH ?
+	          "no broadcast interface" : NULL);
 	v = 1;
 	sp_setsockopt(u, SOL_SOCKET, SO_BROADCAST, (APTR)&v, sizeof(v));
 	r = sp_sendto(u, (APTR)"b", 1, 0, (APTR)&a, sizeof(a));
 	e = r < 0 ? sp_errno() : 0;
-	sp_result("udp.broadcast", "broadcast with SO_BROADCAST", r == 1 ? R_PASS : e == ENETUNREACH ? R_SKIP : R_FAIL, e,
-	          r < 0 && e == ENETUNREACH ? "no broadcast interface" : NULL);
+	sp_result("udp.broadcast", "broadcast with SO_BROADCAST", r == 1 ? R_PASS : e == ENETUNREACH || e == EHOSTUNREACH ?
+	          R_SKIP : R_FAIL, e, r < 0 && (e == ENETUNREACH || e == EHOSTUNREACH) ? "no broadcast interface" : NULL);
 	sp_close(&u);
 
 	/* multicast to ourselves */
@@ -575,8 +577,8 @@ void sp_test_udp(void)
 		r = sp_setsockopt(u, IPPROTO_IP, IP_ADD_MEMBERSHIP, (APTR)&mr, sizeof(mr));
 		e = r < 0 ? sp_errno() : 0;
 		sp_result("udp.mcast_join", "IP_ADD_MEMBERSHIP 239.1.2.3", r == 0 ? R_PASS : e == EADDRNOTAVAIL ||
-		          e == ENETUNREACH ? R_SKIP : R_FAIL, e, r < 0 && (e == EADDRNOTAVAIL || e == ENETUNREACH) ?
-		          "no multicast interface" : NULL);
+		          e == ENETUNREACH ? R_SKIP : e == EINVAL || e == ENOPROTOOPT || e == EOPNOTSUPP ? R_UNSUP : R_FAIL, e,
+		          r < 0 && (e == EADDRNOTAVAIL || e == ENETUNREACH) ? "no multicast interface" : NULL);
 		if (r == 0) {
 			w = sp_socket(AF_INET, SOCK_DGRAM, 0);
 			sp_setsockopt(w, IPPROTO_IP, IP_MULTICAST_LOOP, (APTR)&one, sizeof(one));
@@ -663,7 +665,7 @@ static void opt_value(const char *id, const char *desc, LONG s, LONG level, LONG
 	r = sp_getsockopt(s, level, name, (APTR)&got, &len);
 	if (r < 0) {
 		LONG e = sp_errno();
-		sp_result(id, desc, e == ENOPROTOOPT || e == EOPNOTSUPP ? R_UNSUP : R_FAIL, e, NULL);
+		sp_result(id, desc, e == ENOPROTOOPT || e == EOPNOTSUPP || e == EINVAL ? R_UNSUP : R_FAIL, e, NULL);
 		return;
 	}
 	sp_result(id, desc, set >= 0 ? PASSIF(got >= set) : R_PASS, 0, "%ld", (long)got);

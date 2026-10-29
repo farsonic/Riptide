@@ -132,13 +132,20 @@ static void wd_stop(void)
 		Delay(1);
 }
 
-/* arm the watchdog for ms milliseconds (0: disarm); clears our Ctrl-C */
+/* every test runs under the watchdog: a call that blocks for ever on some
+ * stack ends with EINTR after SP_SAFETY_MS instead of hanging the run */
+#define SP_SAFETY_MS 20000
+
+/* arm the watchdog for ms milliseconds; 0: back to the safety time and
+ * clear our Ctrl-C */
 void sp_watchdog(LONG ms)
 {
 	wd_fired = 0;
-	wd_ticks = ms ? (ms + 19) / 20 : 0;
-	if (!ms)
+	if (!ms) {
 		SetSignal(0, SIGBREAKF_CTRL_C);
+		ms = SP_SAFETY_MS;
+	}
+	wd_ticks = (ms + 19) / 20;
 }
 
 int sp_watchdog_fired(void)
@@ -164,6 +171,9 @@ static void add(const char *id, const char *desc, int res, LONG err, LONG ms, co
 	val[0] = 0;
 	if (fmt)
 		vsnprintf(val, sizeof(val), fmt, ap);
+	if (wd_fired && !val[0] && res != R_PASS)
+		strcpy(val, "blocked: ended by Ctrl-C");
+	sp_watchdog(0);
 	if (res == R_PASS || res == R_INFO)
 		err = 0;
 	printf("  %-4s  %-28s %-38s", resshort[res], id, desc);
@@ -591,6 +601,7 @@ int main(void)
 		sp_peer_addr = a;
 	}
 	wd_start();
+	sp_watchdog(0);
 	t0 = sp_now_ms();
 	if (want("api")) { sp_area("api"); sp_test_api(); }
 	if (want("tags")) { sp_area("tags"); sp_test_tags(); }
