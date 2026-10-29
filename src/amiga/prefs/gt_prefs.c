@@ -103,8 +103,19 @@ static int validate(void)
 	char err[200];
 	int fi;
 
-	if (rp_validate(&conf.cur, &fi, err, sizeof(err)) < 0)
+	if (rp_validate(&conf.cur, &fi, err, sizeof(err)) < 0) {
+		/* this editor shows the first card only: name another one */
+		if (rp_vpage < 0 && rp_ifsel > 0 && (rp_fields[fi].flags & FL_IF)) {
+			char msg[260];
+			rt_snprintf(msg, sizeof(msg), "%s (%s; edit it in the MUI editor or riptide.conf)", err,
+			            conf.cur.ifc[rp_ifsel].ifname);
+			rp_ifsel = 0;
+			rp_message(msg);
+			return -1;
+		}
+		rp_ifsel = 0;
 		return bad(fi, err);
+	}
 	return 0;
 }
 
