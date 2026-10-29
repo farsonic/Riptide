@@ -18,6 +18,7 @@
 #   STACK_DIR              the stack's files (see install_* below);
 #                          riptide: a Riptide build directory (build/amiga)
 #   PROBE                  the stackprobe binary (default build/amiga/stackprobe)
+#   FSUAE_EXTRA            more FS-UAE settings, e.g. "uae_cpu_model = 68000"
 #   TIMEOUT                seconds (default 900)
 # Headless: Xvfb on :${XDISP:-193} when DISPLAY is not set.
 # SPDX-License-Identifier: GPL-2.0-only
@@ -128,9 +129,10 @@ floppy_drive_count = 0
 automatic_input_grab = 0
 video_sync = off
 uae_sana2 = true
+${FSUAE_EXTRA:-}
 CFG
 else
-	{ echo 'FailAt 30'; echo 'Stack 65536'; echo 'Assign Out: DH1:'; cat "$work/probe-cmds"; } > "$sys/S/Startup-Sequence"
+	{ echo 'FailAt 30'; echo 'Stack 65536'; cat "$work/probe-cmds"; } > "$sys/S/Startup-Sequence"
 	cat > "$work/test.fs-uae" <<CFG
 [fs-uae]
 amiga_model = A1200
@@ -138,11 +140,12 @@ fast_memory = 8192
 hard_drive_0 = $sys
 hard_drive_0_label = DH0
 hard_drive_1 = $out
-hard_drive_1_label = DH1
+hard_drive_1_label = Out
 sound_card = none
 floppy_drive_count = 0
 automatic_input_grab = 0
 video_sync = off
+uae_sana2 = true
 CFG
 fi
 xpid=

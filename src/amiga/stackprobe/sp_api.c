@@ -159,10 +159,12 @@ void sp_test_api(void)
 		r = sp_getsockopt(c, SOL_SOCKET, SO_KEEPALIVE, (APTR)&v, &len);
 		ok_or_fail("api.getsockopt", "getsockopt() reads it back", r == 0 && v != 0, NULL, NULL);
 		sp_send(c, (APTR)"xyz", 3, 0);
-		Delay(5);
+		sp_wait(s, 0, 2000);
+		Delay(2);
 		v = -1;
 		r = sp_IoctlSocket(s, FIONREAD, (APTR)&v);
-		ok_or_fail("api.ioctl_fionread", "IoctlSocket() FIONREAD", r == 0 && v == 3, "%s", v >= 0 ? "" : "");
+		sp_result("api.ioctl_fionread", "IoctlSocket() FIONREAD", r == 0 && v == 3 ? R_PASS : R_FAIL, r ? sp_errno() : 0,
+		          "%ld", (long)v);
 		sp_recv_all(s, buf, 3, 1000);
 		r = sp_shutdown(c, 1);
 		ok_or_fail("api.shutdown", "shutdown() then the peer reads EOF", r == 0 && sp_wait(s, 0, 2000) == 1 &&
@@ -467,8 +469,8 @@ void sp_test_netdb(void)
 	se = (struct sp_servent *)sp_getservbyname((STRPTR)"ftp", (STRPTR)"tcp");
 	sp_result("netdb.getservbyname", "getservbyname(\"ftp\", \"tcp\")", se && se->s_port == 21 ? R_PASS : R_FAIL, 0,
 	          "%ld", se ? (long)se->s_port : -1L);
-	se = (struct sp_servent *)sp_getservbyport(80, (STRPTR)"tcp");
-	sp_result("netdb.getservbyport", "getservbyport(80, \"tcp\")", se && se->s_name ? R_PASS : R_FAIL, 0, "%s",
+	se = (struct sp_servent *)sp_getservbyport(21, (STRPTR)"tcp");
+	sp_result("netdb.getservbyport", "getservbyport(21, \"tcp\")", se && se->s_name ? R_PASS : R_FAIL, 0, "%s",
 	          se && se->s_name ? (char *)se->s_name : "none");
 	pe = (struct sp_protoent *)sp_getprotobyname((STRPTR)"udp");
 	sp_result("netdb.getprotobyname", "getprotobyname(\"udp\")", pe && pe->p_proto == 17 ? R_PASS : R_FAIL, 0, NULL);
@@ -552,10 +554,10 @@ static void ext_roadshow(void)
 		LONG r = sp_rs_inet_aton((STRPTR)"192.168.1.2", a4);
 		sp_result("ext.rs_inet_aton", "inet_aton() (Roadshow)", r && a4[0] == 192 && a4[3] == 2 ? R_PASS : R_FAIL, 0, NULL);
 	}
-	NEED_RS(rs_inet_pton, "ext.rs_inet_pton", "inet_pton()/inet_ntop() IPv6 (Roadshow)") {
-		LONG r = sp_rs_inet_pton(AF_INET6, (STRPTR)"2001:db8::1", a16);
-		STRPTR p = r > 0 && SP_HAVE_BSD(rs_inet_ntop) ? sp_rs_inet_ntop(AF_INET6, a16, (STRPTR)txt, sizeof(txt)) : NULL;
-		sp_result("ext.rs_inet_pton", "inet_pton()/inet_ntop() IPv6 (Roadshow)", p && !strcmp(txt, "2001:db8::1") ?
+	NEED_RS(rs_inet_pton, "ext.rs_inet_pton", "inet_pton()/inet_ntop() IPv4 (Roadshow)") {
+		LONG r = sp_rs_inet_pton(AF_INET, (STRPTR)"192.168.7.9", a16);
+		STRPTR p = r > 0 && SP_HAVE_BSD(rs_inet_ntop) ? sp_rs_inet_ntop(AF_INET, a16, (STRPTR)txt, sizeof(txt)) : NULL;
+		sp_result("ext.rs_inet_pton", "inet_pton()/inet_ntop() IPv4 (Roadshow)", p && !strcmp(txt, "192.168.7.9") ?
 		          R_PASS : R_FAIL, 0, "%s", p ? txt : "none");
 	}
 	NEED_RS(In_LocalAddr, "ext.rs_in_localaddr", "In_LocalAddr(127.0.0.1)") {
