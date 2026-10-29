@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "../src/amiga/prefs/prefs_status.c"
+#include "../src/amiga/prefs/prefs_counters.c"
 
 static int checks, failures;
 
@@ -393,12 +394,153 @@ static void test_model(void)
 	}
 }
 
+
+/* the Counters page: rows, rates, Zero, short records of older stacks */
+static struct rp_cnt_model cm;
+
+static int row_of(const char *name)
+{
+	int i;
+	for (i = 0; i < cm.n; i++)
+		if (!strcmp(cm.rows[i].name, name))
+			return i;
+	return -1;
+}
+
+static void test_counters(void)
+{
+	struct rp_cnt_input in;
+	struct rt_ip_stats ips;
+	struct rt_tcp_stats tcps;
+	struct rt_ctl_status cst;
+	struct rt_ctl_iface cifs[2];
+	struct rt_ctl_driver drv;
+	struct rt_ctl_qos q;
+	char name[64], val[32], rate[32], sum[80];
+	int i, r, heads = 0;
+
+	rp_cnt_init(&cm);
+	rp_cnt_summary(&cm, sum, sizeof(sum));
+	CHECK_STR(sum, "Riptide is not running.");
+	memset(&in, 0, sizeof(in));
+	memset(&ips, 0, sizeof(ips));
+	memset(&tcps, 0, sizeof(tcps));
+	memset(&cst, 0, sizeof(cst));
+	memset(cifs, 0, sizeof(cifs));
+	memset(&drv, 0, sizeof(drv));
+	memset(&q, 0, sizeof(q));
+	strcpy(cifs[0].name, "lo0");
+	strcpy(cifs[1].name, "eth0");
+	cifs[1].ipackets = 1000;
+	cifs[1].ibytes = 1500000;
+	strcpy(drv.name, "eth0");
+	drv.rx_frames = 999;
+	drv.tx_inflight_max = 7;
+	strcpy(q.ifname, "eth0");
+	q.packets[0] = 5;
+	ips.InReceives = 2000;
+	tcps.CurrEstab = 3;
+	tcps.RetransSegs = 10;
+	tcps.TCPECNNegotiated = 2;
+	cst.dns_hits = 40;
+	cst.mem_used_kb = 64;
+	in.now_ms = 10000;
+	in.ip = &ips; in.ip_len = sizeof(ips);
+	in.tcp = &tcps; in.tcp_len = sizeof(tcps);
+	in.cst = &cst; in.st_len = sizeof(cst);
+	in.ifaces = (const u8 *)cifs; in.nifaces = 2; in.ifrec = sizeof(cifs[0]);
+	in.drivers = (const u8 *)&drv; in.ndrivers = 1; in.drvrec = sizeof(drv);
+	in.qos = (const u8 *)&q; in.nqos = 1; in.qosrec = sizeof(q);
+	rp_cnt_update(&cm, &in);
+	CHECK(cm.running && cm.n > 100 && cm.n < RP_CNT_MAX);
+	for (i = 0; i < cm.n; i++)
+		heads += cm.rows[i].kind == RP_CNT_HEAD;
+	/* lo0, eth0 with its driver and QoS, IPv4, TCP, names, memory */
+	CHECK(heads == 8 || (printf("heads %d\n", heads), 0));
+	CHECK(row_of("Interface lo0") == 0 && cm.rows[0].kind == RP_CNT_HEAD);
+	r = row_of("Interface eth0\tPackets received");
+	CHECK(r > 0 && cm.rows[r].val == 1000);
+	CHECK(row_of("Driver of eth0") > r && row_of("QoS of eth0\tPackets interactive") > r);
+	CHECK(row_of("ICMP") < 0 && row_of("UDP") < 0);    /* tables that were not read */
+	rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+	CHECK_STR(name, "Packets received");
+	CHECK_STR(val, "1 000");
+	CHECK_STR(rate, "");                                /* one read: no rate yet */
+	rp_cnt_text(&cm, row_of("TCP"), name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+	CHECK_STR(name, "TCP");
+	CHECK_STR(val, "");
+	rp_cnt_summary(&cm, sum, sizeof(sum));
+	CHECK_STR(sum, "Counts since Riptide started.");
+
+	/* a second later: rates; levels have none */
+	cifs[1].ipackets = 1250;
+	tcps.RetransSegs = 12;
+	tcps.CurrEstab = 4;
+	in.now_ms = 11000;
+	rp_cnt_update(&cm, &in);
+	r = row_of("Interface eth0\tPackets received");
+	rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+	CHECK_STR(val, "1 250");
+	CHECK_STR(rate, "+250/s");
+	r = row_of("TCP\tConnections open now");
+	rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+	CHECK(cm.rows[r].kind == RP_CNT_LEVEL);
+	CHECK_STR(val, "4");
+	CHECK_STR(rate, "");
+
+	/* Zero: counts from here; levels stay; new rows count from their start */
+	rp_cnt_zero(&cm);
+	cifs[1].ipackets = 1300;
+	tcps.CurrEstab = 5;
+	in.now_ms = 131000;
+	in.icmp = NULL;
+	rp_cnt_update(&cm, &in);
+	r = row_of("Interface eth0\tPackets received");
+	rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+	CHECK_STR(val, "50");
+	r = row_of("TCP\tConnections open now");
+	rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+	CHECK_STR(val, "5");
+	rp_cnt_summary(&cm, sum, sizeof(sum));
+	CHECK_STR(sum, "Counts since Zero, 2 min ago.");
+	{
+		struct rt_udp_stats us;
+		memset(&us, 0, sizeof(us));
+		us.InDatagrams = 77;
+		in.udp = &us;
+		in.udp_len = sizeof(us);
+		in.now_ms = 132000;
+		rp_cnt_update(&cm, &in);
+		r = row_of("UDP\tDatagrams received");
+		rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+		CHECK_STR(val, "0");
+		/* Since start: as Riptide counts */
+		rp_cnt_since_start(&cm);
+		rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+		CHECK_STR(val, "77");
+		/* an older stack's shorter record: the counts it has */
+		in.udp_len = offsetof(struct rt_udp_stats, TxNoRoom);
+		rp_cnt_update(&cm, &in);
+		CHECK(row_of("UDP\tDatagrams received") > 0 && row_of("UDP\tSends that waited (pacing)") < 0);
+		in.udp = NULL;
+	}
+	/* a counter that wrapped */
+	cifs[1].ipackets = 5;
+	in.now_ms = 133000;
+	rp_cnt_update(&cm, &in);
+	r = row_of("Interface eth0\tPackets received");
+	CHECK(cm.rows[r].rate == 4294967296ULL - 1300 + 5 || (printf("rate %u\n", (unsigned)cm.rows[r].rate), 0));
+	rp_cnt_stopped(&cm);
+	CHECK(!cm.running && cm.n == 0);
+}
+
 int main(void)
 {
 	test_rates();
 	test_scale();
 	test_words();
 	test_model();
+	test_counters();
 	printf("t_prefs_status: %d checks, %d failures\n", checks, failures);
 	return failures != 0;
 }
