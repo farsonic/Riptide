@@ -152,7 +152,8 @@ void rp_status_stopped(struct rp_status_model *m);
 /* ---- the page's text ---- */
 /* "Riptide 0.23 is running. Up 1:02:03. CPU 12 %." */
 void rp_st_summary(const struct rp_status_model *m, char *buf, int len);
-/* "Socket memory 64 of 512 KB (pressure at 384 KB), buffers 100 KB." */
+/* "Sockets use 64 of 512 KB, buffers 100 KB.", "Under pressure: " first
+ * when tcp_mem says so */
 void rp_st_memory(const struct rp_status_model *m, char *buf, int len);
 /* an interface in three lines (no newline at the end of each):
  * l1 "eth0  up  uaenet.device unit 0"

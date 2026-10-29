@@ -1268,18 +1268,24 @@ and never keeps Riptide from quitting (with Riptide 0.22 or older it
 opens `riptide.library` for each read and closes it again). When Riptide
 is not running the page says so and fills in by itself once it starts.
 The graphs scroll by one column a second and only the text that changed
-is drawn again, so the page costs little even on a 68020 with a
-256-colour screen.
+is drawn again. Still, drawing on a planar screen is work for a 68020:
+on an emulated A1200 with a 640x480 256-colour screen, a download that
+takes all the CPU ran 18 to 22 % slower while the Status page was on
+screen than with RiptidePrefs on another page (the reads themselves take
+20 to 60 ms a second). Leave the page, or close the window, when you
+need the last bit of speed.
 
 * **At the top:** whether Riptide runs, its version and uptime, the share
   of the CPU its process used in the last second, and the memory sockets
-  and packet buffers use (with the pressure and limit points).
+  and packet buffers use (and whether they are under pressure or at the
+  limit, see [Socket memory limits](#socket-memory-limits)).
 * **Graphs** (the last minute, one column a second, the scale to the
   highest value): all traffic of every interface but loopback (received:
   columns, sent: a line) and the CPU share. The CPU share comes from
   `net.riptide.status`: reading it starts a meter in the Riptide process
-  for 5 seconds (the time it waits for work, from the E clock), so it
-  costs nothing when nobody reads it.
+  for 5 seconds (a vertical blank interrupt server counts the 50 or 60
+  ticks a second in which the process was waiting for work), so it costs
+  nothing when nobody reads it.
 * **Tabs** (click, or keys `1` to `4`, cursor left and right):
   *Interfaces*: each interface (VLANs too) in three lines (state, driver
   or VLAN, MTU; IPv4 address, gateway, DHCP state and lease left or

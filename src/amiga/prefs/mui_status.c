@@ -631,17 +631,23 @@ static void tb_layout(struct table_data *d, struct RastPort *rp, LONG w, LONG *x
 		}
 		sum += cw[c];
 	}
+	/* too wide: the addresses give way first, the wider one each step
+	 * (cut at their start, the ports stay), then the last column */
 	while (sum > w && n > 2) {
-		/* shrink the wider of the two address columns */
 		int k = cw[1] >= cw[2] ? 1 : 2;
-		LONG cut = sum - w, room = cw[k] - 60;
+		LONG cut, room = cw[k] - 50;
+		if (room <= 0)
+			room = cw[k = 3 - k] - 50;
 		if (room <= 0)
 			break;
+		cut = sum - w < 4 ? sum - w : (sum - w) / 2 + 1;
 		if (cut > room)
 			cut = room;
 		cw[k] -= cut;
 		sum -= cut;
 	}
+	if (sum > w && cw[n - 1] > sum - w)
+		cw[n - 1] -= sum - w;
 	x[0] = 0;
 	for (c = 1; c <= n; c++)
 		x[c] = x[c - 1] + cw[c - 1];
@@ -1210,7 +1216,7 @@ Object *status_page_build(Object *app, ULONG chosen_id)
 	rt_strlcpy(t_sum, "Reading Riptide's state ...\n", sizeof(t_sum));
 	o_sum = mui_newc(stext_mcc, MUIA_SText_Text, (ULONG)t_sum, MUIA_SText_Lines, 2, TAGEND);
 	o_total = mui_newc(graph_mcc, MUIA_Graph_Hist, (ULONG)&model.total, MUIA_Graph_Kind, GK_BYTES,
-	                   MUIA_Graph_Title, (ULONG)"Traffic", MUIA_Graph_Lines, compact ? 3 : 6, MUIA_Graph_Ticker, 1,
+	                   MUIA_Graph_Title, (ULONG)"", MUIA_Graph_Lines, compact ? 3 : 6, MUIA_Graph_Ticker, 1,
 	                   TAGEND);
 	o_cpu = mui_newc(graph_mcc, MUIA_Graph_Hist, (ULONG)&model.cpu_hist, MUIA_Graph_Kind, GK_CPU, MUIA_Graph_Title,
 	                 (ULONG)"CPU", MUIA_Graph_Lines, compact ? 3 : 6, MUIA_HorizWeight, 35, TAGEND);

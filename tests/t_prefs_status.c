@@ -307,7 +307,11 @@ static void test_model(void)
 	rp_st_summary(&m, b, sizeof(b));
 	CHECK_STR(b, "Riptide 0.23 is running. Up 1:02:06. CPU 25 %.");
 	rp_st_memory(&m, b, sizeof(b));
-	CHECK_STR(b, "Socket memory 64 of 512 KB (pressure at 384 KB), buffers 100 KB.");
+	CHECK_STR(b, "Sockets use 64 of 512 KB, buffers 100 KB.");
+	m.st.mem_state = 1;
+	rp_st_memory(&m, b, sizeof(b));
+	CHECK_STR(b, "Under pressure: sockets use 64 of 512 KB, buffers 100 KB.");
+	m.st.mem_state = 0;
 	/* interfaces */
 	rp_st_if_lines(&m.ifs[1], l1, l2, l3, sizeof(l1));
 	CHECK_STR(l1, "eth0  up  uaenet.device unit 0  MTU 1500");

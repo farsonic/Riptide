@@ -564,12 +564,12 @@ void rp_st_summary(const struct rp_status_model *m, char *buf, int len)
 
 void rp_st_memory(const struct rp_status_model *m, char *buf, int len)
 {
-	static const char *const state[3] = { "", " Under pressure.", " At the limit!" };
+	static const char *const state[3] = { "Sockets", "Under pressure: sockets", "At the limit: sockets" };
 
-	rt_snprintf(buf, (size_t)len, "Socket memory %lu of %lu KB (pressure at %lu KB), buffers %lu KB.%s",
-	            (unsigned long)m->st.mem_used_kb, (unsigned long)m->st.mem_high_kb,
-	            (unsigned long)m->st.mem_pressure_kb, (unsigned long)m->st.buf_kb,
-	            state[m->st.mem_state < 3 ? m->st.mem_state : 0]);
+	/* the state first: the line may be cut at its end */
+	rt_snprintf(buf, (size_t)len, "%s use %lu of %lu KB, buffers %lu KB.",
+	            state[m->st.mem_state < 3 ? m->st.mem_state : 0], (unsigned long)m->st.mem_used_kb,
+	            (unsigned long)m->st.mem_high_kb, (unsigned long)m->st.buf_kb);
 }
 
 void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int len)
