@@ -86,6 +86,33 @@ static void text_fit(struct RastPort *rp, LONG x, LONG y, LONG maxw, const char 
 		theme_text(rp, x, y, t, pen, bold);
 }
 
+/* text_fit() for an address: when it is too wide its end (the port) stays,
+ * after "..": as many of the last characters as fit */
+static void text_fit_tail(struct RastPort *rp, LONG x, LONG y, LONG maxw, const char *s, LONG pen)
+{
+	char t[160];
+	int n, lo, hi;
+
+	n = (int)strlen(s);
+	if (!n || theme_textlen(rp, s) <= maxw) {
+		text_fit(rp, x, y, maxw, s, pen, 0);
+		return;
+	}
+	/* the smallest start k with ".." and s + k fitting */
+	lo = 1;
+	hi = n;
+	while (lo < hi) {
+		int mid = (lo + hi) / 2;
+		rt_snprintf(t, sizeof(t), "..%s", s + mid);
+		if (theme_textlen(rp, t) <= maxw)
+			hi = mid;
+		else
+			lo = mid + 1;
+	}
+	rt_snprintf(t, sizeof(t), "..%s", s + lo);
+	text_fit(rp, x, y, maxw, t, pen, 0);
+}
+
 /* A line of text that changes: drawn again only when it differs from what
  * is on screen (cache, at least 120 bytes), its old pixels cleared first.
  * The 68020 and a planar screen make every pixel count. */
@@ -636,7 +663,10 @@ static void tb_row(struct table_data *d, Object *obj, struct RastPort *rp, const
 	}
 	for (c = 0; c < nc; c++) {
 		cell(d->rows[r], c, t, sizeof(t));
-		text_fit(rp, l + x[c], ry + (rh - theme_fh()) / 2, x[c + 1] - x[c] - 6, t, tpen(T_TEXT), 0);
+		if (c == 1 || c == 2)
+			text_fit_tail(rp, l + x[c], ry + (rh - theme_fh()) / 2, x[c + 1] - x[c] - 6, t, tpen(T_TEXT));
+		else
+			text_fit(rp, l + x[c], ry + (rh - theme_fh()) / 2, x[c + 1] - x[c] - 6, t, tpen(T_TEXT), 0);
 	}
 	rt_strlcpy(d->cache[r], d->rows[r], sizeof(d->cache[r]));
 }

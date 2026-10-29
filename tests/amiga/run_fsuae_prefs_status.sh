@@ -234,6 +234,21 @@ cat > "$dh0/S/prefs1" <<EOF
 DH0:C/tpubscreen RPTEST 640 480 $ST_DEPTH 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log1"
 Echo "rc \$RC" >DH0:out/zz_1
 EOF
+# the connections the Connections tab shows, each in its own script (one
+# redirection each: Run's own and nc's would clash): a listener, a steady
+# download and a slow upload
+cat > "$dh0/S/bg_l" <<EOF
+DH0:C/nc -d -l 2121 >NIL:
+Echo "rc \$RC" >DH0:out/nc_l
+EOF
+cat > "$dh0/S/bg_steady" <<EOF
+DH0:C/nc -d $ST_NET.1 7779 >NIL:
+Echo "rc \$RC" >DH0:out/nc_steady
+EOF
+cat > "$dh0/S/bg_up" <<EOF
+DH0:C/nc $ST_NET.1 7780 >NIL: <DH0:big
+Echo "rc \$RC" >DH0:out/nc_up
+EOF
 # the timed downloads: 0 with nothing open, A with RiptidePrefs open on
 # another page, B with its Status page (A and B on the same screen)
 boot <<EOF
@@ -250,9 +265,9 @@ Run >NIL: Execute DH0:S/prefs1
 DH0:C/twait 15
 DH0:C/nc -d $ST_NET.1 7777 >NIL:
 Echo b >DH0:out/dl_b
-Run >DH0:out/nc_l DH0:C/nc -d -v -l 2121
-Run >DH0:out/nc_steady DH0:C/nc -d $ST_NET.1 7779 >NIL:
-Run >DH0:out/nc_up DH0:C/nc $ST_NET.1 7780 <DH0:big
+Run >NIL: Execute DH0:S/bg_l
+Run >NIL: Execute DH0:S/bg_steady
+Run >NIL: Execute DH0:S/bg_up
 Echo ready >DH0:out/ready
 DH0:C/twait DH0:out/zz_1
 DH0:C/tpubscreen RPTEST 640 512 3 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST THEME=DARK"
@@ -299,6 +314,9 @@ grep -Eq '^status: running, [1-9][0-9]* interfaces, [1-9][0-9]* connections, in 
 grep -Eq '^status: running, .* connections, in [0-9]+ out [1-9]' "$dh0/out/log1" ||
 	fail "the Status page saw nothing sent (log1)"
 grep -Eq 'cpu [1-9]' "$dh0/out/log1" || fail "no CPU share in log1"
+# the listener, the steady download and the upload at once
+grep -Eq '^status: running, [0-9]+ interfaces, ([3-9]|[1-9][0-9]+) connections' "$dh0/out/log1" ||
+	fail "the Status page never saw the three background connections (log1)"
 grep -q '^status: running' "$dh0/out/log3" 2>/dev/null || fail "the compact Status page did not read the stack"
 n=$(grep -c "^dl [0-9.]* $DL_SIZE\$" "$work/peer.log" 2>/dev/null)
 [ "${n:-0}" -ge 3 ] || fail "the timed downloads did not complete ($(cat "$work/peer.log" 2>/dev/null))"
@@ -308,7 +326,7 @@ fi
 # ---- 2: Riptide not running ----
 if want 2; then
 boot <<'EOF'
-DH0:C/tpubscreen RPTEST 640 480 $ST_DEPTH 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log5"
+DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log5"
 Echo "rc $RC" >DH0:out/zz_5
 DH0:C/RiptidePrefs GADTOOLS PAGE=Status
 Echo "rc $RC" >DH0:out/zz_6
