@@ -107,6 +107,7 @@ struct rp_st_conn {
 
 struct rp_status_model {
 	int  running;
+	int  have_st;               /* the last read had net.riptide.status (0.23 and later) */
 	int  have_prev;             /* rates need two samples */
 	u32  now_ms;
 	struct rt_ctl_status st;
@@ -150,7 +151,8 @@ void rp_status_update(struct rp_status_model *m, const struct rp_st_input *in);
 void rp_status_stopped(struct rp_status_model *m);
 
 /* ---- the page's text ---- */
-/* "Riptide 0.23 is running. Up 1:02:03. CPU 12 %." */
+/* "Riptide 0.23 is running. Up 1:02:03. CPU 12 %." (without the status
+ * table: that it runs and that it is too old to say more) */
 void rp_st_summary(const struct rp_status_model *m, char *buf, int len);
 /* "Sockets use 64 of 512 KB, buffers 100 KB.", "Under pressure: " first
  * when tcp_mem says so */

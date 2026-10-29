@@ -499,6 +499,7 @@ void rp_status_update(struct rp_status_model *m, const struct rp_st_input *in)
 	int had_tcp = m->have_tcpst;
 
 	m->running = 1;
+	m->have_st = in->st != NULL;
 	if (in->st) {
 		copy_part(&m->st, sizeof(m->st), in->st, in->st_len);
 		m->st.version[sizeof(m->st.version) - 1] = 0;
@@ -552,6 +553,11 @@ void rp_st_summary(const struct rp_status_model *m, char *buf, int len)
 
 	if (!m->running) {
 		rt_strlcpy(buf, "Riptide is not running. Start it from its icon or a Shell.", (size_t)len);
+		return;
+	}
+	if (!m->have_st) {
+		rt_strlcpy(buf, "Riptide is running but does not report its state (version 0.22 or older?).",
+		           (size_t)len);
 		return;
 	}
 	rp_fmt_uptime(up, sizeof(up), m->st.uptime_s);

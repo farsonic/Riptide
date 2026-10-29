@@ -446,25 +446,27 @@ static int other_edit(int id)
 /* the Status page's lines from a new read of Riptide's tables */
 static void st_refresh(void)
 {
+	static char nl[ST_ROWS][120];
 	const struct rp_st_if *f = NULL;
 	char l3[120];
 	int i;
 
 	rp_status_read(&st_model);
 	for (i = 0; i < ST_ROWS; i++)
-		st_line[i][0] = 0;
-	rp_st_summary(&st_model, st_line[0], sizeof(st_line[0]));
+		nl[i][0] = 0;
+	rp_st_summary(&st_model, nl[0], sizeof(nl[0]));
 	if (st_model.running) {
-		rp_st_memory(&st_model, st_line[1], sizeof(st_line[1]));
+		if (st_model.have_st)
+			rp_st_memory(&st_model, nl[1], sizeof(nl[1]));
 		/* the first interface that is not loopback */
 		for (i = 0; i < st_model.nif && !f; i++)
 			if (strncmp(st_model.ifs[i].name, "lo", 2))
 				f = &st_model.ifs[i];
 		if (f) {
-			rp_st_if_lines(f, st_line[2], st_line[3], l3, sizeof(st_line[2]));
-			rp_st_if_rates(f, st_line[4], sizeof(st_line[4]));
+			rp_st_if_lines(f, nl[2], nl[3], l3, sizeof(nl[2]));
+			rp_st_if_rates(f, nl[4], sizeof(nl[4]));
 		}
-		rt_snprintf(st_line[5], sizeof(st_line[5]), "TCP: %d connections, %lu segments resent a second",
+		rt_snprintf(nl[5], sizeof(nl[5]), "TCP: %d connections, %lu segments resent a second",
 		            st_model.nconn_all, (unsigned long)st_model.retrans_ps);
 		{
 			char n[600], *l = n, *e;
@@ -476,14 +478,16 @@ static void st_refresh(void)
 				if (*l)
 					l++;
 			}
-			rt_strlcpy(st_line[6], l, sizeof(st_line[6]));
-			if ((e = strchr(st_line[6], '\n')) != NULL)
+			rt_strlcpy(nl[6], l, sizeof(nl[6]));
+			if ((e = strchr(nl[6], '\n')) != NULL)
 				*e = 0;
 		}
 	}
+	/* only the lines that changed are drawn again */
 	for (i = 0; i < ST_ROWS; i++)
-		if (g_stat[i]) {
+		if (g_stat[i] && strcmp(nl[i], st_line[i])) {
 			struct TagItem t[2];
+			rt_strlcpy(st_line[i], nl[i], sizeof(st_line[i]));
 			t[0].ti_Tag = GTTX_Text;
 			t[0].ti_Data = (ULONG)st_line[i];
 			t[1].ti_Tag = TAG_DONE;
@@ -496,7 +500,8 @@ static void st_timer(int on)
 {
 	if (on && !timer_on && treq) {
 		treq->tr_node.io_Command = TR_ADDREQUEST;
-		treq->tr_time.tv_secs = 1;
+		/* while Riptide is not running only a look for it starting */
+		treq->tr_time.tv_secs = st_model.running ? 1 : 3;
 		treq->tr_time.tv_micro = 0;
 		SendIO((struct IORequest *)treq);
 		timer_on = 1;

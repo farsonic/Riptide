@@ -1160,19 +1160,20 @@ static void tick(void)
 	ULONG period = status_period();
 
 	rp_status_read(&model);
-	upd_running = model.running != 0;
+	/* "running" for the page: Riptide answers with something to show */
+	upd_running = model.running && (model.have_st || model.nif);
 	/* the timer's period follows Riptide running or not */
 	if (status_period() != period)
 		mui_do(_app(o_total), MUIM_Application_PushMethod, (ULONG)o_total, 1, MUIM_Graph_Retime);
-	/* still not running: nothing changed, nothing to draw */
-	if (!model.running && was == 0)
+	/* still nothing to show: nothing changed, nothing to draw */
+	if (!upd_running && was == 0)
 		return;
 	rp_st_summary(&model, t_sum, sizeof(t_sum));
-	if (model.running) {
+	if (model.running && model.have_st) {
 		rp_st_memory(&model, mem, sizeof(mem));
 		rt_strlcpy(t_sum + strlen(t_sum), "\n", sizeof(t_sum) - strlen(t_sum));
 		rt_strlcpy(t_sum + strlen(t_sum), mem, sizeof(t_sum) - strlen(t_sum));
-	} else {
+	} else if (!model.running) {
 		rt_strlcpy(t_sum + strlen(t_sum), "\nThe page fills in by itself when it starts.",
 		           sizeof(t_sum) - strlen(t_sum));
 	}
@@ -1307,14 +1308,17 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 	       MUIA_Group_ActivePage, MUIV_TriggerValue);
 	mui_do(o_table, MUIM_Notify, MUIA_Table_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
 	       chosen_id);
-	head = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 6, MUIA_Group_Child, (ULONG)o_sum,
-	               MUIA_Group_Child, (ULONG)ul, MUIA_Group_Child, (ULONG)o_upd, TAGEND);
+	/* the Update setting under the tabs, at the right */
+	head = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 6, MUIA_Group_Child,
+	               (ULONG)mui_new(MUIC_Rectangle, TAGEND), MUIA_Group_Child, (ULONG)ul, MUIA_Group_Child,
+	               (ULONG)o_upd, TAGEND);
 	if (!head)
 		return NULL;
 	mui_set(o_upd, MUIA_HorizWeight, 0);
-	g = mui_new(MUIC_Group, MUIA_Group_VertSpacing, compact ? 2 : 6, MUIA_Group_Child, (ULONG)head,
+	mui_set(ul, MUIA_HorizWeight, 0);
+	g = mui_new(MUIC_Group, MUIA_Group_VertSpacing, compact ? 2 : 6, MUIA_Group_Child, (ULONG)o_sum,
 	            MUIA_Group_Child, (ULONG)top, MUIA_Group_Child, (ULONG)o_tabs, MUIA_Group_Child, (ULONG)o_tpages,
-	            TAGEND);
+	            MUIA_Group_Child, (ULONG)head, TAGEND);
 	return g;
 }
 
