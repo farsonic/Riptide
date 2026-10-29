@@ -59,5 +59,10 @@ rp_bigstack:
 	DISPATCH qlabel_dispatch
 	DISPATCH status_dispatch
 	DISPATCH line_dispatch
+	DISPATCH graph_dispatch
+	DISPATCH tabs_dispatch
+	DISPATCH table_dispatch
+	DISPATCH ifview_dispatch
+	DISPATCH stext_dispatch
 
 	.section .note.GNU-stack,"",@progbits

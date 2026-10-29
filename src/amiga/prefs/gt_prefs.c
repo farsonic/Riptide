@@ -10,6 +10,7 @@
 #include "cmd/cmdlib.h"
 #include "prefs/prefs_io.h"
 #include "prefs/prefs_gui.h"
+#include "prefs/prefs_status.h"
 
 #if defined(__VBCC__)
 #include <intuition/intuition.h>
@@ -31,7 +32,7 @@ struct Library *GadToolsBase;
 #define IS_LIST(p) (rp_page_list(p) >= 0)
 
 /* gadget IDs: fields are 100 + index */
-enum { G_PAGE = 1, G_SAVE, G_USE, G_APPLY, G_CANCEL, G_LIST, G_LINE, G_ADD, G_REPL, G_DEL, G_NOTE };
+enum { G_PAGE = 1, G_SAVE, G_USE, G_APPLY, G_CANCEL, G_LIST, G_LINE, G_ADD, G_REPL, G_DEL, G_NOTE, G_STAT };
 #define G_FIELD 100
 
 /* ---- state ---- */
@@ -47,6 +48,14 @@ static int page, osel = -1;
 static char linebuf[RP_LONG * 2];
 static char numtext[NFIELDS][12];
 static int stale;               /* gadgets rebuilt: queued gadget messages are old */
+/* the Status page: lines of text, read again every second while shown */
+#define ST_ROWS 7
+static struct Gadget *g_stat[ST_ROWS];
+static char st_line[ST_ROWS][120];
+static struct rp_status_model st_model;
+static struct MsgPort *tport;
+static struct timerequest *treq;
+static int timer_on;
 
 /* layout (font sensitive) */
 static int fh, cw, lw, fw, rowh, ystep, x0, y0, body_y, btn_y, inner_w, inner_h;
@@ -301,6 +310,16 @@ static int build(void)
 		t[1].ti_Data = osel < 0;
 		g = mk(BUTTON_KIND, g, G_REPL, "_Replace", PLACETEXT_IN, x0 + bw + 8, y, bw, rowh, t);
 		g = mk(BUTTON_KIND, g, G_DEL, "D_elete", PLACETEXT_IN, x0 + 2 * (bw + 8), y, bw, rowh, t);
+	} else if (page == P_STATUS) {
+		/* text gadgets, filled by st_refresh() */
+		memset(g_stat, 0, sizeof(g_stat));
+		for (i = 0; i < ST_ROWS; i++) {
+			t[0].ti_Tag = GTTX_Text;
+			t[0].ti_Data = (ULONG)st_line[i];
+			t[1].ti_Tag = TAG_DONE;
+			g = g_stat[i] = mk(TEXT_KIND, g, G_STAT + i, NULL, 0, x0, y, lw + fw, rowh, t);
+			y += ystep;
+		}
 	} else {
 		for (i = 0; i < rp_nfields; i++)
 			if (rp_fields[i].page == page) {
@@ -424,6 +443,71 @@ static int other_edit(int id)
 	return build();
 }
 
+/* the Status page's lines from a new read of Riptide's tables */
+static void st_refresh(void)
+{
+	const struct rp_st_if *f = NULL;
+	char l3[120];
+	int i;
+
+	rp_status_read(&st_model);
+	for (i = 0; i < ST_ROWS; i++)
+		st_line[i][0] = 0;
+	rp_st_summary(&st_model, st_line[0], sizeof(st_line[0]));
+	if (st_model.running) {
+		rp_st_memory(&st_model, st_line[1], sizeof(st_line[1]));
+		/* the first interface that is not loopback */
+		for (i = 0; i < st_model.nif && !f; i++)
+			if (strncmp(st_model.ifs[i].name, "lo", 2))
+				f = &st_model.ifs[i];
+		if (f) {
+			rp_st_if_lines(f, st_line[2], st_line[3], l3, sizeof(st_line[2]));
+			rp_st_if_rates(f, st_line[4], sizeof(st_line[4]));
+		}
+		rt_snprintf(st_line[5], sizeof(st_line[5]), "TCP: %d connections, %lu segments resent in the last second",
+		            st_model.nconn_all, (unsigned long)st_model.retrans_ps);
+		{
+			char n[600], *l = n, *e;
+			rp_st_names_text(&st_model, n, sizeof(n));
+			/* the line about the time */
+			while (*l && strncmp(l, "Time: ", 6)) {
+				while (*l && *l != '\n')
+					l++;
+				if (*l)
+					l++;
+			}
+			rt_strlcpy(st_line[6], l, sizeof(st_line[6]));
+			if ((e = strchr(st_line[6], '\n')) != NULL)
+				*e = 0;
+		}
+	}
+	for (i = 0; i < ST_ROWS; i++)
+		if (g_stat[i]) {
+			struct TagItem t[2];
+			t[0].ti_Tag = GTTX_Text;
+			t[0].ti_Data = (ULONG)st_line[i];
+			t[1].ti_Tag = TAG_DONE;
+			GT_SetGadgetAttrsA(g_stat[i], win, NULL, t);
+		}
+}
+
+/* the one second timer of the Status page: on while it is shown */
+static void st_timer(int on)
+{
+	if (on && !timer_on && treq) {
+		treq->tr_node.io_Command = TR_ADDREQUEST;
+		treq->tr_time.tv_secs = 1;
+		treq->tr_time.tv_micro = 0;
+		SendIO((struct IORequest *)treq);
+		timer_on = 1;
+	} else if (!on && timer_on) {
+		if (!CheckIO((struct IORequest *)treq))
+			AbortIO((struct IORequest *)treq);
+		WaitIO((struct IORequest *)treq);
+		timer_on = 0;
+	}
+}
+
 static int event_loop(void)
 {
 	for (;;) {
@@ -431,8 +515,23 @@ static int event_loop(void)
 		ULONG cls;
 		UWORD code;
 		struct Gadget *gad;
+		ULONG got;
 
-		Wait((1UL << win->UserPort->mp_SigBit) | rp_single_sig());
+		if (page == P_STATUS && !timer_on) {
+			st_refresh();
+			st_timer(1);
+		} else if (page != P_STATUS) {
+			st_timer(0);
+		}
+		got = Wait((1UL << win->UserPort->mp_SigBit) | rp_single_sig() | (tport ? 1UL << tport->mp_SigBit : 0));
+		if (timer_on && (got & (1UL << tport->mp_SigBit)) && CheckIO((struct IORequest *)treq)) {
+			WaitIO((struct IORequest *)treq);
+			timer_on = 0;
+			if (page == P_STATUS) {
+				st_refresh();
+				st_timer(1);
+			}
+		}
 		if (rp_single_poll()) {
 			/* another RiptidePrefs was started: this one comes to the front */
 			ScreenToFront(win->WScreen);
@@ -573,8 +672,25 @@ int gt_run(const struct rp_gui_args *a)
 		goto out;
 	}
 	GT_RefreshWindow(win, NULL);
+	tport = CreateMsgPort();
+	treq = tport ? (struct timerequest *)CreateIORequest(tport, sizeof(*treq)) : NULL;
+	if (treq && OpenDevice((CONST_STRPTR)"timer.device", UNIT_VBLANK, (struct IORequest *)treq, 0)) {
+		DeleteIORequest((struct IORequest *)treq);
+		treq = NULL;
+	}
+	rp_status_init(&st_model);
 	r = event_loop();
+	st_timer(0);
 out:
+	if (treq) {
+		CloseDevice((struct IORequest *)treq);
+		DeleteIORequest((struct IORequest *)treq);
+		treq = NULL;
+	}
+	if (tport) {
+		DeleteMsgPort(tport);
+		tport = NULL;
+	}
 	rp_request_fn = NULL;
 	if (win) {
 		CloseWindow(win);

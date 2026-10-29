@@ -41,6 +41,8 @@ const struct rp_page rp_pages[RP_NPAGES] = {
 	  "Rules that give connections a priority by port or program." },
 	{ "Other lines", "Other lines", "Lines RiptidePrefs does not edit itself",
 	  "Lines of riptide.conf that have no setting here. They are kept as they are." },
+	{ "Status", "Status", "Updated every second while shown",
+	  "What Riptide is doing now: its interfaces, connections, names, time and counters, with graphs." },
 };
 
 int rp_page_list(int page)

@@ -171,4 +171,9 @@ const char *rp_st_conn_header(void);
 void rp_st_names_text(const struct rp_status_model *m, char *buf, int len);
 void rp_st_counters_text(const struct rp_status_model *m, char *buf, int len);
 
+/* ---- AmigaOS only (status_amiga.c) ---- */
+/* Read the tables into m when Riptide runs: 1, else 0 (m then says
+ * "not running"). Opens and closes the libraries each time. */
+int rp_status_read(struct rp_status_model *m);
+
 #endif

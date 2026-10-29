@@ -134,6 +134,7 @@ MUI_STRUCTS = (
     S('MUI_EventHandlerNode', 'ehn_Node', 'ehn_Priority', 'ehn_Flags', 'ehn_Object', 'ehn_Class', 'ehn_Events') +
     S('MUIP_AskMinMax', 'MinMaxInfo') + S('MUIP_Draw', 'flags') + S('MUIP_HandleEvent', 'imsg', 'muikey') +
     S('MUIP_CreateShortHelp', 'mx', 'my') +
+    S('MUI_InputHandlerNode', 'ihn_Node', 'ihn_Object', 'ihn_Flags', 'ihn_Method') +
     [('struct rt_filereq', f, 'struct FileRequester', f) for f in ('fr_File', 'fr_Drawer')]
 )
 MUI_CONSTS = '''MUIA_Application_Title MUIA_Application_Version MUIA_Application_Copyright MUIA_Application_Author
@@ -160,7 +161,8 @@ MUIV_List_Active_Off MUIV_List_Insert_Bottom MUIV_List_ConstructHook_String MUIV
 MUIO_Checkmark MUIO_Cycle MUIO_String MUIO_MenustripNM MUI_EventHandlerRC_Eat MUI_MAXMAX MADF_DRAWOBJECT MUIE_SingleTask
 MUIA_Application_SingleTask MUIA_Application_DoubleStart MUIA_Application_Iconified MUIM_Window_ToFront MUIM_Window_ScreenToFront
 MADF_DRAWUPDATE MPEN_SHINE MPEN_HALFSHINE MPEN_BACKGROUND MPEN_HALFSHADOW MPEN_SHADOW MPEN_TEXT MPEN_FILL MPEN_MARK
-MUIKEY_PRESS MUIKEY_UP MUIKEY_DOWN'''.split()
+MUIKEY_PRESS MUIKEY_UP MUIKEY_DOWN MUIIHNF_TIMER MUIM_Application_AddInputHandler
+MUIM_Application_RemInputHandler'''.split()
 MUI_RT_CONSTS = '''ASL_FileRequest ASLFR_TitleText ASLFR_InitialFile ASLFR_InitialDrawer ASLFR_DoSaveMode'''.split()
 SANA_STRUCTS = (
     S('IOSana2Req', 'ios2_WireError', 'ios2_PacketType', 'ios2_SrcAddr', 'ios2_DstAddr',
