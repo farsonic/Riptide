@@ -1059,7 +1059,7 @@ static void test_multi(void)
 	cmds[0] = 0;
 	CHECK(rp_live_commands(&c, collect, NULL) == 0 && !strcmp(cmds, "ifconfig eth2 alias 172.17.0.9/16;"));
 	t = text_of(&c);
-	CHECK((t && strstr(t, "ifconfig eth2 alias 172.17.0.9/16\n"));
+	CHECK(t && strstr(t, "ifconfig eth2 alias 172.17.0.9/16\n"));
 	free(t);
 	rp_conf_commit(&c);
 
@@ -1068,7 +1068,8 @@ static void test_multi(void)
 	CHECK(!c.cur.ifc[1].ifname[0] && rp_list_count(&c, RP_LIST_VLAN) == 0 && rp_list_count(&c, RP_LIST_ALIAS) == 2);
 	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
 	t = text_of(&c);
-	CHECK(t && !strstr(t, "lan1") && strstr(t, "interface eth2") && strstr(t, "ifconfig eth0 alias 10.0.1.2/24\n")) || (fprintf(stderr, "%s", t), 0));
+	CHECK((t && !strstr(t, "lan1") && strstr(t, "interface eth2") && strstr(t, "ifconfig eth0 alias 10.0.1.2/24\n")) ||
+	      (fprintf(stderr, "%s", t), 0));
 	free(t);
 	rp_conf_free(&c);
 
