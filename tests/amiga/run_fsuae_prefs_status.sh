@@ -30,6 +30,8 @@ ST_IF=${ST_IF:-rts0}
 ST_PEER=${ST_PEER:-rts1}
 ST_NET=${ST_NET:-192.168.171}
 DL_SIZE=${DL_SIZE:-4194304}
+# the timed screen's depth in bitplanes (8: 256 colours, the slowest to draw on)
+ST_DEPTH=${ST_DEPTH:-8}
 [ -n "${FSUAE_PCAP:-}" ] && [ -x "$FSUAE_PCAP" ] || { echo "SKIP: set FSUAE_PCAP to a patched fs-uae (tools/fs-uae)"; exit 0; }
 [ "$(id -u)" = 0 ] || { echo "SKIP: needs root (veth, packet capture)"; exit 0; }
 command -v xdotool >/dev/null 2>&1 || { echo "SKIP: xdotool not installed"; exit 0; }
@@ -225,11 +227,11 @@ if want 1; then
 python3 -I "$here/status_peer.py" $ST_NET.1 "$DL_SIZE" 900 "$work/peer.log" >"$work/peer.err" 2>&1 &
 ppid=$!
 cat > "$dh0/S/prefs0" <<EOF
-DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST PAGE=Interface DEBUG=DH0:out/log0"
+DH0:C/tpubscreen RPTEST 640 480 $ST_DEPTH 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST PAGE=Interface DEBUG=DH0:out/log0"
 Echo "rc \$RC" >DH0:out/zz_0
 EOF
 cat > "$dh0/S/prefs1" <<EOF
-DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log1"
+DH0:C/tpubscreen RPTEST 640 480 $ST_DEPTH 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log1"
 Echo "rc \$RC" >DH0:out/zz_1
 EOF
 # the timed downloads: 0 with nothing open, A with RiptidePrefs open on
@@ -306,7 +308,7 @@ fi
 # ---- 2: Riptide not running ----
 if want 2; then
 boot <<'EOF'
-DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log5"
+DH0:C/tpubscreen RPTEST 640 480 $ST_DEPTH 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log5"
 Echo "rc $RC" >DH0:out/zz_5
 DH0:C/RiptidePrefs GADTOOLS PAGE=Status
 Echo "rc $RC" >DH0:out/zz_6

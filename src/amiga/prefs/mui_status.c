@@ -1109,24 +1109,13 @@ static void show_conn_graph(void)
 	mui_set(o_cgraph, MUIA_Graph_Hist, (ULONG)&c->hist);
 }
 
-/* milliseconds of dos.library's clock (1/50 s steps), for the DEBUG log */
-static u32 log_ms(void)
-{
-	struct DateStamp ds;
-
-	DateStamp(&ds);
-	return (u32)ds.ds_Minute * 60000u + (u32)ds.ds_Tick * 20u;
-}
-
 /* once a second while the page is shown */
 static void tick(void)
 {
 	char mem[160];
 	int i;
-	u32 t0 = log_ms(), t1;
 
 	rp_status_read(&model);
-	t1 = log_ms();
 	rp_st_summary(&model, t_sum, sizeof(t_sum));
 	if (model.running) {
 		rp_st_memory(&model, mem, sizeof(mem));
@@ -1136,25 +1125,10 @@ static void tick(void)
 		rt_strlcpy(t_sum + strlen(t_sum), "\nThe page fills in by itself when it starts.",
 		           sizeof(t_sum) - strlen(t_sum));
 	}
-	{
-		static u32 acc[4], nacc;
-		u32 a = log_ms(), b, c, e;
-		mui_set(o_sum, MUIA_SText_Text, (ULONG)t_sum);
-		b = log_ms();
-		mui_set(o_total, MUIA_Graph_Hist, (ULONG)&model.total);
-		mui_set(o_cpu, MUIA_Graph_Hist, (ULONG)&model.cpu_hist);
-		c = log_ms();
-		mui_set(o_ifv, MUIA_IfView_Update, TRUE);
-		e = log_ms();
-		acc[0] += b - a;
-		acc[1] += c - b;
-		acc[2] += e - c;
-		if (++nacc == 10) {
-			rp_log("DBG 10 ticks: summary %lu ms, graphs %lu ms, interfaces %lu ms", (unsigned long)acc[0],
-			       (unsigned long)acc[1], (unsigned long)acc[2]);
-			acc[0] = acc[1] = acc[2] = nacc = 0;
-		}
-	}
+	mui_set(o_sum, MUIA_SText_Text, (ULONG)t_sum);
+	mui_set(o_total, MUIA_Graph_Hist, (ULONG)&model.total);
+	mui_set(o_cpu, MUIA_Graph_Hist, (ULONG)&model.cpu_hist);
+	mui_set(o_ifv, MUIA_IfView_Update, TRUE);
 	for (i = 0; i < model.nconn; i++) {
 		rp_st_conn_row(&model.conns[i], rowbuf[i], sizeof(rowbuf[i]));
 		rows[i] = rowbuf[i];
@@ -1170,10 +1144,9 @@ static void tick(void)
 	}
 	mui_set(o_names, MUIA_SText_Text, (ULONG)t_names);
 	mui_set(o_counters, MUIA_SText_Text, (ULONG)t_counters);
-	rp_log("status: %s, %d interfaces, %d connections, in %lu out %lu B/s, cpu %lu; read %lu ms, shown %lu ms",
+	rp_log("status: %s, %d interfaces, %d connections, in %lu out %lu B/s, cpu %lu",
 	       model.running ? "running" : "stopped", model.nif, model.nconn, (unsigned long)model.rx_bps,
-	       (unsigned long)model.tx_bps, (unsigned long)model.cpu_pm, (unsigned long)(t1 - t0),
-	       (unsigned long)(log_ms() - t1));
+	       (unsigned long)model.tx_bps, (unsigned long)model.cpu_pm);
 }
 
 void status_table_chosen(void)

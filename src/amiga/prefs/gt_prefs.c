@@ -464,7 +464,7 @@ static void st_refresh(void)
 			rp_st_if_lines(f, st_line[2], st_line[3], l3, sizeof(st_line[2]));
 			rp_st_if_rates(f, st_line[4], sizeof(st_line[4]));
 		}
-		rt_snprintf(st_line[5], sizeof(st_line[5]), "TCP: %d connections, %lu segments resent in the last second",
+		rt_snprintf(st_line[5], sizeof(st_line[5]), "TCP: %d connections, %lu segments resent a second",
 		            st_model.nconn_all, (unsigned long)st_model.retrans_ps);
 		{
 			char n[600], *l = n, *e;
