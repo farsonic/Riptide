@@ -614,7 +614,7 @@ static Object *cards_build(void)
 	iflist = mui_new(MUIC_List, MUIA_Frame, MUIV_Frame_InputList, MUIA_List_ConstructHook,
 	                 MUIV_List_ConstructHook_String, MUIA_List_DestructHook, MUIV_List_DestructHook_String, TAGEND);
 	lvo = iflist ? mui_new(MUIC_Listview, MUIA_Listview_List, (ULONG)iflist, MUIA_CycleChain, 1, MUIA_FixHeightTxt,
-	                       (ULONG)(theme_compact() ? "\n" : "\n\n\n"), TAGEND) : NULL;
+	                       (ULONG)(theme_compact() ? "M\nM" : "M\nM\nM"), TAGEND) : NULL;
 	col = mui_new(MUIC_Group, MUIA_Group_Spacing, 4, MUIA_HorizWeight, 0, TAGEND);
 	if (!lvo || !col)
 		return NULL;

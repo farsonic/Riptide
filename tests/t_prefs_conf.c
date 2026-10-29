@@ -1095,6 +1095,12 @@ static void test_multi(void)
 		rp_ifsel = 0;
 		rp_conf_free(&c);
 	}
+	/* entries of another card pass the check before they are added */
+	CHECK(rp_list_entry_valid(P_ALIAS, "eth1|192.168.3.5/24", err, sizeof(err)));
+	CHECK(rp_list_entry_valid(P_VLAN, "eth1|30 dhcp", err, sizeof(err)));
+	CHECK(!rp_list_entry_valid(P_VLAN, "|30 dhcp", err, sizeof(err)));
+	CHECK(!rp_list_entry_valid(P_ALIAS, "e h|10.0.0.1/8", err, sizeof(err)));
+	CHECK(!rp_list_entry_valid(P_ALIAS, "eth1|bad", err, sizeof(err)));
 	/* entries that name a missing card or VLAN */
 	CHECK(rp_conf_load(&c, "", 0) == 0);
 	CHECK(rp_list_add(&c, RP_LIST_VLAN, "eth5|7 dhcp") == 0);

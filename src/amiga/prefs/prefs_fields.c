@@ -484,6 +484,15 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 
 int rp_list_entry_valid(int page, const char *s, char *err, int errlen)
 {
+	/* an address or VLAN of another card: "IF|" first */
+	if (page == P_ALIAS || page == P_VLAN) {
+		const char *sep = strchr(s, RP_IFSEP), *sp = strchr(s, ' ');
+		if (sep && (sep == s || (size_t)(sep - s) >= RP_IFNAMELEN || strchr(sep + 1, RP_IFSEP) || (sp && sp < sep))) {
+			rt_strlcpy(err, "The interface before '|' must be a name without spaces", (size_t)errlen);
+			return 0;
+		}
+		s = rp_entry_body(s);
+	}
 	if (page == P_ALIAS && !rp_valid_alias(s)) {
 		rt_strlcpy(err, "Extra address: enter A.B.C.D/BITS, e.g. 10.0.0.5/24,\nor A.B.C.D netmask M",
 		           (size_t)errlen);
@@ -965,8 +974,4 @@ void rp_iface_row(const struct rp_iface *f, char *buf, int len)
 		lf_add(buf, len, &n, ", DHCP%s%s", "", "");
 	else
 		lf_add(buf, len, &n, ", %s%s", f->addr[0] ? f->addr : "no address", "");
-	if (f->mtu > 0) {
-		rt_snprintf(u, sizeof(u), "%ld", f->mtu);
-		lf_add(buf, len, &n, ", MTU %s%s", u, "");
-	}
 }

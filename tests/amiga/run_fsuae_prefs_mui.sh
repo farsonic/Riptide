@@ -1,6 +1,7 @@
 #!/bin/sh
 # Riptide - RiptidePrefs' MUI editor on FS-UAE (AROS Kickstart) with MUI
-# 3.8: the same keyboard edits as run_fsuae_prefs.sh must give the same
+# 3.8: the keyboard edits of run_fsuae_prefs.sh, plus a second card with a
+# static address, an extra address and a VLAN on it, give the expected
 # riptide.conf; screenshots of every page in both themes, on a 256-colour
 # 640x480 screen, a 640x512 one and the 640x256 Workbench (compact layout;
 # the AROS ROM opens no screens wider than 640); the help bubble texts
@@ -207,7 +208,13 @@ settle a01-interface
 # IPv4 off (IPv6 stays on)
 key 4
 settle a01b-interface-ipv4-off
-# Address: switch to static, Save with no address: a requester, back to DHCP
+# a second card: New card puts the cursor in its Device field
+key e
+typ a2065.device
+key Return
+settle a01c-interface-second-card
+# Address (of the new card): static; Save with no address: a requester;
+# then its address and router; the first card stays on DHCP
 key p
 settle a02-address
 key m
@@ -216,7 +223,12 @@ key s
 settle a03b-invalid
 key Return
 settle a03c-dismissed
-key Return m
+key Return r
+typ '192.168.2.5/24'
+key Return g
+typ '192.168.2.1'
+key Return d
+settle a03c2-address-first-card
 # a string field emptied (the cursor may be anywhere in it)
 clear() {
 	key "$1" shift+Right
@@ -237,6 +249,12 @@ clear i
 typ '10.0.1.2/24'
 key Return d
 settle a03g-extra-added
+# and one on the second card
+key t
+clear i
+typ '192.168.3.5/24'
+key Return d
+settle a03g2-extra-second-card
 # VLANs (a form): 10 with DHCP and priority 4; then 20, made static with
 # an MTU through Replace
 key p
@@ -259,6 +277,13 @@ key Return t
 typ 1400
 key Return r
 settle a03j-vlans-edited
+# VLAN 30 on the second card, with DHCP
+clear i
+typ 30
+key Return n m m m
+settle a03j2-vlan-second-card
+key d
+settle a03j3-vlans-added
 # Names: replace the host name, add a domain and a name server
 key p
 settle a04-names
@@ -348,9 +373,14 @@ cat > "$work/expect.conf" <<'EOF'
 
 interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440
 dhcp eth0
+interface eth1 device=a2065.device unit=0
+ifconfig eth1 192.168.2.5/24 up
+route add default 192.168.2.1 dev eth1 metric 10
 ifconfig eth0 alias 10.0.1.2/24
+ifconfig eth1 alias 192.168.3.5/24
 interface eth0.10 vlan=10 parent=eth0 dhcp pcp=4
 interface eth0.20 vlan=20 parent=eth0 address=192.168.20.2/24 pcp=4 mtu=1400
+interface eth1.30 vlan=30 parent=eth1 dhcp pcp=4 mtu=1400
 nameserver 192.168.1.1
 hostname zeus    # the old name
 domain example.org
