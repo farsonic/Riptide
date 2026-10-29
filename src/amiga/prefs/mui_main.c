@@ -1147,6 +1147,8 @@ int mui_run(const struct rp_gui_args *a)
 		goto out;
 	}
 	rp_log("window open, page %d, %s theme", page, theme_dark() ? "dark" : "light");
+	rp_log("window %ldx%ld at %ld,%ld", (long)mui_get(win, MUIA_Window_Width), (long)mui_get(win, MUIA_Window_Height),
+	       (long)mui_get(win, MUIA_Window_LeftEdge), (long)mui_get(win, MUIA_Window_TopEdge));
 	rp_request_fn = mui_request;
 	show_status();
 	{

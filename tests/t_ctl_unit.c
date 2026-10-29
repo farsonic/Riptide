@@ -601,8 +601,8 @@ static void test_status(struct rt_sockctx *ctx)
 	CHECK(fetch("net.riptide.status", sizeof(st)) == 1);
 	memcpy(&st, rec(0, sizeof(st)), sizeof(st));
 	CHECK(st.cpu_on == 1 && st.cpu_idle == rt_cpu_idle);
-	/* and goes off 5 s after the last read */
-	rt_host_advance_clock(4000);
+	/* and goes off 12 s after the last read */
+	rt_host_advance_clock(11000);
 	rt_lock();
 	rt_cpu_meter_poll();
 	CHECK(rt_cpu_meter == 1);

@@ -1283,7 +1283,7 @@ need the last bit of speed.
   highest value): all traffic of every interface but loopback (received:
   columns, sent: a line) and the CPU share. The CPU share comes from
   `net.riptide.status`: reading it starts a meter in the Riptide process
-  for 5 seconds (a vertical blank interrupt server counts the 50 or 60
+  for 12 seconds (a vertical blank interrupt server counts the 50 or 60
   ticks a second in which the process was waiting for work), so it costs
   nothing when nobody reads it.
 * **Tabs** (click, or keys `1` to `4`, cursor left and right):

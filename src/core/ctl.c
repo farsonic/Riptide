@@ -635,10 +635,11 @@ volatile u8 rt_cpu_meter;
 u32 rt_cpu_idle;
 static u32 ctl_start_ms, cpu_meter_ms;
 
-/* the meter stops 5 s after the last read of net.riptide.status */
+/* the meter stops 12 s after the last read of net.riptide.status (the
+ * Status page reads every 1, 2 or 5 s) */
 void rt_cpu_meter_poll(void)
 {
-	if (rt_cpu_meter && rt_now_ms() - cpu_meter_ms > 5000u)
+	if (rt_cpu_meter && rt_now_ms() - cpu_meter_ms > 12000u)
 		rt_cpu_meter = 0;
 }
 

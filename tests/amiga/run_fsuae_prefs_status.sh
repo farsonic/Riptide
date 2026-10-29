@@ -15,7 +15,8 @@
 #     tests/amiga/run_fsuae_prefs_status.sh [BUILD] [OUTDIR]
 #
 # ST_IF, ST_PEER, ST_NET (first three octets) choose other veth names and
-# subnet; DL_SIZE the timed download (bytes); ST_UPDATE the Status page's
+# subnet; DL_SIZE the timed download (bytes); ST_VLANS the VLAN interfaces
+# besides eth0 (default 2); ST_UPDATE the Status page's
 # Update setting for the run (0, 1, 2 for every 1, 2, 5 s; default 0). Needs root, fs-uae, Xvfb (or
 # DISPLAY), xdotool, ImageMagick, Python PIL, vbcc + NDK and vasm.
 # SPDX-License-Identifier: GPL-2.0-only
@@ -145,6 +146,12 @@ ifconfig eth0 $ST_NET.2/24 up
 route add default $ST_NET.1
 nameserver $ST_NET.1
 CONF
+# VLANs, so the Interfaces tab has more interfaces than fit (ST_VLANS of them)
+v=1
+while [ $v -le ${ST_VLANS:-2} ]; do
+	echo "interface eth0.$((v * 10)) vlan=$((v * 10)) parent=eth0 address=10.$((v * 10)).0.2/24" >>"$dh0/S/riptide.conf"
+	v=$((v + 1))
+done
 cp "$dh0/S/riptide.conf" "$dh0/Prefs/Env-Archive/Riptide/riptide.conf"
 # the Status page's Update setting (0 every second, 1 every 2 s, 2 every 5 s)
 if [ -n "${ST_UPDATE:-}" ]; then
@@ -315,6 +322,13 @@ cleanup_uae
 kill "$ppid" 2>/dev/null
 ppid=
 grep -q '^window open' "$dh0/out/log1" 2>/dev/null || fail "the MUI editor did not open"
+# every window inside its screen
+for lg in log0 log1 log3; do
+	awk '/^screen [0-9]+x[0-9]+/ { split($2, s, "x") } /^window [0-9]+x[0-9]+ at/ { split($2, w, "x"); split($4, p, ",");
+		if (p[1] + w[1] > s[1] || p[2] + w[2] > s[2]) bad = 1 } END { exit bad }' "$dh0/out/$lg" 2>/dev/null ||
+		fail "$lg: the window does not fit its screen ($(grep -E '^(screen|window [0-9])' "$dh0/out/$lg" | tr '\n' ' '))"
+done
+grep -Eq '^status: running, ([4-9]|[1-9][0-9]) interfaces' "$dh0/out/log1" || fail "the Status page did not see the VLANs"
 grep -Eq '^status: running, [1-9][0-9]* interfaces, [1-9][0-9]* connections, in [1-9]' "$dh0/out/log1" ||
 	fail "the Status page saw no traffic (log1)"
 grep -Eq '^status: running, .* connections, in [0-9]+ out [1-9]' "$dh0/out/log1" ||

@@ -402,7 +402,7 @@ struct rt_ctl_dns6 {
 };
 
 /* ---- the stack at a glance (net.riptide.status, 0.23) ----
- * Reading it also runs the CPU meter for the next 5 seconds: the Riptide
+ * Reading it also runs the CPU meter for the next 12 seconds: the Riptide
  * process then counts the time it waits for work (cpu_idle, in ticks of
  * cpu_hz per second). Between two reads that both have cpu_on set, the
  * process was busy for 1 - (idle1 - idle0) / (now1 - now0) of the time. */
@@ -437,7 +437,7 @@ struct rt_ctl_status {
 
 /* the CPU meter: while rt_cpu_meter is set the OS layer counts the time
  * its stack process waits for work (rt_cpu_counts()); rt_cpu_meter_poll()
- * turns it off 5 s after the last read of net.riptide.status */
+ * turns it off 12 s after the last read of net.riptide.status */
 extern volatile u8 rt_cpu_meter;
 extern u32 rt_cpu_idle;
 void rt_cpu_meter_poll(void);

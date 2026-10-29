@@ -191,6 +191,8 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIA_Window_ScreenTitle      0x804234b0UL
 #define MUIA_Window_LeftEdge         0x80426c65UL
 #define MUIA_Window_TopEdge          0x80427c66UL
+#define MUIA_Window_Width            0x8042dcaeUL
+#define MUIA_Window_Height           0x80425846UL
 #define MUIA_Window_Sleep            0x8042e7dbUL
 #define MUIA_Window_RefWindow        0x804201f4UL
 #define MUIA_Window_Activate         0x80428d2fUL
