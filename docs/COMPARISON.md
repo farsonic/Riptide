@@ -484,7 +484,7 @@ These are emulator results, not measurements on real hardware.
 
 | Stack | Version | Obtained |
 |---|---|---|
-| Riptide | 0.23 (this repository) | built here |
+| Riptide | 0.24 with the Roadshow extensions (this repository) | built here |
 | AmiNetXDuo | 1.0.0-rc2 (NetX Duo 6.5.2), commit eba3a41 | nightly release binary of 29.10.2026; its "full" stack installed into the system as its Installer's system layout does, with a static `DEVS:NetInterfaces/eth0` |
 | AmiTCP_NG | 4.1.8, source commit 90575fa (8.10.2026) | built from source with `amigadev/crosstools:m68k-amigaos` (gcc 6.5), its library, usergroup.library and AddNetInterface |
 | MiamiDx | 1.0c (10.04.2000), evaluation version | the user's `MiamiDx10cmain.lha` with Aminet `comm/tcp/MiamiDx10c-MUI.lha` and MUI 3.8, laid out as `Install_MiamiDx` does; settings imported in its GUI from the MiamiInit file below and saved |
@@ -512,32 +512,51 @@ them below as unsupported.
 
 | Stack | bsdsocket | Passed | Failed | Unsupported | Skipped | Score |
 |---|---|---|---|---|---|---|
-| Riptide 0.24 | 4.1 | 175 | 0 | 17 | 2 | 91 % |
-| AmiNetXDuo 1.0.0-rc2 | 4.11 | 162 | 5 | 13 | 2 | 90 % |
-| AmiTCP_NG 4.1.8 | 4.1 | 154 | 5 | 13 | 2 | 90 % |
-| MiamiDx 1.0c (evaluation) | 4.1 | 155 | 6 | 23 | 2 | 84 % |
-| Miami 3.2b (evaluation) | 4.1 | 153 | 8 | 23 | 2 | 83 % |
-| PrismNet (lwIP 2.2.1) | 4.4 | 139 | 16 | 17 | 2 | 81 % |
-| tolunnet 1.2.0-rc6 | 4.1 | 129 | 11 | 24 | 2 | 79 % |
-| AmiTCP 3.0b2 | 3.28 | 131 | 9 | 29 | 4 | 78 % |
+| Riptide 0.24 + Roadshow API | 4.1 | 208 | 0 | 5 | 2 | 98 % |
+| AmiNetXDuo 1.0.0-rc2 | 4.11 | 181 | 5 | 15 | 2 | 90 % |
+| AmiTCP_NG 4.1.8 | 4.1 | 172 | 6 | 15 | 2 | 89 % |
+| PrismNet (lwIP 2.2.1) | 4.4 | 149 | 21 | 23 | 2 | 77 % |
+| MiamiDx 1.0c (evaluation) | 4.1 | 155 | 6 | 44 | 2 | 76 % |
+| Miami 3.2b (evaluation) | 4.1 | 153 | 8 | 44 | 2 | 75 % |
+| tolunnet 1.2.0-rc6 | 4.1 | 137 | 11 | 37 | 2 | 74 % |
+| AmiTCP 3.0b2 | 3.28 | 131 | 9 | 50 | 4 | 69 % |
+
+These are the second round of runs. Riptide had gained the Roadshow
+extensions of bsdsocket.library, and stackprobe had gained 22 Roadshow
+tests to look at them more closely. 12 of them call more of the API:
+interface queries, the routing message format, `In_CanForward()`,
+statistics, adding a DNS server, the default domain, `RoadshowData`,
+`gethostbyname_r()`, the Roadshow `getaddrinfo()`, BPF ioctls, and an
+`MHT_Connect` hook that must refuse a `connect()`. 10 more ask the
+`SBTC_HAVE_*` style tags. Every stack ran again with that stackprobe, so
+the totals are higher than in the first round (175 tests then for Riptide
+0.24).
 
 The score is passed / (passed + failed + unsupported). It measures breadth
 and correctness together, and the extension families weigh in:
-- **Riptide and the Miamis:** 13 tests of miami.library (Riptide offers it
-  as its compatibility alias). Their unsupported are the Roadshow-only calls.
-- **AmiNetXDuo, AmiTCP_NG, PrismNet, tolunnet:** the Roadshow calls instead.
+- **The Miamis:** the 13 tests of miami.library. Their unsupported tests
+  are the 33 Roadshow ones.
+- **AmiNetXDuo, AmiTCP_NG, PrismNet, tolunnet:** the Roadshow calls
+  instead, as far as each has them.
+- **Riptide:** both families. It has miami.library as its compatibility
+  alias and the Roadshow calls in bsdsocket.library.
 
-So read the failures more than the percentages. Riptide also ran on the AROS
-ROM (175 passed, the same results), and AmiTCP 3.0b2 on an emulated plain
-68000 (131 passed, the same as on the 68020).
+So read the failures more than the percentages.
+
+Riptide also ran on the AROS ROM, with 208 passed and the same results.
+AmiTCP 3.0b2 had run on an emulated plain 68000 in the first round, with
+131 passed, the same as on the 68020. AmiTCP_NG crashed the emulated
+machine (a black screen) in three of five runs with this stackprobe, at
+no fixed test: a run with `VERBOSE`, which flushes every line, completed.
+Its report is from a complete run.
 
 What each stack did not do (failures, from `RESULTS.md`):
 
 * **Riptide**: nothing since 0.24. 0.23 sent no SIGURG signal to a
   socket's FIOSETOWN owner when urgent data arrived (only to FIOASYNC
-  sockets); found by stackprobe and fixed. Its unsupported tests are the
-  Roadshow extension calls and the legacy socket.library, inet.library,
-  ifconfig.library, miamibpf and miamipcap libraries.
+  sockets); found by stackprobe and fixed. Its five unsupported tests are
+  the legacy socket.library, inet.library, ifconfig.library, miamibpf and
+  miamipcap libraries.
 * **AmiNetXDuo**:
   - **TCP close:** neither SO_LINGER 0 nor closing with unread data resets
     the peer.
@@ -546,6 +565,7 @@ What each stack did not do (failures, from `RESULTS.md`):
     allowed without SO_BROADCAST.
 * **AmiTCP_NG**:
   - `getprotobynumber(6)` finds nothing.
+  - `In_CanForward(127.0.0.1)` says the loopback net may be forwarded.
   - Closing a socket with unread data does not reset the peer (RFC 2525).
   - `MSG_DONTWAIT` is not known (a blocking `recv()` waits).
   - Datagrams of 32 KB and more are refused on loopback.
@@ -568,6 +588,12 @@ What each stack did not do (failures, from `RESULTS.md`):
   - **netdb:** `getnetby*()` and `getprotoent()`/`getservent()` find nothing.
   - **Sockets:** at most 14 per program here (ENOBUFS).
   - **Close:** closing with unread data does not reset the peer.
+  - **Roadshow calls that answer but do nothing:**
+    - `In_CanForward()` says no to 8.8.8.8.
+    - `ObtainRoadshowData()` returns NULL.
+    - `gethostbyname_r()` finds nothing.
+    - `bpf_ioctl()` leaves the version and the buffer size at 0.
+    - An `MHT_Connect` hook is accepted but never called.
 * **tolunnet**:
   - `inet_network("10.1")` gives 10.0.0.1, not 10.1 (0x0a01).
   - `gethostbyaddr(127.0.0.1)` finds nothing.
