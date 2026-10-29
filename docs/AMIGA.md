@@ -1296,7 +1296,9 @@ need the last bit of speed.
 * **Tabs** (click, or keys `1` to `4`, cursor left and right):
   *Interfaces*: each interface (VLANs too) in three lines (state, driver
   or VLAN, MTU; IPv4 address, gateway, DHCP state and lease left or
-  link-local; IPv6 addresses), its speeds in and out, and its own graph.
+  link-local; IPv6 addresses), its speeds in and out, and its own graph;
+  when not all fit, a line says which are shown and a click on the list
+  (or cursor down and up) shows the next ones.
   *Connections*: every TCP connection in two lines, both ends in full
   first (`192.168.1.2:1025  to  93.184.216.34:80`, a listener only its
   own), then its state, round trip time, window in packets and ECN,

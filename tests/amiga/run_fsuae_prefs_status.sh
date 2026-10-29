@@ -311,6 +311,9 @@ shot s07-dark-connections 4
 key Escape
 waitfile zz_2 60
 shot s08-compact 14
+# the interfaces that did not fit
+key Down Down
+shot s08b-compact-more-interfaces 4
 key 2
 shot s09-compact-connections 4
 key Escape
