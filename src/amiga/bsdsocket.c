@@ -1009,11 +1009,12 @@ void amiga_async_hook(struct rt_socket *so, u32 events)
 		Permit();
 		return;
 	}
-	if (so->state & RT_SS_ASYNC) {
+	if (so->state & RT_SS_ASYNC)
 		mask |= c->sc.sigio_mask;
-		if (events & RT_SEV_OOB)
-			mask |= c->sc.sigurg_mask;
-	}
+	/* SIGURG: BSD sends it to the socket's owner (FIOSETOWN) whether or
+	 * not the socket is asynchronous */
+	if ((events & RT_SEV_OOB) && ((so->state & RT_SS_ASYNC) || so->pgid))
+		mask |= c->sc.sigurg_mask;
 	if (events & so->event_mask)
 		mask |= c->sc.sigevent_mask;
 	if (mask)

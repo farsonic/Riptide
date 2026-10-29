@@ -272,11 +272,12 @@ void rt_sock_wakeup(struct rt_socket *so, u32 events)
 		return;
 	}
 	/* Events the owner selected with SO_EVENTMASK are remembered for
-	 * GetSocketEvents(); FIOASYNC owners get every event (SIGIO/SIGURG). */
+	 * GetSocketEvents(); FIOASYNC owners get every event (SIGIO/SIGURG),
+	 * and urgent data reaches an owner set with FIOSETOWN as in BSD. */
 	pend = events & so->event_mask;
 	if (pend)
 		so->events_pending |= pend;
-	if ((pend || (so->state & RT_SS_ASYNC)) && rt_sock_async_hook)
+	if ((pend || (so->state & RT_SS_ASYNC) || ((events & RT_SEV_OOB) && so->pgid)) && rt_sock_async_hook)
 		rt_sock_async_hook(so, events);
 }
 

@@ -266,18 +266,31 @@ static void test_time_wait(void)
 	rt_api_close(&ss, fd);
 }
 
+/* urgent data reaches the owner set with FIOSETOWN (BSD SIGURG) */
+static volatile int oob_hook_calls;
+static void oob_hook(struct rt_socket *so, u32 ev)
+{
+	(void)so;
+	if (ev & RT_SEV_OOB)
+		oob_hook_calls++;
+}
+
 /* urgent data: MSG_OOB byte and SIOCATMARK */
 static void test_oob(void)
 {
 	int lfd, cfd, afd, r;
 	char buf[16];
-	s32 mark = -1;
+	s32 mark = -1, owner = 0x1234;
 
 	CHECK(pair(5013, &lfd, &cfd, &afd));
+	CHECK(rt_api_ioctl(&ss, afd, RT_FIOSETOWN, &owner) == 0);
+	rt_sock_async_hook = oob_hook;
 	CHECK(rt_api_send(&cs, cfd, "ab", 2, 0) == 2);
 	CHECK(rt_api_send(&cs, cfd, "!", 1, RT_MSG_OOB) == 1);
 	CHECK(rt_api_send(&cs, cfd, "cd", 2, 0) == 2);
 	usleep(30000);
+	rt_sock_async_hook = NULL;
+	CHECKV(oob_hook_calls >= 1, "calls=%d", oob_hook_calls);  /* not FIOASYNC */
 	r = rt_api_recv(&ss, afd, buf, sizeof(buf), 0);
 	CHECKV(r == 2 && memcmp(buf, "ab", 2) == 0, "r=%d", r);   /* stops at the mark */
 	rt_api_ioctl(&ss, afd, RT_SIOCATMARK, &mark);
