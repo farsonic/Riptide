@@ -19,7 +19,7 @@
 # must select an icon, drag one, open a drawer window and close it, and show
 # its menus. Screenshots of every step stay in OUTDIR.
 #
-# PKG is a built package drawer (default build/package/Riptide, made by
+# ROUNDS (e.g. "1 6") runs some of them. PKG is a built package drawer (default build/package/Riptide, made by
 # "make -f Makefile.amiga TOOLCHAIN=gcc package"). Needs KS314_ROM and
 # KS314_SYS (tests/amiga/ks314.sh), MUI_DIR, fs-uae, Xvfb (or DISPLAY),
 # xdotool, ImageMagick, Python PIL and vbcc + NDK (for wbprobe).
@@ -184,10 +184,17 @@ mui_host() {
 }
 
 conf=$sys/Prefs/Env-Archive/Riptide/riptide.conf
+# ROUNDS: which rounds to run (default all)
+want() {
+	case " ${ROUNDS:-1 2 3 4 5 6} " in
+	*" $1 "*) return 0 ;;
+	esac
+	return 1
+}
 
 # ---- 1: MUI, Save, Apply ----------------------------------------------------
 r=r1-mui-apply
-if open_editor "$MUI_ICON" rp.log $r; then
+if want 1 && open_editor "$MUI_ICON" rp.log $r; then
 	shot $r-a-open
 	mui_host zeus
 	shot $r-b-edited
@@ -204,11 +211,11 @@ if open_editor "$MUI_ICON" rp.log $r; then
 	cp "$out/rp.log" "$work/$r.log"
 	grep -q '^hostname zeus$' "$conf" || fail "$r: riptide.conf has no hostname zeus"
 fi
-wb_ok $r
+want 1 && wb_ok $r
 
 # ---- 2: MUI, Save, Later -----------------------------------------------------
 r=r2-mui-later
-if open_editor "$MUI_ICON" rp.log $r; then
+if want 2 && open_editor "$MUI_ICON" rp.log $r; then
 	mui_host mars
 	$ptr click $SAVE >/dev/null
 	waitlog "$out/rp.log" "Apply the changes" 20 || fail "$r: no Apply question"
@@ -219,11 +226,11 @@ if open_editor "$MUI_ICON" rp.log $r; then
 	cp "$out/rp.log" "$work/$r.log"
 	grep -q '^hostname mars$' "$conf" || fail "$r: riptide.conf has no hostname mars"
 fi
-wb_ok $r
+want 2 && wb_ok $r
 
 # ---- 3: MUI, a change, Esc -----------------------------------------------------
 r=r3-mui-cancel
-if open_editor "$MUI_ICON" rp.log $r; then
+if want 3 && open_editor "$MUI_ICON" rp.log $r; then
 	mui_host venus
 	key Return
 	key Escape 2
@@ -231,11 +238,11 @@ if open_editor "$MUI_ICON" rp.log $r; then
 	cp "$out/rp.log" "$work/$r.log"
 	grep -q '^hostname mars$' "$conf" || fail "$r: Cancel changed riptide.conf"
 fi
-wb_ok $r
+want 3 && wb_ok $r
 
 # ---- 4: opened twice ------------------------------------------------------------
 r=r4-twice
-if open_editor "$MUI_ICON" rp.log $r; then
+if want 4 && open_editor "$MUI_ICON" rp.log $r; then
 	# cover it with the System drawer, then start it again
 	$ptr click $SYS_ICON 2 >/dev/null
 	sleep 4
@@ -250,11 +257,11 @@ if open_editor "$MUI_ICON" rp.log $r; then
 	$ptr click 248 191 >/dev/null   # close the System drawer
 	sleep 2
 fi
-wb_ok $r
+want 4 && wb_ok $r
 
 # ---- 5: Status page open for a minute, then Save -----------------------------
 r=r5-status
-if open_editor "$MUI_ICON" rp.log $r; then
+if want 5 && open_editor "$MUI_ICON" rp.log $r; then
 	sleep 60
 	shot $r-a-status
 	grep -c '^status: running' "$out/rp.log" >"$work/$r-reads.txt"
@@ -262,36 +269,38 @@ if open_editor "$MUI_ICON" rp.log $r; then
 	waitlog "$out/rp.log" "exit 0" 20 || fail "$r: the editor did not exit"
 	cp "$out/rp.log" "$work/$r.log"
 fi
-wb_ok $r
+want 5 && wb_ok $r
 
 # ---- 6: GadTools editor, Save, Apply ---------------------------------------------
 r=r6-gadtools
-if open_editor "$GT_ICON" gt.log $r "GadTools editor"; then
+if want 6 && open_editor "$GT_ICON" gt.log $r "GadTools editor"; then
 	shot $r-a-open
+	# the GadTools editor opens on Interface: four pages on to Names
 	n=0
-	while [ $n -lt 5 ]; do key p; n=$((n + 1)); done
+	while [ $n -lt 4 ]; do key p; n=$((n + 1)); done
+	sleep 1
 	key h
 	n=0
-	while [ $n -lt 8 ]; do xdotool key BackSpace; n=$((n + 1)); done
+	# an Intuition string gadget starts with the cursor at the front
+	while [ $n -lt 8 ]; do xdotool key Delete; n=$((n + 1)); done
 	xdotool type --delay 150 jupiter
 	key Return
 	shot $r-b-edited
 	key s 3
 	shot $r-c-question
-	if waitlog "$out/gt.log" "Apply the changes" 10; then
-		# the question is an EasyRequest: Return answers its first button
-		key Return 3
-		shot $r-d-answered
-		waitlog "$out/gt.log" "Applied" 20 && key Return 2
-	fi
+	# the question and the report are EasyRequests: Left Amiga + V answers
+	# the first button (Apply, then OK)
+	key super+v 4
+	shot $r-d-answered
+	key super+v 3
 	waitlog "$out/gt.log" "exit 0" 20 || fail "$r: the editor did not exit"
 	cp "$out/gt.log" "$work/$r.log"
 	grep -q '^hostname jupiter$' "$conf" || fail "$r: riptide.conf has no hostname jupiter"
 fi
-wb_ok $r
+want 6 && wb_ok $r
 
 if [ $fails -eq 0 ]; then
-	echo "ok   RiptidePrefs from Workbench icons on Kickstart 3.1.4 + MUI 3.8: Save/Apply, Later, Cancel, twice, Status page, GadTools; Workbench works after each"
+	echo "ok   RiptidePrefs from Workbench icons on Kickstart 3.1.4 + MUI 3.8, rounds ${ROUNDS:-1 2 3 4 5 6} (Save/Apply, Later, Cancel, twice, Status page, GadTools); Workbench works after each"
 	echo "     screenshots: $work/*.png"
 	exit 0
 fi

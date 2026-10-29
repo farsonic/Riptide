@@ -105,6 +105,24 @@ open(p, "wb").write(d)
 EOF
 }
 
+# ks314_screenmode DEST DISPLAYID WIDTH HEIGHT DEPTH: the Workbench screen
+# mode (ENVARC:Sys/screenmode.prefs, which IPrefs reads at boot), e.g.
+# 0x29024 1280 512 3 for PAL Super-High-Res interlaced on AGA
+ks314_screenmode()
+{
+	mkdir -p "$1/Prefs/Env-Archive/Sys"
+	python3 - "$1/Prefs/Env-Archive/Sys/screenmode.prefs" "$2" "$3" "$4" "$5" <<'EOF'
+import struct, sys
+path, mode, w, h, d = sys.argv[1], int(sys.argv[2], 0), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+prhd = b"PRHD" + struct.pack(">IBBI", 6, 0, 0, 0)
+# struct ScreenModePrefs: sm_Reserved[4], sm_DisplayID, sm_Width, sm_Height,
+# sm_Depth, sm_Control (SMF_AUTOSCROLL)
+scrm = b"SCRM" + struct.pack(">I4IIHHHH", 28, 0, 0, 0, 0, mode, w, h, d, 1)
+body = b"PREF" + prhd + scrm
+open(path, "wb").write(b"FORM" + struct.pack(">I", len(body)) + body)
+EOF
+}
+
 # ks314_config FILE DEST [EXTRA LINES]
 ks314_config()
 {
