@@ -331,6 +331,16 @@ static void tag_val(const char *id, const char *desc, ULONG code)
 		sp_result(id, desc, R_PASS, 0, "%lx", (unsigned long)v);
 }
 
+/* a Roadshow "SBTC_HAVE_..." style query: passes with a non-zero answer */
+static void tag_have(const char *id, const char *desc, ULONG code)
+{
+	ULONG v;
+	if (tag_get(code, 0, &v) < 0 || !v)
+		sp_result(id, desc, R_UNSUP, 0, NULL);
+	else
+		sp_result(id, desc, R_PASS, 0, "%lu", (unsigned long)v);
+}
+
 void sp_test_tags(void)
 {
 	ULONG v, old, t[3];
@@ -362,6 +372,17 @@ void sp_test_tags(void)
 	tag_str("tags.s2werrnostrptr", "SBTC_S2WERRNOSTRPTR (1)", SBTC_S2WERRNOSTRPTR, 1);
 	tag_str("tags.releasestrptr", "SBTC_RELEASESTRPTR", SBTC_RELEASESTRPTR, 0);
 	tag_val("tags.compat43", "SBTC_COMPAT43 get", SBTC_COMPAT43);
+	/* Roadshow (bsdsocket.library 4) */
+	tag_have("tags.rs_filter_channels", "SBTC_NUM_PACKET_FILTER_CHANNELS (Roadshow)", 40);
+	tag_have("tags.rs_routing_api", "SBTC_HAVE_ROUTING_API (Roadshow)", 41);
+	tag_have("tags.rs_interface_api", "SBTC_HAVE_INTERFACE_API (Roadshow)", 47);
+	tag_have("tags.rs_monitoring_api", "SBTC_HAVE_MONITORING_API (Roadshow)", 50);
+	tag_have("tags.rs_status_api", "SBTC_HAVE_STATUS_API (Roadshow)", 53);
+	tag_have("tags.rs_dns_api", "SBTC_HAVE_DNS_API (Roadshow)", 54);
+	tag_val("tags.rs_system_status", "SBTC_SYSTEM_STATUS get (Roadshow)", 56);
+	tag_have("tags.rs_conversion_api", "SBTC_HAVE_ADDRESS_CONVERSION_API (Roadshow)", 60);
+	tag_have("tags.rs_roadshowdata_api", "SBTC_HAVE_ROADSHOWDATA_API (Roadshow)", 67);
+	tag_have("tags.rs_gethostaddr_r_api", "SBTC_HAVE_GETHOSTADDR_R_API (Roadshow)", 69);
 
 	/* set and read back, then restore */
 	if (tag_get(SBTC_BREAKMASK, 0, &old) == 0) {
@@ -578,6 +599,174 @@ static void ext_roadshow(void)
 	}
 }
 
+/* Roadshow tags, structures and constants used below (Roadshow SDK) */
+#define RS_TAG_USER       0x80000000UL
+#define RS_IFQ_MTU        (RS_TAG_USER + 1900 + 5)
+#define RS_IFQ_Address    (RS_TAG_USER + 1900 + 14)
+#define RS_MHT_Connect    3
+#define RS_BIOCGBLEN      0x40044266UL
+#define RS_BIOCVERSION    0x40044271UL
+struct rs_dnsnode { struct MinNode n; LONG size; STRPTR addr; LONG use; };
+struct rs_addrinfo { LONG flags, family, socktype, protocol; ULONG addrlen; APTR addr; STRPTR canon;
+                     struct rs_addrinfo *next; };
+struct rs_hook { struct MinNode n; APTR entry, subentry, data; };
+
+static LONG rs_dns_has(const char *a)
+{
+	struct List *l = (struct List *)sp_ObtainDomainNameServerList();
+	struct rs_dnsnode *n;
+	LONG found = 0;
+
+	if (!l)
+		return -1;
+	for (n = (struct rs_dnsnode *)l->lh_Head; n->n.mln_Succ; n = (struct rs_dnsnode *)n->n.mln_Succ)
+		if (n->addr && !strcmp((char *)n->addr, a))
+			found = 1;
+	sp_ReleaseDomainNameServerList(l);
+	return found;
+}
+
+static volatile LONG rs_hook_calls;
+
+static ULONG rs_connect_hook(__reg("a0") struct rs_hook *h, __reg("a2") APTR obj, __reg("a1") APTR msg)
+{
+	rs_hook_calls++;
+	return EACCES;
+}
+
+static void ext_roadshow2(void)
+{
+	int rs = SocketBase->lib_Version >= 4;
+	static UBYTE buf[256];
+
+	NEED_RS(QueryInterfaceTagList, "ext.rs_query_if", "QueryInterfaceTagList(IFQ_MTU, IFQ_Address)") {
+		struct List *l = SP_HAVE_BSD(ObtainInterfaceList) ? (struct List *)sp_ObtainInterfaceList() : NULL;
+		struct sp_sockaddr_in sa;
+		LONG mtu = 0, r = -1;
+		ULONG t[5];
+		char name[20];
+		name[0] = 0;
+		if (l && l->lh_Head->ln_Succ && l->lh_Head->ln_Name)
+			strncpy(name, l->lh_Head->ln_Name, sizeof(name) - 1);
+		name[sizeof(name) - 1] = 0;
+		if (l)
+			sp_ReleaseInterfaceList(l);
+		if (name[0]) {
+			t[0] = RS_IFQ_MTU;
+			t[1] = (ULONG)&mtu;
+			t[2] = RS_IFQ_Address;
+			t[3] = (ULONG)&sa;
+			t[4] = TAG_DONE;
+			memset(&sa, 0, sizeof(sa));
+			r = sp_QueryInterfaceTagList((STRPTR)name, (APTR)t);
+		}
+		sp_result("ext.rs_query_if", "QueryInterfaceTagList(IFQ_MTU, IFQ_Address)", r == 0 && mtu > 0 ? R_PASS : R_FAIL,
+		          r ? sp_errno() : 0, "%s mtu %ld", name, (long)mtu);
+	}
+	NEED_RS(GetRouteInfo, "ext.rs_route_format", "GetRouteInfo(): rt_msghdr version 3 records") {
+		UBYTE *r = (UBYTE *)sp_GetRouteInfo(AF_UNSPEC, 0), *p;
+		int n = 0, ok = r != NULL;
+		for (p = r; ok && n < 500 && *(UWORD *)p; p += *(UWORD *)p, n++)
+			if (p[2] != 3 || *(UWORD *)p < 74)
+				ok = 0;
+		sp_result("ext.rs_route_format", "GetRouteInfo(): rt_msghdr version 3 records", ok && n > 0 && n < 500 ?
+		          R_PASS : R_FAIL, ok ? 0 : sp_errno(), "%d routes", n);
+		if (r && SP_HAVE_BSD(FreeRouteInfo))
+			sp_FreeRouteInfo(r);
+	}
+	NEED_RS(In_CanForward, "ext.rs_in_canforward", "In_CanForward()") {
+		LONG a = sp_In_CanForward(0x08080808UL), b = sp_In_CanForward(INADDR_LOOPBACK);
+		sp_result("ext.rs_in_canforward", "In_CanForward()", a && !b ? R_PASS : R_FAIL, 0, "%ld %ld", (long)a, (long)b);
+	}
+	NEED_RS(GetNetworkStatistics, "ext.rs_netstat", "GetNetworkStatistics(NETSTATUS_ip)") {
+		LONG need = sp_GetNetworkStatistics(2, 1, NULL, 0);
+		LONG got = sp_GetNetworkStatistics(2, 1, buf, 96);
+		sp_result("ext.rs_netstat", "GetNetworkStatistics(NETSTATUS_ip)", need >= 96 && got == 96 ? R_PASS : R_FAIL,
+		          got < 0 ? sp_errno() : 0, "%ld bytes", (long)need);
+	}
+	NEED_RS(AddDomainNameServer, "ext.rs_dns_add", "Add/RemoveDomainNameServer()") {
+		LONG a = sp_AddDomainNameServer((STRPTR)"10.255.255.53"), h1 = rs_dns_has("10.255.255.53"), r = -1, h2;
+		if (a == 0 && SP_HAVE_BSD(RemoveDomainNameServer))
+			r = sp_RemoveDomainNameServer((STRPTR)"10.255.255.53");
+		h2 = rs_dns_has("10.255.255.53");
+		sp_result("ext.rs_dns_add", "Add/RemoveDomainNameServer()", a == 0 && h1 == 1 && r == 0 && h2 == 0 ? R_PASS : R_FAIL,
+		          a ? sp_errno() : 0, "listed %ld, after removal %ld", (long)h1, (long)h2);
+	}
+	NEED_RS(GetDefaultDomainName, "ext.rs_domainname", "GetDefaultDomainName()") {
+		LONG r;
+		buf[0] = 0;
+		r = sp_GetDefaultDomainName((STRPTR)buf, 64);
+		buf[63] = 0;
+		sp_result("ext.rs_domainname", "GetDefaultDomainName()", r == 0 || r == 1 ? R_PASS : R_FAIL, 0, "%s",
+		          r ? (char *)buf : "(none)");
+	}
+	NEED_RS(ObtainRoadshowData, "ext.rs_roadshowdata", "ObtainRoadshowData(ORD_ReadAccess)") {
+		struct List *l = (struct List *)sp_ObtainRoadshowData(0);
+		LONG n = list_len(l);
+		sp_result("ext.rs_roadshowdata", "ObtainRoadshowData(ORD_ReadAccess)", l && n > 0 ? R_PASS : R_FAIL,
+		          l ? 0 : sp_errno(), "%ld options", (long)n);
+		if (l && SP_HAVE_BSD(ReleaseRoadshowData))
+			sp_ReleaseRoadshowData(l);
+	}
+	NEED_RS(gethostbyname_r, "ext.rs_gethostbyname_r", "gethostbyname_r(\"127.0.0.1\")") {
+		struct sp_hostent he;
+		LONG herr = -5;
+		struct sp_hostent *h = (struct sp_hostent *)sp_gethostbyname_r((STRPTR)"127.0.0.1", &he, buf, sizeof(buf), &herr);
+		sp_result("ext.rs_gethostbyname_r", "gethostbyname_r(\"127.0.0.1\")", h == &he && he.h_addr_list &&
+		          he.h_addr_list[0] && *(ULONG *)he.h_addr_list[0] == INADDR_LOOPBACK ? R_PASS : R_FAIL, 0,
+		          "h_errno %ld", (long)herr);
+	}
+	NEED_RS(rs_getaddrinfo, "ext.rs_getaddrinfo", "getaddrinfo() (Roadshow, -810)") {
+		struct rs_addrinfo hints, *res = NULL;
+		LONG r;
+		memset(&hints, 0, sizeof(hints));
+		hints.family = AF_INET;
+		hints.socktype = SOCK_STREAM;
+		r = sp_rs_getaddrinfo((STRPTR)"127.0.0.1", (STRPTR)"80", &hints, &res);
+		sp_result("ext.rs_getaddrinfo", "getaddrinfo() (Roadshow, -810)", r == 0 && res && res->addr &&
+		          ((struct sp_sockaddr_in *)res->addr)->sin_port == 80 &&
+		          ((struct sp_sockaddr_in *)res->addr)->sin_addr.s_addr == INADDR_LOOPBACK ? R_PASS : R_FAIL, 0,
+		          "%ld", (long)r);
+		if (r == 0 && res && SP_HAVE_BSD(rs_freeaddrinfo))
+			sp_rs_freeaddrinfo(res);
+	}
+	NEED_RS(bpf_ioctl, "ext.rs_bpf_ioctl", "bpf_ioctl(BIOCVERSION, BIOCGBLEN)") {
+		LONG ch = SP_HAVE_BSD(bpf_open) ? sp_bpf_open(-1) : -1, r = -1;
+		UWORD ver[2];
+		ULONG blen = 0;
+		ver[0] = ver[1] = 0;
+		if (ch >= 0) {
+			r = sp_bpf_ioctl(ch, RS_BIOCVERSION, ver) | sp_bpf_ioctl(ch, RS_BIOCGBLEN, &blen);
+			sp_bpf_close(ch);
+		}
+		sp_result("ext.rs_bpf_ioctl", "bpf_ioctl(BIOCVERSION, BIOCGBLEN)", ch < 0 ? R_UNSUP : r == 0 && ver[0] == 1 &&
+		          blen > 0 ? R_PASS : R_FAIL, 0, "version %u.%u, buffer %lu", ver[0], ver[1], (unsigned long)blen);
+	}
+	NEED_RS(AddNetMonitorHookTagList, "ext.rs_monitor_connect", "MHT_Connect hook refuses connect()") {
+		static struct rs_hook h;
+		UWORD port;
+		LONG lst = sp_tcp_listener(&port), s = -1, r = 1, e = 0, a;
+		struct sp_sockaddr_in sa;
+		memset(&h, 0, sizeof(h));
+		h.entry = (APTR)rs_connect_hook;
+		a = sp_AddNetMonitorHookTagList(RS_MHT_Connect, &h, NULL);
+		if (a == 0 && lst >= 0) {
+			s = sp_socket(AF_INET, SOCK_STREAM, 0);
+			sp_sin(&sa, INADDR_LOOPBACK, port);
+			r = sp_connect(s, (APTR)&sa, sizeof(sa));
+			e = r < 0 ? sp_errno() : 0;
+		}
+		if (a == 0 && SP_HAVE_BSD(RemoveNetMonitorHook))
+			sp_RemoveNetMonitorHook(&h);
+		if (s >= 0)
+			sp_CloseSocket(s);
+		if (lst >= 0)
+			sp_CloseSocket(lst);
+		sp_result("ext.rs_monitor_connect", "MHT_Connect hook refuses connect()", a != 0 ? R_UNSUP :
+		          r < 0 && e == EACCES && rs_hook_calls == 1 ? R_PASS : R_FAIL, e, "%ld hook calls", (long)rs_hook_calls);
+	}
+}
+
 static void ext_miami(void)
 {
 	UBYTE a16[16];
@@ -734,6 +923,7 @@ static void ext_usergroup(void)
 void sp_test_ext(void)
 {
 	ext_roadshow();
+	ext_roadshow2();
 	ext_miami();
 	ext_usergroup();
 }
