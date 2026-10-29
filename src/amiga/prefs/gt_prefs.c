@@ -681,6 +681,7 @@ int gt_run(const struct rp_gui_args *a)
 	rp_status_init(&st_model);
 	r = event_loop();
 	st_timer(0);
+	rp_status_free();
 out:
 	if (treq) {
 		CloseDevice((struct IORequest *)treq);

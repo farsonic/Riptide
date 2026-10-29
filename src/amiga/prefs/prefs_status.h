@@ -22,6 +22,7 @@
 struct rp_hist {
 	u32 v[2][RP_HIST];      /* ring: the newest at (head + n - 1) % RP_HIST */
 	int head, n;            /* oldest sample; samples held (up to RP_HIST) */
+	u32 pushes;             /* samples ever pushed (a graph draws only what is new) */
 };
 void rp_hist_clear(struct rp_hist *h);
 void rp_hist_push(struct rp_hist *h, u32 a, u32 b);
@@ -175,5 +176,7 @@ void rp_st_counters_text(const struct rp_status_model *m, char *buf, int len);
 /* Read the tables into m when Riptide runs: 1, else 0 (m then says
  * "not running"). Opens and closes the libraries each time. */
 int rp_status_read(struct rp_status_model *m);
+/* the buffers it keeps between reads */
+void rp_status_free(void);
 
 #endif

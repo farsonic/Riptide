@@ -33,6 +33,7 @@ void rp_hist_push(struct rp_hist *h, u32 a, u32 b)
 	}
 	h->v[0][i] = a;
 	h->v[1][i] = b;
+	h->pushes++;
 }
 
 u32 rp_hist_at(const struct rp_hist *h, int s, int i)

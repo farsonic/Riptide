@@ -156,6 +156,8 @@
 306 void RectFill(struct RastPort* rp a1, LONG xMin d0, LONG yMin d1, LONG xMax d2, LONG yMax d3)
 324 LONG WritePixel(struct RastPort* rp a1, LONG x d0, LONG y d1)
 342 void SetAPen(struct RastPort* rp a1, ULONG pen d0)
+348 void SetBPen(struct RastPort* rp a1, ULONG pen d0)
 354 void SetDrMd(struct RastPort* rp a1, ULONG drawMode d0)
+396 void ScrollRaster(struct RastPort* rp a1, LONG dx d0, LONG dy d1, LONG xMin d2, LONG yMin d3, LONG xMax d4, LONG yMax d5)
 840 LONG ObtainBestPenA(struct ColorMap* cm a0, ULONG r d1, ULONG g d2, ULONG b d3, const struct TagItem* tags a1)
 948 void ReleasePen(struct ColorMap* cm a0, ULONG n d0)

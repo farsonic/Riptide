@@ -156,7 +156,6 @@ automatic_input_grab = 0
 video_sync = off
 uae_sana2 = 1
 uaenet_pcap = $ST_IF
-base_dir = $work/fsuae
 CFG
 
 ip link add $ST_IF type veth peer name $ST_PEER 2>/dev/null || { echo "SKIP: cannot create a veth pair"; exit 0; }
@@ -248,9 +247,9 @@ Run >NIL: Execute DH0:S/prefs1
 DH0:C/twait 15
 DH0:C/nc -d $ST_NET.1 7777 >NIL:
 Echo b >DH0:out/dl_b
-Run >NIL: DH0:C/nc -d -l 2121 >NIL:
-Run >NIL: DH0:C/nc -d $ST_NET.1 7779 >NIL:
-Run >NIL: DH0:C/nc $ST_NET.1 7780 <DH0:big >NIL:
+Run >DH0:out/nc_l DH0:C/nc -d -v -l 2121
+Run >DH0:out/nc_steady DH0:C/nc -d $ST_NET.1 7779 >NIL:
+Run >DH0:out/nc_up DH0:C/nc $ST_NET.1 7780 <DH0:big
 Echo ready >DH0:out/ready
 DH0:C/twait DH0:out/zz_1
 DH0:C/tpubscreen RPTEST 640 512 3 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST THEME=DARK"
