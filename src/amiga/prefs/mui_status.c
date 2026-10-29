@@ -616,7 +616,7 @@ static int ncols(const char *row)
  * the addresses (columns 1 and 2) giving way when that is too wide. */
 static void tb_layout(struct table_data *d, struct RastPort *rp, LONG w, LONG *x, int *nc)
 {
-	LONG cw[TB_COLS], sum = 0;
+	LONG cw[TB_COLS] = { 0 }, sum = 0;
 	char t[64];
 	int c, r, n = ncols(d->header);
 
