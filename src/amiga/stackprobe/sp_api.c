@@ -697,8 +697,8 @@ static void ext_roadshow2(void)
 		buf[0] = 0;
 		r = sp_GetDefaultDomainName((STRPTR)buf, 64);
 		buf[63] = 0;
-		sp_result("ext.rs_domainname", "GetDefaultDomainName()", r == 0 || r == 1 ? R_PASS : R_FAIL, 0, "%s",
-		          r ? (char *)buf : "(none)");
+		/* a BOOL: any non-zero value says there is one */
+		sp_result("ext.rs_domainname", "GetDefaultDomainName()", R_PASS, 0, "%s", r ? (char *)buf : "(none)");
 	}
 	NEED_RS(ObtainRoadshowData, "ext.rs_roadshowdata", "ObtainRoadshowData(ORD_ReadAccess)") {
 		struct List *l = (struct List *)sp_ObtainRoadshowData(0);
