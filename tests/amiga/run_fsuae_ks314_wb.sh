@@ -14,6 +14,7 @@
 #   4 opened twice: the second copy must hand over to the first and quit
 #   5 the Status page left open for a minute (updating every second), Save
 #   6 the GadTools editor (an icon with the GADTOOLS tool type): Save, Apply
+#   7 a help bubble, Project > Save As... and Open... (ASL requesters)
 # After each round: tests/amiga/wbprobe.c's snapshot must show no
 # RiptidePrefs left and the Workbench screen's layers free, and Workbench
 # must select an icon, drag one, open a drawer window and close it, and show
@@ -186,7 +187,7 @@ mui_host() {
 conf=$sys/Prefs/Env-Archive/Riptide/riptide.conf
 # ROUNDS: which rounds to run (default all)
 want() {
-	case " ${ROUNDS:-1 2 3 4 5 6} " in
+	case " ${ROUNDS:-1 2 3 4 5 6 7} " in
 	*" $1 "*) return 0 ;;
 	esac
 	return 1
@@ -299,8 +300,52 @@ if want 6 && open_editor "$GT_ICON" gt.log $r "GadTools editor"; then
 fi
 want 6 && wb_ok $r
 
+# ---- 7: menus, ASL requesters, help bubbles (what the AROS ROM could not) ---
+# menu "X Y": hold the right button over Project, let go over X,Y
+menu() {
+	$ptr move 226 137 >/dev/null
+	xdotool mousedown 3
+	sleep 1
+	$ptr move $1 >/dev/null
+	sleep 0.5
+	xdotool mouseup 3
+	sleep 4
+}
+r=r7-asl
+if want 7 && open_editor "$MUI_ICON" rp.log $r; then
+	# a help bubble: rest the pointer on the page list
+	$ptr move 230 259 >/dev/null
+	sleep 1
+	shot $r-a-nobubble
+	sleep 4
+	shot $r-b-bubble
+	differ "$r-a-nobubble" "$r-b-bubble" 340 140 830 330 || fail "$r: no help bubble"
+	# Project > Save As...: an ASL requester in ENVARC:Riptide
+	menu "240 178"
+	shot $r-c-saveas
+	n=0
+	while [ $n -lt 14 ]; do xdotool key Delete; n=$((n + 1)); done
+	xdotool type --delay 150 copy.conf
+	key Return 3
+	[ -f "$sys/Prefs/Env-Archive/Riptide/copy.conf" ] || fail "$r: Save As wrote no ENVARC:Riptide/copy.conf"
+	sed -i 's/^hostname .*/hostname opened/' "$sys/Prefs/Env-Archive/Riptide/copy.conf"
+	# Project > Open...: the first file in the list is copy.conf
+	menu "236 160"
+	shot $r-d-open
+	$ptr click 400 221 2 >/dev/null
+	sleep 3
+	$ptr click 230 259 >/dev/null     # the Names page
+	sleep 2
+	shot $r-e-opened
+	key Escape 3
+	waitlog "$out/rp.log" "exit 0" 20 || fail "$r: the editor did not exit"
+	cp "$out/rp.log" "$work/$r.log"
+	grep -q "command $((101))" "$work/$r.log" || fail "$r: no Save As command in the log"
+fi
+want 7 && wb_ok $r
+
 if [ $fails -eq 0 ]; then
-	echo "ok   RiptidePrefs from Workbench icons on Kickstart 3.1.4 + MUI 3.8, rounds ${ROUNDS:-1 2 3 4 5 6} (Save/Apply, Later, Cancel, twice, Status page, GadTools); Workbench works after each"
+	echo "ok   RiptidePrefs from Workbench icons on Kickstart 3.1.4 + MUI 3.8, rounds ${ROUNDS:-1 2 3 4 5 6 7} (Save/Apply, Later, Cancel, twice, Status page, GadTools, ASL and bubbles); Workbench works after each"
 	echo "     screenshots: $work/*.png"
 	exit 0
 fi
