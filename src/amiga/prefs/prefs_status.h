@@ -53,6 +53,8 @@ void rp_fmt_bytes(char *buf, int len, u32 hi, u32 lo);
 void rp_fmt_rate(char *buf, int len, u32 bytes_per_s);
 /* a count with thin groups: "1 234 567" */
 void rp_fmt_count(char *buf, int len, u32 v);
+/* "s" after a count other than 1 ("1 packet", "2 packets"), else "" */
+const char *rp_plural(unsigned long n);
 /* a duration: "45 s", "12 min", "3 h 05 min", "2 days 4 h" */
 void rp_fmt_dur(char *buf, int len, u32 s);
 /* an uptime: "0:00:45", "3:04:05", "2 days 3:04:05" */
@@ -158,7 +160,7 @@ void rp_st_summary(const struct rp_status_model *m, char *buf, int len);
  * when tcp_mem says so */
 void rp_st_memory(const struct rp_status_model *m, char *buf, int len);
 /* an interface in three lines (no newline at the end of each):
- * l1 "eth0  up  uaenet.device unit 0"
+ * l1 "eth0  up  MTU 1500  uaenet.device unit 0"
  * l2 "192.168.1.2/24 via 192.168.1.1, DHCP: bound, 3 h 05 min left"
  * l3 "2001:db8::2, fe80::1" (or "IPv6 off") */
 void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int len);

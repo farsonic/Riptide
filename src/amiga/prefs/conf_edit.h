@@ -3,8 +3,9 @@
  * written back without disturbing what it does not understand.
  *
  * The file is kept as a list of lines. Lines the editor understands
- * (the first interface line, dhcp/ifconfig/route and "ifconfig IF alias"
- * for that interface, nameserver, hostname, domain, ipv4, ipv6, ntp,
+ * (up to RP_NIF "interface NAME device=..." lines, the dhcp, ifconfig and
+ * default route lines of those interfaces, "ifconfig IF alias" for them
+ * and their VLANs, the VLAN lines, nameserver, hostname, domain, ipv4, ipv6, ntp,
  * timezone, mdns, "qos on|off", "qos rule" and the sysctls of the table
  * below) are parsed into struct rp_model; everything else - comments,
  * blank lines, unknown keywords - stays as it is. rp_conf_text() with an
@@ -60,11 +61,15 @@ extern const char *const rp_ss_names[RP_NSS];
 extern const char *const rp_cc_names[];     /* "cubic", "reno", "ledbat" */
 
 /* lists: extra IPv4 addresses ("ifconfig IF alias SPEC"), QoS rules
- * ("qos rule SPEC") and VLANs of the interface; entries are packed (no
- * empty ones in between). A VLAN entry is "ID [dhcp|A.B.C.D/BITS|up]
- * [pcp=N|pcp=priority] [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off]
- * [tcpwindow=N]" (the keys in this order) for the line "interface IF.ID
- * vlan=ID parent=IF [dhcp|address=A.B.C.D/BITS|up] [pcp=...] ...". */
+ * ("qos rule SPEC") and VLANs; entries are packed (no empty ones in
+ * between). A VLAN entry is "ID [dhcp|A.B.C.D/BITS|up] [pcp=N|pcp=priority]
+ * [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [tcpwindow=N]" (the keys
+ * in this order) for the line "interface IF.ID vlan=ID parent=IF
+ * [dhcp|address=A.B.C.D/BITS|up] [pcp=...] ...".
+ * An address or VLAN entry of the first interface is just that; one of
+ * another interface starts with its name and RP_IFSEP: "eth1|10 dhcp"
+ * (a VLAN of eth1), "eth0.10|10.0.1.2/24" (an address of VLAN eth0.10).
+ * rp_entry_if() and rp_entry_body() take an entry apart. */
 #define RP_NALIAS   8
 #define RP_ALIASLEN 72
 #define RP_NQRULE   16
@@ -72,10 +77,17 @@ extern const char *const rp_cc_names[];     /* "cubic", "reno", "ledbat" */
 #define RP_VLANLEN  112
 #define RP_VLAN_NKEYS 6     /* pcp mtu ipv4 ipv6 qos tcpwindow */
 enum { RP_LIST_ALIAS, RP_LIST_QRULE, RP_LIST_VLAN };
+#define RP_IFSEP '|'
 
-struct rp_model {
-	/* interface (the first "interface NAME device=..." line) */
-	char ifname[16];
+/* A network card: an "interface NAME device=..." line and its address
+ * lines. The first one (ifc[0]) is always there; the others are used when
+ * their name is set (a deleted one leaves an empty slot). Its default
+ * route is "route add default GW", another's "route add default GW dev IF
+ * metric N" (so the first card's router is tried first). */
+#define RP_NIF    4
+#define RP_IFNAME 16
+struct rp_iface {
+	char ifname[RP_IFNAME];               /* "": slot not used */
 	char device[RP_STR];
 	long unit, mtu, reads, tcpwindow;     /* RP_UNSET when absent */
 	int  raw;
@@ -86,6 +98,11 @@ struct rp_model {
 	char addr[RP_ADDR];                   /* A.B.C.D or A.B.C.D/BITS */
 	char netmask[RP_ADDR];
 	char gateway[RP_ADDR];
+	long metric;                          /* of a later card's default route (RP_UNSET: ours) */
+};
+
+struct rp_model {
+	struct rp_iface ifc[RP_NIF];
 	char dns[RP_NDNS][RP_ADDR];
 	/* names */
 	char hostname[RP_STR];
@@ -119,7 +136,8 @@ struct rp_conf {
 	int final_eol;                        /* the last line had a line end */
 	struct rp_model orig, cur;
 	/* where each setting lives (NULL: not in the file) */
-	struct rp_line *l_iface, *l_dhcp, *l_ifconfig, *l_route, *l_dns[RP_NDNS];
+	struct rp_line *l_iface[RP_NIF], *l_dhcp[RP_NIF], *l_ifconfig[RP_NIF], *l_route[RP_NIF];
+	struct rp_line *l_dns[RP_NDNS];
 	struct rp_line *l_hostname, *l_domain, *l_ipv6, *l_ntp, *l_tz, *l_mdns;
 	struct rp_line *l_quickack, *l_delack_segs, *l_delack_ms;
 	struct rp_line *l_ipv4, *l_qos, *l_sc[RP_NSC], *l_ss[RP_NSS];
@@ -128,8 +146,8 @@ struct rp_conf {
 	char h_alias[RP_NALIAS][RP_ALIASLEN];
 	char h_qrule[RP_NQRULE][RP_LONG];
 	char h_vlan[RP_NVLAN][RP_VLANLEN];
-	char h_ifname[16];
-	char h_vifname[16];                   /* the parent named in the VLAN lines */
+	char h_ifname[RP_IFNAME];             /* the first card's name in the alias lines */
+	char h_vifname[RP_IFNAME];            /* the parent named in its VLAN lines */
 };
 
 /* provided by the program */
@@ -161,6 +179,28 @@ int  rp_list_count(const struct rp_conf *c, int which);
 const char *rp_list_get(const struct rp_conf *c, int which, int i);
 int  rp_list_set(struct rp_conf *c, int which, int i, const char *text);
 int  rp_list_add(struct rp_conf *c, int which, const char *text);
+
+/* Interfaces of a model. rp_iface_add(): a new card in a free slot (a
+ * free name ethN, DHCP), its index or -1 when all RP_NIF are used.
+ * rp_iface_delete(): removes card k (not the first) with its VLANs and the
+ * addresses on it and on its VLANs. rp_iface_rename(): card k gets a new
+ * name; the address and VLAN entries that name it follow. */
+int  rp_iface_add(struct rp_model *m);
+void rp_iface_delete(struct rp_model *m, int k);
+void rp_iface_rename(struct rp_model *m, int k, const char *name);
+/* the card named name (case does not matter), -1 if none */
+int  rp_iface_find(const struct rp_model *m, const char *name);
+/* How many entries name card k, its VLANs or addresses on them (what a
+ * delete would remove). */
+int  rp_iface_users(const struct rp_model *m, int k);
+/* The names an address may be on (cards, then VLANs as PARENT.ID; with
+ * vlans 0 the cards only), into names[max][RP_IFNAME+8]; their number. */
+#define RP_IFNAMELEN (RP_IFNAME + 8)
+int  rp_iface_names(const struct rp_model *m, char (*names)[RP_IFNAMELEN], int max, int vlans);
+/* An entry's interface (its prefix, else the first card's name) and the
+ * entry without the prefix. */
+void rp_entry_if(const struct rp_model *m, const char *e, char *buf, size_t size);
+const char *rp_entry_body(const char *e);
 
 /* Validation: 1 if valid. */
 int  rp_valid_ip4(const char *s, int allow_prefix);

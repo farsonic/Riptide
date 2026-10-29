@@ -296,17 +296,24 @@ static struct rp_line *top_anchor(struct rp_conf *c)
 
 /* ---- parsing ---- */
 
+/* a card's settings before its lines are read */
+static void iface_defaults(struct rp_iface *f, const char *name, const char *device)
+{
+	memset(f, 0, sizeof(*f));
+	copy(f->ifname, name, sizeof(f->ifname));
+	copy(f->device, device, sizeof(f->device));
+	f->unit = 0;
+	f->mtu = f->reads = f->tcpwindow = f->metric = RP_UNSET;
+	f->dhcp = 1;
+	f->linklocal = 1;
+}
+
 static void model_defaults(struct rp_model *m)
 {
 	int i;
 
 	memset(m, 0, sizeof(*m));
-	copy(m->ifname, "eth0", sizeof(m->ifname));
-	copy(m->device, "uaenet.device", sizeof(m->device));
-	m->unit = 0;
-	m->mtu = m->reads = m->tcpwindow = RP_UNSET;
-	m->dhcp = 1;
-	m->linklocal = 1;
+	iface_defaults(&m->ifc[0], "eth0", "uaenet.device");
 	m->ipv6 = 1;
 	m->mdns = -1;
 	m->quickack = m->delack_segs = m->delack_ms = RP_UNSET;
@@ -316,40 +323,69 @@ static void model_defaults(struct rp_model *m)
 		m->sc[i] = RP_UNSET;
 }
 
+int rp_iface_find(const struct rp_model *m, const char *name)
+{
+	int k;
+
+	for (k = 0; k < RP_NIF; k++)
+		if (m->ifc[k].ifname[0] && eq(m->ifc[k].ifname, name))
+			return k;
+	return -1;
+}
+
+/* is l the interface line of a card? */
+static int is_iface_line(const struct rp_conf *c, const struct rp_line *l)
+{
+	int k;
+
+	for (k = 0; k < RP_NIF; k++)
+		if (c->l_iface[k] == l)
+			return 1;
+	return 0;
+}
+
+/* "interface NAME device=D ...": the next card (up to RP_NIF; a name used
+ * twice or a VLAN line is not one) */
 static void parse_interface(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 {
 	struct rp_model *m = &c->orig;
+	struct rp_iface *f;
 	const char *v;
-	int i, have_dev = 0;
+	int i, k, have_dev = 0;
 
 	for (i = 2; i < tk->n; i++)
 		if (kv(tk->t[i], "device"))
 			have_dev = 1;
-	if (!have_dev || c->l_iface)
+	if (!have_dev || strlen(tk->t[1]) >= RP_IFNAME || strchr(tk->t[1], RP_IFSEP))
 		return;
-	c->l_iface = l;
-	copy(m->ifname, tk->t[1], sizeof(m->ifname));
-	m->unit = 0;
+	for (k = 0; k < RP_NIF && c->l_iface[k]; k++)
+		if (eq(m->ifc[k].ifname, tk->t[1]))
+			return;
+	if (k == RP_NIF)
+		return;
+	c->l_iface[k] = l;
+	f = &m->ifc[k];
+	iface_defaults(f, tk->t[1], "");
 	for (i = 2; i < tk->n; i++) {
 		if ((v = kv(tk->t[i], "device")) != NULL)
-			copy(m->device, v, sizeof(m->device));
+			copy(f->device, v, sizeof(f->device));
 		else if ((v = kv(tk->t[i], "unit")) != NULL)
-			m->unit = num(v);
+			f->unit = num(v);
 		else if ((v = kv(tk->t[i], "mtu")) != NULL)
-			m->mtu = num(v);
+			f->mtu = num(v);
 		else if ((v = kv(tk->t[i], "reads")) != NULL)
-			m->reads = num(v);
+			f->reads = num(v);
 		else if ((v = kv(tk->t[i], "tcpwindow")) != NULL)
-			m->tcpwindow = num(v);
+			f->tcpwindow = num(v);
 		else if (eq(tk->t[i], "raw"))
-			m->raw = 1;
+			f->raw = 1;
 		else {
-			size_t o = strlen(m->ifextra);
-			rt_snprintf(m->ifextra + o, sizeof(m->ifextra) - o, "%s%s", o ? " " : "", tk->raw[i]);
+			size_t o = strlen(f->ifextra);
+			rt_snprintf(f->ifextra + o, sizeof(f->ifextra) - o, "%s%s", o ? " " : "", tk->raw[i]);
 		}
 	}
-	if (m->unit == RP_UNSET)
-		m->unit = 0;
+	if (f->unit == RP_UNSET)
+		f->unit = 0;
 }
 
 static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
@@ -358,14 +394,14 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 	const char *k = tk->t[0];
 	int i;
 
-	if (eq(k, "interface") && tk->n >= 3 && c->l_iface != l) {
+	if (eq(k, "interface") && tk->n >= 3 && !is_iface_line(c, l)) {
 		/* interface IF.ID vlan=ID parent=IF [dhcp|address=A/BITS|up] [pcp=N]
 		 * [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [tcpwindow=N] */
 		static const char *const keys[RP_VLAN_NKEYS] = { "pcp", "mtu", "ipv4", "ipv6", "qos", "tcpwindow" };
 		const char *val[RP_VLAN_NKEYS];
-		char e[RP_VLANLEN], name[24];
+		char e[RP_VLANLEN], name[RP_IFNAMELEN];
 		const char *vid = NULL, *par = NULL, *mode = "", *v;
-		int ok = 1, j;
+		int ok = 1, j, pk;
 		size_t n;
 		memset(val, 0, sizeof(val));
 		for (i = 2; i < tk->n && ok; i++) {
@@ -386,16 +422,20 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 					ok = 0;
 			}
 		}
-		if (!ok || !vid || !par || !eq(par, m->ifname))
+		if (!ok || !vid || !par || (pk = rp_iface_find(m, par)) < 0)
 			return;
-		rt_snprintf(name, sizeof(name), "%s.%s", m->ifname, vid);
+		rt_snprintf(name, sizeof(name), "%s.%s", m->ifc[pk].ifname, vid);
 		if (!eq(tk->t[1], name))
 			return;
-		n = (size_t)rt_snprintf(e, sizeof(e), "%s%s%s", vid, mode[0] ? " " : "", mode);
+		/* a VLAN of a later card: "PARENT|" first */
+		n = 0;
+		if (pk > 0)
+			n = (size_t)rt_snprintf(e, sizeof(e), "%s%c", m->ifc[pk].ifname, RP_IFSEP);
+		n += (size_t)rt_snprintf(e + n, sizeof(e) - n, "%s%s%s", vid, mode[0] ? " " : "", mode);
 		for (j = 0; j < RP_VLAN_NKEYS && n < sizeof(e); j++)
 			if (val[j])
 				n += (size_t)rt_snprintf(e + n, sizeof(e) - n, " %s=%s", keys[j], val[j]);
-		if (n + 1 < sizeof(e) && rp_valid_vlan(e))
+		if (n + 1 < sizeof(e) && rp_valid_vlan(rp_entry_body(e)))
 			for (i = 0; i < RP_NVLAN; i++)
 				if (!c->l_vlan[i]) {
 					c->l_vlan[i] = l;
@@ -404,30 +444,47 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 				}
 	} else if (eq(k, "dhcp")) {
 		/* dhcp IF [start] [linklocal on|off] */
+		int fk = tk->n >= 2 ? rp_iface_find(m, tk->t[1]) : -1;
 		i = tk->n >= 3 && eq(tk->t[2], "start") ? 3 : 2;
-		if (!c->l_dhcp && tk->n >= 2 && eq(tk->t[1], m->ifname) &&
+		if (fk >= 0 && !c->l_dhcp[fk] &&
 		    (tk->n == i || (tk->n == i + 2 && eq(tk->t[i], "linklocal") &&
 		                    (eq(tk->t[i + 1], "on") || eq(tk->t[i + 1], "off"))))) {
-			c->l_dhcp = l;
-			m->dhcp = 1;
-			m->linklocal = tk->n == i || eq(tk->t[i + 1], "on");
+			c->l_dhcp[fk] = l;
+			m->ifc[fk].dhcp = 1;
+			m->ifc[fk].linklocal = tk->n == i || eq(tk->t[i + 1], "on");
 		}
-	} else if (eq(k, "ifconfig") && tk->n >= 4 && eq(tk->t[1], m->ifname) &&
-	           (eq(tk->t[2], "alias") || eq(tk->t[2], "add"))) {
-		/* ifconfig IF alias A.B.C.D[/BITS] [netmask M] [broadcast B] */
-		char spec[RP_ALIASLEN + 8];
+	} else if (eq(k, "ifconfig") && tk->n >= 4 && (eq(tk->t[2], "alias") || eq(tk->t[2], "add"))) {
+		/* ifconfig IF alias A.B.C.D[/BITS] [netmask M] [broadcast B], IF
+		 * a card or a VLAN of one (PARENT.ID) */
+		char spec[RP_ALIASLEN + 8], e[RP_ALIASLEN + 8];
+		const char *dot = strchr(tk->t[1], '.');
+		int fk = rp_iface_find(m, tk->t[1]);
+		size_t n = 0;
+		if (fk < 0 && dot && (size_t)(dot - tk->t[1]) < RP_IFNAME) {
+			char par[RP_IFNAME];
+			memcpy(par, tk->t[1], (size_t)(dot - tk->t[1]));
+			par[dot - tk->t[1]] = 0;
+			if (rp_iface_find(m, par) < 0 || strlen(tk->t[1]) >= RP_IFNAMELEN || strchr(tk->t[1], RP_IFSEP))
+				return;
+		} else if (fk < 0) {
+			return;
+		}
 		join_raw(tk, 3, spec, sizeof(spec));
-		if (strlen(spec) < RP_ALIASLEN && rp_valid_alias(spec))
+		if (fk != 0)
+			n = (size_t)rt_snprintf(e, sizeof(e), "%s%c", fk > 0 ? m->ifc[fk].ifname : tk->t[1], RP_IFSEP);
+		rt_snprintf(e + n, sizeof(e) - n, "%s", spec);
+		if (strlen(e) < RP_ALIASLEN && rp_valid_alias(spec))
 			for (i = 0; i < RP_NALIAS; i++)
 				if (!c->l_alias[i]) {
 					c->l_alias[i] = l;
-					copy(m->alias[i], spec, sizeof(m->alias[i]));
+					copy(m->alias[i], e, sizeof(m->alias[i]));
 					break;
 				}
 	} else if (eq(k, "ifconfig")) {
 		/* ifconfig IF A.B.C.D[/BITS] [netmask M] [up] */
 		const char *addr = NULL, *mask = NULL;
-		int ok = !c->l_ifconfig && tk->n >= 3 && eq(tk->t[1], m->ifname);
+		int fk = tk->n >= 3 ? rp_iface_find(m, tk->t[1]) : -1;
+		int ok = fk >= 0 && !c->l_ifconfig[fk];
 		for (i = 2; ok && i < tk->n; i++) {
 			if (eq(tk->t[i], "up") || eq(tk->t[i], "inet"))
 				continue;
@@ -442,21 +499,39 @@ static void parse_line(struct rp_conf *c, struct rp_line *l, struct toks *tk)
 			ok = 0;
 		}
 		if (ok && addr) {
-			c->l_ifconfig = l;
-			copy(m->addr, addr, sizeof(m->addr));
-			copy(m->netmask, mask ? mask : "", sizeof(m->netmask));
-			if (!c->l_dhcp)
-				m->dhcp = 0;
+			c->l_ifconfig[fk] = l;
+			copy(m->ifc[fk].addr, addr, sizeof(m->ifc[fk].addr));
+			copy(m->ifc[fk].netmask, mask ? mask : "", sizeof(m->ifc[fk].netmask));
+			if (!c->l_dhcp[fk])
+				m->ifc[fk].dhcp = 0;
 		}
 	} else if (eq(k, "route")) {
-		/* route add default [via|gw] GW */
-		if (!c->l_route && tk->n >= 4 && eq(tk->t[1], "add") && eq(tk->t[2], "default")) {
+		/* route add default [via|gw] GW [dev IF] [metric N]: the first
+		 * card's without dev, else the card named */
+		if (tk->n >= 4 && eq(tk->t[1], "add") && eq(tk->t[2], "default")) {
+			const char *gw, *dev = NULL;
+			long metric = RP_UNSET;
+			int fk = 0, ok = 1;
 			i = 3;
-			if (tk->n == 5 && (eq(tk->t[3], "via") || eq(tk->t[3], "gw")))
+			if (eq(tk->t[3], "via") || eq(tk->t[3], "gw"))
 				i = 4;
-			if (i == tk->n - 1 && rp_valid_ip4(tk->t[i], 0)) {
-				c->l_route = l;
-				copy(m->gateway, tk->t[i], sizeof(m->gateway));
+			gw = i < tk->n ? tk->t[i] : "";
+			for (i++; ok && i < tk->n; i += 2) {
+				if (i + 1 >= tk->n)
+					ok = 0;
+				else if (eq(tk->t[i], "dev") && !dev)
+					dev = tk->t[i + 1];
+				else if (eq(tk->t[i], "metric") && metric == RP_UNSET && num(tk->t[i + 1]) != RP_UNSET)
+					metric = num(tk->t[i + 1]);
+				else
+					ok = 0;
+			}
+			if (dev)
+				fk = rp_iface_find(m, dev);
+			if (ok && fk >= 0 && !c->l_route[fk] && rp_valid_ip4(gw, 0) && (fk == 0 || dev)) {
+				c->l_route[fk] = l;
+				copy(m->ifc[fk].gateway, gw, sizeof(m->ifc[fk].gateway));
+				m->ifc[fk].metric = metric;
 			}
 		}
 	} else if (eq(k, "nameserver")) {
@@ -605,8 +680,8 @@ int rp_conf_load(struct rp_conf *c, const char *text, size_t len)
 	memcpy(c->h_alias, c->orig.alias, sizeof(c->h_alias));
 	memcpy(c->h_qrule, c->orig.qrule, sizeof(c->h_qrule));
 	memcpy(c->h_vlan, c->orig.vlan, sizeof(c->h_vlan));
-	copy(c->h_ifname, c->orig.ifname, sizeof(c->h_ifname));
-	copy(c->h_vifname, c->orig.ifname, sizeof(c->h_vifname));
+	copy(c->h_ifname, c->orig.ifc[0].ifname, sizeof(c->h_ifname));
+	copy(c->h_vifname, c->orig.ifc[0].ifname, sizeof(c->h_vifname));
 	return 0;
 oom:
 	rp_conf_free(c);
@@ -626,19 +701,32 @@ static int str_changed(const char *a, const char *b)
 	return strcmp(a, b) != 0;
 }
 
-static int iface_changed(const struct rp_model *o, const struct rp_model *n)
+static int iface_changed(const struct rp_iface *o, const struct rp_iface *n)
 {
 	return str_changed(o->ifname, n->ifname) || str_changed(o->device, n->device) || o->unit != n->unit ||
 	       o->mtu != n->mtu || o->reads != n->reads || o->tcpwindow != n->tcpwindow || o->raw != n->raw ||
 	       str_changed(o->ifextra, n->ifextra);
 }
 
-static int addr_changed(const struct rp_model *o, const struct rp_model *n)
+static int addr_changed(const struct rp_iface *o, const struct rp_iface *n)
 {
 	return o->dhcp != n->dhcp || str_changed(o->ifname, n->ifname) ||
 	       (n->dhcp && o->linklocal != n->linklocal) ||
 	       (!n->dhcp && (str_changed(o->addr, n->addr) || str_changed(o->netmask, n->netmask) ||
-	                     str_changed(o->gateway, n->gateway)));
+	                     str_changed(o->gateway, n->gateway) || o->metric != n->metric));
+}
+
+/* any card or its address changed, added or removed */
+static int ifaces_changed(const struct rp_model *o, const struct rp_model *n)
+{
+	int k;
+
+	for (k = 0; k < RP_NIF; k++)
+		if (str_changed(o->ifc[k].ifname, n->ifc[k].ifname) ||
+		    (n->ifc[k].ifname[0] && (iface_changed(&o->ifc[k], &n->ifc[k]) ||
+		                             addr_changed(&o->ifc[k], &n->ifc[k]))))
+			return 1;
+	return 0;
 }
 
 static int list_changed(const struct rp_model *o, const struct rp_model *n, int which)
@@ -740,13 +828,22 @@ static int in_list(const char *base, int from, int n, size_t len, const char *te
 }
 
 /* "interface IF.ID vlan=ID parent=IF [dhcp|address=A/BITS|up] [pcp=N] ..."
- * for the VLAN entry "ID [MODE] [pcp=N] [mtu=N] ..." */
-static void vlan_line(const char *ifname, const char *e, char *buf, size_t size)
+ * for the VLAN entry "[PARENT|]ID [MODE] [pcp=N] [mtu=N] ..." (IF: the
+ * parent named, else ifname) */
+static void vlan_line(const char *first, const char *e, char *buf, size_t size)
 {
-	char w[RP_VLAN_NKEYS + 2][RP_VLANLEN];
+	char w[RP_VLAN_NKEYS + 2][RP_VLANLEN], ifname[RP_IFNAME];
+	const char *sep = strchr(e, RP_IFSEP);
 	int n = 0, k;
 	size_t i;
 
+	if (sep && (size_t)(sep - e) < sizeof(ifname)) {
+		memcpy(ifname, e, (size_t)(sep - e));
+		ifname[sep - e] = 0;
+		e = sep + 1;
+	} else {
+		copy(ifname, first, sizeof(ifname));
+	}
 	memset(w, 0, sizeof(w));
 	while (*e && n < RP_VLAN_NKEYS + 2) {
 		while (*e == ' ')
@@ -768,10 +865,13 @@ static void vlan_line(const char *ifname, const char *e, char *buf, size_t size)
 
 static void list_line(const struct rp_conf *c, int which, const char *e, char *buf, size_t size)
 {
-	if (which == RP_LIST_ALIAS)
-		rt_snprintf(buf, size, "ifconfig %s alias %s", c->cur.ifname, e);
-	else if (which == RP_LIST_VLAN)
-		vlan_line(c->cur.ifname, e, buf, size);
+	if (which == RP_LIST_ALIAS) {
+		char ifn[RP_IFNAMELEN];
+		rp_entry_if(&c->cur, e, ifn, sizeof(ifn));
+		rt_snprintf(buf, size, "ifconfig %s alias %s", ifn, rp_entry_body(e));
+	} else if (which == RP_LIST_VLAN) {
+		vlan_line(c->cur.ifc[0].ifname, e, buf, size);
+	}
 	else
 		rt_snprintf(buf, size, "%s rule %s", RP_KW_QOS, e);
 }
@@ -795,8 +895,8 @@ static int sync_list(struct rp_conf *c, int which, struct rp_line **slot, char *
 		if (h && w && (!strcmp(h, w) || (!in_list(want, j + 1, n, len, h) && !in_list(have, i + 1, n, len, w)))) {
 			/* the same (untouched unless the interface was renamed), or
 			 * replaced: in place */
-			if (strcmp(h, w) || (which == RP_LIST_ALIAS && strcmp(c->h_ifname, c->cur.ifname)) ||
-			    (which == RP_LIST_VLAN && strcmp(c->h_vifname, c->cur.ifname))) {
+			if (strcmp(h, w) || (which == RP_LIST_ALIAS && strcmp(c->h_ifname, c->cur.ifc[0].ifname)) ||
+			    (which == RP_LIST_VLAN && strcmp(c->h_vifname, c->cur.ifc[0].ifname))) {
 				list_line(c, which, w, buf, sizeof(buf));
 				r |= put(c, &slot[i], NULL, buf);
 			}
@@ -820,9 +920,87 @@ static int sync_list(struct rp_conf *c, int which, struct rp_line **slot, char *
 		slot[i] = i < k ? ns[i] : NULL;
 	memcpy(have, want, (size_t)n * len);
 	if (which == RP_LIST_ALIAS)
-		copy(c->h_ifname, c->cur.ifname, sizeof(c->h_ifname));
+		copy(c->h_ifname, c->cur.ifc[0].ifname, sizeof(c->h_ifname));
 	if (which == RP_LIST_VLAN)
-		copy(c->h_vifname, c->cur.ifname, sizeof(c->h_vifname));
+		copy(c->h_vifname, c->cur.ifc[0].ifname, sizeof(c->h_vifname));
+	return r;
+}
+
+/* the last line (in the file) of cards 0..upto-1: their interface,
+ * dhcp, ifconfig and route lines; NULL if none */
+static struct rp_line *iface_last(struct rp_conf *c, int upto)
+{
+	struct rp_line *l;
+	int k;
+
+	for (l = c->tail; l; l = l->prev)
+		for (k = 0; k < upto; k++)
+			if (l == c->l_iface[k] || l == c->l_dhcp[k] || l == c->l_ifconfig[k] || l == c->l_route[k])
+				return l;
+	return NULL;
+}
+
+/* bring the lines of card k in line with c->cur: a new card's lines follow
+ * the cards before it, a removed card's lines go */
+static int sync_iface(struct rp_conf *c, int k)
+{
+	const struct rp_iface *o = &c->orig.ifc[k], *n = &c->cur.ifc[k];
+	char buf[LINEMAX], q[RP_STR + 4];
+	struct rp_line *anchor;
+	int r = 0, fresh = !o->ifname[0];
+
+	if (!n->ifname[0]) {
+		r |= put(c, &c->l_route[k], NULL, NULL);
+		r |= put(c, &c->l_ifconfig[k], NULL, NULL);
+		r |= put(c, &c->l_dhcp[k], NULL, NULL);
+		r |= put(c, &c->l_iface[k], NULL, NULL);
+		return r;
+	}
+	if (fresh || iface_changed(o, n)) {
+		int x = rt_snprintf(buf, sizeof(buf), "interface %s device=%s unit=%ld", n->ifname,
+		                    quoted(n->device, q, sizeof(q)), n->unit < 0 ? 0L : n->unit);
+		if (n->mtu > 0)
+			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " mtu=%ld", n->mtu);
+		if (n->reads > 0)
+			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " reads=%ld", n->reads);
+		if (n->tcpwindow > 0)
+			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " tcpwindow=%ld", n->tcpwindow);
+		if (n->raw)
+			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " raw");
+		if (n->ifextra[0])
+			rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " %s", n->ifextra);
+		anchor = k == 0 ? first_of(c->l_domain, first_of(c->l_hostname, top_anchor(c))) : iface_last(c, k);
+		r |= put(c, &c->l_iface[k], anchor, buf);
+	}
+	if (fresh || addr_changed(o, n)) {
+		anchor = c->l_iface[k];
+		if (n->dhcp) {
+			if (c->l_ifconfig[k] && !c->l_dhcp[k]) {
+				anchor = c->l_ifconfig[k]->prev;
+				if (anchor && anchor == c->l_route[k])
+					anchor = anchor->prev;
+			}
+			r |= put(c, &c->l_ifconfig[k], NULL, NULL);
+			r |= put(c, &c->l_route[k], NULL, NULL);
+			rt_snprintf(buf, sizeof(buf), "dhcp %s%s", n->ifname, n->linklocal ? "" : " linklocal off");
+			r |= put(c, &c->l_dhcp[k], anchor, buf);
+		} else {
+			if (c->l_dhcp[k] && !c->l_ifconfig[k])
+				anchor = c->l_dhcp[k]->prev;
+			r |= put(c, &c->l_dhcp[k], NULL, NULL);
+			if (n->netmask[0])
+				rt_snprintf(buf, sizeof(buf), "ifconfig %s %s netmask %s up", n->ifname, n->addr, n->netmask);
+			else
+				rt_snprintf(buf, sizeof(buf), "ifconfig %s %s up", n->ifname, n->addr);
+			r |= put(c, &c->l_ifconfig[k], anchor, n->addr[0] ? buf : NULL);
+			if (k == 0 && n->metric == RP_UNSET)
+				rt_snprintf(buf, sizeof(buf), "route add default %s", n->gateway);
+			else
+				rt_snprintf(buf, sizeof(buf), "route add default %s dev %s metric %ld", n->gateway, n->ifname,
+				            n->metric != RP_UNSET ? n->metric : 10L * k);
+			r |= put(c, &c->l_route[k], first_of(c->l_ifconfig[k], anchor), n->gateway[0] ? buf : NULL);
+		}
+	}
 	return r;
 }
 
@@ -830,7 +1008,7 @@ static int sync_list(struct rp_conf *c, int which, struct rp_line **slot, char *
 static int sync_lines(struct rp_conf *c)
 {
 	const struct rp_model *o = &c->orig, *n = &c->cur;
-	char buf[LINEMAX], q[RP_STR + 4];
+	char buf[LINEMAX];
 	struct rp_line *anchor;
 	int i, r = 0;
 
@@ -842,48 +1020,10 @@ static int sync_lines(struct rp_conf *c)
 		rt_snprintf(buf, sizeof(buf), "domain %s", n->domain);
 		r |= put(c, &c->l_domain, first_of(c->l_hostname, top_anchor(c)), n->domain[0] ? buf : NULL);
 	}
-	if (iface_changed(o, n)) {
-		int k = rt_snprintf(buf, sizeof(buf), "interface %s device=%s unit=%ld", n->ifname,
-		                    quoted(n->device, q, sizeof(q)), n->unit < 0 ? 0L : n->unit);
-		if (n->mtu > 0)
-			k += rt_snprintf(buf + k, sizeof(buf) - (size_t)k, " mtu=%ld", n->mtu);
-		if (n->reads > 0)
-			k += rt_snprintf(buf + k, sizeof(buf) - (size_t)k, " reads=%ld", n->reads);
-		if (n->tcpwindow > 0)
-			k += rt_snprintf(buf + k, sizeof(buf) - (size_t)k, " tcpwindow=%ld", n->tcpwindow);
-		if (n->raw)
-			k += rt_snprintf(buf + k, sizeof(buf) - (size_t)k, " raw");
-		if (n->ifextra[0])
-			rt_snprintf(buf + k, sizeof(buf) - (size_t)k, " %s", n->ifextra);
-		r |= put(c, &c->l_iface, first_of(c->l_domain, first_of(c->l_hostname, top_anchor(c))), buf);
-	}
-	if (addr_changed(o, n)) {
-		anchor = c->l_iface;
-		if (n->dhcp) {
-			if (c->l_ifconfig && !c->l_dhcp) {
-				anchor = c->l_ifconfig->prev;
-				if (anchor && anchor == c->l_route)
-					anchor = anchor->prev;
-			}
-			r |= put(c, &c->l_ifconfig, NULL, NULL);
-			r |= put(c, &c->l_route, NULL, NULL);
-			rt_snprintf(buf, sizeof(buf), "dhcp %s%s", n->ifname, n->linklocal ? "" : " linklocal off");
-			r |= put(c, &c->l_dhcp, anchor, buf);
-		} else {
-			if (c->l_dhcp && !c->l_ifconfig)
-				anchor = c->l_dhcp->prev;
-			r |= put(c, &c->l_dhcp, NULL, NULL);
-			if (n->netmask[0])
-				rt_snprintf(buf, sizeof(buf), "ifconfig %s %s netmask %s up", n->ifname, n->addr, n->netmask);
-			else
-				rt_snprintf(buf, sizeof(buf), "ifconfig %s %s up", n->ifname, n->addr);
-			r |= put(c, &c->l_ifconfig, anchor, n->addr[0] ? buf : NULL);
-			rt_snprintf(buf, sizeof(buf), "route add default %s", n->gateway);
-			r |= put(c, &c->l_route, first_of(c->l_ifconfig, anchor), n->gateway[0] ? buf : NULL);
-		}
-	}
+	for (i = 0; i < RP_NIF; i++)
+		r |= sync_iface(c, i);
 	if (dns_changed(o, n)) {
-		anchor = first_of(c->l_route, first_of(c->l_ifconfig, first_of(c->l_dhcp, c->l_iface)));
+		anchor = iface_last(c, RP_NIF);
 		for (i = 0; i < RP_NDNS; i++) {
 			rt_snprintf(buf, sizeof(buf), "nameserver %s", n->dns[i]);
 			r |= put(c, &c->l_dns[i], anchor, n->dns[i][0] ? buf : NULL);
@@ -941,10 +1081,10 @@ static int sync_lines(struct rp_conf *c)
 			r |= put(c, &c->l_ss[i], NULL, n->ss[i][0] ? buf : NULL);
 		}
 	r |= sync_list(c, RP_LIST_ALIAS, c->l_alias, c->h_alias[0], n->alias[0], RP_NALIAS, RP_ALIASLEN,
-	               first_of(c->l_route, first_of(c->l_ifconfig, first_of(c->l_dhcp, c->l_iface))));
+	               iface_last(c, RP_NIF));
 	r |= sync_list(c, RP_LIST_QRULE, c->l_qrule, c->h_qrule[0], n->qrule[0], RP_NQRULE, RP_LONG, c->l_qos);
 	/* new VLAN lines after the interface's address lines */
-	anchor = first_of(c->l_route, first_of(c->l_ifconfig, first_of(c->l_dhcp, c->l_iface)));
+	anchor = iface_last(c, RP_NIF);
 	for (i = 0; i < RP_NALIAS; i++)
 		if (c->l_alias[i])
 			anchor = c->l_alias[i];
@@ -987,10 +1127,12 @@ static int is_bound(const struct rp_conf *c, const struct rp_line *l)
 {
 	int i;
 
-	if (l == c->l_iface || l == c->l_dhcp || l == c->l_ifconfig || l == c->l_route || l == c->l_hostname ||
-	    l == c->l_domain || l == c->l_ipv6 || l == c->l_ntp || l == c->l_tz || l == c->l_mdns ||
-	    l == c->l_quickack || l == c->l_delack_segs || l == c->l_delack_ms)
+	if (l == c->l_hostname || l == c->l_domain || l == c->l_ipv6 || l == c->l_ntp || l == c->l_tz ||
+	    l == c->l_mdns || l == c->l_quickack || l == c->l_delack_segs || l == c->l_delack_ms)
 		return 1;
+	for (i = 0; i < RP_NIF; i++)
+		if (l == c->l_iface[i] || l == c->l_dhcp[i] || l == c->l_ifconfig[i] || l == c->l_route[i])
+			return 1;
 	for (i = 0; i < RP_NDNS; i++)
 		if (l == c->l_dns[i])
 			return 1;
@@ -1139,6 +1281,138 @@ int rp_list_add(struct rp_conf *c, int which, const char *text)
 	memset(e, 0, size);
 	copy(e, text, size);
 	return 0;
+}
+
+/* ---- interfaces of the model ---- */
+
+void rp_entry_if(const struct rp_model *m, const char *e, char *buf, size_t size)
+{
+	const char *sep = strchr(e, RP_IFSEP);
+
+	if (sep && (size_t)(sep - e) < size) {
+		memcpy(buf, e, (size_t)(sep - e));
+		buf[sep - e] = 0;
+	} else {
+		copy(buf, m->ifc[0].ifname, size);
+	}
+}
+
+const char *rp_entry_body(const char *e)
+{
+	const char *sep = strchr(e, RP_IFSEP);
+
+	return sep ? sep + 1 : e;
+}
+
+/* does an entry's prefix name card 'name' (or, with vlans, a VLAN of it)? */
+static int on_iface(const char *e, const char *name, int vlans)
+{
+	const char *sep = strchr(e, RP_IFSEP);
+	size_t l = strlen(name);
+
+	if (!sep || (size_t)(sep - e) < l || ncase(e, name, l))
+		return 0;
+	return e + l == sep || (vlans && e[l] == '.');
+}
+
+int rp_iface_add(struct rp_model *m)
+{
+	char name[RP_IFNAME];
+	int k, x;
+
+	for (k = 1; k < RP_NIF && m->ifc[k].ifname[0]; k++)
+		;
+	if (k == RP_NIF)
+		return -1;
+	for (x = 1;; x++) {
+		rt_snprintf(name, sizeof(name), "eth%d", x);
+		if (rp_iface_find(m, name) < 0)
+			break;
+	}
+	iface_defaults(&m->ifc[k], name, "");
+	return k;
+}
+
+int rp_iface_users(const struct rp_model *m, int k)
+{
+	int i, n = 0;
+
+	if (k <= 0 || k >= RP_NIF || !m->ifc[k].ifname[0])
+		return 0;
+	for (i = 0; i < RP_NALIAS && m->alias[i][0]; i++)
+		n += on_iface(m->alias[i], m->ifc[k].ifname, 1);
+	for (i = 0; i < RP_NVLAN && m->vlan[i][0]; i++)
+		n += on_iface(m->vlan[i], m->ifc[k].ifname, 0);
+	return n;
+}
+
+/* drop the entries of a list on card 'name'; the rest move up */
+static void list_drop(char *base, int n, size_t len, const char *name, int vlans)
+{
+	int i = 0, j;
+
+	while (i < n && base[(size_t)i * len]) {
+		if (!on_iface(base + (size_t)i * len, name, vlans)) {
+			i++;
+			continue;
+		}
+		for (j = i; j + 1 < n; j++)
+			memcpy(base + (size_t)j * len, base + (size_t)(j + 1) * len, len);
+		memset(base + (size_t)(n - 1) * len, 0, len);
+	}
+}
+
+void rp_iface_delete(struct rp_model *m, int k)
+{
+	if (k <= 0 || k >= RP_NIF || !m->ifc[k].ifname[0])
+		return;
+	list_drop(m->alias[0], RP_NALIAS, RP_ALIASLEN, m->ifc[k].ifname, 1);
+	list_drop(m->vlan[0], RP_NVLAN, RP_VLANLEN, m->ifc[k].ifname, 0);
+	memset(&m->ifc[k], 0, sizeof(m->ifc[k]));
+}
+
+/* the prefixes of a list that name card old (or a VLAN of it) say name */
+static void list_rename(char *base, int n, size_t len, const char *old, const char *name, int vlans)
+{
+	char buf[RP_VLANLEN + RP_ALIASLEN];
+	int i;
+
+	for (i = 0; i < n && base[(size_t)i * len]; i++) {
+		char *e = base + (size_t)i * len;
+		if (!on_iface(e, old, vlans))
+			continue;
+		rt_snprintf(buf, sizeof(buf), "%s%s", name, e + strlen(old));
+		if (strlen(buf) < len)
+			copy(e, buf, len);
+	}
+}
+
+void rp_iface_rename(struct rp_model *m, int k, const char *name)
+{
+	char old[RP_IFNAME];
+
+	if (k < 0 || k >= RP_NIF || !m->ifc[k].ifname[0] || !strcmp(m->ifc[k].ifname, name))
+		return;
+	copy(old, m->ifc[k].ifname, sizeof(old));
+	copy(m->ifc[k].ifname, name, sizeof(m->ifc[k].ifname));
+	list_rename(m->alias[0], RP_NALIAS, RP_ALIASLEN, old, name, 1);
+	if (k > 0)
+		list_rename(m->vlan[0], RP_NVLAN, RP_VLANLEN, old, name, 0);
+}
+
+int rp_iface_names(const struct rp_model *m, char (*names)[RP_IFNAMELEN], int max, int vlans)
+{
+	char par[RP_IFNAME];
+	int k, i, n = 0;
+
+	for (k = 0; k < RP_NIF && n < max; k++)
+		if (m->ifc[k].ifname[0])
+			copy(names[n++], m->ifc[k].ifname, RP_IFNAMELEN);
+	for (i = 0; vlans && i < RP_NVLAN && m->vlan[i][0] && n < max; i++) {
+		rp_entry_if(m, m->vlan[i], par, sizeof(par));
+		rt_snprintf(names[n++], RP_IFNAMELEN, "%s.%lu", par, rt_strtoul(rp_entry_body(m->vlan[i]), NULL, 10));
+	}
+	return n;
 }
 
 /* ---- validation ---- */
@@ -1499,7 +1773,9 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 			fn(buf, arg);
 		}
 	}
-	if (list_changed(o, n, RP_LIST_ALIAS) && !str_changed(o->ifname, n->ifname)) {
+	if (list_changed(o, n, RP_LIST_ALIAS) && !str_changed(o->ifc[0].ifname, n->ifc[0].ifname)) {
+		char ifn[RP_IFNAMELEN];
+		const char *b;
 		int j, k;
 		/* removed addresses first, then the new ones */
 		for (i = 0; i < RP_NALIAS && o->alias[i][0]; i++) {
@@ -1507,9 +1783,11 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 				;
 			if (j < RP_NALIAS)
 				continue;
-			for (k = 0; o->alias[i][k] && o->alias[i][k] != '/' && o->alias[i][k] != ' '; k++)
+			rp_entry_if(o, o->alias[i], ifn, sizeof(ifn));
+			b = rp_entry_body(o->alias[i]);
+			for (k = 0; b[k] && b[k] != '/' && b[k] != ' '; k++)
 				;
-			rt_snprintf(buf, sizeof(buf), "ifconfig %s %.*s -alias", n->ifname, k, o->alias[i]);
+			rt_snprintf(buf, sizeof(buf), "ifconfig %s %.*s -alias", ifn, k, b);
 			fn(buf, arg);
 		}
 		for (i = 0; i < RP_NALIAS && n->alias[i][0]; i++) {
@@ -1517,11 +1795,13 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 				;
 			if (j < RP_NALIAS)
 				continue;
-			rt_snprintf(buf, sizeof(buf), "ifconfig %s alias %s", n->ifname, n->alias[i]);
+			rp_entry_if(n, n->alias[i], ifn, sizeof(ifn));
+			rt_snprintf(buf, sizeof(buf), "ifconfig %s alias %s", ifn, rp_entry_body(n->alias[i]));
 			fn(buf, arg);
 		}
 	}
-	if (list_changed(o, n, RP_LIST_VLAN) && !str_changed(o->ifname, n->ifname)) {
+	if (list_changed(o, n, RP_LIST_VLAN) && !str_changed(o->ifc[0].ifname, n->ifc[0].ifname)) {
+		char ifn[RP_IFNAMELEN];
 		int j;
 		/* removed (or changed) VLANs go, then the new ones are made */
 		for (i = 0; i < RP_NVLAN && o->vlan[i][0]; i++) {
@@ -1529,8 +1809,9 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 				;
 			if (j < RP_NVLAN)
 				continue;
-			rt_snprintf(buf, sizeof(buf), "interface %s.%lu delete", n->ifname,
-			            rt_strtoul(o->vlan[i], NULL, 10));
+			rp_entry_if(o, o->vlan[i], ifn, sizeof(ifn));
+			rt_snprintf(buf, sizeof(buf), "interface %s.%lu delete", ifn,
+			            rt_strtoul(rp_entry_body(o->vlan[i]), NULL, 10));
 			fn(buf, arg);
 		}
 		for (i = 0; i < RP_NVLAN && n->vlan[i][0]; i++) {
@@ -1538,13 +1819,13 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 				;
 			if (j < RP_NVLAN)
 				continue;
-			vlan_line(n->ifname, n->vlan[i], buf, sizeof(buf));
+			vlan_line(n->ifc[0].ifname, n->vlan[i], buf, sizeof(buf));
 			fn(buf, arg);
 		}
 	}
-	if (iface_changed(o, n) || addr_changed(o, n) || o->ipv6 != n->ipv6 || o->ipv4 != n->ipv4 ||
+	if (ifaces_changed(o, n) || o->ipv6 != n->ipv6 || o->ipv4 != n->ipv4 ||
 	    ((list_changed(o, n, RP_LIST_ALIAS) || list_changed(o, n, RP_LIST_VLAN)) &&
-	     str_changed(o->ifname, n->ifname)))
+	     str_changed(o->ifc[0].ifname, n->ifc[0].ifname)))
 		restart = 1;
 	return restart;
 }

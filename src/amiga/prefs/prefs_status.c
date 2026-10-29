@@ -155,6 +155,11 @@ void rp_fmt_rate(char *buf, int len, u32 bps)
 	rt_snprintf(buf, (size_t)len, "%s/s", b);
 }
 
+const char *rp_plural(unsigned long n)
+{
+	return n == 1 ? "" : "s";
+}
+
 void rp_fmt_count(char *buf, int len, u32 v)
 {
 	char t[16];
@@ -588,8 +593,9 @@ void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int 
 		rt_snprintf(l1, (size_t)len, "%s  %s  VLAN %u  MTU %u", f->name, state, (unsigned)f->vlan_id,
 		            (unsigned)f->mtu);
 	else
-		rt_snprintf(l1, (size_t)len, "%s  %s  %s  MTU %u", f->name, state, f->descr[0] ? f->descr : "",
-		            (unsigned)f->mtu);
+		/* the MTU before the driver: a narrow page cuts the driver's end */
+		rt_snprintf(l1, (size_t)len, "%s  %s  MTU %u  %s", f->name, state, (unsigned)f->mtu,
+		            f->descr[0] ? f->descr : "");
 	if (f->ip4_off) {
 		rt_strlcpy(l2, "IPv4 off", (size_t)len);
 	} else {
@@ -650,8 +656,9 @@ void rp_st_if_totals(const struct rp_st_if *f, char *buf, int len)
 	rp_fmt_bytes(tb, sizeof(tb), 0, f->obytes);
 	rp_fmt_count(rp, sizeof(rp), f->ipk);
 	rp_fmt_count(tp, sizeof(tp), f->opk);
-	rt_snprintf(buf, (size_t)len, "Received %s in %s packets, sent %s in %s; %lu errors, %lu dropped", rb, rp, tb, tp,
-	            (unsigned long)(f->ierr + f->oerr), (unsigned long)f->drops);
+	rt_snprintf(buf, (size_t)len, "Received %s in %s packet%s, sent %s in %s; %lu error%s, %lu dropped", rb, rp,
+	            rp_plural(f->ipk), tb, tp, (unsigned long)(f->ierr + f->oerr), rp_plural(f->ierr + f->oerr),
+	            (unsigned long)f->drops);
 }
 
 const char *rp_st_conn_header(void)
@@ -706,8 +713,9 @@ void rp_st_names_text(const struct rp_status_model *m, char *buf, int len)
 		rp_fmt_ip4(a, sizeof(a), m->dns[i]);
 		k = addf(buf, len, k, "%s %s", i ? "," : "", a);
 	}
-	k = addf(buf, len, k, "\nName cache: %lu answers from the cache, %lu \"no such name\", %lu failures not asked again",
-	    (unsigned long)m->st.dns_hits, (unsigned long)m->st.dns_neg_hits, (unsigned long)m->st.dns_fail_hits);
+	k = addf(buf, len, k, "\nName cache: %lu answer%s from the cache, %lu \"no such name\", %lu failure%s not asked again",
+	    (unsigned long)m->st.dns_hits, rp_plural(m->st.dns_hits), (unsigned long)m->st.dns_neg_hits,
+	    (unsigned long)m->st.dns_fail_hits, rp_plural(m->st.dns_fail_hits));
 	switch (m->st.ntp_state) {
 	case RT_CTL_NTP_OFF:
 		k = addf(buf, len, k, "\nTime: NTP is off (turn it on on the Time page)");
@@ -747,18 +755,20 @@ void rp_st_counters_text(const struct rp_status_model *m, char *buf, int len)
 		k = addf(buf, len, k, "Connections: %s open; %s made, %s accepted since start", a, b, c);
 		rp_fmt_count(a, sizeof(a), m->tcp.RetransSegs);
 		rp_fmt_count(b, sizeof(b), m->tcp.OutSegs);
-		k = addf(buf, len, k, "\nResent: %s of %s segments (%lu in the last second)", a, b, (unsigned long)m->retrans_ps);
+		k = addf(buf, len, k, "\nResent: %s of %s segment%s (%lu in the last second)", a, b, rp_plural(m->tcp.OutSegs),
+		    (unsigned long)m->retrans_ps);
 		k = addf(buf, len, k, "\nTimeouts: %lu; recoveries: %lu fast, %lu by loss probe", (unsigned long)m->tcp.TCPTimeouts,
 		    (unsigned long)(m->tcp.TCPSackRecovery + m->tcp.TCPRenoRecovery),
 		    (unsigned long)m->tcp.TCPLossProbeRecovery);
-		k = addf(buf, len, k, "\nECN: %lu connections, %lu congestion marks", (unsigned long)m->tcp.TCPECNNegotiated,
-		    (unsigned long)m->tcp.TCPECNEceRcvd);
+		k = addf(buf, len, k, "\nECN: %lu connection%s, %lu congestion mark%s", (unsigned long)m->tcp.TCPECNNegotiated,
+		    rp_plural(m->tcp.TCPECNNegotiated), (unsigned long)m->tcp.TCPECNEceRcvd, rp_plural(m->tcp.TCPECNEceRcvd));
 		k = addf(buf, len, k, "\nPath MTU black holes: %lu", (unsigned long)m->tcp.TCPMTUPBlackhole);
 		k = addf(buf, len, k, "\nDropped for memory: %lu", (unsigned long)m->tcp.TCPMemLimitDrops);
 	}
 	if (m->have_ipst)
-		k = addf(buf, len, k, "%sIP: %lu packets dropped in, %lu out, %lu without a route", k ? "\n" : "",
-		    (unsigned long)m->ip.InDiscards, (unsigned long)m->ip.OutDiscards, (unsigned long)m->ip.OutNoRoutes);
+		k = addf(buf, len, k, "%sIP: %lu packet%s dropped in, %lu out, %lu without a route", k ? "\n" : "",
+		    (unsigned long)m->ip.InDiscards, rp_plural(m->ip.InDiscards), (unsigned long)m->ip.OutDiscards,
+		    (unsigned long)m->ip.OutNoRoutes);
 	if (!k)
 		rt_strlcpy(buf, "No counters (Riptide is older than 0.10?)", (size_t)len);
 }

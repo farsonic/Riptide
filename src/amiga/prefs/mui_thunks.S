@@ -64,5 +64,6 @@ rp_bigstack:
 	DISPATCH table_dispatch
 	DISPATCH ifview_dispatch
 	DISPATCH stext_dispatch
+	DISPATCH cview_dispatch
 
 	.section .note.GNU-stack,"",@progbits

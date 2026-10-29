@@ -1,6 +1,7 @@
 #!/bin/sh
 # Riptide - RiptidePrefs' MUI editor on FS-UAE (AROS Kickstart) with MUI
-# 3.8: the same keyboard edits as run_fsuae_prefs.sh must give the same
+# 3.8: the keyboard edits of run_fsuae_prefs.sh, plus a second card with a
+# static address, an extra address and a VLAN on it, give the expected
 # riptide.conf; screenshots of every page in both themes, on a 256-colour
 # 640x480 screen, a 640x512 one and the 640x256 Workbench (compact layout;
 # the AROS ROM opens no screens wider than 640); the help bubble texts
@@ -165,7 +166,8 @@ typ() {
 	sleep ${KEYDELAY:-0.7}
 }
 settle() {
-	$ptr stable 2 60 >/dev/null || fail "screen did not settle before $1"
+	$ptr stable 2 60 ${gone:-} >/dev/null || fail "screen did not settle before $1"
+	gone=
 	$ptr shot "$work/$1.png"
 }
 # boot with the given Startup-Sequence lines (after the assigns)
@@ -187,14 +189,18 @@ waitfor() {
 	while [ $t -lt 40 ] && [ ! -s "$dh0/out/$1" ]; do sleep 1; t=$((t + 1)); done
 	[ -s "$dh0/out/$1" ] || { fail "RiptidePrefs did not finish ($1)"; return 1; }
 	grep -q '^rc 0' "$dh0/out/$1" || fail "RiptidePrefs ($1): $(cat "$dh0/out/$1")"
-	# the next RiptidePrefs takes a moment to open: an empty screen is
-	# "stable" too, so give it time before the next settle
-	sleep 4
+	# the next RiptidePrefs takes a moment to open (MUI longer on a busy
+	# host): an empty screen is "stable" too, so the next settle waits for
+	# a screen other than this one
+	sleep 1
+	gone="$work/gone.png"
+	$ptr shot "$gone"
+	sleep 2
 }
 # STAGES="1 2 3": the boots to run (default all)
 want() { case " ${STAGES:-1 2 3} " in *" $1 "*) return 0;; esac; return 1; }
 # the pages' names, as the page list shows them
-pages="status interface address extra vlans names time tcp connecting ports keepalive background memory he qos qosrules other"
+pages="status interface address extra vlans names time tcp connecting ports keepalive background memory he qos qosrules other counters"
 
 # ---- 1: 640x480, 256 colours, light: the edits of run_fsuae_prefs.sh ----
 if want 1; then
@@ -207,7 +213,13 @@ settle a01-interface
 # IPv4 off (IPv6 stays on)
 key 4
 settle a01b-interface-ipv4-off
-# Address: switch to static, Save with no address: a requester, back to DHCP
+# a second card: New card puts the cursor in its Device field
+key e
+typ a2065.device
+key Return
+settle a01c-interface-second-card
+# Address (of the new card): static; Save with no address: a requester;
+# then its address and router; the first card stays on DHCP
 key p
 settle a02-address
 key m
@@ -216,7 +228,12 @@ key s
 settle a03b-invalid
 key Return
 settle a03c-dismissed
-key Return m
+key Return r
+typ '192.168.2.5/24'
+key Return g
+typ '192.168.2.1'
+key Return d
+settle a03c2-address-first-card
 # a string field emptied (the cursor may be anywhere in it)
 clear() {
 	key "$1" shift+Right
@@ -237,6 +254,12 @@ clear i
 typ '10.0.1.2/24'
 key Return d
 settle a03g-extra-added
+# and one on the second card
+key t
+clear i
+typ '192.168.3.5/24'
+key Return d
+settle a03g2-extra-second-card
 # VLANs (a form): 10 with DHCP and priority 4; then 20, made static with
 # an MTU through Replace
 key p
@@ -259,6 +282,13 @@ key Return t
 typ 1400
 key Return r
 settle a03j-vlans-edited
+# VLAN 30 on the second card, with DHCP
+clear i
+typ 30
+key Return n m m m
+settle a03j2-vlan-second-card
+key d
+settle a03j3-vlans-added
 # Names: replace the host name, add a domain and a name server
 key p
 settle a04-names
@@ -348,9 +378,14 @@ cat > "$work/expect.conf" <<'EOF'
 
 interface eth0 device=uaenet.device unit=0 mtu=1500 tcpwindow=1440
 dhcp eth0
+interface eth1 device=a2065.device unit=0
+ifconfig eth1 192.168.2.5/24 up
+route add default 192.168.2.1 dev eth1 metric 10
 ifconfig eth0 alias 10.0.1.2/24
+ifconfig eth1 alias 192.168.3.5/24
 interface eth0.10 vlan=10 parent=eth0 dhcp pcp=4
 interface eth0.20 vlan=20 parent=eth0 address=192.168.20.2/24 pcp=4 mtu=1400
+interface eth1.30 vlan=30 parent=eth1 dhcp pcp=4 mtu=1400
 nameserver 192.168.1.1
 hostname zeus    # the old name
 domain example.org
@@ -420,6 +455,10 @@ Echo "rc $RC" >DH0:out/zz_3h
 DH0:C/RiptidePrefs PAGE=14
 Echo "rc $RC" >DH0:out/zz_3i
 EOF
+# MUI can take a while to start here: an empty Workbench is "stable" too,
+# so wait for the window first
+t=0
+while [ $t -lt 60 ] && ! grep -q '^window open' "$dh0/out/log3" 2>/dev/null; do sleep 1; t=$((t + 1)); done
 settle c01-workbench-compact
 # the pointer over a page lights it
 $ptr move 300 246 >/dev/null

@@ -4,8 +4,10 @@
 #   fsuae_pointer.py click X Y [COUNT]   move the pointer to screen pixel X,Y
 #                                         and click (COUNT=2: double-click)
 #   fsuae_pointer.py move X Y            only move it there (help bubbles)
-#   fsuae_pointer.py stable SECS [MAX]   wait until the screen has not changed
+#   fsuae_pointer.py stable SECS [MAX [PREV]]
+#                                         wait until the screen has not changed
 #                                         for SECS seconds (at most MAX seconds)
+#                                         and differs from screenshot PREV
 #   fsuae_pointer.py wait SECS MAX X Y [PREV]
 #                                         like stable, and pixel X,Y must be a
 #                                         button's white edge and the screen must
@@ -127,11 +129,12 @@ def main(argv):
         return stable(float(argv[2]), float(argv[3]), (int(argv[4]), int(argv[5])),
                       argv[6] if len(argv) > 6 else None)
     if len(argv) >= 3 and argv[1] == "stable":
-        return stable(float(argv[2]), float(argv[3]) if len(argv) > 3 else 120)
+        return stable(float(argv[2]), float(argv[3]) if len(argv) > 3 else 120, None,
+                      argv[4] if len(argv) > 4 else None)
     if len(argv) == 3 and argv[1] == "shot":
         shot(argv[2])
         return 0
-    sys.stderr.write("usage: fsuae_pointer.py click X Y [COUNT] | move X Y | stable SECS [MAX] | "
+    sys.stderr.write("usage: fsuae_pointer.py click X Y [COUNT] | move X Y | stable SECS [MAX [PREV]] | "
                      "wait SECS MAX X Y [PREV] | shot FILE\n")
     return 2
 

@@ -1136,10 +1136,10 @@ under a heading of their own):
 | Page | Settings | Lines in riptide.conf |
 |---|---|---|
 | Status | none: what Riptide is doing now, read once a second while the page is shown (see [below](#the-status-page)). The MUI editor opens on it and lists it first; in the GadTools editor it is the last page | none |
-| Interface | interface name, device, unit, MTU, TCP window, reads; IPv4 and IPv6 on/off (two check boxes) | the first `interface NAME device=...` line (other options such as `raw`, `options=`, `ipv4=`, `ipv6=` or `qos=` are kept), `ipv4 on\|off`, `ipv6 on\|off` |
-| Address | DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway; with DHCP "Link-local if no DHCP" (a 169.254 address while there is no lease, on by default) | `dhcp IF [linklocal off]`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` |
-| Extra addresses | a list of up to 8 more IPv4 addresses of the interface (`A.B.C.D/BITS`, or `A.B.C.D` with `netmask M` and/or `broadcast B`), with DHCP or a static primary address. MUI editor: a form with IPv4 address, Netmask and Broadcast | `ifconfig IF alias SPEC` |
-| VLANs | a list of up to 8 VLANs of the interface: `ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority] [mtu=N] [ipv4=on\|off] [ipv6=on\|off] [qos=on\|off] [tcpwindow=N]`, e.g. `10 dhcp` or `20 10.20.0.2/24 pcp=5 mtu=1400`. MUI editor: a form with VLAN ID (and the interface's name it gives), Address mode (DHCP, Static address, Up without an IPv4 address, Not started), IPv4 address, Priority (PCP: Default, 0-7 or From traffic priority), MTU, TCP window, IPv4, IPv6 and QoS (Default, On, Off) | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...] [mtu=...] ...` |
+| Interface | up to 4 network cards (see [below](#several-cards)), each with its interface name, device, unit, MTU, TCP window, reads; IPv4 and IPv6 on/off for all cards (two check boxes). MUI editor: the list of cards, **New card** (`e`) and **Remove card** (`o`), and the settings of the card chosen; GadTools editor: the first card | each card's `interface NAME device=...` line (other options such as `raw`, `options=`, `ipv4=`, `ipv6=` or `qos=` are kept), `ipv4 on\|off`, `ipv6 on\|off` |
+| Address | per card: DHCP or static; address (`A.B.C.D` or `A.B.C.D/BITS`), netmask, gateway; with DHCP "Link-local if no DHCP" (a 169.254 address while there is no lease, on by default). MUI editor: the **Card** cycle (`d`) chooses whose address the page shows | `dhcp IF [linklocal off]`, or `ifconfig IF ADDR [netmask M] up` and `route add default GW` (first card) or `route add default GW dev IF metric 10*N` (the others) |
+| Extra addresses | a list of up to 8 more IPv4 addresses on the cards and VLANs (`[IF\|]A.B.C.D/BITS`, or `A.B.C.D` with `netmask M` and/or `broadcast B`; without `IF\|` the first card), with DHCP or a static primary address. MUI editor: a form with Interface (a cycle of the cards and VLANs), IPv4 address, Netmask and Broadcast | `ifconfig IF alias SPEC` |
+| VLANs | a list of up to 8 VLANs on the cards: `[CARD\|]ID [dhcp\|A.B.C.D/BITS\|up] [pcp=0-7\|pcp=priority] [mtu=N] [ipv4=on\|off] [ipv6=on\|off] [qos=on\|off] [tcpwindow=N]`, e.g. `10 dhcp`, `20 10.20.0.2/24 pcp=5 mtu=1400` or `eth1\|30 dhcp` (without `CARD\|`: the first card). MUI editor: a form with Network card (a cycle of the cards), VLAN ID (and the interface's name it gives), Address mode (DHCP, Static address, Up without an IPv4 address, Not started), IPv4 address, Priority (PCP: Default, 0-7 or From traffic priority), MTU, TCP window, IPv4, IPv6 and QoS (Default, On, Off) | `interface IF.ID vlan=ID parent=IF [dhcp\|address=A.B.C.D/BITS\|up] [pcp=...] [mtu=...] ...` |
 | Names | host name, domain, up to three DNS servers; EDNS size (empty: default, 0 = off) and DNS over TCP (Default/On/Off) | `hostname`, `domain`, `nameserver`, `sysctl dns.edns_size=N`, `sysctl dns.tcp_fallback=0\|1` |
 | Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit, ECN (Default/Off/On/Accept only) | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=`, `sysctl net.inet.tcp.ecn=` |
@@ -1151,7 +1151,8 @@ under a heading of their own):
 | Advanced: Happy Eyeballs | Happy Eyeballs (On/Off), attempt delay (ms, 10-2000), resolution delay (ms, 0-1000), prefer (RFC 6724 / IPv6 / IPv4), IPv6 lookup filter (On/Off), the longest time a negative DNS answer is cached (s; empty: 3600, 0 = off) | `sysctl net.inet.he.enable=`, `attempt_delay=`, `resolution_delay=`, `prefer=`, `aaaa_filter=`, `sysctl dns.cache.neg_maxttl=N` |
 | Advanced: QoS | QoS bands (Default/On/Off), frames in flight (1-32), band limit (frames, 8-1024), priority sets DSCP (On/Off) | `qos on\|off`, `sysctl net.inet.ip.qos_inflight=`, `qos_limit=`, `qos_prio_dscp=` |
 | Advanced: QoS rules | a list of up to 16 rules: `[proto=tcp\|udp] port=\|lport=\|rport=P,.. \| program=NAME` and `priority=interactive\|default\|bulk\|0-7` and/or `dscp=EF\|CS1\|AF41\|0-63`. MUI editor: a form with Protocol, Ports, Which end (either, this Amiga's, the other one's), Program, Priority and DSCP mark | `qos rule ...` |
-| Other lines | a list of the lines RiptidePrefs does not edit itself (e.g. `compat ...`, extra interfaces, routes, `background ...`); a line can be edited, replaced, added or deleted | as typed |
+| Advanced: Counters | none: every count Riptide keeps, read while the page is shown (MUI editor; see [below](#the-counters-page)). The GadTools editor has a note there (`netstat -s`, `ip -s link`) | none |
+| Other lines | a list of the lines RiptidePrefs does not edit itself (e.g. `compat ...`, a fifth card, other routes, `background ...`); a line can be edited, replaced, added or deleted | as typed |
 
 The "Advanced:" pages edit the settings of "Connecting, Fast Open,
 keepalive, cork", "Path MTU black holes", "Background transfers", "Socket memory limits", "Happy
@@ -1322,13 +1323,55 @@ the CPU share, scales, history, connections matched between reads, every
 line of text); reading the tables in `status_amiga.c`, the MUI page and
 its classes (graph, tabs, table, interface list, text) in `mui_status.c`.
 
-Only the first `interface` line with `device=` and its `dhcp`/`ifconfig`/
-`route add default`/`ifconfig IF alias` lines and its VLANs (`interface
-IF.ID vlan=ID parent=IF` with `dhcp`, `address=`, `up`, `pcp=`, `mtu=`,
-`tcpwindow=`, `ipv4=`, `ipv6=` and `qos=`) are on the Interface, Address,
-Extra addresses and VLANs pages; other interfaces (VLAN lines with other
-options or names among them) and routes
-appear under Other lines. The background rules are edited as their sysctls; a
+### Several cards
+
+The first four `interface` lines with `device=`, each with its `dhcp`/
+`ifconfig`/`route add default`/`ifconfig IF alias` lines and its VLANs
+(`interface IF.ID vlan=ID parent=IF` with `dhcp`, `address=`, `up`,
+`pcp=`, `mtu=`, `tcpwindow=`, `ipv4=`, `ipv6=` and `qos=`) are on the
+Interface, Address, Extra addresses and VLANs pages; a fifth card, other
+interfaces (VLAN lines with other options or names among them) and other
+routes appear under Other lines.
+
+* **Interface page (MUI):** the list of cards ("eth1: a2065.device unit
+  0, DHCP"); clicking one shows its settings below, and the Address page
+  then shows its address. **New card** adds one with the next free name
+  (`eth1`) and puts the cursor in its Device field; **Remove card**
+  removes the card chosen with its VLANs and their addresses (the first
+  card stays). Renaming a card renames its VLANs and addresses too.
+* **Gateways:** the first card's router is `route add default GW`; another
+  card's is `route add default GW dev IF metric 10*N` (N its place in the
+  list, or the metric the line had), so the first card's route is used
+  first and the others take over when it goes.
+* **Checks:** two cards with the same name, or the same device and unit,
+  and a VLAN or extra address on a card that is not there are refused,
+  and the editor shows the card or the entry.
+* **GadTools editor:** it edits the first card (its 7 rows leave no room
+  for a chooser); the other cards and their lines stay as they are, and
+  an error on another card names it and points to the MUI editor.
+
+### The Counters page
+
+Advanced: Counters (MUI editor) shows every count Riptide keeps, grouped
+and in plain words: for each card *Interface X* (packets, bytes, errors,
+drops, multicasts), *Driver of X* (the SANA-II/MNI counters) and *QoS of
+X* (the bands), then *IPv4*, *ICMP*, *IGMP (multicast)*, *UDP*, *TCP*,
+*IPv6*, *ICMPv6, Neighbor Discovery, MLD*, *Names (DNS cache)* and
+*Memory*: name, value and the change per second. These are the tables
+`netstat -s` and `ip -s link` read. The list has a scroll bar, and only
+lines that changed are drawn again.
+
+* It reads at the Status page's **Update** setting while it is shown,
+  and **Refresh** (`f`) reads at once.
+* **Zero** (`z`) shows the counts since then ("Counts since Zero, 2 min
+  ago."); Riptide's own counters stay as they are. **Since start** (`t`)
+  goes back to the counts since Riptide started. Levels such as the
+  memory in use are not zeroed.
+* When Riptide is not running the page says so and looks again every 3
+  seconds.
+
+The rows, rates and Zero are in `src/amiga/prefs/prefs_counters.c`
+(host-tested by `tests/t_prefs_status.c`), the page in `mui_counters.c`. The background rules are edited as their sysctls; a
 `background ...` keyword line stays under Other lines (it sets the same
 values, so keep only one of the two). List entries that stay keep their
 line (and its comment) when others are added, replaced or deleted.

@@ -103,8 +103,19 @@ static int validate(void)
 	char err[200];
 	int fi;
 
-	if (rp_validate(&conf.cur, &fi, err, sizeof(err)) < 0)
+	if (rp_validate(&conf.cur, &fi, err, sizeof(err)) < 0) {
+		/* this editor shows the first card only: name another one */
+		if (rp_vpage < 0 && rp_ifsel > 0 && (rp_fields[fi].flags & FL_IF)) {
+			char msg[260];
+			rt_snprintf(msg, sizeof(msg), "%s (%s; edit it in the MUI editor or riptide.conf)", err,
+			            conf.cur.ifc[rp_ifsel].ifname);
+			rp_ifsel = 0;
+			rp_message(msg);
+			return -1;
+		}
+		rp_ifsel = 0;
 		return bad(fi, err);
+	}
 	return 0;
 }
 
@@ -466,8 +477,9 @@ static void st_refresh(void)
 			rp_st_if_lines(f, nl[2], nl[3], l3, sizeof(nl[2]));
 			rp_st_if_rates(f, nl[4], sizeof(nl[4]));
 		}
-		rt_snprintf(nl[5], sizeof(nl[5]), "TCP: %d connections, %lu segments resent a second",
-		            st_model.nconn_all, (unsigned long)st_model.retrans_ps);
+		rt_snprintf(nl[5], sizeof(nl[5]), "TCP: %d connection%s, %lu segment%s resent a second",
+		            st_model.nconn_all, rp_plural((unsigned long)st_model.nconn_all), (unsigned long)st_model.retrans_ps,
+		            rp_plural(st_model.retrans_ps));
 		{
 			char n[600], *l = n, *e;
 			rp_st_names_text(&st_model, n, sizeof(n));
