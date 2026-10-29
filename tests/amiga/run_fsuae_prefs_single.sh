@@ -495,7 +495,9 @@ key p p p p p
 key h shift+Right BackSpace BackSpace BackSpace BackSpace
 typ mars
 key Return
-key s
+# Save clicked (not its key): it must not stay drawn pressed under the
+# question
+$ptr click 278 554 >/dev/null
 settle w06-apply-asked
 key Escape
 waitfor wb3 60
