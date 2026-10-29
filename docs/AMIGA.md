@@ -1274,13 +1274,15 @@ is not running the page says so, looks for it only every 3 seconds and
 draws nothing until it starts; then it fills in by itself. A Riptide that
 answers without figures (0.22 and older have no `net.riptide.status`) is
 shown as running, without uptime, CPU and memory.
-The graphs scroll by one column a second and only the text that changed
+The graphs scroll by one column per read and only the text that changed
 is drawn again. Still, drawing on a planar screen is work for a 68020:
 on an emulated A1200 with a 640x480 256-colour screen, a download that
-takes all the CPU ran 18 to 22 % slower while the Status page was on
-screen than with RiptidePrefs on another page (the reads themselves take
-20 to 60 ms a second). Leave the page, or close the window, when you
-need the last bit of speed.
+takes all the CPU ran 10 to 17 % slower while the Status page was on
+screen updating every second than with RiptidePrefs on another page,
+and 6 to 11 % slower updating every 5 seconds (three runs each; the
+reads themselves take 20 to 60 ms). Set Update to every 5 seconds or
+Paused, leave the page, or close the window, when you need the last bit
+of speed.
 
 * **At the top:** whether Riptide runs, its version and uptime, the share
   of the CPU its process used in the last second, and the memory sockets
@@ -1298,7 +1300,7 @@ need the last bit of speed.
   or VLAN, MTU; IPv4 address, gateway, DHCP state and lease left or
   link-local; IPv6 addresses), its speeds in and out, and its own graph;
   when not all fit, a line says which are shown and a click on the list
-  (or cursor down and up) shows the next ones.
+  shows the next ones.
   *Connections*: every TCP connection in two lines, both ends in full
   first (`192.168.1.2:1025  to  93.184.216.34:80`, a listener only its
   own), then its state, round trip time, window in packets and ECN,

@@ -16,7 +16,8 @@
  *           a row can be chosen
  *   ifview  every interface: three lines, its speeds and a small graph;
  *           when they do not all fit, as many as fit and a line saying
- *           which: a click or cursor down shows the next ones
+ *           which: a click shows the next ones (the cursor keys are the
+ *           page list's)
  *   stext   a fixed number of lines of text that change
  * The total-traffic graph also owns the timer: it starts when the page is
  * shown and stops when it is hidden, so nothing is read on other pages.
@@ -55,8 +56,6 @@
 enum { GK_BYTES, GK_CPU, GK_CONN };
 
 #define RAW_1 0x01
-#define RAW_UP    0x4c
-#define RAW_DOWN  0x4d
 #define RAW_LEFT  0x4f
 #define RAW_RIGHT 0x4e
 #ifndef SELECTDOWN
@@ -987,7 +986,7 @@ DISPATCHER(ifview_dispatch)
 			return FALSE;
 		theme_setup(obj);
 		d = INST_DATA(cl, obj);
-		mc_handler(obj, cl, &d->ehn, IDCMP_MOUSEBUTTONS | IDCMP_RAWKEY, 1);
+		mc_handler(obj, cl, &d->ehn, IDCMP_MOUSEBUTTONS, 1);
 		return TRUE;
 	case MUIM_Cleanup:
 		d = INST_DATA(cl, obj);
@@ -1003,23 +1002,17 @@ DISPATCHER(ifview_dispatch)
 		((struct ifview_data *)INST_DATA(cl, obj))->shown = 0;
 		break;
 	case MUIM_HandleEvent: {
-		/* the next interfaces: a click, cursor down (up goes back) */
+		/* a click: the next interfaces (after the last, the first again) */
 		struct IntuiMessage *im = ((struct MUIP_HandleEvent *)msg)->imsg;
-		int n, step = 0;
+		int n;
 		d = INST_DATA(cl, obj);
 		if (!im || !d->shown || !d->m || !d->m->running)
 			return 0;
 		n = d->m->nif;
-		if (im->Class == IDCMP_MOUSEBUTTONS && im->Code == SELECTDOWN && mc_inside(obj, im))
-			step = 2;
-		else if (im->Class == IDCMP_RAWKEY && (im->Code == RAW_DOWN || im->Code == RAW_UP))
-			step = im->Code == RAW_DOWN ? 1 : -1;
-		if (!step || n <= d->fit || d->fit < 1)
+		if (im->Class != IDCMP_MOUSEBUTTONS || im->Code != SELECTDOWN || !mc_inside(obj, im) || n <= d->fit ||
+		    d->fit < 1)
 			return 0;
-		if (step == 2)
-			d->first = d->first + d->fit < n ? d->first + d->fit : 0;
-		else
-			d->first = (d->first + n + step) % n;
+		d->first = d->first + d->fit < n ? d->first + d->fit : 0;
 		MUI_Redraw(obj, MADF_DRAWOBJECT);
 		return MUI_EventHandlerRC_Eat;
 	}
@@ -1296,8 +1289,8 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 	mui_set(o_upd, MUIA_Cycle_Active, (ULONG)upd);
 	mui_set(o_upd, MUIA_CycleChain, 1);
 	theme_bubble_to(hu, sizeof(hu), "Update", "How often the page reads Riptide and draws again. Drawing "
-	                "takes time from a 68020: a download that keeps it busy ran about 20 % slower with the "
-	                "page updating every second, about 5 % every 5 s. Paused keeps what is shown.");
+	                "takes time from a 68020: on an A1200 a download that kept it busy ran 10 to 17 % slower "
+	                "with the page updating every second, 6 to 11 % every 5 s. Paused keeps what is shown.");
 	mui_set(o_upd, MUIA_ShortHelp, (ULONG)hu);
 	mui_set(ul, MUIA_ShortHelp, (ULONG)hu);
 	mui_do(o_upd, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
