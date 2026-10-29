@@ -142,6 +142,10 @@ static int xmit_now(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16
 {
 	if (rt_capture_on)
 		rt_capture_frame(nif, b, RT_CAP_OUT, ethertype, NULL, 0);
+	if (rt_bpf_on)
+		rt_bpf_tap(nif, b, 1, ethertype, NULL, dsthw, 0);
+	if (rt_mon_on(RT_MON_PACKET) && rt_netif_mon_out(nif, b))
+		return -RT_EACCES;
 	return nif->link_output(nif, b, dsthw, ethertype);
 }
 

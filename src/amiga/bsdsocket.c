@@ -1,5 +1,6 @@
 /*
- * Riptide - bsdsocket.library (AmiTCP 4 API, 46 functions).
+ * Riptide - bsdsocket.library (AmiTCP 4 API, 46 functions; the Roadshow
+ * extensions after them are in roadshow.c).
  *
  * Every function runs in the calling task. Results follow the AmiTCP
  * conventions: -1 and the per-task errno (also written through the
@@ -34,6 +35,8 @@ void bsd_set_errno(struct TaskCtx *c, LONG e)
 		case 4: *(ULONG *)c->errnoptr = (ULONG)e; break;
 		}
 	}
+	if (c->errhook)
+		amiga_rs_error_hook(c, 1, e);
 }
 
 static void set_herrno(struct TaskCtx *c, LONG h)
@@ -41,6 +44,8 @@ static void set_herrno(struct TaskCtx *c, LONG h)
 	c->herrno = h;
 	if (c->herrnoptr)
 		*c->herrnoptr = h;
+	if (c->errhook)
+		amiga_rs_error_hook(c, 2, h);
 }
 
 static LONG ret(struct TaskCtx *c, int r)
@@ -75,6 +80,10 @@ LONG bsd_bind(RTREG(a6) struct Library *base, RTREG(d0) LONG s, RTREG(a0) const 
               RTREG(d1) LONG namelen)
 {
 	CTX;
+	LONG e;
+
+	if ((amiga_rs_caller_hooks & (1 << 6)) && (e = amiga_rs_mon_connect(c, 1, s, name, namelen)) != 0)
+		return ret(c, -e);
 	return ret(c, rt_api_bind(&c->sc, s, (const struct rt_sockaddr_in *)name, (u32)namelen));
 }
 
@@ -100,6 +109,10 @@ LONG bsd_connect(RTREG(a6) struct Library *base, RTREG(d0) LONG s, RTREG(a0) con
                  RTREG(d1) LONG namelen)
 {
 	CTX;
+	LONG e;
+
+	if ((amiga_rs_caller_hooks & (1 << 3)) && (e = amiga_rs_mon_connect(c, 0, s, name, namelen)) != 0)
+		return ret(c, -e);
 	return ret(c, rt_api_connect(&c->sc, s, (const struct rt_sockaddr_in *)name, (u32)namelen));
 }
 
@@ -108,6 +121,11 @@ LONG bsd_sendto(RTREG(a6) struct Library *base, RTREG(d0) LONG s, RTREG(a0) cons
                 RTREG(d3) LONG tolen)
 {
 	CTX;
+	LONG e;
+
+	if ((amiga_rs_caller_hooks & (1 << 4)) &&
+	    (e = amiga_rs_mon_send(c, s, msg, len, flags, to, tolen, NULL)) != 0)
+		return ret(c, -e);
 	return ret(c, rt_api_sendto(&c->sc, s, msg, (u32)len, flags,
 	                            (const struct rt_sockaddr_in *)to, (u32)tolen));
 }
@@ -116,6 +134,11 @@ LONG bsd_send(RTREG(a6) struct Library *base, RTREG(d0) LONG s, RTREG(a0) const 
               RTREG(d1) LONG len, RTREG(d2) LONG flags)
 {
 	CTX;
+	LONG e;
+
+	if ((amiga_rs_caller_hooks & (1 << 4)) &&
+	    (e = amiga_rs_mon_send(c, s, msg, len, flags, NULL, 0, NULL)) != 0)
+		return ret(c, -e);
 	return ret(c, rt_api_send(&c->sc, s, msg, (u32)len, flags));
 }
 
@@ -562,7 +585,7 @@ ULONG bsd_getnetbyaddr(RTREG(a6) struct Library *base, RTREG(d0) ULONG net, RTRE
 	return 0;
 }
 
-static ULONG make_servent(struct TaskCtx *c, const struct rt_servent_info *si)
+ULONG bsd_make_servent(struct TaskCtx *c, const struct rt_servent_info *si)
 {
 	int i;
 
@@ -584,16 +607,16 @@ ULONG bsd_getservbyname(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR n
 	CTX;
 	if (!name)
 		return 0;
-	return make_servent(c, rt_getservbyname((const char *)name, (const char *)proto));
+	return bsd_make_servent(c, rt_getservbyname((const char *)name, (const char *)proto));
 }
 
 ULONG bsd_getservbyport(RTREG(a6) struct Library *base, RTREG(d0) LONG port, RTREG(a0) CONST_STRPTR proto)
 {
 	CTX;
-	return make_servent(c, rt_getservbyport(rt_ntohs((u16)port), (const char *)proto));
+	return bsd_make_servent(c, rt_getservbyport(rt_ntohs((u16)port), (const char *)proto));
 }
 
-static ULONG make_protoent(struct TaskCtx *c, const struct rt_protoent_info *pi)
+ULONG bsd_make_protoent(struct TaskCtx *c, const struct rt_protoent_info *pi)
 {
 	int i;
 
@@ -608,18 +631,34 @@ static ULONG make_protoent(struct TaskCtx *c, const struct rt_protoent_info *pi)
 	return (ULONG)&c->proto.pe;
 }
 
+ULONG bsd_make_netent(struct TaskCtx *c, const struct rt_netent_info *ni)
+{
+	int i;
+
+	if (!ni)
+		return 0;
+	for (i = 0; i < 4 && ni->aliases[i] && i < (int)RT_ARRAY_SIZE(c->net.aliases) - 1; i++)
+		c->net.aliases[i] = (char *)ni->aliases[i];
+	c->net.aliases[i] = NULL;
+	c->net.ne.n_name = (char *)ni->name;
+	c->net.ne.n_aliases = c->net.aliases;
+	c->net.ne.n_addrtype = RT_AF_INET;
+	c->net.ne.n_net = ni->net;
+	return (ULONG)&c->net.ne;
+}
+
 ULONG bsd_getprotobyname(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR name)
 {
 	CTX;
 	if (!name)
 		return 0;
-	return make_protoent(c, rt_getprotobyname((const char *)name));
+	return bsd_make_protoent(c, rt_getprotobyname((const char *)name));
 }
 
 ULONG bsd_getprotobynumber(RTREG(a6) struct Library *base, RTREG(d0) LONG proto)
 {
 	CTX;
-	return make_protoent(c, rt_getprotobynumber(proto));
+	return bsd_make_protoent(c, rt_getprotobynumber(proto));
 }
 
 /* ---- syslog ---- */
@@ -699,7 +738,8 @@ void bsd_vsyslog(RTREG(a6) struct Library *base, RTREG(d0) ULONG pri, RTREG(a0) 
 		return;
 	n = rt_snprintf(line, sizeof(line), "%s: ", c->logtag ? (const char *)c->logtag : "syslog");
 	vformat(line + n, sizeof(line) - (u32)n, (const char *)msg, (const ULONG *)args, c->errno_);
-	amiga_log_line(line);
+	if (!amiga_rs_log(c, pri, line))
+		amiga_log_line(line);
 }
 
 /* ---- misc ---- */
@@ -718,6 +758,11 @@ LONG bsd_sendmsg(RTREG(a6) struct Library *base, RTREG(d0) LONG s, RTREG(a0) APT
 
 	if (!m)
 		return ret(c, -RT_EFAULT);
+	if (amiga_rs_caller_hooks & (1 << 4)) {
+		LONG e = amiga_rs_mon_send(c, s, NULL, 0, flags, NULL, 0, m);
+		if (e)
+			return ret(c, -e);
+	}
 	return ret(c, rt_api_sendmsg(&c->sc, s, (const struct rt_iov *)m->msg_iov, (int)m->msg_iovlen,
 	                             flags, (const struct rt_sockaddr_in *)m->msg_name, m->msg_namelen));
 }
@@ -947,7 +992,8 @@ static int sbt_one(struct TaskCtx *c, struct TagItem *ti)
 		val = (ULONG)RELEASE_STRING;
 		break;
 	default:
-		return -1;
+		/* the Roadshow codes (roadshow.c) */
+		return amiga_rs_sbt(c, code, set, where) == 0 ? 0 : -1;
 	}
 	if (!set)
 		*where = val;

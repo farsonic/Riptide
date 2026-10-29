@@ -187,6 +187,8 @@ static void add(const char *id, const char *desc, int res, LONG err, LONG ms, co
 	if (ms >= 0 && sp_verbose)
 		printf(" [%ld ms]", (long)ms);
 	printf("\n");
+	if (sp_verbose)
+		fflush(stdout);     /* a stack that crashes the machine: the last line shows where */
 	counts[res]++;
 	if (!results || nres >= SP_MAXRES)
 		return;

@@ -60,6 +60,20 @@ int amiga_ctx_valid(struct TaskCtx *c)
 	return 0;
 }
 
+/* SBTC_SIG_ADDRESS_CHANGE_MASK: tell every task that asked. */
+void amiga_ctx_signal_addrchg(void)
+{
+	struct MinNode *n;
+
+	Forbid();
+	for (n = ctx_list.mlh_Head; n->mln_Succ; n = n->mln_Succ) {
+		struct TaskCtx *c = (struct TaskCtx *)n;
+		if (c->addrchg_mask && c->task)
+			Signal(c->task, c->addrchg_mask);
+	}
+	Permit();
+}
+
 static struct TaskCtx *ctx_create(struct Task *me)
 {
 	struct TaskCtx *c = AllocVec(sizeof(*c), MEMF_PUBLIC | MEMF_CLEAR);
@@ -86,6 +100,7 @@ static struct TaskCtx *ctx_create(struct Task *me)
 
 static void ctx_destroy(struct TaskCtx *c)
 {
+	amiga_rs_ctx_gone(c);
 	Forbid();
 	Remove((struct Node *)&c->node);
 	if (ctx_cache == c)
@@ -394,5 +409,11 @@ LONG amiga_call_d0d1(APTR fn, LONG d0, LONG d1)
 {
 	return ((fn_d0d1_t)fn)(d0, d1);
 }
+
+typedef ULONG (*fn_hook_t)(__reg("a0") APTR, __reg("a2") APTR, __reg("a1") APTR);
+ULONG amiga_call_hook(APTR hook, APTR obj, APTR msg)
+{
+	return ((fn_hook_t)((struct Hook *)hook)->h_Entry)(hook, obj, msg);
+}
 #endif
-/* GCC: amiga_call_d0d1 is in gcc_thunks.S */
+/* GCC: amiga_call_d0d1 and amiga_call_hook are in gcc_thunks.S */

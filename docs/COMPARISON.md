@@ -59,7 +59,8 @@ RiptidePrefs. It is also the only one with its source open and its
 behaviour tested against a reference TCP (Linux). MiamiDx and Roadshow
 are complete products with decades of use on real Amigas and features
 around the protocol engine that Riptide does not have: PPP dial-up,
-firewall and NAT, a BPF API (and, in MiamiDx, multicast routing).
+firewall and NAT (and, in MiamiDx, multicast routing). Riptide implements
+Roadshow's bsdsocket.library API extensions, BPF included (section 5).
 Riptide has run only in emulators so far, so its real-hardware speed and
 robustness are unproven. Section 9 lists where it is behind.
 
@@ -210,16 +211,28 @@ slightly between runs (seeded but timing dependent).
 
 | | MiamiDx | Roadshow | Riptide |
 |---|---|---|---|
-| bsdsocket.library | AmiTCP 4 (46 LVOs) | AmiTCP 4.0 API [RS-DOC] plus many extensions (below) | AmiTCP 4, all 46 functions |
+| bsdsocket.library | AmiTCP 4 (46 LVOs) | AmiTCP 4.0 API [RS-DOC] plus many extensions (below) | AmiTCP 4, all 46 functions, and the Roadshow extensions at Roadshow's vector offsets (below) |
 | Extended API | miami.library 21: sysctl, getaddrinfo & co., fd callbacks, packet filter hooks, SSL | In bsdsocket.library itself [RS-DOC]: routing (`AddRouteTagList`, `DeleteRouteTagList`, `ChangeRouteTagList`, `GetRouteInfo`), interfaces (`AddInterfaceTagList`, `ConfigureInterfaceTagList`, `QueryInterfaceTagList`, `ObtainInterfaceList`, `RemoveInterface`), DNS (`AddDomainNameServer`, `ObtainDomainNameServerList`, `SetDefaultDomainName`...), monitoring (`AddNetMonitorHookTagList`, `GetNetworkStatistics`), BPF (`bpf_open`...), mbuf access, `ObtainRoadshowData`/`ChangeRoadshowData`, server sockets, `gethostbyname_r`, `getaddrinfo`/`getnameinfo` | `riptide.library` 2 (the MiamiDx API under Riptide names, plus `RiptideConnectName()`) and a compat alias under the old name; `net.riptide.*` tables via `RiptideSysCtl()`; the RIPTIDE command port; BSD routing and ARP ioctls |
 | usergroup.library | Yes | **Unverified** | Yes, single user |
 
-Riptide does **not** implement any of Roadshow's bsdsocket.library
-extensions. Programs that call `AddRouteTagList()`, `ObtainInterfaceList()`,
-`bpf_open()`, `ObtainRoadshowData()` and the like get no such vectors
-(Riptide's bsdsocket.library ends at LVO -300, `GetSocketEvents()`). Tools
-written for Roadshow's API therefore do not work with Riptide; tools written
-for the plain AmiTCP API or for MiamiDx's documented API do.
+Riptide implements Roadshow's bsdsocket.library extensions at the vector
+offsets of the Roadshow SDK (`bpf_open()` at -366 to `getnameinfo()` at
+-822; `docs/AMIGA.md`, "Roadshow extensions"): the packet filter, routes,
+interfaces and DHCP address allocation, monitoring hooks, statistics, DNS,
+the netdb enumeration, address conversion, `RoadshowData`,
+`gethostbyname_r()` and Roadshow's `getaddrinfo()` family. Changes go
+through the same code as Riptide's configuration language. Not provided:
+the kernel memory (`mbuf_*`) calls (no mbufs), the private IP filter calls
+(`ipf_*`), and an Internet superserver (`ProcessIsServer()` is always FALSE).
+`IFC_GetPeerAddress`/`IFC_GetDNS` need SANA-II R4 address queries that
+Riptide's driver layer does not make. We could not run Roadshow itself
+(section 11), so the comparison with it rests on its SDK documentation and
+on Roadshow programs we could try. NetMon 0.34 (Aminet
+`comm/net/netmon.lha`, freeware: an interface monitor "for Roadshow" built
+on `ObtainInterfaceList()` and `QueryInterfaceTagList()`) ran under Riptide
+on Kickstart 3.1.4 with MUI 3.8 in FS-UAE. Its `WRITESTATS` statistics
+in `ENV:` counted the 1680 bytes that ten loopback pings moved through
+`lo0`.
 
 ## 6. Drivers and configuration
 
@@ -285,14 +298,16 @@ Riptide is younger and narrower. Be aware of these before choosing it:
   neither of the others has, is there, but only host-side: no stateful
   DHCPv6, no RFC 3542 ancillary data, and SANA-II drivers need a
   multicast filter.
-* **No firewall, NAT or packet filter hooks**, no BPF API or live
-  tcpdump (only capture to pcap files), no SOCKS, no SSL
+* **No firewall or NAT**: Roadshow's monitoring hooks (which can drop
+  ICMP, UDP, connection requests and packets) and BPF channels are there,
+  but no rule-based filter; no live tcpdump program (capture to pcap
+  files, or a program of one's own on the BPF API), no SOCKS, no SSL
   (`RiptideOpenSSL()` returns NULL), no inetd, no `TCP:` handler, no
   IDN.
 * **No server-side TCP Fast Open** (the client side is there).
-* **Roadshow's API extensions** (routing, interface, DNS, monitoring, BPF,
-  `RoadshowData`) are not implemented, so Roadshow-specific tools do not
-  run.
+* **Roadshow's API extensions** are implemented except the kernel memory
+  (`mbuf_*`) and IP filter (`ipf_*`) calls, the superserver and SANA-II R4
+  peer/DNS queries (section 5).
 * **MiamiDx's private vectors** (resolver internals, kvm access, settings
   database) return 0, so MiamiDx's own NetStat, DiG and NSLookup do not
   work with Riptide's compat alias.
@@ -475,7 +490,7 @@ These are emulator results, not measurements on real hardware.
 
 | Stack | Version | Obtained |
 |---|---|---|
-| Riptide | 0.23 (this repository) | built here |
+| Riptide | 0.24 with the Roadshow extensions (this repository) | built here |
 | AmiNetXDuo | 1.0.0-rc2 (NetX Duo 6.5.2), commit eba3a41 | nightly release binary of 29.10.2026; its "full" stack installed into the system as its Installer's system layout does, with a static `DEVS:NetInterfaces/eth0` |
 | AmiTCP_NG | 4.1.8, source commit 90575fa (8.10.2026) | built from source with `amigadev/crosstools:m68k-amigaos` (gcc 6.5), its library, usergroup.library and AddNetInterface |
 | MiamiDx | 1.0c (10.04.2000), evaluation version | the user's `MiamiDx10cmain.lha` with Aminet `comm/tcp/MiamiDx10c-MUI.lha` and MUI 3.8, laid out as `Install_MiamiDx` does; settings imported in its GUI from the MiamiInit file below and saved |
@@ -503,32 +518,51 @@ them below as unsupported.
 
 | Stack | bsdsocket | Passed | Failed | Unsupported | Skipped | Score |
 |---|---|---|---|---|---|---|
-| Riptide 0.24 | 4.1 | 175 | 0 | 17 | 2 | 91 % |
-| AmiNetXDuo 1.0.0-rc2 | 4.11 | 162 | 5 | 13 | 2 | 90 % |
-| AmiTCP_NG 4.1.8 | 4.1 | 154 | 5 | 13 | 2 | 90 % |
-| MiamiDx 1.0c (evaluation) | 4.1 | 155 | 6 | 23 | 2 | 84 % |
-| Miami 3.2b (evaluation) | 4.1 | 153 | 8 | 23 | 2 | 83 % |
-| PrismNet (lwIP 2.2.1) | 4.4 | 139 | 16 | 17 | 2 | 81 % |
-| tolunnet 1.2.0-rc6 | 4.1 | 129 | 11 | 24 | 2 | 79 % |
-| AmiTCP 3.0b2 | 3.28 | 131 | 9 | 29 | 4 | 78 % |
+| Riptide 0.24 + Roadshow API | 4.1 | 208 | 0 | 5 | 2 | 98 % |
+| AmiNetXDuo 1.0.0-rc2 | 4.11 | 181 | 5 | 15 | 2 | 90 % |
+| AmiTCP_NG 4.1.8 | 4.1 | 172 | 6 | 15 | 2 | 89 % |
+| PrismNet (lwIP 2.2.1) | 4.4 | 149 | 21 | 23 | 2 | 77 % |
+| MiamiDx 1.0c (evaluation) | 4.1 | 155 | 6 | 44 | 2 | 76 % |
+| Miami 3.2b (evaluation) | 4.1 | 153 | 8 | 44 | 2 | 75 % |
+| tolunnet 1.2.0-rc6 | 4.1 | 137 | 11 | 37 | 2 | 74 % |
+| AmiTCP 3.0b2 | 3.28 | 131 | 9 | 50 | 4 | 69 % |
+
+These are the second round of runs. Riptide had gained the Roadshow
+extensions of bsdsocket.library, and stackprobe had gained 22 Roadshow
+tests to look at them more closely. 12 of them call more of the API:
+interface queries, the routing message format, `In_CanForward()`,
+statistics, adding a DNS server, the default domain, `RoadshowData`,
+`gethostbyname_r()`, the Roadshow `getaddrinfo()`, BPF ioctls, and an
+`MHT_Connect` hook that must refuse a `connect()`. 10 more ask the
+`SBTC_HAVE_*` style tags. Every stack ran again with that stackprobe, so
+the totals are higher than in the first round (175 tests then for Riptide
+0.24).
 
 The score is passed / (passed + failed + unsupported). It measures breadth
 and correctness together, and the extension families weigh in:
-- **Riptide and the Miamis:** 13 tests of miami.library (Riptide offers it
-  as its compatibility alias). Their unsupported are the Roadshow-only calls.
-- **AmiNetXDuo, AmiTCP_NG, PrismNet, tolunnet:** the Roadshow calls instead.
+- **The Miamis:** the 13 tests of miami.library. Their unsupported tests
+  are the 33 Roadshow ones.
+- **AmiNetXDuo, AmiTCP_NG, PrismNet, tolunnet:** the Roadshow calls
+  instead, as far as each has them.
+- **Riptide:** both families. It has miami.library as its compatibility
+  alias and the Roadshow calls in bsdsocket.library.
 
-So read the failures more than the percentages. Riptide also ran on the AROS
-ROM (175 passed, the same results), and AmiTCP 3.0b2 on an emulated plain
-68000 (131 passed, the same as on the 68020).
+So read the failures more than the percentages.
+
+Riptide also ran on the AROS ROM, with 208 passed and the same results.
+AmiTCP 3.0b2 had run on an emulated plain 68000 in the first round, with
+131 passed, the same as on the 68020. AmiTCP_NG crashed the emulated
+machine (a black screen) in three of five runs with this stackprobe, at
+no fixed test: a run with `VERBOSE`, which flushes every line, completed.
+Its report is from a complete run.
 
 What each stack did not do (failures, from `RESULTS.md`):
 
 * **Riptide**: nothing since 0.24. 0.23 sent no SIGURG signal to a
   socket's FIOSETOWN owner when urgent data arrived (only to FIOASYNC
-  sockets); found by stackprobe and fixed. Its unsupported tests are the
-  Roadshow extension calls and the legacy socket.library, inet.library,
-  ifconfig.library, miamibpf and miamipcap libraries.
+  sockets); found by stackprobe and fixed. Its five unsupported tests are
+  the legacy socket.library, inet.library, ifconfig.library, miamibpf and
+  miamipcap libraries.
 * **AmiNetXDuo**:
   - **TCP close:** neither SO_LINGER 0 nor closing with unread data resets
     the peer.
@@ -537,6 +571,7 @@ What each stack did not do (failures, from `RESULTS.md`):
     allowed without SO_BROADCAST.
 * **AmiTCP_NG**:
   - `getprotobynumber(6)` finds nothing.
+  - `In_CanForward(127.0.0.1)` says the loopback net may be forwarded.
   - Closing a socket with unread data does not reset the peer (RFC 2525).
   - `MSG_DONTWAIT` is not known (a blocking `recv()` waits).
   - Datagrams of 32 KB and more are refused on loopback.
@@ -559,6 +594,12 @@ What each stack did not do (failures, from `RESULTS.md`):
   - **netdb:** `getnetby*()` and `getprotoent()`/`getservent()` find nothing.
   - **Sockets:** at most 14 per program here (ENOBUFS).
   - **Close:** closing with unread data does not reset the peer.
+  - **Roadshow calls that answer but do nothing:**
+    - `In_CanForward()` says no to 8.8.8.8.
+    - `ObtainRoadshowData()` returns NULL.
+    - `gethostbyname_r()` finds nothing.
+    - `bpf_ioctl()` leaves the version and the buffer size at 0.
+    - An `MHT_Connect` hook is accepted but never called.
 * **tolunnet**:
   - `inet_network("10.1")` gives 10.0.0.1, not 10.1 (0x0a01).
   - `gethostbyaddr(127.0.0.1)` finds nothing.

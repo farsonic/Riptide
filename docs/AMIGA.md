@@ -2483,6 +2483,82 @@ ancillary data (`IPV6_PKTINFO`, `IPV6_RECVHOPLIMIT`: `ping6` cannot show
 the reply's hop limit), routing headers (a host: one with segments left
 is refused with a parameter problem), mobility, IPsec, SEND, and IPv6 over PPP (IPV6CP).
 
+## Roadshow extensions (bsdsocket.library 4)
+
+`bsdsocket.library` (version 4) has the extensions of the Roadshow
+API after the AmiTCP 4 vectors. The vector offsets are those of the
+Roadshow SDK's `bsdsocket_lib.sfd`, from `bpf_open()` at -366 to
+`getnameinfo()` at -822. The reserved slots return 0.
+`tests/amiga/check_layouts.sh` checks the offsets, registers, structures
+and constants against that SDK (`ROADSHOW_SDK`, or the copy in NDK 3.2R4
+under `SANA+RoadshowTCP-IP`). The code is in `src/amiga/roadshow.c`,
+`src/core/bpf.c` and `src/core/bsdinfo.c`.
+
+Every call runs in the calling task. Queries read the stack's state
+directly. Changes that a `riptide.conf` line can make are sent to the
+Riptide process as RIPTIDE port commands, so they act exactly like
+`route`, `ifconfig`, `dhcp` and `interface` in the configuration file and
+the tools. These are routes, interface addresses and state, DHCP, and
+adding or removing interfaces. A program calling them needs Riptide
+running, which it does anyway when it has the library open.
+
+| Area | Calls (LVO) | In Riptide |
+|---|---|---|
+| Packet filter | `bpf_open` -366 … `bpf_data_waiting` -408 | 16 channels on any interface, classic BPF filter programs, the BSD double buffer, `bpf_hdr` records, read timeout, immediate mode, notify and interrupt signals, `bpf_write()`. Ethernet interfaces give `DLT_EN10MB` frames (the 14 byte header is rebuilt from the addresses the driver reported); point-to-point interfaces and `lo0` give `DLT_NULL`. `BIOCPROMISC` sets the interface promiscuous until the last channel that asked closes. |
+| Routes | `AddRouteTagList` -414, `DeleteRouteTagList` -420, `ChangeRouteTagList` -426 (private), `FreeRouteInfo` -432, `GetRouteInfo` -438 | `RTA_*` tags become `route add/del/change` lines. A destination without a host part is a classful network. `GetRouteInfo()` returns the IPv4 routing table as version 3 `rt_msghdr` records with `RTA_DST`, `RTA_GATEWAY`, `RTA_NETMASK` and `RTA_IFA` addresses, filtered by flags. |
+| Interfaces | `AddInterfaceTagList` -444, `ConfigureInterfaceTagList` -450, `Release/ObtainInterfaceList` -456/-462, `QueryInterfaceTagList` -468, `RemoveInterface` -732 | `AddInterfaceTagList()` is `interface NAME device=D unit=N` (`IFA_NumReadRequests` becomes `reads=`, `IFA_LimitMTU` `mtu=`; the other SANA-II tuning tags are ignored, `IFA_HardwareAddress` is refused). `IFC_*` set addresses, aliases, metric, MTU and state (`SM_Online`/`SM_Offline` also switch the SANA-II device), and `IFC_ReleaseAddress` releases a DHCP lease. `IFC_GetPeerAddress` and `IFC_GetDNS` need SANA-II R4 address queries and fail with `EOPNOTSUPP`. Every `IFQ_*` tag is answered (the driver's counters where there are some, 0 for copy statistics and debug mode). Unknown query tags are left alone. |
+| Address allocation | `CreateAddrAllocMessageA` -474, `DeleteAddrAllocMessage` -480, `BeginInterfaceConfig` -486, `AbortInterfaceConfig` -492 | Riptide's DHCP client does the work. `AAMP_BOOTP` uses it too (DHCP servers answer both), and `AAMP_SLOWAUTO`/`AAMP_FASTAUTO` use it with an immediate 169.254/16 link-local fallback. The message is replied with the address, mask, server, router, DNS servers, domain and lease expiry once bound, or with `AAMR_Timeout` (the client is stopped again if this request started it), `AAMR_InterfaceWrongType` (not Ethernet), `AAMR_AddressKnown` (a static address), `AAMR_Busy` and so on. |
+| Monitoring | `AddNetMonitorHookTagList` -498, `RemoveNetMonitorHook` -504 | All seven hook types. `MHT_Connect`, `MHT_Bind` and `MHT_Send` run in the caller of `connect()`, `bind()`, `send()`/`sendto()`/`sendmsg()`, and a positive result is the error that call returns. `MHT_ICMP`, `MHT_UDP`, `MHT_TCP_Connect` (a SYN without ACK) and `MHT_Packet` run in the Riptide process: `MA_Drop` drops as if the checksum was wrong, `MA_Ignore` skips ICMP processing, and `MA_DropWithReset` answers a connection request with a reset. The hooks of a program that quits without removing them are removed when it closes the library. |
+| Statistics | `GetNetworkStatistics` -510 | All ten `NETSTATUS_*` tables in the 4.4BSD layouts (`icmpstat`, `igmpstat`, `ipstat`, `mbstat`, `mrtstat`, `rtstat`, `tcpstat`, `udpstat`, and `protocol_connection_data` for TCP and UDP sockets). Riptide counts what the Linux SNMP MIB counts, so the BSD counters are filled from the nearest Riptide counter, and the ones it does not keep are 0 (`mbstat` and `mrtstat` entirely: no mbufs, no multicast routing). IPv6 sockets are not listed. |
+| DNS | `AddDomainNameServer` -516, `RemoveDomainNameServer` -522, `Release/ObtainDomainNameServerList` -528/-534, `Get/SetDefaultDomainName` -702/-708 | Additions nest. In the list, `dnsn_UseCount` is the nesting count, or -1 for servers from the configuration or DHCP. The default domain is `domain` in `riptide.conf`. |
+| Network database | `set/end/getnetent` -540…-552, `…protoent` -558…-570, `…servent` -576…-588 | Walk the built-in tables. The networks table has only "loopback". |
+| Address conversion | `inet_aton` -594, `inet_ntop` -600, `inet_pton` -606, `In_LocalAddr` -612, `In_CanForward` -618 | IPv4 and IPv6. `In_LocalAddr()` is true for our addresses and every address on a connected subnet. |
+| Kernel memory | `mbuf_copym` -624 … `mbuf_pullup` -684 | Not provided: there are no mbufs. `SBTC_HAVE_KERNEL_MEMORY_API` says FALSE, and the calls return NULL or -1 (`ENOSYS`). |
+| Internet superserver | `ProcessIsServer` -690, `ObtainServerSocket` -696 | Riptide has no superserver: FALSE and -1. |
+| Configuration data | `ObtainRoadshowData` -714, `ReleaseRoadshowData` -720, `ChangeRoadshowData` -726 | 17 options mapped to sysctls: `bpf.bufsize`, `icmp.maskrepl`, `icmp.processecho`, `icmp.procesststamp`, `ip.defttl`, `ip.forwarding`, `ip.sendredirects`, `task.controller.priority` (the Riptide process's priority), `tcp.do_rfc1323`, `tcp.do_timestamps`, `tcp.do_win_scale`, `tcp.mssdflt`, `tcp.recvspace`, `tcp.sendspace`, `udp.cksum`, `udp.recvspace` and `udp.sendspace` (`net.inet.udp.maxdgram`). One writer at a time. |
+| Reentrant resolver | `gethostbyname_r` -738, `gethostbyaddr_r` -744 | IPv4. The result goes into the caller's buffer (`ERANGE` if it is too small). |
+| IP filter | `ipf_*` -762 … -798 (private) | Not provided: -1 with `ENXIO`; `SBTC_IPF_API_VERSION` is 0. |
+| getaddrinfo() | `freeaddrinfo` -804, `getaddrinfo` -810, `gai_strerror` -816, `getnameinfo` -822 | The Roadshow flavour: `struct addrinfo` with `ai_addr` before `ai_canonname`, negative `EAI_*` codes and Roadshow's `AI_*`/`NI_*` values. `gai_strerror()` takes its code in a0. riptide.library's implementation does the lookup. |
+
+**SocketBaseTagList() codes.** Besides the AmiTCP codes:
+
+* `SBTC_NUM_PACKET_FILTER_CHANNELS` (16).
+* Every `SBTC_HAVE_*_API` code answers TRUE, except
+  `SBTC_HAVE_KERNEL_MEMORY_API`, which answers FALSE.
+* `SBTC_UDP_CHECKSUM`, `SBTC_IP_FORWARDING`, `SBTC_IP_DEFAULT_TTL`,
+  `SBTC_ICMP_MASK_REPLY`, `SBTC_ICMP_SEND_REDIRECTS`,
+  `SBTC_ICMP_PROCESS_ECHO` and `SBTC_ICMP_PROCESS_TSTAMP` read and set
+  the stack-wide sysctls. Riptide answers ICMP time stamp requests
+  now. The new sysctls `net.inet.icmp.process_echo` and
+  `net.inet.icmp.process_tstamp` take `IR_Process`/`IR_Ignore`/`IR_Drop`
+  as 0/1/2.
+* `SBTC_SYSTEM_STATUS`, and `SBTC_GET_BYTES_RECEIVED`/`SENT` (by
+  reference, an `SBQUAD_T`).
+* `SBTC_SIG_ADDRESS_CHANGE_MASK` is signalled whenever an interface
+  address is set, added or removed.
+* `SBTC_ERROR_HOOK` is called on every `errno` and `h_errno` change.
+  `SBTC_LOG_HOOK` takes over `vsyslog()` output.
+* `SBTC_CAN_SHARE_LIBRARY_BASES` is accepted.
+* `SBTC_COMPAT43` and `SBTC_IDN_DEFAULT_CHARACTER_SET` read 0, and only
+  0 can be set (4.4BSD socket addresses; no IDN translation).
+* `SBTC_LOG_FILE_NAME` reads "" and cannot be set: Riptide logs to its
+  own output.
+* `SBTC_IP_FILTER_HOOK` is NULL, and only NULL can be set.
+
+**SDK.** `sdk/fd/bsdsocket_lib.fd`, `sdk/include/clib/bsdsocket_protos.h`,
+the vbcc inlines, pragmas and `proto/bsdsocket.h` cover the whole table,
+AmiTCP part included. The private vectors are `##private`, as in the
+Roadshow SFD. `sdk/include/libraries/bsdsocket.h` has the tags,
+constants and structures above, written from the Roadshow documentation.
+The socket structures themselves come from the usual network headers.
+`tests/amiga/rs_test.c`, built from the SDK, calls every vector and is run
+by `tests/amiga/run_fsuae_roadshow.sh`.
+
+**Roadshow programs.** NetMon 0.34 (Aminet `comm/net/netmon.lha`), an
+interface monitor written for Roadshow, runs under Riptide. It finds the
+interfaces and shows their traffic, and its `WRITESTATS` option writes
+the same counters to `ENV:`.
+
 ## Compatibility notes
 
 **Per-opener library bases.** As in the historical stack, every task that
@@ -2526,9 +2602,11 @@ readable (end of file), one whose connect failed reports the error.
 
 * `gethostbyname()` and `gethostbyaddr()` use the static table first,
   then DNS.
-* `getnetbyname()` and `getnetbyaddr()` know only "loopback" (net 127).
-* `getservbyname()`, `getservbyport()`, `getprotobyname()` and
-  `getprotobynumber()` use built-in tables.
+* `getnetbyname()`, `getnetbyaddr()` and `getnetent()` know only
+  "loopback" (net 127).
+* `getservbyname()`, `getservbyport()`, `getprotobyname()`,
+  `getprotobynumber()`, `getservent()` and `getprotoent()` use built-in
+  tables.
 
 **riptide.library.**
 
@@ -2562,7 +2640,7 @@ readable (end of file), one whose connect failed reports the error.
   `tests/amiga/check_layouts.sh` checks against that API's SDK.
 
 **riptide.library SDK.** `sdk/` holds what a program needs to call
-riptide.library, generated from `src/amiga/lib_lvos.txt` by
+riptide.library (and bsdsocket.library, see "Roadshow extensions"), generated from `src/amiga/lib_lvos.txt` by
 `tools/gen_lvos.py` (`make -f Makefile.amiga sdk`; `check` fails when it
 is out of date):
 
@@ -2754,7 +2832,8 @@ Both builds generate their library glue from the LVO tables
 
 | Test | What it checks |
 |---|---|
-| `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the SDK 2.11 of the historical API (`COMPAT_SDK`): the compat alias must keep its vector layout (riptide.library's names are mapped to the historical ones), and `sdk/fd/riptide_lib.fd` must match the table. With `MUI_SDK=` (the `Developer` drawer of Aminet `dev/mui/mui38dev.lha`) also RiptidePrefs' MUI definitions (`src/amiga/prefs/mui.h`: structures, attribute and method numbers) and its muimaster.library vectors. Set `NDK=`, `COMPAT_SDK=` and `AMITCP_SDK=` to the unpacked archives. |
+| `tests/amiga/check_layouts.sh` | Riptide's own structure layouts, constants and vector tables against the NDK 3.2, the AmiTCP SDK 4.3 and the SDK 2.11 of the historical API (`COMPAT_SDK`): the compat alias must keep its vector layout (riptide.library's names are mapped to the historical ones), and `sdk/fd/riptide_lib.fd` must match the table. With `MUI_SDK=` (the `Developer` drawer of Aminet `dev/mui/mui38dev.lha`) also RiptidePrefs' MUI definitions (`src/amiga/prefs/mui.h`: structures, attribute and method numbers) and its muimaster.library vectors. Set `NDK=`, `COMPAT_SDK=` and `AMITCP_SDK=` to the unpacked archives. The Roadshow extensions of bsdsocket.library are checked against the Roadshow SDK (`ROADSHOW_SDK=`, default `$NDK/SANA+RoadshowTCP-IP`, part of NDK 3.2R4: its `sfd/` and `netinclude/`): the whole vector table to -822, `src/amiga/roadshow.h`, the packet filter and routing message layouts, the statistics structure sizes and about 290 constants; `sdk/fd/bsdsocket_lib.fd` must match the table too. |
+| `tests/amiga/run_fsuae_roadshow.sh build/amiga` | Boots FS-UAE (AROS ROM, or `KICKSTART_ROM=`) with Riptide on loopback and runs `tests/amiga/rs_test` (built from `sdk/` only), which calls every Roadshow vector of bsdsocket.library and checks the results: packet filter on lo0 (filter program, notify signal, read timeout and interrupt, `bpf_write()` delivered to a socket), interface queries and changes (an alias and the address change signal), routes, DNS servers and the default domain, statistics, configuration data, the netdb enumeration, address conversion, `gethostbyname_r()`/`gethostbyaddr_r()`, the Roadshow `getaddrinfo()` layout and codes, all seven monitoring hook types, address allocation messages and the SocketBaseTagList() codes. |
 | `tests/amiga/test_hunk.py FILES` | Loads the executables with amitools and checks their relocations. It also has elf2hunk unit tests: absolute, PC-relative and absolute-symbol relocations, rejecting 16-bit relocations, bss in the hunk size, and a run under vamos. |
 | `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback (127.0.0.1 and ::1, 24- and 28-byte `sockaddr_in6`, a dual-stack listener, the IPv6 resolver calls) with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
 | `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. IPv6: `ip -6` addr/route/neigh changes and listings, `ifconfig inet6`, `ping6`/`ping -6`, `traceroute6`, `host` AAAA and `ip6.arpa`, `nc -6` (also an IPv4 client of a dual-stack listener), `netstat -6`. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. Background transfers: `Riptide BACKGROUND program=nc` makes the next `nc` client LEDBAT and rLEDBAT (`netstat -T`), the socket memory sysctls and the `STATUS` line. |

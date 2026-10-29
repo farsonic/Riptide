@@ -3,7 +3,7 @@
 #   make -f Makefile.amiga                  vbcc (default): build/amiga/Riptide, build/amiga/rtcheck
 #   make -f Makefile.amiga TOOLCHAIN=gcc    m68k-linux-gnu-gcc + tools/elf2hunk.py: build/amiga-gcc/...
 #   make -f Makefile.amiga check            vamos self test + hunk/relocation checks
-#   make -f Makefile.amiga sdk              regenerate the riptide.library SDK in sdk/
+#   make -f Makefile.amiga sdk              regenerate the riptide.library and bsdsocket.library SDK in sdk/
 #   make -f Makefile.amiga package          Installer package: build/package/Riptide/,
 #                                           build/riptide-<version>.lha (or .zip) and .adf
 #   Releases (from 0.20) are packaged from the gcc build, which is faster:
@@ -19,7 +19,7 @@ VASM ?= $(VBCC)/bin/vasmm68k_mot
 VAMOS ?= vamos
 
 CORE_SRC  := $(wildcard src/core/*.c)
-AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/amiga/riptidelib.c \
+AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/amiga/roadshow.c src/amiga/riptidelib.c \
              src/amiga/usergroup.c src/amiga/sana2.c src/amiga/mni.c src/amiga/stackproc.c \
              src/amiga/main.c src/amiga/selftest.c src/amiga/bench.c
 LIBS      := bsdsocket riptide usergroup
@@ -206,7 +206,12 @@ all: $(BUILD)/sdk_test
 $(BUILD)/sdk_test: tests/amiga/sdk_test.c $(wildcard sdk/include/*/*.h)
 	@mkdir -p $(dir $@)
 	$(VC) -c99 -O2 -cpu=68020 -I$(NDK)/Include_H -Isdk/include -o $@ $< -lamiga
-SDK_BIN := $(BUILD)/sdk_test
+# the Roadshow API test (tests/amiga/run_fsuae_roadshow.sh), from the SDK too
+all: $(BUILD)/rs_test
+$(BUILD)/rs_test: tests/amiga/rs_test.c $(wildcard sdk/include/*/*.h)
+	@mkdir -p $(dir $@)
+	$(VC) -c99 -O2 -cpu=68020 -I$(NDK)/Include_H -Isdk/include -o $@ $< -lamiga
+SDK_BIN := $(BUILD)/sdk_test $(BUILD)/rs_test
 endif
 
 # ping6 / traceroute6 are ping.c / traceroute.c built for IPv6
@@ -230,9 +235,11 @@ $(BUILD)/stackprobe: $(SP_SRC) src/amiga/stackprobe/stackprobe.h $(SP_GEN)
 # ---------------------------------------------------------------- SDK ----
 sdk:
 	$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide sdk
+	$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt bsdsocket sdk
 
 sdk-check:
-	@rm -rf $(BUILD)/sdk && $(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide $(BUILD)/sdk
+	@rm -rf $(BUILD)/sdk && $(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide $(BUILD)/sdk && \
+		$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt bsdsocket $(BUILD)/sdk
 	@for f in $$(cd $(BUILD)/sdk && find . -type f); do \
 		cmp -s $(BUILD)/sdk/$$f sdk/$$f || { echo "sdk/$$f is out of date: make -f Makefile.amiga sdk"; exit 1; }; \
 	done; echo "ok   sdk/ matches src/amiga/lib_lvos.txt"

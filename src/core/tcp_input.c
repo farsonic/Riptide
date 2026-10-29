@@ -2200,6 +2200,19 @@ out:
 	return;
 }
 
+/* A monitoring hook rejected the connection request b with a reset
+ * (RFC 793: RST|ACK acknowledging the SYN and its data). */
+static void mon_reset(const struct rt_buf *b, const rt_in6_addr *sa, const rt_in6_addr *da, u32 doff)
+{
+	const u8 *th = b->data;
+	u32 ack = rt_get_be32(th + 4) + (b->len - doff) + 1 + ((th[13] & TCPHDR_FIN) ? 1 : 0);
+	u16 sport, dport;
+
+	memcpy(&sport, th, 2);
+	memcpy(&dport, th + 2, 2);
+	tcp_send_ctl(da, sa, dport, sport, 0, ack, TCPHDR_RST | TCPHDR_ACK, 0, 0, 0, 0, 0, 0, 0);
+}
+
 static void tcp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 {
 	const u8 *th;
@@ -2230,6 +2243,16 @@ static void tcp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 	}
 	rt_in6_set_v4mapped(&sa, saddr);
 	rt_in6_set_v4mapped(&da, daddr);
+	/* MHT_TCP_Connect: connection requests */
+	if (rt_mon_on(RT_MON_TCP_CONNECT) && (th[13] & (TCPHDR_SYN | TCPHDR_ACK | TCPHDR_RST)) == TCPHDR_SYN) {
+		int v = rt_mon_hook(RT_MON_TCP_CONNECT, &saddr, &daddr, th);
+		if (v != RT_MA_CONTINUE) {
+			if (v == RT_MA_DROPRESET)
+				mon_reset(b, &sa, &da, doff);
+			rt_tcpstat.InCsumErrors++;
+			goto bad;
+		}
+	}
 	tcp_rcv(b, &sa, &da, ip->tos, 0);
 	tcp_api_exit();
 	return;

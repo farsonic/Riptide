@@ -15,7 +15,9 @@ if you want stability etc.
 * **Compatible:** publishes `bsdsocket.library` 4 (AmiTCP API, 46 LVOs),
   `miami.library` 21 (Miami API, 83 vectors) and `usergroup.library` 4, all
   with the same LVO layouts as MiamiDx. These were verified against the
-  MiamiDx binary and the official SDKs.
+  MiamiDx binary and the official SDKs. `bsdsocket.library` also has the
+  Roadshow extensions (packet filter, routes, interfaces, DHCP, monitoring
+  hooks, statistics, DNS and more) at the Roadshow SDK's vector offsets.
 * **Modern TCP:** CUBIC with HyStart++ (RFC 9406), and NewReno. SACK and D-SACK, RACK-TLP,
   PRR, F-RTO with DSACK/Eifel undo, timestamps with PAWS, window scaling and
   ECN. RTO per RFC 6298 with Linux's estimator, delayed ACK with quickack,

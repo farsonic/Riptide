@@ -1170,6 +1170,10 @@ static void udp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 		rt_udpstat.InCsumErrors++;
 		goto err;
 	}
+	if (rt_mon_on(RT_MON_UDP) && rt_mon_hook(RT_MON_UDP, &ip->saddr, &ip->daddr, uh) != RT_MA_CONTINUE) {
+		rt_udpstat.InCsumErrors++;
+		goto err;
+	}
 	memcpy(&sport, uh, 2);
 	memcpy(&dport, uh + 2, 2);
 	if (dport == 0)

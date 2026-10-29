@@ -5,7 +5,7 @@
 # against the FD file of the API its compat alias provides, by
 # tests/amiga/check_layouts.sh.
 
-@lib bsdsocket SocketBase prefix=bsd_
+@lib bsdsocket SocketBase prefix=bsd_ guard=300:RT_BSDSOCKET_V4
 6   ULONG LibOpen(ULONG version d0) = bsd_libopen
 12  ULONG LibClose() = bsd_libclose
 18  ULONG LibExpunge() = rtlib_expunge
@@ -56,6 +56,84 @@
 288 ULONG gethostid()
 294 LONG SocketBaseTagList(APTR tags a0)
 300 LONG GetSocketEvents(ULONG* eventsp a0)
+# Roadshow extensions (bsdsocket.library 4, src/amiga/roadshow.c): the
+# layout of the Roadshow SDK bsdsocket_lib.sfd (-306..-360 are reserved
+# there and return 0 here); "# private" rows are ##private in that SFD.
+366 LONG bpf_open(LONG channel d0)
+372 LONG bpf_close(LONG channel d0)
+378 LONG bpf_read(LONG channel d0, APTR buffer a0, LONG len d1)
+384 LONG bpf_write(LONG channel d0, APTR buffer a0, LONG len d1)
+390 LONG bpf_set_notify_mask(LONG channel d1, ULONG signal_mask d0)
+396 LONG bpf_set_interrupt_mask(LONG channel d0, ULONG signal_mask d1)
+402 LONG bpf_ioctl(LONG channel d0, ULONG command d1, APTR buffer a0)
+408 LONG bpf_data_waiting(LONG channel d0)
+414 LONG AddRouteTagList(APTR tags a0)
+420 LONG DeleteRouteTagList(APTR tags a0)
+426 LONG ChangeRouteTagList(APTR tags a0)   # private
+432 void FreeRouteInfo(APTR buf a0)
+438 APTR GetRouteInfo(LONG address_family d0, LONG flags d1)
+444 LONG AddInterfaceTagList(STRPTR interface_name a0, STRPTR device_name a1, LONG unit d0, APTR tags a2)
+450 LONG ConfigureInterfaceTagList(STRPTR interface_name a0, APTR tags a1)
+456 void ReleaseInterfaceList(APTR list a0)
+462 APTR ObtainInterfaceList()
+468 LONG QueryInterfaceTagList(STRPTR interface_name a0, APTR tags a1)
+474 LONG CreateAddrAllocMessageA(LONG version d0, LONG protocol d1, STRPTR interface_name a0, APTR result_ptr a1, APTR tags a2)
+480 void DeleteAddrAllocMessage(APTR aam a0)
+486 void BeginInterfaceConfig(APTR message a0)
+492 void AbortInterfaceConfig(APTR message a0)
+498 LONG AddNetMonitorHookTagList(LONG type d0, APTR hook a0, APTR tags a1)
+504 void RemoveNetMonitorHook(APTR hook a0)
+510 LONG GetNetworkStatistics(LONG type d0, LONG version d1, APTR destination a0, LONG size d2)
+516 LONG AddDomainNameServer(STRPTR address a0)
+522 LONG RemoveDomainNameServer(STRPTR address a0)
+528 void ReleaseDomainNameServerList(APTR list a0)
+534 APTR ObtainDomainNameServerList()
+540 void setnetent(LONG stay_open d0)
+546 void endnetent()
+552 APTR getnetent()
+558 void setprotoent(LONG stay_open d0)
+564 void endprotoent()
+570 APTR getprotoent()
+576 void setservent(LONG stay_open d0)
+582 void endservent()
+588 APTR getservent()
+594 LONG inet_aton(STRPTR cp a0, APTR addr a1)
+600 STRPTR inet_ntop(LONG af d0, APTR src a0, STRPTR dst a1, LONG size d1)
+606 LONG inet_pton(LONG af d0, STRPTR src a0, APTR dst a1)
+612 LONG In_LocalAddr(ULONG address d0)
+618 LONG In_CanForward(ULONG address d0)
+624 APTR mbuf_copym(APTR m a0, LONG off d0, LONG len d1)
+630 LONG mbuf_copyback(APTR m a0, LONG off d0, LONG len d1, APTR cp a1)
+636 LONG mbuf_copydata(APTR m a0, LONG off d0, LONG len d1, APTR cp a1)
+642 APTR mbuf_free(APTR m a0)
+648 void mbuf_freem(APTR m a0)
+654 APTR mbuf_get()
+660 APTR mbuf_gethdr()
+666 APTR mbuf_prepend(APTR m a0, LONG len d0)
+672 LONG mbuf_cat(APTR m a0, APTR n a1)
+678 LONG mbuf_adj(APTR mp a0, LONG req_len d0)
+684 APTR mbuf_pullup(APTR m a0, LONG len d0)
+690 LONG ProcessIsServer(APTR pr a0)
+696 LONG ObtainServerSocket()
+702 LONG GetDefaultDomainName(STRPTR buffer a0, LONG buffer_size d0)
+708 void SetDefaultDomainName(STRPTR buffer a0)
+714 APTR ObtainRoadshowData(LONG access d0)
+720 void ReleaseRoadshowData(APTR list a0)
+726 LONG ChangeRoadshowData(APTR list a0, STRPTR name a1, ULONG length d0, APTR data a2)
+732 LONG RemoveInterface(STRPTR interface_name a0, LONG force d0)
+738 APTR gethostbyname_r(STRPTR name a0, APTR hp a1, APTR buf a2, ULONG buflen d0, APTR he a3)
+744 APTR gethostbyaddr_r(STRPTR addr a0, LONG len d0, LONG type d1, APTR hp a1, APTR buf a2, ULONG buflen d2, APTR he a3)
+762 LONG ipf_open(LONG channel d0)   # private
+768 LONG ipf_close(LONG channel d0)   # private
+774 LONG ipf_ioctl(LONG channel d0, ULONG command d1, APTR buffer a0)   # private
+780 LONG ipf_log_read(LONG channel d0, APTR buffer a0, LONG len d1)   # private
+786 LONG ipf_log_data_waiting(LONG channel d0)   # private
+792 LONG ipf_set_notify_mask(LONG channel d0, ULONG mask d1)   # private
+798 LONG ipf_set_interrupt_mask(LONG channel d0, ULONG mask d1)   # private
+804 void freeaddrinfo(APTR ai a0)
+810 LONG getaddrinfo(STRPTR hostname a0, STRPTR servname a1, APTR hints a2, APTR res a3)
+816 STRPTR gai_strerror(LONG errnum a0)
+822 LONG getnameinfo(APTR sa a0, ULONG salen d0, STRPTR host a1, ULONG hostlen d1, STRPTR serv a2, ULONG servlen d2, ULONG flags d3)
 
 # riptide.library 1. The same jump table also serves the compat alias
 # library (see src/amiga/riptidelib.c), so its layout must not change.

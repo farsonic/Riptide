@@ -17,6 +17,10 @@ static s32 icmp_ratelimit = 1000;      /* ms per token, per destination */
 static s32 icmp_msgs_per_sec = 1000;
 static s32 icmp_msgs_burst = 50;
 static s32 icmp_drop_redirect = 0;
+/* echo and time stamp requests: 0 answer, 1 ignore (raw sockets still
+ * see them), 2 drop as if damaged (Roadshow IR_Process/IR_Ignore/IR_Drop) */
+s32 rt_icmp_process_echo = 0;
+s32 rt_icmp_process_tstamp = 0;
 
 static const struct rt_sysctl icmp_sysctl[] = {
 	{ "net.inet.icmp.maskrepl", RT_SYSCTL_INT, RT_SYSCTL_RW, 4, { RT_CTL_NET, 2, 1, 1 },
@@ -31,6 +35,10 @@ static const struct rt_sysctl icmp_sysctl[] = {
 	  &icmp_msgs_burst, 1, 100000, NULL, "Global ICMP error burst" },
 	{ "net.inet.icmp.drop_redirect", RT_SYSCTL_INT, RT_SYSCTL_RW, 0, { 0 },
 	  &icmp_drop_redirect, 0, 1, NULL, "Ignore ICMP redirects" },
+	{ "net.inet.icmp.process_echo", RT_SYSCTL_INT, RT_SYSCTL_RW, 0, { 0 },
+	  &rt_icmp_process_echo, 0, 2, NULL, "Echo requests: 0 answer, 1 ignore, 2 drop" },
+	{ "net.inet.icmp.process_tstamp", RT_SYSCTL_INT, RT_SYSCTL_RW, 0, { 0 },
+	  &rt_icmp_process_tstamp, 0, 2, NULL, "Time stamp requests: 0 answer, 1 ignore, 2 drop" },
 };
 
 /* ---- rate limiting ---- */
@@ -292,9 +300,21 @@ void rt_icmp_input(struct rt_buf *b, const struct rt_iphdr *ip)
 		rt_icmpstat.InErrors++;
 		goto done;
 	}
+	if (rt_mon_on(RT_MON_ICMP)) {
+		int v = rt_mon_hook(RT_MON_ICMP, &ip->saddr, &ip->daddr, ic);
+		if (v != RT_MA_CONTINUE) {
+			if (v != RT_MA_IGNORE)
+				rt_icmpstat.InErrors++;
+			goto done;
+		}
+	}
 	switch (ic[0]) {
 	case RT_ICMP_ECHO:
 		rt_icmpstat.InEchos++;
+		if (rt_icmp_process_echo == 2)
+			rt_icmpstat.InErrors++;
+		if (rt_icmp_process_echo)
+			break;
 		if ((b->flags & (RT_BUFF_BCAST | RT_BUFF_MCAST)) && !icmp_bmcastecho)
 			break;
 		memcpy(hdr, ic, 8);
@@ -305,6 +325,22 @@ void rt_icmp_input(struct rt_buf *b, const struct rt_iphdr *ip)
 	case RT_ICMP_ECHOREPLY:
 		rt_icmpstat.InEchoReps++;
 		break;   /* raw sockets (ping) already have their copy */
+	case RT_ICMP_TSTAMP: {
+		u32 ts[3], sec, usec, now;
+		if (rt_icmp_process_tstamp == 2)
+			rt_icmpstat.InErrors++;
+		if (rt_icmp_process_tstamp || len < 20 || (b->flags & (RT_BUFF_BCAST | RT_BUFF_MCAST)))
+			break;
+		/* RFC 792: milliseconds since midnight UT */
+		rt_wallclock_tv(&sec, &usec);
+		now = rt_htonl((sec % 86400u) * 1000u + usec / 1000u);
+		memcpy(ts, ic + 8, 4);
+		ts[1] = ts[2] = now;
+		memcpy(hdr, ic, 8);
+		hdr[0] = RT_ICMP_TSTAMPREPLY;
+		icmp_send(ip->daddr, ip->saddr, ip->tos, hdr, ts, 12);
+		break;
+	}
 	case RT_ICMP_MASKREQ:
 		if (!icmp_maskrepl || len < 12 || !b->netif || !b->netif->addr || !ip->saddr)
 			break;

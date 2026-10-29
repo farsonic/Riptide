@@ -175,6 +175,12 @@ const struct rt_servent_info *rt_getservbyname(const char *name, const char *pro
 const struct rt_servent_info *rt_getservbyport(u16 port /* host order */, const char *proto);
 const struct rt_protoent_info *rt_getprotobyname(const char *name);
 const struct rt_protoent_info *rt_getprotobynumber(int proto);
+/* networks (getnetent()): net in host order, like struct netent */
+struct rt_netent_info { const char *name; const char *aliases[4]; u32 net; };
+/* entry i of each table, NULL past the end (getservent() & co.) */
+const struct rt_servent_info *rt_servent_at(unsigned i);
+const struct rt_protoent_info *rt_protoent_at(unsigned i);
+const struct rt_netent_info *rt_netent_at(unsigned i);
 
 /* ---- DHCP client (src/core/dhcp.c, RFC 2131) ---- */
 #define RT_DHCP_EV_BOUND   1

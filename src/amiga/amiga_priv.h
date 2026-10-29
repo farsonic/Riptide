@@ -90,9 +90,16 @@ struct TaskCtx {
 	} proto;
 	struct {
 		struct netent ne;
-		char  *aliases[1];
+		char  *aliases[5];
 	} net;
 	char   ifname[RT_IFNAMSIZ];
+	/* Roadshow extensions (roadshow.c) */
+	int    servidx, protoidx, netidx;   /* getservent() & co. */
+	APTR   errhook;              /* SBTC_ERROR_HOOK (struct Hook *) */
+	ULONG  addrchg_mask;         /* SBTC_SIG_ADDRESS_CHANGE_MASK */
+	LONG   share_bases;          /* SBTC_CAN_SHARE_LIBRARY_BASES */
+	int    in_mon_hook;          /* calling a monitoring hook */
+	char   devname[64];          /* IFQ_DeviceName result */
 };
 
 /* Base of a per-task library (bsdsocket, riptide, its alias, usergroup) */
@@ -138,6 +145,7 @@ int  amiga_libs_remove(void);
 /* Find (or not) the TaskCtx of the calling task. */
 struct TaskCtx *amiga_ctx_find(struct Task *t);
 int  amiga_ctx_valid(struct TaskCtx *c);    /* under Forbid() */
+void amiga_ctx_signal_addrchg(void);       /* SBTC_SIG_ADDRESS_CHANGE_MASK */
 /* The per-task generic open/close used by the Open/Close vectors. */
 struct Library *rtlib_open(struct RtLibDef *def, struct Library *master);
 ULONG rtlib_close(struct RtBase *b);
@@ -158,8 +166,32 @@ const char *amiga_ioerr_str(LONG e);
 struct hostent *bsd_make_hostent(struct TaskCtx *c, const char *name, const u32 *addrs, int n);
 struct hostent *bsd_make_hostent6(struct TaskCtx *c, const char *name, const rt_in6_addr *addrs, int n);
 
+/* netdb results in the per-task buffers (NULL in, NULL out) */
+ULONG bsd_make_servent(struct TaskCtx *c, const struct rt_servent_info *si);
+ULONG bsd_make_protoent(struct TaskCtx *c, const struct rt_protoent_info *pi);
+ULONG bsd_make_netent(struct TaskCtx *c, const struct rt_netent_info *ni);
+
+/* roadshow.c: the Roadshow (bsdsocket.library 4) extensions */
+void amiga_rs_init(void);                 /* stack process, before the libraries */
+void amiga_rs_ctx_gone(struct TaskCtx *c); /* its channels, hooks and lists go */
+/* SocketBaseTagList() codes of the extensions: 0 done, -1 failed, 1 not ours */
+int  amiga_rs_sbt(struct TaskCtx *c, ULONG code, int set, ULONG *where);
+/* SBTC_ERROR_HOOK: errno (EHMA_Set_errno) or h_errno changed */
+void amiga_rs_error_hook(struct TaskCtx *c, ULONG action, LONG code);
+/* SBTC_LOG_HOOK: 1 if a hook took the vsyslog() line */
+int  amiga_rs_log(struct TaskCtx *c, ULONG pri, const char *line);
+/* MHT_Connect / MHT_Bind / MHT_Send hooks in the caller's context: 0 to
+ * proceed, else the errno a hook asked for. amiga_rs_caller_hooks has a
+ * bit (1 << MHT_*) for each kind with hooks. */
+extern volatile ULONG amiga_rs_caller_hooks;
+LONG amiga_rs_mon_connect(struct TaskCtx *c, int bind, LONG s, APTR name, LONG namelen);
+LONG amiga_rs_mon_send(struct TaskCtx *c, LONG s, APTR buf, LONG len, LONG flags, APTR to, LONG tolen,
+                       APTR msg);
+
 /* Call an application callback taking d0/d1 (fd callback). */
 LONG amiga_call_d0d1(APTR fn, LONG d0, LONG d1);
+/* Call a struct Hook: h_Entry with a0 = hook, a2 = object, a1 = message. */
+ULONG amiga_call_hook(APTR hook, APTR obj, APTR msg);
 int  amiga_inet_aton(const char *cp, u32 *addr);
 STRPTR amiga_ntoa(u32 in_net, char *buf);
 void amiga_set_fdcb(struct TaskCtx *c, APTR fn, LONG cpu);

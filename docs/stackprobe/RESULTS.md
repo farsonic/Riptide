@@ -7,14 +7,14 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 | Stack | bsdsocket | Passed | Failed | Unsupported | Skipped | Score | Machine |
 |---|---|---|---|---|---|---|---|
-| Riptide 0.24 | 4.1 | 175 | 0 | 17 | 2 | 91 % | 68020, Kickstart 46.143 |
-| AmiNetXDuo 1.0.0-rc2 | 4.11 | 162 | 5 | 13 | 2 | 90 % | 68020, Kickstart 46.143 |
-| AmiTCP_NG 4.1.8 | 4.1 | 154 | 5 | 13 | 2 | 90 % | 68020, Kickstart 46.143 |
-| MiamiDeluxe 1.0c | 4.1 | 155 | 6 | 23 | 2 | 84 % | 68020, Kickstart 46.143 |
-| Miami 3.2b | 4.1 | 153 | 8 | 23 | 2 | 83 % | 68020, Kickstart 46.143 |
-| PrismNet 4.3 | 4.4 | 139 | 16 | 17 | 2 | 81 % | 68020, Kickstart 46.143 |
-| tolunnet 1.2.0-rc6 | 4.1 | 129 | 11 | 24 | 2 | 79 % | 68020, Kickstart 46.143 |
-| AmiTCP 3.0b2 | 3.28 | 131 | 9 | 29 | 4 | 78 % | 68020, Kickstart 46.143 |
+| Riptide 0.24 | 4.1 | 208 | 0 | 5 | 2 | 98 % | 68020, Kickstart 46.143 |
+| AmiNetXDuo 1.0.0-rc2 | 4.11 | 181 | 5 | 15 | 2 | 90 % | 68020, Kickstart 46.143 |
+| AmiTCP_NG 4.1.8 | 4.1 | 172 | 6 | 15 | 2 | 89 % | 68020, Kickstart 46.143 |
+| MiamiDeluxe 1.0c | 4.1 | 155 | 6 | 44 | 2 | 76 % | 68020, Kickstart 46.143 |
+| Miami 3.2b | 4.1 | 153 | 8 | 44 | 2 | 75 % | 68020, Kickstart 46.143 |
+| PrismNet 4.3 | 4.4 | 149 | 21 | 23 | 2 | 77 % | 68020, Kickstart 46.143 |
+| tolunnet 1.2.0-rc6 | 4.1 | 137 | 11 | 37 | 2 | 74 % | 68020, Kickstart 46.143 |
+| AmiTCP 3.0b2 | 3.28 | 131 | 9 | 50 | 4 | 69 % | 68020, Kickstart 46.143 |
 
 #### libs
 
@@ -93,7 +93,17 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 | `s2errnostrptr` SBTC_S2ERRNOSTRPTR (1) | yes | yes | yes | yes | yes | yes | yes | yes |
 | `s2werrnostrptr` SBTC_S2WERRNOSTRPTR (1) | yes | yes | yes | yes | yes | yes | yes | yes |
 | `releasestrptr` SBTC_RELEASESTRPTR | yes | yes | yes | yes | yes | yes | yes | - |
-| `compat43` SBTC_COMPAT43 get | - | - | yes | - | - | - | - | - |
+| `compat43` SBTC_COMPAT43 get | yes | - | yes | - | - | - | - | - |
+| `rs_filter_channels` SBTC_NUM_PACKET_FILTER_CHANNELS (Roadshow) | yes | yes | yes | - | - | - | - | - |
+| `rs_routing_api` SBTC_HAVE_ROUTING_API (Roadshow) | yes | yes | yes | - | - | yes | - | - |
+| `rs_interface_api` SBTC_HAVE_INTERFACE_API (Roadshow) | yes | yes | yes | - | - | yes | - | - |
+| `rs_monitoring_api` SBTC_HAVE_MONITORING_API (Roadshow) | yes | yes | - | - | - | - | - | - |
+| `rs_status_api` SBTC_HAVE_STATUS_API (Roadshow) | yes | yes | yes | - | - | yes | - | - |
+| `rs_dns_api` SBTC_HAVE_DNS_API (Roadshow) | yes | yes | yes | - | - | yes | yes | - |
+| `rs_system_status` SBTC_SYSTEM_STATUS get (Roadshow) | yes | yes | yes | - | - | - | yes | - |
+| `rs_conversion_api` SBTC_HAVE_ADDRESS_CONVERSION_API (Roadshow) | yes | yes | yes | - | - | - | yes | - |
+| `rs_roadshowdata_api` SBTC_HAVE_ROADSHOWDATA_API (Roadshow) | yes | - | yes | - | - | - | - | - |
+| `rs_gethostaddr_r_api` SBTC_HAVE_GETHOSTADDR_R_API (Roadshow) | yes | yes | yes | - | - | - | yes | - |
 | `set_breakmask` SBTC_BREAKMASK set and read back | yes | yes | yes | yes | yes | yes | yes | yes |
 | `set_dtablesize` SBTC_DTABLESIZE raised by 64 | yes | yes | yes | yes | yes | yes | yes | yes |
 | `errnobyteptr` SBTC_ERRNOBYTEPTR gets the error | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -136,7 +146,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 | `backlog` connections completed with listen(5), no accept | 6 of 8 | 5 of 8 | 8 of 8 | 8 of 8 | 8 of 8 | 5 of 8 | 5 of 8 | 8 of 8 |
 | `eaddrinuse` bind() to a listening port says EADDRINUSE | yes | yes | yes | yes | yes | yes | yes | yes |
 | `reuseaddr` SO_REUSEADDR binds a port in TIME_WAIT | yes | yes | yes | yes | yes | yes | yes | yes |
-| `ephemeral` ports bind(0) picks (10 sockets) | 51574-65359 | 49769-64074 | 51804-65515 | 1055-1064 | 1055-1064 | 63964-63973 | 50155-50164 | 1053-1062 |
+| `ephemeral` ports bind(0) picks (10 sockets) | 54466-64064 | 49498-65437 | 49586-59507 | 1055-1064 | 1055-1064 | 55286-55295 | 64682-64691 | 1053-1062 |
 | `msg_peek` MSG_PEEK leaves the data | yes | yes | yes | yes | yes | yes | yes | yes |
 | `msg_dontwait` MSG_DONTWAIT on a blocking socket | yes | yes | FAIL (EINTR) | FAIL (EINTR) | FAIL (EINTR) | yes | yes | FAIL (EINTR) |
 | `msg_waitall` MSG_WAITALL gets the whole 6 bytes | yes | yes | yes | yes | yes | yes | FAIL | yes |
@@ -199,9 +209,9 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 | Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
-| `timeout_20` WaitSelect() 20 ms timeout lasts | 21 ms | 22 ms | 27 ms | FAIL | FAIL | 22 ms | 30 ms | 31 ms |
-| `timeout_100` WaitSelect() 100 ms timeout lasts | 101 ms | 121 ms | 116 ms | 201 ms | 201 ms | 102 ms | 101 ms | 116 ms |
-| `timeout_500` WaitSelect() 500 ms timeout lasts | 501 ms | 521 ms | 518 ms | 501 ms | 501 ms | 502 ms | 523 ms | 516 ms |
+| `timeout_20` WaitSelect() 20 ms timeout lasts | 21 ms | 23 ms | 22 ms | FAIL | FAIL | 22 ms | 24 ms | 30 ms |
+| `timeout_100` WaitSelect() 100 ms timeout lasts | 101 ms | 121 ms | 115 ms | 201 ms | 201 ms | 102 ms | 110 ms | 116 ms |
+| `timeout_500` WaitSelect() 500 ms timeout lasts | 501 ms | 521 ms | 520 ms | 501 ms | 501 ms | 502 ms | 501 ms | 517 ms |
 | `poll` zero timeout returns at once | yes | yes | yes | yes | yes | yes | yes | yes |
 | `signal` a signal in the mask ends WaitSelect() | yes | yes | yes | yes | yes | yes | yes | yes |
 | `break_accept` Ctrl-C ends a blocking accept() | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -235,17 +245,28 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 | Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
-| `rs_interfaces` ObtainInterfaceList() (Roadshow) | - | yes | yes | - | - | yes | - | - |
-| `rs_routes` GetRouteInfo() (Roadshow) | - | yes | yes | - | - | yes | - | - |
-| `rs_dns` ObtainDomainNameServerList() | - | yes | yes | - | - | yes | - | - |
-| `rs_getprotoent` setprotoent()/getprotoent() | - | yes | yes | - | - | FAIL | yes | - |
-| `rs_getservent` setservent()/getservent() | - | yes | yes | - | - | FAIL | yes | - |
-| `rs_getnetent` setnetent()/getnetent() | - | yes | yes | - | - | yes | yes | - |
-| `rs_inet_aton` inet_aton() (Roadshow) | - | yes | yes | - | - | yes | yes | - |
-| `rs_inet_pton` inet_pton()/inet_ntop() IPv4 (Roadshow) | - | yes | yes | - | - | yes | yes | - |
-| `rs_in_localaddr` In_LocalAddr(127.0.0.1) | - | yes | yes | - | - | yes | yes | - |
-| `rs_processisserver` ProcessIsServer() (inetd API) | - | yes | yes | - | - | yes | yes | - |
-| `rs_bpf` bpf_open()/bpf_close() (packet filter) | - | yes | yes | - | - | yes | - | - |
+| `rs_interfaces` ObtainInterfaceList() (Roadshow) | yes | yes | yes | - | - | yes | - | - |
+| `rs_routes` GetRouteInfo() (Roadshow) | yes | yes | yes | - | - | yes | - | - |
+| `rs_dns` ObtainDomainNameServerList() | yes | yes | yes | - | - | yes | - | - |
+| `rs_getprotoent` setprotoent()/getprotoent() | yes | yes | yes | - | - | FAIL | yes | - |
+| `rs_getservent` setservent()/getservent() | yes | yes | yes | - | - | FAIL | yes | - |
+| `rs_getnetent` setnetent()/getnetent() | yes | yes | yes | - | - | yes | yes | - |
+| `rs_inet_aton` inet_aton() (Roadshow) | yes | yes | yes | - | - | yes | yes | - |
+| `rs_inet_pton` inet_pton()/inet_ntop() IPv4 (Roadshow) | yes | yes | yes | - | - | yes | yes | - |
+| `rs_in_localaddr` In_LocalAddr(127.0.0.1) | yes | yes | yes | - | - | yes | yes | - |
+| `rs_processisserver` ProcessIsServer() (inetd API) | yes | yes | yes | - | - | yes | yes | - |
+| `rs_bpf` bpf_open()/bpf_close() (packet filter) | yes | yes | yes | - | - | yes | - | - |
+| `rs_query_if` QueryInterfaceTagList(IFQ_MTU, IFQ_Address) | yes | yes | yes | - | - | yes | - | - |
+| `rs_route_format` GetRouteInfo(): rt_msghdr version 3 records | yes | yes | yes | - | - | yes | - | - |
+| `rs_in_canforward` In_CanForward() | yes | yes | FAIL | - | - | FAIL | yes | - |
+| `rs_netstat` GetNetworkStatistics(NETSTATUS_ip) | yes | yes | yes | - | - | yes | - | - |
+| `rs_dns_add` Add/RemoveDomainNameServer() | yes | yes | yes | - | - | yes | - | - |
+| `rs_domainname` GetDefaultDomainName() | yes | yes | yes | - | - | yes | yes | - |
+| `rs_roadshowdata` ObtainRoadshowData(ORD_ReadAccess) | yes | - | yes | - | - | FAIL (EAFNOSUPPORT) | - | - |
+| `rs_gethostbyname_r` gethostbyname_r("127.0.0.1") | yes | yes | yes | - | - | FAIL | yes | - |
+| `rs_getaddrinfo` getaddrinfo() (Roadshow, -810) | yes | yes | yes | - | - | yes | yes | - |
+| `rs_bpf_ioctl` bpf_ioctl(BIOCVERSION, BIOCGBLEN) | yes | yes | yes | - | - | FAIL | - | - |
+| `rs_monitor_connect` MHT_Connect hook refuses connect() | yes | yes | - | - | - | FAIL | - | - |
 | `mi_supportsipv6` MiamiSupportsIPV6() | yes |  |  | yes | yes |  |  |  |
 | `mi_getpid` MiamiGetPid() | yes |  |  | yes | yes |  |  |  |
 | `mi_isonline` MiamiIsOnline(NULL) | yes |  |  | yes | yes |  |  |  |

@@ -11,6 +11,10 @@
 #    the reference FD files. riptide.library's names are mapped to the
 #    reference names (COMPAT_FN_PREFIX), since its jump table is also
 #    published as the compat alias and must stay binary compatible.
+# 3. The Roadshow extensions of bsdsocket.library (version 4): the whole
+#    vector table against the Roadshow SDK's SFD file, and src/amiga/
+#    roadshow.h, rt_bpf.h and rt_bsdinfo.h against its netinclude headers
+#    (ROADSHOW_SDK, default NDK/SANA+RoadshowTCP-IP: sfd/ and netinclude/).
 # Nothing from the reference headers is copied into the repository.
 import os
 import re
@@ -241,6 +245,122 @@ EPROTONOSUPPORT ESOCKTNOSUPPORT EOPNOTSUPP EPFNOSUPPORT EAFNOSUPPORT EADDRINUSE 
 ENETUNREACH ENETRESET ECONNABORTED ECONNRESET ENOBUFS EISCONN ENOTCONN ESHUTDOWN ETOOMANYREFS ETIMEDOUT
 ECONNREFUSED ELOOP ENAMETOOLONG EHOSTDOWN EHOSTUNREACH ENOTEMPTY SIOCADDRT SIOCDELRT SIOCAIFADDR
 RTF_UP RTF_GATEWAY RTF_HOST RTF_REJECT RTF_DYNAMIC RTF_MASK RTF_STATIC'''.split()
+# Roadshow SDK (libraries/bsdsocket.h, net/bpf.h, net/route.h, netinet/*_var.h, netdb.h)
+def R(mine, ref, pairs):
+    """Our struct against a reference one with other field names."""
+    out = [('struct ' + mine, None, 'struct ' + ref, None)]
+    out += [('struct ' + mine, a, 'struct ' + ref, b) for a, b in pairs]
+    return out
+
+
+ROADSHOW_STRUCTS = (
+    S('AddressAllocationMessage', 'aam_Reserved', 'aam_Result', 'aam_Version', 'aam_Protocol',
+      'aam_InterfaceName', 'aam_Timeout', 'aam_LeaseTime', 'aam_RequestedAddress', 'aam_ClientIdentifier',
+      'aam_Address', 'aam_ServerAddress', 'aam_SubnetMask', 'aam_NAKMessage', 'aam_NAKMessageSize',
+      'aam_RouterTable', 'aam_RouterTableSize', 'aam_DNSTable', 'aam_DNSTableSize', 'aam_StaticRouteTable',
+      'aam_StaticRouteTableSize', 'aam_HostName', 'aam_HostNameSize', 'aam_DomainName', 'aam_DomainNameSize',
+      'aam_BOOTPMessage', 'aam_BOOTPMessageSize', 'aam_LeaseExpires', 'aam_Unicast') +
+    S('DomainNameServerNode', 'dnsn_Size', 'dnsn_Address', 'dnsn_UseCount') +
+    S('RoadshowDataNode', 'rdn_Name', 'rdn_Flags', 'rdn_Type', 'rdn_Length', 'rdn_Data') +
+    S('ConnectMonitorMsg', 'cmm_Size', 'cmm_Caller', 'cmm_Socket', 'cmm_Name', 'cmm_NameLen') +
+    S('BindMonitorMsg', 'bmm_Size', 'bmm_Caller', 'bmm_Socket', 'bmm_Name', 'bmm_NameLen') +
+    S('SendMonitorMessage', 'smm_Size', 'smm_Caller', 'smm_Socket', 'smm_Buffer', 'smm_Len', 'smm_Flags',
+      'smm_To', 'smm_ToLen', 'smm_Msg') +
+    R('ProtocolMonitorMessage', 'TCPConnectMonitorMessage',
+      (('pm_Size', 'tcmm_Size'), ('pm_Src', 'tcmm_Src'), ('pm_Dst', 'tcmm_Dst'), ('pm_Header', 'tcmm_TCP'))) +
+    R('ProtocolMonitorMessage', 'UDPMonitorMessage',
+      (('pm_Size', 'umm_Size'), ('pm_Src', 'umm_Src'), ('pm_Dst', 'umm_Dst'), ('pm_Header', 'umm_UDP'))) +
+    R('ProtocolMonitorMessage', 'ICMPMonitorMessage',
+      (('pm_Size', 'imm_Size'), ('pm_Src', 'imm_Src'), ('pm_Dst', 'imm_Dst'), ('pm_Header', 'imm_ICMP'))) +
+    S('PacketMonitorMessage', 'pmm_Size', 'pmm_Direction', 'pmm_LinkLayerData', 'pmm_LinkLayerSize',
+      'pmm_PacketData', 'pmm_PacketSize') +
+    S('ErrorHookMsg', 'ehm_Size', 'ehm_Action', 'ehm_Code') +
+    S('LogHookMessage', 'lhm_Size', 'lhm_Priority', 'lhm_Date', 'lhm_Tag', 'lhm_ID', 'lhm_Message') +
+    S('SANA2CopyStats') +
+    R('rs_addrinfo', 'addrinfo', [(f, f) for f in ('ai_flags', 'ai_family', 'ai_socktype', 'ai_protocol',
+                                                   'ai_addrlen', 'ai_addr', 'ai_canonname', 'ai_next')]) +
+    [('SBQUAD_T', None, 'SBQUAD_T', None)] +
+    R('rt_bpf_insn', 'bpf_insn', (('code', 'code'), ('jt', 'jt'), ('jf', 'jf'), ('k', 'k'))) +
+    R('rt_bpf_program', 'bpf_program', (('bf_len', 'bf_len'), ('bf_insns', 'bf_insns'))) +
+    R('rt_bpf_stat', 'bpf_stat', (('bs_recv', 'bs_recv'), ('bs_drop', 'bs_drop'))) +
+    R('rt_bpf_version', 'bpf_version', (('bv_major', 'bv_major'), ('bv_minor', 'bv_minor'))) +
+    [('RT_BPF_HDRLEN', '=', 'struct bpf_hdr', None),
+     ('RT_RTM_HDRLEN', '=', 'struct rt_msghdr', None),
+     ('RT_RTM_OFS_INDEX', '=', 'struct rt_msghdr', 'rtm_index'),
+     ('RT_RTM_OFS_FLAGS', '=', 'struct rt_msghdr', 'rtm_flags'),
+     ('RT_RTM_OFS_ADDRS', '=', 'struct rt_msghdr', 'rtm_addrs'),
+     ('RT_RTM_OFS_USE', '=', 'struct rt_msghdr', 'rtm_use'),
+     ('RT_RTM_OFS_RMX', '=', 'struct rt_msghdr', 'rtm_rmx'),
+     ('RT_BSD_ICMPSTAT_SIZE', '=', 'struct icmpstat', None),
+     ('RT_BSD_IGMPSTAT_SIZE', '=', 'struct igmpstat', None),
+     ('RT_BSD_IPSTAT_SIZE', '=', 'struct ipstat', None),
+     ('RT_BSD_MBSTAT_SIZE', '=', 'struct mbstat', None),
+     ('RT_BSD_MRTSTAT_SIZE', '=', 'struct mrtstat', None),
+     ('RT_BSD_RTSTAT_SIZE', '=', 'struct rtstat', None),
+     ('RT_BSD_TCPSTAT_SIZE', '=', 'struct tcpstat', None),
+     ('RT_BSD_UDPSTAT_SIZE', '=', 'struct udpstat', None),
+     ('RT_BSD_PCD_SIZE', '=', 'struct protocol_connection_data', None)])
+ROADSHOW_CONSTS = ('''SBTC_NUM_PACKET_FILTER_CHANNELS SBTC_HAVE_ROUTING_API SBTC_UDP_CHECKSUM
+SBTC_IP_FORWARDING SBTC_IP_DEFAULT_TTL SBTC_ICMP_MASK_REPLY SBTC_ICMP_SEND_REDIRECTS SBTC_HAVE_INTERFACE_API
+SBTC_ICMP_PROCESS_ECHO SBTC_ICMP_PROCESS_TSTAMP SBTC_HAVE_MONITORING_API SBTC_CAN_SHARE_LIBRARY_BASES
+SBTC_LOG_FILE_NAME SBTC_HAVE_STATUS_API SBTC_HAVE_DNS_API SBTC_LOG_HOOK SBTC_SYSTEM_STATUS
+SBTC_SIG_ADDRESS_CHANGE_MASK SBTC_IPF_API_VERSION SBTC_HAVE_LOCAL_DATABASE_API SBTC_HAVE_ADDRESS_CONVERSION_API
+SBTC_HAVE_KERNEL_MEMORY_API SBTC_IP_FILTER_HOOK SBTC_HAVE_SERVER_API SBTC_GET_BYTES_RECEIVED SBTC_GET_BYTES_SENT
+SBTC_IDN_DEFAULT_CHARACTER_SET SBTC_HAVE_ROADSHOWDATA_API SBTC_ERROR_HOOK SBTC_HAVE_GETHOSTADDR_R_API IDNCS_ASCII
+SBSYSSTAT_Interfaces SBSYSSTAT_PTP_Interfaces SBSYSSTAT_BCast_Interfaces SBSYSSTAT_Resolver SBSYSSTAT_Routes
+SBSYSSTAT_DefaultRoute IR_Process IR_Ignore IR_Drop EHMA_Set_errno EHMA_Set_h_errno
+RTA_Destination RTA_Gateway RTA_DefaultGateway RTA_DestinationHost RTA_DestinationNet
+IFA_IPType IFA_ARPType IFA_NumReadRequests IFA_NumWriteRequests IFA_NumARPRequests IFA_PacketFilterMode
+IFA_PointToPoint IFA_Reserved0 IFA_Multicast IFA_DownGoesOffline IFA_ReportOffline IFA_RequiresInitDelay
+IFA_CopyMode IFA_HardwareAddress IFA_SetDebugMode IFA_LimitMTU
+IFC_Address IFC_NetMask IFC_DestinationAddress IFC_BroadcastAddress IFC_Metric IFC_AddAliasAddress
+IFC_DeleteAliasAddress IFC_State IFC_GetPeerAddress IFC_GetDNS IFC_AssociatedRoute IFC_AssociatedDNS
+IFC_ReleaseAddress IFC_SetDebugMode IFC_Complete IFC_LimitMTU
+IFQ_DeviceName IFQ_DeviceUnit IFQ_HardwareAddressSize IFQ_HardwareAddress IFQ_MTU IFQ_BPS IFQ_HardwareType
+IFQ_PacketsReceived IFQ_PacketsSent IFQ_BadData IFQ_Overruns IFQ_UnknownTypes IFQ_LastStart IFQ_Address
+IFQ_DestinationAddress IFQ_BroadcastAddress IFQ_NetMask IFQ_Metric IFQ_State IFQ_AddressBindType
+IFQ_AddressLeaseExpires IFQ_PrimaryDNSAddress IFQ_SecondaryDNSAddress IFQ_NumReadRequests IFQ_MaxReadRequests
+IFQ_NumWriteRequests IFQ_MaxWriteRequests IFQ_GetBytesIn IFQ_GetBytesOut IFQ_GetDebugMode IFQ_GetSANA2CopyStats
+IFQ_NumReadRequestsPending IFQ_NumWriteRequestsPending IFQ_HardwareMTU IFQ_OutputDrops IFQ_InputDrops
+IFQ_OutputErrors IFQ_InputErrors IFQ_OutputMulticasts IFQ_InputMulticasts IFQ_IPDrops IFQ_ARPDrops
+IFABT_Unknown IFABT_Static IFABT_Dynamic SM_Offline SM_Online SM_Down SM_Up
+MHT_ICMP MHT_UDP MHT_TCP_Connect MHT_Connect MHT_Send MHT_Packet MHT_Bind MA_Continue MA_Ignore MA_Drop
+MA_DropWithReset PMMD_Receive PMMD_Send NETWORKSTATUS_VERSION
+AAM_VERSION AAM_VERSION_MINIMUM AAM_TIMEOUT_MIN AAMR_Success AAMR_Aborted AAMR_InterfaceNotKnown
+AAMR_InterfaceWrongType AAMR_AddressKnown AAMR_VersionUnknown AAMR_NoMemory AAMR_Timeout AAMR_AddressInUse
+AAMR_AddrChangeFailed AAMR_MaskChangeFailed AAMR_Busy AAMR_Ignored AAMP_BOOTP AAMP_DHCP AAMP_SLOWAUTO AAMP_FASTAUTO
+DHCP_INFINITE_LEASE_TIME CAAMTA_Timeout CAAMTA_LeaseTime CAAMTA_RequestedAddress CAAMTA_ClientIdentifier
+CAAMTA_NAKMessageSize CAAMTA_RouterTableSize CAAMTA_DNSTableSize CAAMTA_StaticRouteTableSize
+CAAMTA_HostNameSize CAAMTA_DomainNameSize CAAMTA_BOOTPMessageSize CAAMTA_RecordLeaseExpiration
+CAAMTA_ReplyPort CAAMTA_RequestUnicast CAAME_Success CAAME_Invalid_result_ptr CAAME_Not_enough_memory
+CAAME_Invalid_version CAAME_Invalid_protocol CAAME_Invalid_interface_name CAAME_Interface_not_found
+CAAME_Invalid_client_identifier CAAME_Client_identifier_too_short CAAME_Client_identifier_too_long
+RDNT_Integer RDNF_ReadOnly ORD_ReadAccess ORD_WriteAccess
+RS_AI_PASSIVE=AI_PASSIVE RS_AI_CANONNAME=AI_CANONNAME RS_AI_NUMERICHOST=AI_NUMERICHOST RS_AI_EXT=AI_EXT
+RS_AI_NUMERICSERV=AI_NUMERICSERV RS_NI_NUMERICHOST=NI_NUMERICHOST RS_NI_NUMERICSERV=NI_NUMERICSERV
+RS_NI_NOFQDN=NI_NOFQDN RS_NI_NAMEREQD=NI_NAMEREQD RS_NI_DGRAM=NI_DGRAM RS_NI_WITHSCOPEID=NI_WITHSCOPEID
+RS_EAI_BADFLAGS=EAI_BADFLAGS RS_EAI_NONAME=EAI_NONAME RS_EAI_AGAIN=EAI_AGAIN RS_EAI_FAIL=EAI_FAIL
+RS_EAI_NODATA=EAI_NODATA RS_EAI_FAMILY=EAI_FAMILY RS_EAI_SOCKTYPE=EAI_SOCKTYPE RS_EAI_SERVICE=EAI_SERVICE
+RS_EAI_ADDRFAMILY=EAI_ADDRFAMILY RS_EAI_MEMORY=EAI_MEMORY RS_EAI_SYSTEM=EAI_SYSTEM RS_EAI_BADHINTS=EAI_BADHINTS
+RS_EAI_PROTOCOL=EAI_PROTOCOL
+RT_BPF_MAXINSNS=BPF_MAXINSNS RT_BPF_MAXBUFSIZE=BPF_MAXBUFSIZE RT_BPF_MINBUFSIZE=BPF_MINBUFSIZE
+RT_BPF_ALIGNMENT=BPF_ALIGNMENT RT_BPF_MAJOR_VERSION=BPF_MAJOR_VERSION RT_BPF_MINOR_VERSION=BPF_MINOR_VERSION
+RT_DLT_NULL=DLT_NULL RT_DLT_EN10MB=DLT_EN10MB RT_BIOCGBLEN=BIOCGBLEN RT_BIOCSBLEN=BIOCSBLEN
+RT_BIOCSETF=BIOCSETF RT_BIOCFLUSH=BIOCFLUSH RT_BIOCPROMISC=BIOCPROMISC RT_BIOCGDLT=BIOCGDLT
+RT_BIOCGETIF=BIOCGETIF RT_BIOCSETIF=BIOCSETIF RT_BIOCSRTIMEOUT=BIOCSRTIMEOUT RT_BIOCGRTIMEOUT=BIOCGRTIMEOUT
+RT_BIOCGSTATS=BIOCGSTATS RT_BIOCIMMEDIATE=BIOCIMMEDIATE RT_BIOCVERSION=BIOCVERSION
+RT_BPF_LD=BPF_LD RT_BPF_LDX=BPF_LDX RT_BPF_ST=BPF_ST RT_BPF_STX=BPF_STX RT_BPF_ALU=BPF_ALU RT_BPF_JMP=BPF_JMP
+RT_BPF_RET=BPF_RET RT_BPF_MISC=BPF_MISC RT_BPF_W=BPF_W RT_BPF_H=BPF_H RT_BPF_B=BPF_B RT_BPF_IMM=BPF_IMM
+RT_BPF_ABS=BPF_ABS RT_BPF_IND=BPF_IND RT_BPF_MEM=BPF_MEM RT_BPF_LEN=BPF_LEN RT_BPF_MSH=BPF_MSH
+RT_BPF_ADD=BPF_ADD RT_BPF_SUB=BPF_SUB RT_BPF_MUL=BPF_MUL RT_BPF_DIV=BPF_DIV RT_BPF_OR=BPF_OR RT_BPF_AND=BPF_AND
+RT_BPF_LSH=BPF_LSH RT_BPF_RSH=BPF_RSH RT_BPF_NEG=BPF_NEG RT_BPF_JA=BPF_JA RT_BPF_JEQ=BPF_JEQ RT_BPF_JGT=BPF_JGT
+RT_BPF_JGE=BPF_JGE RT_BPF_JSET=BPF_JSET RT_BPF_K=BPF_K RT_BPF_X=BPF_X RT_BPF_A=BPF_A RT_BPF_TAX=BPF_TAX
+RT_BPF_TXA=BPF_TXA RT_RTM_VERSION=RTM_VERSION RT_RTM_GET=RTM_GET RT_RTA_DST=RTA_DST RT_RTA_GATEWAY=RTA_GATEWAY
+RT_RTA_NETMASK=RTA_NETMASK RT_RTA_IFA=RTA_IFA RT_NETSTATUS_ICMP=NETSTATUS_icmp RT_NETSTATUS_IGMP=NETSTATUS_igmp
+RT_NETSTATUS_IP=NETSTATUS_ip RT_NETSTATUS_MB=NETSTATUS_mb RT_NETSTATUS_MRT=NETSTATUS_mrt RT_NETSTATUS_RT=NETSTATUS_rt
+RT_NETSTATUS_TCP=NETSTATUS_tcp RT_NETSTATUS_UDP=NETSTATUS_udp RT_NETSTATUS_TCP_SOCKETS=NETSTATUS_tcp_sockets
+RT_NETSTATUS_UDP_SOCKETS=NETSTATUS_udp_sockets''').split()
+
 # AmiTCP SDK: the ARP ioctls (struct arpreq is AmiTCP specific: 18 byte arp_ha)
 AMITCP_ARP_CONSTS = '''SIOCSARP SIOCGARP SIOCDARP ATF_INUSE ATF_COM ATF_PERM ATF_PUBL'''.split()
 
@@ -285,7 +405,8 @@ def our_values(tmp, items, consts, includes):
 
 
 def check_against(tmp, name, items, consts, our_inc, ref_inc, ref_dirs, defines=(), rt_consts=()):
-    vals = our_values(tmp, items, consts + ['RT_' + c for c in rt_consts], our_inc)
+    # a constant "OURS=THEIRS" has another name in the reference
+    vals = our_values(tmp, items, [c.split('=')[0] for c in consts] + ['RT_' + c for c in rt_consts], our_inc)
     src = os.path.join(tmp, 'ref_%s.c' % name)
     with open(src, 'w') as f:
         for d in defines:
@@ -303,8 +424,8 @@ def check_against(tmp, name, items, consts, our_inc, ref_inc, ref_dirs, defines=
                     % (e, vals[n], mine, field or 'sizeof', vals[n]))
             n += 1
         for c in consts + list(rt_consts):
-            rc = COMPAT_CONSTS.get(c, c)
-            f.write('_Static_assert((unsigned long)(%s) == %uUL, "%s: ours=%u");\n' % (rc, vals[n], c, vals[n]))
+            rc = c.split('=')[-1] if '=' in c else COMPAT_CONSTS.get(c, c)
+            f.write('_Static_assert((unsigned long)(%s) == %uUL, "%s: ours=%u");\n' % (rc, vals[n], c.split('=')[0], vals[n]))
             n += 1
     gi = run([CC, '-print-file-name=include']).stdout.strip()
     cmd = [CC, '-m68020', '-std=gnu89', '-fsyntax-only', '-ffreestanding', '-nostdinc', '-isystem', gi,
@@ -340,14 +461,46 @@ def parse_fd(path):
     return funcs
 
 
-def check_lvos(table, lib, fd, rename=None, allow_extra=()):
+def parse_sfd(path):
+    """An SFD file: {name: (bias, regs)}, as parse_fd()."""
+    funcs = {}
+    bias = 30
+    skip = False
+    for line in open(path, encoding='latin-1'):
+        line = line.strip()
+        if not line or line.startswith('*'):
+            continue
+        if line.startswith('==bias'):
+            bias = int(line.split()[1])
+        elif line.startswith('==reserve'):
+            bias += 6 * int(line.split()[1])
+        elif line.startswith('==varargs'):
+            skip = True
+        elif line.startswith('=='):
+            continue
+        else:
+            m = re.match(r'.*?\b(\w+)\s*\((.*?)\)\s*\((.*?)\)\s*$', line)
+            if not m:
+                continue
+            if skip:              # the varargs stub shares the previous vector
+                skip = False
+                continue
+            regs = [r.strip().lower() for r in re.split('[,/]', m.group(3)) if r.strip()]
+            funcs[m.group(1)] = (bias, regs)
+            bias += 6
+    return funcs
+
+
+def check_lvos(table, lib, fd, rename=None, allow_extra=(), max_bias=None):
     libs = gen_lvos.parse(table)
     ok = True
-    ref = parse_fd(fd)
+    ref = parse_sfd(fd) if fd.endswith('.sfd') else parse_fd(fd)
     n = 0
     for f in libs[lib].funcs:
         if (f.bias <= 24 and 'resource' not in libs[lib].opts) or f.name in allow_extra:
             continue
+        if max_bias and f.bias > max_bias:
+            continue          # beyond the reference API (the Roadshow extensions)
         name = rename(f.name) if rename else f.name
         if name not in ref:
             print('  %s: %s not in %s' % (lib, f.name, os.path.basename(fd)))
@@ -406,7 +559,7 @@ def main():
                                 rt_consts=RT_CONSTS)
             fdd = os.path.join(compat, 'fd')
             t = os.path.join(ROOT, 'src/amiga/lib_lvos.txt')
-            ok &= check_lvos(t, 'bsdsocket', os.path.join(fdd, 'socket_lib.fd'))
+            ok &= check_lvos(t, 'bsdsocket', os.path.join(fdd, 'socket_lib.fd'), max_bias=300)
             ok &= check_lvos(t, 'riptide', os.path.join(fdd, COMPAT_FD), rename=compat_name,
                              allow_extra=('RiptideReserved53',))
             ok &= check_lvos(t, 'usergroup', os.path.join(fdd, 'usergroup_lib.fd'))
@@ -433,10 +586,37 @@ def main():
                 t = os.path.join(ROOT, 'src/amiga/lib_lvos.txt')
                 for lib, fdn in (('bsdsocket', 'bsdsocket_lib.fd'), ('usergroup', 'usergroup_lib.fd')):
                     if os.path.exists(os.path.join(fdd, fdn)):
-                        ok &= check_lvos(t, lib, os.path.join(fdd, fdn))
-        # the developer SDK's FD file (generated from the same table)
+                        ok &= check_lvos(t, lib, os.path.join(fdd, fdn), max_bias=300)
+        rs = os.environ.get('ROADSHOW_SDK') or os.path.join(ndk, 'SANA+RoadshowTCP-IP')
+        if os.path.isfile(os.path.join(rs, 'sfd', 'bsdsocket_lib.sfd')):
+            t = os.path.join(ROOT, 'src/amiga/lib_lvos.txt')
+            ok &= check_lvos(t, 'bsdsocket', os.path.join(rs, 'sfd', 'bsdsocket_lib.sfd'))
+            if max(f.bias for f in gen_lvos.parse(t)['bsdsocket'].funcs) != 822:
+                print('FAIL bsdsocket: table must extend to -822 (Roadshow getnameinfo())')
+                ok = False
+            ni = os.path.join(rs, 'netinclude')
+            # its headers include a few C library headers they need nothing from
+            stub = os.path.join(tmp, 'libc')
+            os.makedirs(stub, exist_ok=True)
+            for h in ('stdlib.h', 'string.h', 'stdio.h', 'stddef.h'):
+                if h != 'stddef.h':
+                    open(os.path.join(stub, h), 'w').close()
+            ok &= check_against(tmp, 'roadshow', ROADSHOW_STRUCTS, ROADSHOW_CONSTS,
+                                ['exec.h', 'dos.h', 'roadshow.h', 'rt_bpf.h', 'rt_bsdinfo.h'],
+                                ['exec/types.h', 'exec/ports.h', 'dos/dos.h', 'utility/hooks.h',
+                                 'sys/socket.h', 'sys/ioctl.h', 'net/if.h', 'net/route.h', 'net/bpf.h',
+                                 'netinet/in.h', 'netinet/in_systm.h', 'netinet/ip.h', 'netinet/ip_var.h',
+                                 'netinet/ip_icmp.h', 'netinet/icmp_var.h', 'netinet/igmp_var.h',
+                                 'netinet/udp.h', 'netinet/udp_var.h', 'netinet/tcp.h', 'netinet/tcp_var.h',
+                                 'netinet/ip_mroute.h', 'sys/mbuf.h', 'netdb.h', 'libraries/bsdsocket.h'],
+                                [ni, inc, stub])
+        else:
+            print('SKIP roadshow: no %s/sfd/bsdsocket_lib.sfd (set ROADSHOW_SDK)' % rs)
+        # the developer SDK's FD files (generated from the same table)
         ok &= check_lvos(os.path.join(ROOT, 'src/amiga/lib_lvos.txt'), 'riptide',
                          os.path.join(ROOT, 'sdk/fd/riptide_lib.fd'))
+        ok &= check_lvos(os.path.join(ROOT, 'src/amiga/lib_lvos.txt'), 'bsdsocket',
+                         os.path.join(ROOT, 'sdk/fd/bsdsocket_lib.fd'))
         t = os.path.join(ROOT, 'src/amiga/os/os_lvos.txt')
         for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd'),
                          ('locale', 'locale_lib.fd'), ('battclock', 'battclock_lib.fd'),

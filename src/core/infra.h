@@ -9,6 +9,8 @@
 
 #include "rt/riptide.h"
 #include "rt/rt_capture.h"
+#include "rt/rt_bpf.h"
+#include "rt/rt_monitor.h"
 
 /* ---- tunables (s32 so they can be registered with rt_sysctl) ---- */
 extern s32 rt_ip_forwarding;        /* net.inet.ip.forwarding */
@@ -21,6 +23,8 @@ extern s32 rt_ip_portrange_last;    /* net.inet.ip.portrange.last */
 extern s32 rt_udp_checksum;         /* net.inet.udp.checksum */
 extern s32 rt_udp_recvspace;        /* net.inet.udp.recvspace */
 extern s32 rt_udp_maxdgram;         /* net.inet.udp.maxdgram */
+extern s32 rt_icmp_process_echo;    /* net.inet.icmp.process_echo */
+extern s32 rt_icmp_process_tstamp;  /* net.inet.icmp.process_tstamp */
 
 /* Address classification (network order arguments). */
 static inline int rt_ip_is_multicast(u32 a) { return (rt_ntohl(a) & 0xf0000000u) == 0xe0000000u; }
@@ -36,6 +40,8 @@ void rt_netif_init(void);
 /* rt_netif_input() without the counters and capture: hand a received
  * frame's payload to the protocol of 'ethertype' on nif (vlan.c). */
 void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, const u8 *srchw, u16 flags);
+/* MHT_Packet hook for a frame to be sent: 1 if dropped (b freed) */
+int  rt_netif_mon_out(struct rt_netif *nif, struct rt_buf *b);
 
 /* ---- ip6_if.c: link state changes (netif.c) ---- */
 void rt_ip6_if_up(struct rt_netif *nif);

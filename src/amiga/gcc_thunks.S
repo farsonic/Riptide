@@ -49,4 +49,17 @@ amiga_call_d0d1:
 	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
 
+| ULONG amiga_call_hook(APTR hook, APTR obj, APTR msg): jsr hook->h_Entry
+| with a0 = hook, a2 = object, a1 = message
+	.globl	amiga_call_hook
+amiga_call_hook:
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)
+	move.l	48(%sp),%a0
+	move.l	52(%sp),%a2
+	move.l	56(%sp),%a1
+	move.l	8(%a0),%a3
+	jsr	(%a3)
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+
 	.section .note.GNU-stack,"",@progbits
