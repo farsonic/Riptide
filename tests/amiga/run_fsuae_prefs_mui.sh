@@ -194,13 +194,13 @@ waitfor() {
 # STAGES="1 2 3": the boots to run (default all)
 want() { case " ${STAGES:-1 2 3} " in *" $1 "*) return 0;; esac; return 1; }
 # the pages' names, as the page list shows them
-pages="interface address extra vlans names time tcp connecting ports keepalive background memory he qos qosrules other"
+pages="status interface address extra vlans names time tcp connecting ports keepalive background memory he qos qosrules other"
 
 # ---- 1: 640x480, 256 colours, light: the edits of run_fsuae_prefs.sh ----
 if want 1; then
 reset_conf
 boot <<'EOF'
-DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST DEBUG=DH0:out/log1"
+DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST PAGE=Interface DEBUG=DH0:out/log1"
 Echo "rc $RC" >DH0:out/zz_1
 EOF
 settle a01-interface
@@ -463,7 +463,7 @@ grep -q 'screen 640x256' "$dh0/out/log3" 2>/dev/null || fail "no screen line in 
 # read its settings, and its default leaves bubbles off), so check the
 # texts the editor gives MUI instead
 grep -q 'bubble field: .*Interface name' "$dh0/out/log3" 2>/dev/null || fail "no bubble text on the first setting"
-grep -q 'bubble page: .*Interface' "$dh0/out/log3" 2>/dev/null || fail "no bubble text from the page list"
+grep -q 'bubble page: .*Status' "$dh0/out/log3" 2>/dev/null || fail "no bubble text from the page list"
 fi
 
 cleanup

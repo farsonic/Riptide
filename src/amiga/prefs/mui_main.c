@@ -1150,7 +1150,7 @@ int mui_run(const struct rp_gui_args *a)
 		/* for the DEBUG log: the bubbles of the first setting and page */
 		const char *h1 = (const char *)mui_get(fobj[0], MUIA_ShortHelp);
 		const char *h2 = (const char *)mui_do(nav, MUIM_CreateShortHelp, (ULONG)_mleft(nav) + 20,
-		                                      (ULONG)_mtop(nav) + (theme_compact() ? 1 : theme_fh() + 10));
+		                                      (ULONG)_mtop(nav) + 2);
 		rp_log("bubble field: %s", h1 ? h1 : "(none)");
 		rp_log("bubble page: %s", h2 ? h2 : "(none)");
 	}
