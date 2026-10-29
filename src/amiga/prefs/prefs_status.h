@@ -158,7 +158,7 @@ void rp_st_summary(const struct rp_status_model *m, char *buf, int len);
  * when tcp_mem says so */
 void rp_st_memory(const struct rp_status_model *m, char *buf, int len);
 /* an interface in three lines (no newline at the end of each):
- * l1 "eth0  up  uaenet.device unit 0"
+ * l1 "eth0  up  MTU 1500  uaenet.device unit 0"
  * l2 "192.168.1.2/24 via 192.168.1.1, DHCP: bound, 3 h 05 min left"
  * l3 "2001:db8::2, fe80::1" (or "IPv6 off") */
 void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int len);

@@ -1,8 +1,9 @@
 /*
  * Riptide - RiptidePrefs (MUI): the Counters page (Advanced). Every count
  * Riptide keeps, read while the page is shown (status_amiga.c reads the
- * tables, prefs_counters.c makes the rows), at the Status page's Update
- * period, with Refresh, Zero (counts from now on) and Since start.
+ * tables, prefs_counters.c makes the rows) as often as the Status page's
+ * Update setting says, with Refresh, Zero (counts from now on) and Since
+ * start.
  *
  * One class of its own, cview: the rows in three columns (name, value,
  * change per second), group headings in bold, and a flat scroll bar at the
@@ -24,7 +25,6 @@
 #define MUIM_CView_Tick    (RTAG + 0xc80)  /* the timer, or Refresh */
 #define MUIM_CView_Zero    (RTAG + 0xc81)
 #define MUIM_CView_Start   (RTAG + 0xc82)  /* Since start */
-#define MUIM_CView_Update  (RTAG + 0xc83)  /* the Update cycle changed: (value) */
 
 #ifndef SELECTDOWN
 #define SELECTDOWN 0x68
@@ -39,7 +39,7 @@
 
 static const ULONG upd_ms[4] = { 1000, 2000, 5000, 0 };
 static struct rp_cnt_model model;
-static Object *o_view, *o_sum, *o_upd, *o_btn[3];
+static Object *o_view, *o_sum, *o_sumrow, *o_btn[3];
 static char t_sum[120];
 static char *helps[5];
 
@@ -113,6 +113,26 @@ static void cv_bar(struct cview_data *d, Object *obj, int vis)
 	           tpen(d->drag ? T_ACCENT : T_BORDER));
 }
 
+/* s cut to fit w pixels (the longest start that fits, found by halving) */
+static void cv_fit(struct RastPort *rp, char *s, LONG w)
+{
+	int n = (int)strlen(s), lo = 0, hi = n;
+
+	if (theme_textlen(rp, s) <= w)
+		return;
+	while (lo < hi) {
+		int mid = (lo + hi + 1) / 2;
+		char c = s[mid];
+		s[mid] = 0;
+		if (theme_textlen(rp, s) <= w)
+			lo = mid;
+		else
+			hi = mid - 1;
+		s[mid] = c;
+	}
+	s[lo] = 0;
+}
+
 /* line i (row r): heading or name, value right-aligned, change per second */
 static void cv_line(struct cview_data *d, Object *obj, int i, int r, const char *key)
 {
@@ -120,6 +140,7 @@ static void cv_line(struct cview_data *d, Object *obj, int i, int r, const char 
 	LONG y = _mtop(obj) + (LONG)i * cv_rowh(), x = _mleft(obj), right = _mright(obj) - CV_BAR - 4;
 	LONG wrate = theme_textlen(rp, "+999 999/s") + 8, xv = right - wrate;
 	char name[RP_CNT_NAME], val[24], rate[24];
+	LONG vw;
 	int head;
 
 	theme_fill(rp, x, y, _mright(obj) - CV_BAR, y + cv_rowh() - 1, tpen(T_HEAD));
@@ -133,9 +154,10 @@ static void cv_line(struct cview_data *d, Object *obj, int i, int r, const char 
 		theme_text(rp, x + 2, y, name, tpen(T_TEXT), 1);
 		return;
 	}
+	vw = theme_textlen(rp, val);
+	cv_fit(rp, name, xv - vw - 8 - (x + 14));
 	theme_text(rp, x + 14, y, name, tpen(T_TEXT), 0);
-	theme_text(rp, xv - theme_textlen(rp, val), y, val, tpen(model.rows[r].kind == RP_CNT_LEVEL ? T_DIM : T_TEXT),
-	           0);
+	theme_text(rp, xv - vw, y, val, tpen(model.rows[r].kind == RP_CNT_LEVEL ? T_DIM : T_TEXT), 0);
 	if (rate[0])
 		theme_text(rp, right - theme_textlen(rp, rate), y, rate, tpen(T_ACCENT), 0);
 }
@@ -147,9 +169,11 @@ static void cv_draw(struct cview_data *d, Object *obj, int update)
 	int vis = cv_clamp(d, obj), i, full;
 
 	if (!model.running) {
+		char t[100];
 		theme_fill(rp, _mleft(obj), _mtop(obj), _mright(obj), _mbottom(obj), tpen(T_HEAD));
-		theme_text(rp, _mleft(obj) + 4, _mtop(obj) + 2,
-		           tr("Riptide is not running. The counts appear when it starts."), tpen(T_DIM), 0);
+		rt_strlcpy(t, tr("Riptide is not running. The counts appear when it starts."), sizeof(t));
+		cv_fit(rp, t, _mwidth(obj) - 8);
+		theme_text(rp, _mleft(obj) + 4, _mtop(obj) + 2, t, tpen(T_DIM), 0);
 		d->valid = 0;
 		return;
 	}
@@ -289,8 +313,6 @@ DISPATCHER(cview_dispatch)
 		d->valid = 0;
 		/* the Update setting may have changed on the Status page */
 		d->upd = rp_eprefs_get("status_update", 0) & 3;
-		if (o_upd)
-			mui_nnset(o_upd, MUIA_Cycle_Active, (ULONG)d->upd);
 		cv_timer(obj, d, 1);
 		/* the first read at once, after this layout */
 		mui_do(_app(obj), MUIM_Application_PushMethod, (ULONG)obj, 1, MUIM_CView_Tick);
@@ -315,16 +337,6 @@ DISPATCHER(cview_dispatch)
 		cv_summary();
 		if (d->shown)
 			MUI_Redraw(obj, MADF_DRAWUPDATE);
-		return 0;
-	case MUIM_CView_Update:
-		d = INST_DATA(cl, obj);
-		d->upd = (int)((ULONG *)msg)[1] & 3;
-		rp_eprefs_set("status_update", d->upd);
-		rp_eprefs_save();
-		if (d->shown) {
-			cv_timer(obj, d, 0);
-			cv_timer(obj, d, 1);
-		}
 		return 0;
 	case MUIM_Draw: {
 		ULONG f;
@@ -426,22 +438,19 @@ static Object *cbutton(const char *label, ULONG m, int k, const char *help)
 
 Object *counters_page_build(void)
 {
-	static const char *upd_labels[5];
-	Object *bar, *ul;
+	Object *bar;
 
 	rp_cnt_init(&model);
 	rt_strlcpy(t_sum, tr("Counts since Riptide started."), sizeof(t_sum));
 	o_view = mui_newc(cview_mcc, TAGEND);
 	o_sum = mui_newc(qlabel_mcc, MUIA_QLabel_Text, (ULONG)t_sum, MUIA_QLabel_Kind, QL_TEXT, TAGEND);
-	upd_labels[0] = tr("Every second");
-	upd_labels[1] = tr("Every 2 s");
-	upd_labels[2] = tr("Every 5 s");
-	upd_labels[3] = tr("Paused");
-	upd_labels[4] = NULL;
-	o_upd = mui_make(MUIO_Cycle, (ULONG)tr("Up_date"), (ULONG)upd_labels);
-	ul = mui_newc(qlabel_mcc, MUIA_QLabel_Text, (ULONG)"Up_date", MUIA_QLabel_Kind, QL_LABEL, TAGEND);
+	/* the label at the left of the full width (a label alone would make the
+	 * page as narrow as its text) */
+	o_sumrow = o_sum ? mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 0, MUIA_VertWeight, 0,
+	                           MUIA_Group_Child, (ULONG)o_sum, MUIA_Group_Child,
+	                           (ULONG)mui_new(MUIC_Rectangle, TAGEND), TAGEND) : NULL;
 	bar = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 6, MUIA_VertWeight, 0, TAGEND);
-	if (!o_view || !o_sum || !o_upd || !ul || !bar)
+	if (!o_view || !o_sumrow || !bar)
 		return NULL;
 	if (!cbutton("Re_fresh", MUIM_CView_Tick, 0, "Reads the counts again now.") ||
 	    !cbutton("_Zero", MUIM_CView_Zero, 1,
@@ -453,29 +462,14 @@ Object *counters_page_build(void)
 	mui_do(bar, OM_ADDMEMBER, (ULONG)o_btn[1]);
 	mui_do(bar, OM_ADDMEMBER, (ULONG)o_btn[2]);
 	mui_do(bar, OM_ADDMEMBER, (ULONG)mui_new(MUIC_Rectangle, TAGEND));
-	mui_do(bar, OM_ADDMEMBER, (ULONG)ul);
-	mui_do(bar, OM_ADDMEMBER, (ULONG)o_upd);
-	mui_set(o_upd, MUIA_HorizWeight, 0);
-	mui_set(ul, MUIA_HorizWeight, 0);
-	mui_set(o_upd, MUIA_CycleChain, 1);
-	mui_set(o_upd, MUIA_Cycle_Active, (ULONG)(rp_eprefs_get("status_update", 0) & 3));
-	helps[3] = rp_alloc(400);
-	if (helps[3]) {
-		theme_bubble_to(helps[3], 400, "Update",
-		                "How often the page reads the counts again. It is the Status page's setting too.");
-		mui_set(o_upd, MUIA_ShortHelp, (ULONG)helps[3]);
-		mui_set(ul, MUIA_ShortHelp, (ULONG)helps[3]);
-	}
 	helps[4] = rp_alloc(400);
 	if (helps[4]) {
 		theme_bubble_to(helps[4], 400, "Counts",
-		                "Each count with how much it grew in the last second. Click the bar at the right "
-		                "to see more, or drag its knob.");
+		                "Each count with how much it grew in the last second, read as often as the Status "
+		                "page's Update setting says. Click the bar at the right to see more, or drag its knob.");
 		mui_set(o_view, MUIA_ShortHelp, (ULONG)helps[4]);
 	}
-	mui_do(o_upd, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime, (ULONG)o_view, 2, MUIM_CView_Update,
-	       MUIV_TriggerValue);
-	return mui_new(MUIC_Group, MUIA_Group_VertSpacing, theme_compact() ? 2 : 6, MUIA_Group_Child, (ULONG)o_sum,
+	return mui_new(MUIC_Group, MUIA_Group_VertSpacing, theme_compact() ? 2 : 6, MUIA_Group_Child, (ULONG)o_sumrow,
 	               MUIA_Group_Child, (ULONG)o_view, MUIA_Group_Child, (ULONG)bar, TAGEND);
 }
 
@@ -486,8 +480,6 @@ void counters_tips(int on)
 	for (k = 0; k < 3; k++)
 		if (o_btn[k])
 			mui_set(o_btn[k], MUIA_ShortHelp, on ? (ULONG)helps[k] : 0);
-	if (o_upd)
-		mui_set(o_upd, MUIA_ShortHelp, on ? (ULONG)helps[3] : 0);
 	if (o_view)
 		mui_set(o_view, MUIA_ShortHelp, on ? (ULONG)helps[4] : 0);
 }
@@ -500,6 +492,6 @@ void counters_page_free(void)
 		rp_free(helps[k]);
 		helps[k] = NULL;
 	}
-	o_view = o_sum = o_upd = o_btn[0] = o_btn[1] = o_btn[2] = NULL;
+	o_view = o_sum = o_sumrow = o_btn[0] = o_btn[1] = o_btn[2] = NULL;
 	t_sum[0] = 0;
 }

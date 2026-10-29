@@ -315,7 +315,7 @@ static void test_model(void)
 	m.st.mem_state = 0;
 	/* interfaces */
 	rp_st_if_lines(&m.ifs[1], l1, l2, l3, sizeof(l1));
-	CHECK_STR(l1, "eth0  up  uaenet.device unit 0  MTU 1500");
+	CHECK_STR(l1, "eth0  up  MTU 1500  uaenet.device unit 0");
 	CHECK_STR(l2, "192.168.1.20/24 via 192.168.1.1, DHCP bound, 3 h 05 min left");
 	CHECK_STR(l3, "2001:db8::2, fe80::1");       /* global first, the tentative one left out */
 	rp_st_if_lines(&m.ifs[2], l1, l2, l3, sizeof(l1));

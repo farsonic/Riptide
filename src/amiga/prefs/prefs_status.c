@@ -588,8 +588,9 @@ void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int 
 		rt_snprintf(l1, (size_t)len, "%s  %s  VLAN %u  MTU %u", f->name, state, (unsigned)f->vlan_id,
 		            (unsigned)f->mtu);
 	else
-		rt_snprintf(l1, (size_t)len, "%s  %s  %s  MTU %u", f->name, state, f->descr[0] ? f->descr : "",
-		            (unsigned)f->mtu);
+		/* the MTU before the driver: a narrow page cuts the driver's end */
+		rt_snprintf(l1, (size_t)len, "%s  %s  MTU %u  %s", f->name, state, (unsigned)f->mtu,
+		            f->descr[0] ? f->descr : "");
 	if (f->ip4_off) {
 		rt_strlcpy(l2, "IPv4 off", (size_t)len);
 	} else {
