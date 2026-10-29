@@ -353,10 +353,21 @@ boot() {
 	sleep 10
 }
 # the next editor started from Workbench takes a while to open its
-# window; the screen before it is "stable" too
+# window (longer on a busy host), and the screen before it is "stable"
+# too: wait for the light face of its Save button (MUI and GadTools both
+# have one there; the Shell window behind is grey)
 wbnext() {
-	sleep ${WBDELAY:-12}
-	settle "$1"
+	sleep ${WBDELAY:-3}
+	$ptr wait 2 120 230 548 >/dev/null || fail "no editor window before $1"
+	$ptr shot "$work/$1.png"
+}
+# the same for the GadTools editor (grey buttons): a settled screen other
+# than the one left when the editor before it closed
+wbnext_gt() {
+	$ptr shot "$work/gone.png"
+	sleep ${WBDELAY:-3}
+	$ptr stable 2 120 "$work/gone.png" >/dev/null || fail "no editor window before $1"
+	$ptr shot "$work/$1.png"
 }
 # wait for out/NAME (written by the Amiga)
 waitfor() {
@@ -474,7 +485,7 @@ DH0:C/RiptidePrefs PAGE=Names
 Echo "rc $RC" >DH0:out/zz_after
 EOF
 # a: Save without changes
-settle w01-wb-open
+wbnext w01-wb-open
 key s
 waitfor wb1 60
 # b: a change, Save, Apply
@@ -513,7 +524,7 @@ waitfor wb4 60
 wbnext w07b-tooltypes-mui
 key Escape
 waitfor wb5 60
-wbnext w07c-tooltypes-gadtools
+wbnext_gt w07c-tooltypes-gadtools
 key Escape
 waitfor wb6 60
 # afterwards: a window opens, the editor opens again
