@@ -43,10 +43,15 @@ enum { F_STR, F_NUM, F_CHECK, F_CYCLE };
 #define FL_ZERO   4             /* F_NUM: 0 is allowed below min */
 #define FL_RIGHT  8             /* F_CHECK: GadTools: on the previous row, at the right */
 #define FL_DHCP   16            /* disabled with a static address */
+#define FL_IF     32            /* a setting of the card rp_ifsel: off is in struct rp_iface */
+
+/* the card the Interface and Address pages show (an index of
+ * rp_model.ifc[]; the first card when that slot is not used) */
+extern int rp_ifsel;
 
 struct rp_field {
 	unsigned char page, type, flags;
-	unsigned short off, size;   /* in struct rp_model; size of the string or number */
+	unsigned short off, size;   /* in struct rp_model (FL_IF: rp_iface); size of the string or number */
 	long min, max;
 	const char *label;          /* '_' marks the keyboard shortcut */
 	const char *const *cy;      /* F_CYCLE: labels and values */
@@ -70,6 +75,8 @@ void rp_flabel(int fi, char *buf, int len);
 char rp_fkey(int fi);
 /* the field of a model address, -1 when none */
 int  rp_find(const struct rp_model *m, const void *addr);
+/* the card rp_ifsel stands for (0 when its slot is not used) */
+int  rp_ifcur(const struct rp_model *m);
 
 /* Take text typed into a string or number field into the model. Numbers:
  * empty is "not set"; out of range or not a number gives -1 and a message
@@ -78,7 +85,8 @@ int  rp_find(const struct rp_model *m, const void *addr);
 int  rp_fparse(struct rp_model *m, int fi, const char *text, char *err, int errlen);
 
 /* Check the whole model: 0, or -1 with *fi the field to show and err the
- * reason ("enter an IPv4 address, e.g. ..."). */
+ * reason ("enter an IPv4 address, e.g. ..."); for a card's setting
+ * rp_ifsel is set to that card. */
 int  rp_validate(const struct rp_model *m, int *fi, char *err, int errlen);
 
 /* Check an entry of a list page before it is added: 1, or 0 with the
@@ -93,6 +101,7 @@ const char *rp_list_full_msg(int page);
  * are kept in struct rp_lvals by field index. */
 enum { LF_NUM, LF_STR, LF_CYCLE, LF_INFO };   /* LF_INFO: shown, not edited */
 #define LF_SAMEROW 1            /* next to the field before, on its row */
+#define LF_NAMES   2            /* LF_CYCLE: its labels are the names of struct rp_lnames */
 struct rp_lfield {
 	unsigned char page, type, flags;
 	unsigned char size;         /* LF_STR: longest text */
@@ -103,8 +112,8 @@ struct rp_lfield {
 };
 /* the fields, in this order in rp_lfields[] */
 enum {
-	LA_ADDR, LA_MASK, LA_BCAST,                                     /* Extra addresses */
-	LV_ID, LV_NAME, LV_MODE, LV_ADDR, LV_PCP, LV_MTU, LV_TCPWIN,     /* VLANs */
+	LA_IF, LA_ADDR, LA_MASK, LA_BCAST,                              /* Extra addresses */
+	LV_PARENT, LV_ID, LV_NAME, LV_MODE, LV_ADDR, LV_PCP, LV_MTU, LV_TCPWIN,     /* VLANs */
 	LV_IP4, LV_IP6, LV_QOS,
 	LQ_PROTO, LQ_PORTS, LQ_SIDE, LQ_PROG, LQ_PRIO, LQ_DSCP,          /* QoS rules */
 	RP_NLFIELDS
@@ -117,17 +126,30 @@ struct rp_lvals {
 	int cy[RP_NLFIELDS_MAX];                /* LF_CYCLE: the label chosen */
 	char tx[RP_NLFIELDS_MAX][RP_LFTEXT];    /* LF_NUM, LF_STR, LF_INFO: the text */
 };
-/* An entry (NULL or "": a new one) into the form of its page. */
-void rp_lform_get(int page, const char *entry, const char *ifname, struct rp_lvals *v);
+/* The cards and VLANs the Interface and Parent cycles offer (LA_IF: the
+ * cards, then the VLANs; LV_PARENT: the cards), as rp_iface_names() gives
+ * them; rp_lform_names() fills it from a model. */
+struct rp_lnames {
+	int n;
+	char name[RP_NIF + RP_NVLAN][RP_IFNAMELEN];
+};
+void rp_lform_names(const struct rp_model *m, int page, struct rp_lnames *nm);
+/* An entry (NULL or "": a new one) into the form of its page; nm: the
+ * names of the page (the first one is the first card). */
+void rp_lform_get(int page, const char *entry, const struct rp_lnames *nm, struct rp_lvals *v);
 /* The form into an entry: 0, or -1 with *fi the field to show and err why. */
-int  rp_lform_put(int page, const struct rp_lvals *v, char *entry, int len, int *fi, char *err, int errlen);
+int  rp_lform_put(int page, const struct rp_lvals *v, const struct rp_lnames *nm, char *entry, int len, int *fi,
+                  char *err, int errlen);
 /* a field that does not apply with the others' values (IPv4 address
  * unless Static) */
 int  rp_lform_disabled(int fi, const struct rp_lvals *v);
 /* LF_INFO fields again after a change (the VLAN's interface name) */
-void rp_lform_update(int page, struct rp_lvals *v, const char *ifname);
+void rp_lform_update(int page, struct rp_lvals *v, const struct rp_lnames *nm);
 /* an entry as the list shows it: "eth0.10: DHCP, priority 4, MTU 1400" */
-void rp_list_row(int page, const char *entry, const char *ifname, char *buf, int len);
+void rp_list_row(int page, const char *entry, const struct rp_lnames *nm, char *buf, int len);
+/* a card as the Interface page's list shows it: "eth0: uaenet.device
+ * unit 0, DHCP" */
+void rp_iface_row(const struct rp_iface *f, char *buf, int len);
 /* the line under a form: how many entries fit, what needs a restart */
 const char *rp_lform_note(int page);
 /* the label without '_', and its shortcut key in lower case (0: none) */

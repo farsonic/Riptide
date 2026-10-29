@@ -10,13 +10,13 @@
 
 const struct rp_page rp_pages[RP_NPAGES] = {
 	{ "Interface", "Interface", "Interface changes need a restart of Riptide",
-	  "The network card Riptide uses: its SANA-II driver and unit, and how big its packets may be." },
+	  "The network cards Riptide uses: each one's SANA-II driver and unit, and how big its packets may be." },
 	{ "Address", "Address", "Address changes need a restart of Riptide",
-	  "How the Amiga gets its IPv4 address: from a DHCP server, or typed in here." },
-	{ "Extra addresses", "Extra addresses", "A.B.C.D/BITS or A.B.C.D netmask M (up to 8)",
-	  "More IPv4 addresses on the same card, for example to reach a second network on the same cable." },
-	{ "VLANs", "VLANs", "ID dhcp|A.B.C.D/BITS|up [pcp= mtu= ipv4= ipv6= qos=]",
-	  "Tagged networks (802.1Q) on the same card. Each VLAN is an interface of its own." },
+	  "How each card gets its IPv4 address: from a DHCP server, or typed in here." },
+	{ "Extra addresses", "Extra addresses", "[IF|]A.B.C.D/BITS or A.B.C.D netmask M (up to 8)",
+	  "More IPv4 addresses on a card or VLAN, for example to reach a second network on the same cable." },
+	{ "VLANs", "VLANs", "[CARD|]ID dhcp|A.B.C.D/BITS|up [pcp= mtu= ipv4= ipv6= qos=]",
+	  "Tagged networks (802.1Q) on a card. Each VLAN is an interface of its own." },
 	{ "Names", "Names", "Empty fields are left out of the file",
 	  "The Amiga's name, its domain and the name servers that turn names into addresses." },
 	{ "Time", "Time", "Zone: auto or +10:00. No servers: from DHCP",
@@ -59,6 +59,9 @@ int rp_page_list(int page)
 #define M(f) offsetof(struct rp_model, f)
 #define MS(f) M(f), sizeof(((struct rp_model *)0)->f)
 #define SC(i) M(sc) + (i) * sizeof(long), sizeof(long)
+#define MI(f) offsetof(struct rp_iface, f), sizeof(((struct rp_iface *)0)->f)
+
+int rp_ifsel;
 #define SS(i) M(ss) + (i) * RP_SSLEN, RP_SSLEN
 
 static const char *const cy_dhcp[] = { "DHCP", "Static", NULL };
@@ -87,31 +90,32 @@ static const char *const cy_prefer[] = { "Default", "RFC 6724", "IPv6", "IPv4", 
 static const long cyv_prefer[] = { RP_UNSET, 0, 6, 4 };
 
 const struct rp_field rp_fields[] = {
-	{ P_IFACE, F_STR,   0, MS(ifname),    0, 0,        "_Interface name", NULL, NULL,
+	{ P_IFACE, F_STR,   FL_IF, MI(ifname), 0, 0,       "_Interface name", NULL, NULL,
 	  "The name Riptide gives the card, such as eth0. Commands and the other pages use it." },
-	{ P_IFACE, F_STR,   0, MS(device),    0, 0,        "_Device", NULL, NULL,
+	{ P_IFACE, F_STR,   FL_IF, MI(device), 0, 0,       "_Device", NULL, NULL,
 	  "The SANA-II driver of the network card, such as a2065.device or uaenet.device." },
-	{ P_IFACE, F_NUM,   0, MS(unit),      0, 255,      "U_nit", NULL, NULL,
+	{ P_IFACE, F_NUM,   FL_IF, MI(unit), 0, 255,       "U_nit", NULL, NULL,
 	  "Which card the driver should use when it handles several. Usually 0." },
-	{ P_IFACE, F_NUM,   0, MS(mtu),       68, 65535,   "_MTU", NULL, NULL,
+	{ P_IFACE, F_NUM,   FL_IF, MI(mtu), 68, 65535,     "_MTU", NULL, NULL,
 	  "The largest packet in bytes. Leave it empty to use the driver's value (1500 on Ethernet)." },
-	{ P_IFACE, F_NUM,   FL_ZERO, MS(tcpwindow), 536, 16777216, "TCP _window", NULL, NULL,
+	{ P_IFACE, F_NUM,   FL_IF | FL_ZERO, MI(tcpwindow), 536, 16777216, "TCP _window", NULL, NULL,
 	  "Limits how much data a connection on this card may have on the way. Empty or 0: no limit." },
-	{ P_IFACE, F_NUM,   0, MS(reads),     4, 128,      "_Reads", NULL, NULL,
+	{ P_IFACE, F_NUM,   FL_IF, MI(reads), 4, 128,      "_Reads", NULL, NULL,
 	  "How many receive requests Riptide keeps waiting at the driver. More can help fast cards." },
 	{ P_IFACE, F_CHECK, 0, MS(ipv4),      0, 0,        "IPv_4", NULL, NULL,
-	  "Use IPv4 on this card. Turn it off for an IPv6-only network." },
+	  "Use IPv4 on all cards. Turn it off for an IPv6-only network." },
 	{ P_IFACE, F_CHECK, FL_RIGHT, MS(ipv6), 0, 0,      "IP_v6", NULL, NULL,
-	  "Use IPv6 on this card. Riptide then configures its addresses by itself." },
-	{ P_ADDR,  F_CYCLE, 0, MS(dhcp),      0, 0,        "_Mode", cy_dhcp, cyv_dhcp,
+	  "Use IPv6 on all cards. Riptide then configures their addresses by itself." },
+	{ P_ADDR,  F_CYCLE, FL_IF, MI(dhcp), 0, 0,         "_Mode", cy_dhcp, cyv_dhcp,
 	  "DHCP asks the network for an address, router and name servers. Static uses the fields below." },
-	{ P_ADDR,  F_STR,   FL_STATIC, MS(addr),    0, 0,  "Add_ress", NULL, NULL,
-	  "The Amiga's IPv4 address, such as 192.168.1.20, or 192.168.1.20/24 with the network size." },
-	{ P_ADDR,  F_STR,   FL_STATIC, MS(netmask), 0, 0,  "_Netmask", NULL, NULL,
+	{ P_ADDR,  F_STR,   FL_IF | FL_STATIC, MI(addr), 0, 0, "Add_ress", NULL, NULL,
+	  "The card's IPv4 address, such as 192.168.1.20, or 192.168.1.20/24 with the network size." },
+	{ P_ADDR,  F_STR,   FL_IF | FL_STATIC, MI(netmask), 0, 0, "_Netmask", NULL, NULL,
 	  "The size of the local network, such as 255.255.255.0. Not needed when the address ends in /24." },
-	{ P_ADDR,  F_STR,   FL_STATIC, MS(gateway), 0, 0,  "_Gateway", NULL, NULL,
-	  "The router that leads to the Internet, such as 192.168.1.1." },
-	{ P_ADDR,  F_CHECK, FL_DHCP, MS(linklocal), 0, 0,  "_Link-local if no DHCP", NULL, NULL,
+	{ P_ADDR,  F_STR,   FL_IF | FL_STATIC, MI(gateway), 0, 0, "_Gateway", NULL, NULL,
+	  "The router that leads to the Internet, such as 192.168.1.1. With routers on several cards, the "
+	  "first card's is used first." },
+	{ P_ADDR,  F_CHECK, FL_IF | FL_DHCP, MI(linklocal), 0, 0, "_Link-local if no DHCP", NULL, NULL,
 	  "When no DHCP server answers, take a 169.254.x.y address so a direct cable still works." },
 	{ P_NAMES, F_STR,   0, MS(hostname),  0, 0,        "_Host name", NULL, NULL,
 	  "The Amiga's name on the network, such as amy." },
@@ -220,15 +224,26 @@ const struct rp_field rp_fields[] = {
 };
 const int rp_nfields = (int)(sizeof(rp_fields) / sizeof(rp_fields[0]));
 
+int rp_ifcur(const struct rp_model *m)
+{
+	return rp_ifsel > 0 && rp_ifsel < RP_NIF && m->ifc[rp_ifsel].ifname[0] ? rp_ifsel : 0;
+}
+
+/* where field fi's struct starts: the model, or the card shown */
+static const char *fbase(const struct rp_model *m, int fi)
+{
+	return rp_fields[fi].flags & FL_IF ? (const char *)&m->ifc[rp_ifcur(m)] : (const char *)m;
+}
+
 long rp_fget(const struct rp_model *m, int fi)
 {
-	const void *p = (const char *)m + rp_fields[fi].off;
+	const void *p = fbase(m, fi) + rp_fields[fi].off;
 	return rp_fields[fi].size == sizeof(long) ? *(const long *)p : (long)*(const int *)p;
 }
 
 void rp_fset(struct rp_model *m, int fi, long v)
 {
-	void *p = (char *)m + rp_fields[fi].off;
+	void *p = (char *)fbase(m, fi) + rp_fields[fi].off;
 	if (rp_fields[fi].size == sizeof(long))
 		*(long *)p = v;
 	else
@@ -237,7 +252,7 @@ void rp_fset(struct rp_model *m, int fi, long v)
 
 char *rp_fstr(struct rp_model *m, int fi)
 {
-	return (char *)m + rp_fields[fi].off;
+	return (char *)fbase(m, fi) + rp_fields[fi].off;
 }
 
 int rp_fcycle(const struct rp_model *m, int fi)
@@ -254,8 +269,8 @@ int rp_fcycle(const struct rp_model *m, int fi)
 
 int rp_fdisabled(const struct rp_model *m, int fi)
 {
-	int fl = rp_fields[fi].flags;
-	return ((fl & FL_STATIC) && m->dhcp) || ((fl & FL_DHCP) && !m->dhcp) || ((fl & FL_NTP) && !m->ntp);
+	int fl = rp_fields[fi].flags, dhcp = m->ifc[rp_ifcur(m)].dhcp;
+	return ((fl & FL_STATIC) && dhcp) || ((fl & FL_DHCP) && !dhcp) || ((fl & FL_NTP) && !m->ntp);
 }
 
 void rp_flabel(int fi, char *buf, int len)
@@ -280,7 +295,7 @@ int rp_find(const struct rp_model *m, const void *addr)
 {
 	int i;
 	for (i = 0; i < rp_nfields; i++)
-		if ((const char *)m + rp_fields[i].off == (const char *)addr)
+		if (fbase(m, i) + rp_fields[i].off == (const char *)addr)
 			return i;
 	return -1;
 }
@@ -293,6 +308,21 @@ int rp_fparse(struct rp_model *m, int fi, const char *text, char *err, int errle
 
 	while (*s == ' ')
 		s++;
+	if (f->type == F_STR && (f->flags & FL_IF) && f->off == offsetof(struct rp_iface, ifname)) {
+		/* a card's new name: its address and VLAN entries follow */
+		char name[RP_IFNAME];
+		size_t n;
+		rt_strlcpy(name, s, sizeof(name));
+		n = strlen(name);
+		while (n > 0 && name[n - 1] == ' ')
+			name[--n] = 0;
+		if (!name[0] || strchr(name, ' ') || strchr(name, RP_IFSEP) || strchr(name, '.')) {
+			rt_strlcpy(err, "enter a name without spaces, dots or '|', e.g. eth0", (size_t)errlen);
+			return -1;
+		}
+		rp_iface_rename(m, rp_ifcur(m), name);
+		return 0;
+	}
 	if (f->type == F_STR) {
 		char *d = rp_fstr(m, fi);
 		size_t n;
@@ -353,20 +383,68 @@ static int bad(const struct rp_model *m, const void *addr, const char *why, int 
 
 int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 {
-	int i;
+	char names[RP_NIF + RP_NVLAN][RP_IFNAMELEN], ifn[RP_IFNAMELEN];
+	int i, k, j, nn;
 
-	if (!m->ifname[0] || strchr(m->ifname, ' '))
-		return bad(m, m->ifname, "enter a name without spaces, e.g. eth0", fi, err, errlen);
-	if (!m->device[0])
-		return bad(m, m->device, "enter the SANA-II device, e.g. uaenet.device", fi, err, errlen);
-	if (!m->dhcp) {
-		if (!rp_valid_ip4(m->addr, 1))
-			return bad(m, m->addr, "enter an IPv4 address, e.g. 192.168.1.20 or 192.168.1.20/24", fi, err,
-			           errlen);
-		if (m->netmask[0] && !rp_valid_ip4(m->netmask, 0))
-			return bad(m, m->netmask, "enter a mask, e.g. 255.255.255.0", fi, err, errlen);
-		if (m->gateway[0] && !rp_valid_ip4(m->gateway, 0))
-			return bad(m, m->gateway, "enter the router's IPv4 address", fi, err, errlen);
+	for (k = 0; k < RP_NIF; k++) {
+		const struct rp_iface *f = &m->ifc[k];
+		if (!f->ifname[0])
+			continue;
+		rp_ifsel = k;
+		if (strchr(f->ifname, ' ') || strchr(f->ifname, RP_IFSEP) || strchr(f->ifname, '.'))
+			return bad(m, f->ifname, "enter a name without spaces, dots or '|', e.g. eth0", fi, err, errlen);
+		for (j = 0; j < k; j++)
+			if (m->ifc[j].ifname[0] && !rt_strcasecmp(m->ifc[j].ifname, f->ifname))
+				return bad(m, f->ifname, "another card has this name already", fi, err, errlen);
+		if (!f->device[0])
+			return bad(m, f->device, "enter the SANA-II device, e.g. uaenet.device", fi, err, errlen);
+		for (j = 0; j < k; j++)
+			if (m->ifc[j].ifname[0] && !rt_strcasecmp(m->ifc[j].device, f->device) &&
+			    (m->ifc[j].unit < 0 ? 0 : m->ifc[j].unit) == (f->unit < 0 ? 0 : f->unit))
+				return bad(m, &f->unit, "another card uses this device and unit already", fi, err, errlen);
+		if (!f->dhcp) {
+			if (!rp_valid_ip4(f->addr, 1))
+				return bad(m, f->addr, "enter an IPv4 address, e.g. 192.168.1.20 or 192.168.1.20/24", fi, err,
+				           errlen);
+			if (f->netmask[0] && !rp_valid_ip4(f->netmask, 0))
+				return bad(m, f->netmask, "enter a mask, e.g. 255.255.255.0", fi, err, errlen);
+			if (f->gateway[0] && !rp_valid_ip4(f->gateway, 0))
+				return bad(m, f->gateway, "enter the router's IPv4 address", fi, err, errlen);
+		}
+	}
+	rp_ifsel = 0;
+	/* VLANs on cards that are there, addresses on cards or VLANs that are */
+	for (i = 0; i < RP_NVLAN && m->vlan[i][0]; i++) {
+		rp_entry_if(m, m->vlan[i], ifn, sizeof(ifn));
+		if (rp_iface_find(m, ifn) < 0) {
+			*fi = 0;
+			rt_snprintf(err, (size_t)errlen, "VLAN %s: there is no card %s (VLANs page)",
+			            rp_entry_body(m->vlan[i]), ifn);
+			return -1;
+		}
+		for (j = 0; j < i; j++) {
+			char ifn2[RP_IFNAMELEN];
+			rp_entry_if(m, m->vlan[j], ifn2, sizeof(ifn2));
+			if (!rt_strcasecmp(ifn, ifn2) && rt_strtoul(rp_entry_body(m->vlan[i]), NULL, 10) ==
+			                                     rt_strtoul(rp_entry_body(m->vlan[j]), NULL, 10)) {
+				*fi = 0;
+				rt_snprintf(err, (size_t)errlen, "VLAN %lu is on %s twice (VLANs page)",
+				            rt_strtoul(rp_entry_body(m->vlan[i]), NULL, 10), ifn);
+				return -1;
+			}
+		}
+	}
+	nn = rp_iface_names(m, names, RP_NIF + RP_NVLAN, 1);
+	for (i = 0; i < RP_NALIAS && m->alias[i][0]; i++) {
+		rp_entry_if(m, m->alias[i], ifn, sizeof(ifn));
+		for (j = 0; j < nn && rt_strcasecmp(names[j], ifn); j++)
+			;
+		if (j == nn) {
+			*fi = 0;
+			rt_snprintf(err, (size_t)errlen, "Extra address %s: there is no card or VLAN %s",
+			            rp_entry_body(m->alias[i]), ifn);
+			return -1;
+		}
 	}
 	if (m->hostname[0] && !rp_valid_name(m->hostname))
 		return bad(m, m->hostname, "letters, digits, '-' and '.' only", fi, err, errlen);
@@ -443,6 +521,8 @@ static const char *const qprio_word[] = { "", "interactive", "default", "bulk" }
 static const char *const vkeys[3] = { "ipv4", "ipv6", "qos" };
 
 const struct rp_lfield rp_lfields[] = {
+	{ P_ALIAS, LF_CYCLE, LF_NAMES, 0, 0, 0, "In_terface", NULL,
+	  "The card or VLAN the address is on." },
 	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_IPv4 address", NULL,
 	  "The extra address, with the size of its network: 10.0.1.2/24, or 10.0.1.2 and a netmask below." },
 	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_Netmask", NULL,
@@ -450,6 +530,8 @@ const struct rp_lfield rp_lfields[] = {
 	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_Broadcast", NULL,
 	  "The broadcast address of that network. Empty: worked out from the address and mask." },
 
+	{ P_VLAN, LF_CYCLE, LF_NAMES, 0, 0, 0, "_Network card", NULL,
+	  "The network card the VLAN runs on. Its switch port must carry the VLAN's tag." },
 	{ P_VLAN, LF_NUM, 0, 0, 1, 4094, "VLAN _ID", NULL,
 	  "The VLAN number (1-4094) the switch uses for this network." },
 	{ P_VLAN, LF_INFO, LF_SAMEROW, 0, 0, 0, "Name", NULL,
@@ -539,23 +621,48 @@ static void lf_set(struct rp_lvals *v, int fi, const char *t)
 	rt_strlcpy(v->tx[fi], t, RP_LFTEXT);
 }
 
-void rp_lform_update(int page, struct rp_lvals *v, const char *ifname)
+void rp_lform_names(const struct rp_model *m, int page, struct rp_lnames *nm)
 {
-	if (page == P_VLAN)
-		rt_snprintf(v->tx[LV_NAME], RP_LFTEXT, "%s.%s", ifname, v->tx[LV_ID][0] ? v->tx[LV_ID] : "?");
+	nm->n = rp_iface_names(m, nm->name, RP_NIF + RP_NVLAN, page == P_ALIAS);
 }
 
-void rp_lform_get(int page, const char *entry, const char *ifname, struct rp_lvals *v)
+/* the name chosen in a LF_NAMES cycle */
+static const char *lf_name(const struct rp_lnames *nm, int cy)
+{
+	return nm->n ? nm->name[cy >= 0 && cy < nm->n ? cy : 0] : "eth0";
+}
+
+void rp_lform_update(int page, struct rp_lvals *v, const struct rp_lnames *nm)
+{
+	if (page == P_VLAN)
+		rt_snprintf(v->tx[LV_NAME], RP_LFTEXT, "%s.%s", lf_name(nm, v->cy[LV_PARENT]),
+		            v->tx[LV_ID][0] ? v->tx[LV_ID] : "?");
+}
+
+void rp_lform_get(int page, const char *entry, const struct rp_lnames *nm, struct rp_lvals *v)
 {
 	char w[RP_LONG];
-	const char *s = entry ? entry : "", *x;
-	int i, first = 1, mode = 0;
+	const char *s = entry ? entry : "", *x, *sep = strchr(s, RP_IFSEP);
+	int i, first = 1, mode = 0, ci = 0;
 
 	for (i = 0; i < rp_nlfields; i++)
 		if (rp_lfields[i].page == page) {
 			v->cy[i] = 0;
 			v->tx[i][0] = 0;
 		}
+	/* "IF|...": the interface chosen */
+	if (sep && page != P_QRULE) {
+		for (ci = 0; ci < nm->n && (strlen(nm->name[ci]) != (size_t)(sep - s) ||
+		                            rt_strncasecmp(nm->name[ci], s, (size_t)(sep - s))); ci++)
+			;
+		if (ci == nm->n)
+			ci = 0;
+		s = sep + 1;
+	}
+	if (page == P_ALIAS)
+		v->cy[LA_IF] = ci;
+	if (page == P_VLAN)
+		v->cy[LV_PARENT] = ci;
 	while (lf_word(&s, w, sizeof(w))) {
 		if (page == P_ALIAS) {
 			if (first)
@@ -608,7 +715,7 @@ void rp_lform_get(int page, const char *entry, const char *ifname, struct rp_lva
 	}
 	if (page == P_QRULE && (v->cy[LQ_PRIO] < 0 || v->cy[LQ_PRIO] > 11))
 		v->cy[LQ_PRIO] = 0;
-	rp_lform_update(page, v, ifname);
+	rp_lform_update(page, v, nm);
 }
 
 int rp_lform_disabled(int fi, const struct rp_lvals *v)
@@ -660,14 +767,18 @@ static void lf_add(char *entry, int len, size_t *n, const char *fmt, const char 
 		*n += (size_t)rt_snprintf(entry + *n, (size_t)len - *n, fmt, a, b);
 }
 
-int rp_lform_put(int page, const struct rp_lvals *v, char *entry, int len, int *fi, char *err, int errlen)
+int rp_lform_put(int page, const struct rp_lvals *v, const struct rp_lnames *nm, char *entry, int len, int *fi,
+                 char *err, int errlen)
 {
 	char a[RP_LFTEXT], b[RP_LFTEXT], c[RP_LFTEXT], d[8];
 	size_t n = 0;
-	int i;
+	int i, ci = page == P_ALIAS ? v->cy[LA_IF] : page == P_VLAN ? v->cy[LV_PARENT] : 0;
 
 	*fi = -1;
 	entry[0] = 0;
+	/* not on the first card: "IF|" first */
+	if ((page == P_ALIAS || page == P_VLAN) && ci > 0 && ci < nm->n)
+		lf_add(entry, len, &n, "%s%s", nm->name[ci], "|");   /* RP_IFSEP */
 	if (page == P_ALIAS) {
 		lf_trim(v, LA_ADDR, a, sizeof(a));
 		lf_trim(v, LA_MASK, b, sizeof(b));
@@ -683,7 +794,7 @@ int rp_lform_put(int page, const struct rp_lvals *v, char *entry, int len, int *
 			lf_add(entry, len, &n, " netmask %s%s", b, "");
 		if (c[0])
 			lf_add(entry, len, &n, " broadcast %s%s", c, "");
-		return n + 1 < (size_t)len && rp_valid_alias(entry) ? 0 :
+		return n + 1 < (size_t)len && rp_valid_alias(rp_entry_body(entry)) ? 0 :
 		       lf_bad(LA_ADDR, "this address cannot be written", fi, err, errlen);
 	}
 	if (page == P_VLAN) {
@@ -722,7 +833,7 @@ int rp_lform_put(int page, const struct rp_lvals *v, char *entry, int len, int *
 			return lf_bad(LV_TCPWIN, "enter 0 or 536..16777216, or leave it empty", fi, err, errlen);
 		if (a[0])
 			lf_add(entry, len, &n, " tcpwindow=%s%s", a, "");
-		return n + 1 < (size_t)len && rp_valid_vlan(entry) ? 0 :
+		return n + 1 < (size_t)len && rp_valid_vlan(rp_entry_body(entry)) ? 0 :
 		       lf_bad(LV_ID, "this VLAN cannot be written", fi, err, errlen);
 	}
 	if (page == P_QRULE) {
@@ -773,16 +884,16 @@ int rp_lform_put(int page, const struct rp_lvals *v, char *entry, int len, int *
 	return lf_bad(0, "this page has no form", fi, err, errlen);
 }
 
-void rp_list_row(int page, const char *entry, const char *ifname, char *buf, int len)
+void rp_list_row(int page, const char *entry, const struct rp_lnames *nm, char *buf, int len)
 {
 	struct rp_lvals v;
 	size_t n = 0;
 	int i;
 
 	buf[0] = 0;
-	rp_lform_get(page, entry, ifname, &v);
+	rp_lform_get(page, entry, nm, &v);
 	if (page == P_ALIAS) {
-		lf_add(buf, len, &n, "%s%s", v.tx[LA_ADDR], "");
+		lf_add(buf, len, &n, "%s: %s", lf_name(nm, v.cy[LA_IF]), v.tx[LA_ADDR]);
 		if (v.tx[LA_MASK][0])
 			lf_add(buf, len, &n, ", netmask %s%s", v.tx[LA_MASK], "");
 		if (v.tx[LA_BCAST][0])
@@ -833,6 +944,25 @@ void rp_list_row(int page, const char *entry, const char *ifname, char *buf, int
 
 const char *rp_lform_note(int page)
 {
-	return page == P_ALIAS ? "Up to 8 extra addresses" : page == P_VLAN ? "Up to 8 VLANs on this card" :
+	return page == P_ALIAS ? "Up to 8 extra addresses" : page == P_VLAN ? "Up to 8 VLANs" :
 	       page == P_QRULE ? "Up to 16 rules" : rp_pages[page].note;
+}
+
+void rp_iface_row(const struct rp_iface *f, char *buf, int len)
+{
+	char u[16];
+	size_t n = 0;
+
+	buf[0] = 0;
+	rt_snprintf(u, sizeof(u), "%ld", f->unit < 0 ? 0L : f->unit);
+	lf_add(buf, len, &n, "%s: %s", f->ifname, f->device[0] ? f->device : "(no device)");
+	lf_add(buf, len, &n, " unit %s%s", u, "");
+	if (f->dhcp)
+		lf_add(buf, len, &n, ", DHCP%s%s", "", "");
+	else
+		lf_add(buf, len, &n, ", %s%s", f->addr[0] ? f->addr : "no address", "");
+	if (f->mtu > 0) {
+		rt_snprintf(u, sizeof(u), "%ld", f->mtu);
+		lf_add(buf, len, &n, ", MTU %s%s", u, "");
+	}
 }
