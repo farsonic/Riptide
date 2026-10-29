@@ -447,7 +447,7 @@ static void test_counters(void)
 	in.now_ms = 10000;
 	in.ip = &ips; in.ip_len = sizeof(ips);
 	in.tcp = &tcps; in.tcp_len = sizeof(tcps);
-	in.cst = &cst; in.st_len = sizeof(cst);
+	in.st = &cst; in.st_len = sizeof(cst);
 	in.ifaces = (const u8 *)cifs; in.nifaces = 2; in.ifrec = sizeof(cifs[0]);
 	in.drivers = (const u8 *)&drv; in.ndrivers = 1; in.drvrec = sizeof(drv);
 	in.qos = (const u8 *)&q; in.nqos = 1; in.qosrec = sizeof(q);
