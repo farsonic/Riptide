@@ -2,8 +2,8 @@
  * Riptide test helper - wbprobe FILE SECS: every SECS seconds write a
  * snapshot of the system to FILE (rewritten each time; "seq N" on the
  * first line): every task in exec's ready and wait lists (name, priority,
- * state, signals waited for), whether a "RiptidePrefs" process or port
- * exists, whether the Workbench screen's layers can be locked right now
+ * state, signals waited for), how many "RiptidePrefs" processes run and
+ * whether its port exists, whether the Workbench screen's layers can be locked right now
  * (someone holding them would stop Workbench from selecting icons) and
  * the free memory.
  *
@@ -33,6 +33,8 @@ struct Library *LayersBase;
 
 static char buf[6000];
 
+static int nprefs;    /* tasks named RiptidePrefs */
+
 /* append the tasks of list l, state tag s */
 static int walk(char *o, int left, struct List *l, const char *s)
 {
@@ -41,6 +43,8 @@ static int walk(char *o, int left, struct List *l, const char *s)
 
 	for (nd = l->lh_Head; nd->ln_Succ && left > 80; nd = nd->ln_Succ) {
 		struct Task *t = (struct Task *)nd;
+		if (nd->ln_Name && !strcmp(nd->ln_Name, "RiptidePrefs"))
+			nprefs++;
 		int k = sprintf(o, "%s %s pri %d sigwait %08lx\n", s, nd->ln_Name ? nd->ln_Name : "(none)",
 		                (int)nd->ln_Pri, (unsigned long)t->tc_SigWait);
 		o += k;
@@ -69,6 +73,7 @@ int main(int argc, char **argv)
 		int layers = -1;
 		struct Task *me = FindTask(NULL);
 
+		nprefs = 0;
 		Disable();
 		k = sprintf(o, "seq %ld\nrun %s %s\n", (long)++seq, me->tc_Node.ln_Name ? me->tc_Node.ln_Name : "?",
 		            "(this)");
@@ -96,8 +101,8 @@ int main(int argc, char **argv)
 			UnlockPubScreen(NULL, wb);
 		}
 		Forbid();
-		k = sprintf(o, "riptideprefs port %s, task %s\n", FindPort((STRPTR)"RiptidePrefs") ? "yes" : "no",
-		            FindTask((STRPTR)"RiptidePrefs") ? "yes" : "no");
+		k = sprintf(o, "riptideprefs port %s, tasks %d\n", FindPort((STRPTR)"RiptidePrefs") ? "yes" : "no",
+		            nprefs);
 		Permit();
 		o += k;
 		left -= k;
