@@ -34,6 +34,7 @@ TOOLS="ip ifconfig route arp netstat ping traceroute host sysctl hostname nc ftp
 top=$(cd "$(dirname "$0")/.." && pwd)
 TOOLS="$TOOLS ping6 traceroute6"      # IPv6 variants of ping and traceroute
 TOOLS="$TOOLS rtdiag"                 # diagnostics for bug reports
+TOOLS="$TOOLS stackprobe"             # compares TCP/IP stacks (any stack, 68000)
 mkicon="$PYTHON $top/tools/mkicon.py"
 
 for f in Riptide rtcheck $TOOLS ftpd-test RiptidePrefs; do

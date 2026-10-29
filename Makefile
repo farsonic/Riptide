@@ -80,6 +80,7 @@ $(BUILD)/tests/%: tests/%.c $(BUILD)/libriptide.a $(BUILD)/libspeedtest.a $(ST_H
 
 check: all
 	./tests/run_tests.sh $(BUILD)
+	python3 tests/test_stackprobe_compare.py
 
 # IPv6 interop peer (gVisor netstack) for tests/t_ip6_gvisor.c: needs Go
 # and downloads gvisor.dev/gvisor, so it is not part of "all". A host

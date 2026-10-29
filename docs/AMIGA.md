@@ -1852,6 +1852,43 @@ command in the background and waits until bsdsocket.library appears;
 every check on its own numbered line (`ok` or `FAIL`), grouped by section;
 without it only failures and the summary are shown.
 
+### stackprobe
+
+`stackprobe [QUICK] [PERF] [PEER=host] [ONLY=area,...] [JSON=file] [CSV=file] [NAME=label] [VERBOSE]`
+tests which TCP/IP features the running stack offers and how they behave,
+through the public Amiga APIs only, so the same program runs under any
+stack: AmiTCP, Miami, Genesis, Roadshow, AmiTCP_NG, PrismNet, tolunnet
+or Riptide. It is plain 68000 code and needs nothing but a running stack.
+
+Every test ends as `PASS`, `FAIL` (with the error), `--`
+(unsupported: the call is not in the library's jump table, or the stack
+answers ENOPROTOOPT/EOPNOTSUPP), `skip` (needs a network or `PEER=`) or
+`info` (a value, not a verdict). The areas:
+
+| Area | What it tries |
+|---|---|
+| `libs` | which libraries and ports exist: bsdsocket, usergroup, miami, the AS225 socket and inet libraries, miamibpf/miamipcap, AmiTCP 4's ifconfig.library, riptide |
+| `api` | every call of the AmiTCP bsdsocket.library table once (socket to GetSocketEvents) |
+| `tags` | every `SocketBaseTagList()` code of the AmiTCP SDK, the set-and-read-back ones, the errno pointers of 1, 2 and 4 bytes |
+| `netdb` | hosts and reverse lookups, services, protocols, networks |
+| `tcp` | loopback transfer with the data checked; half close; resets (SO_LINGER 0, close with unread data, send after a reset); refused; non-blocking connect, accept and recv; backlog; EADDRINUSE and SO_REUSEADDR in TIME_WAIT; ephemeral ports; MSG_PEEK, MSG_DONTWAIT, MSG_WAITALL; urgent data (MSG_OOB, the except set, SIGURG, SIOCATMARK, SO_OOBINLINE); FIOASYNC |
+| `udp` | loopback datagrams; truncation; 1.5 to 64 KB datagrams; connected UDP and its ECONNREFUSED; broadcast with and without SO_BROADCAST; multicast join, loop and leave; a raw ICMP ping of 127.0.0.1 |
+| `options` | socket, TCP and IP options set and read back, an unknown option, SO_RCVTIMEO and SO_SNDTIMEO |
+| `select` | WaitSelect() timeouts (20, 100, 500 ms, measured), polling, a signal in the mask, Ctrl-C ending a blocking accept(), readable and writable, a descriptor above 64 |
+| `misc` | how many sockets a program gets, a socket handed to another process (ReleaseSocket/ObtainSocket), the errors for bad descriptors, families and protocols |
+| `ipv6` | AF_INET6 TCP and UDP over ::1, IPV6_V6ONLY, an IPv6 listener taking an IPv4 client, `gethostbyname2()` |
+| `ext` | the Roadshow extensions (interface, route and name server lists, the *ent() calls, inet_aton/pton/ntop, In_LocalAddr, ProcessIsServer, BPF), miami.library (getaddrinfo, getnameinfo, if_nameindex ...) and usergroup.library |
+| `perf` | (`PERF`) loopback TCP throughput, connections a second, UDP datagrams a second, the cost of a WaitSelect() poll: stack and CPU together |
+| `peer` | (`PEER=host`, with `tests/amiga/stackprobe_peer.py` on that host) TCP echo round trip, upload, download, a refused connection, UDP echo |
+
+A call is only made when the library's jump table reaches its vector, and
+each test runs under a watchdog: a call that blocks for ever on some stack
+(for example `recv(MSG_DONTWAIT)` where the flag is unknown) is ended by a
+Ctrl-C after 20 s and counts as a failure, so a run always finishes. `JSON=`
+writes the report for `tools/stackprobe_compare.py`, which prints a
+Markdown table of several reports side by side (see `docs/COMPARISON.md`).
+`tests/amiga/run_fsuae_stackprobe.sh` runs it under one stack in FS-UAE.
+
 ## Profiling and debug log
 
 Two diagnostics are built into every Riptide. Both cost next to nothing
@@ -2721,6 +2758,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/test_hunk.py FILES` | Loads the executables with amitools and checks their relocations. It also has elf2hunk unit tests: absolute, PC-relative and absolute-symbol relocations, rejecting 16-bit relocations, bss in the hunk size, and a run under vamos. |
 | `tests/amiga/run_vamos.sh build/amiga/Riptide` | `Riptide SELFTEST` under vamos: MakeLibrary/AddLibrary, the Open/Close vectors, and about 75 library-level checks through the real jump tables. It drives TCP and UDP over loopback (127.0.0.1 and ::1, 24- and 28-byte `sockaddr_in6`, a dual-stack listener, the IPv6 resolver calls) with non-blocking sockets while the test pumps the stack itself. Needs `machine68k==0.3.0`. |
 | `tests/amiga/run_fsuae_tools.sh build/amiga` | Boots FS-UAE with a uaenet.device interface (`uae_sana2`, `network_card = a2065`) and runs about 80 tool invocations (every tool, both argument styles, error cases, `ip link add/del` at run time). Their outputs are saved on DH0:out/ and checked with regular expressions. This FS-UAE has no slirp backend (nothing is received on eth0), so eth0 is configured statically and pings, traceroutes and netstat run over loopback. IPv6: `ip -6` addr/route/neigh changes and listings, `ifconfig inet6`, `ping6`/`ping -6`, `traceroute6`, `host` AAAA and `ip6.arpa`, `nc -6` (also an IPv4 client of a dual-stack listener), `netstat -6`. It also runs `sdk_test` (built from `sdk/` only) and checks the library line of the startup log and of `STATUS`. Background transfers: `Riptide BACKGROUND program=nc` makes the next `nc` client LEDBAT and rLEDBAT (`netstat -T`), the socket memory sysctls and the `STATUS` line. |
+| `STACK=name tests/amiga/run_fsuae_stackprobe.sh OUT.json [ARGS]` | Runs `stackprobe` under one TCP/IP stack on FS-UAE and keeps its JSON report (`tools/stackprobe_compare.py` puts several side by side; `tests/test_stackprobe_compare.py` tests that script). `STACK=riptide` (a Riptide build directory in `STACK_DIR`), `amitcp` (the unpacked AmiTCP-3.0b2 drawer), `amitcp_ng` (an AmiTCP_NG tree with `build/` and `install/`), or any other name with `STACK_DIR` holding files to copy over System: and a `start` file. With `KICKSTART_ROM` and `WB_DIR` (an installed Workbench; neither is in this repository) the stack is installed on a copy of that Workbench; without them only Riptide runs, on the AROS ROM. Every stack gets `uaenet.device` unit 0 at 10.0.2.15/24. `FSUAE_EXTRA="uae_cpu_model = 68000"` runs it on a plain 68000. `tests/amiga/stackprobe_peer.py` is the far end for `PEER=`. |
 | `tests/amiga/run_fsuae_ftp.sh build/amiga` | The ftp client against `ftpd-test` over loopback on FS-UAE: a script logs in, lists, uploads and downloads 1 MB files (also to NIL:), checks ascii conversion in both directions (the wire format is checked by switching the server to TYPE I with `quote`), `reget`/`restart`, `mget`/`mput`, mkdir/rmdir/rename/delete, 550 errors, multi-line replies, EPSV refused → PASV with a bogus PASV address, active mode (PORT), aborted transfers (a test hook raises Ctrl-C after N bytes) followed by more commands, a failed login and the URL forms; then IPv6 sessions with a dual-stack `ftpd-test -6` (EPSV, EPRT, `ftp://[::1]:2122/`) and an IPv4 client of the same server. The files land on the host directory DH0: and are compared byte for byte; the transfer rates are printed. |
 | `tests/t_arch_m68k.c` (host, `make CROSS=m68k-linux-gnu-`) | Every assembly routine against the C versions: all lengths 0..160 with every source/destination alignment 0..15, 3000 random lengths up to 4096, 64-128 KB and 4 MB buffers, initial sums 0, 0xffffffff and others, random/all-ones/zero data, guard bytes around every copy; odd-offset chaining, the TCP `rt_buf` copy + checksum, routine selection and the sysctls. Run it on each CPU: `RT_CPU=68040 qemu-m68k -cpu m68040 build/m68k-linux-gnu/tests/t_arch_m68k` (also `m68020`, `m68030`, `m68060`). qemu's 68060 model lacks MOVE16, so there the test turns MOVE16 off through the kill switch. It skips in other builds. |
 | `tests/amiga/run_fsuae_speedtest.sh build/amiga` | speedtest against three `httpd-test` servers on FS-UAE (plain, chunked with redirects, redirecting to https://): `--server-url`, `--mirror`, all output formats, byte counts against the servers' counters, errors and Ctrl-C. |

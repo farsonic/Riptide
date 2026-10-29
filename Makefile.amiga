@@ -213,6 +213,20 @@ endif
 $(BUILD)/amiga/cmd/ping6.o: src/amiga/cmd/ping.c
 $(BUILD)/amiga/cmd/traceroute6.o: src/amiga/cmd/traceroute.c
 
+# stackprobe (src/amiga/stackprobe): compares Amiga TCP/IP stacks, so it
+# must run on a plain 68000 under any of them. Always built with vbcc for
+# the 68000 (this gcc's libgcc is 68020 code), from the NDK and its own
+# LVO table, in both toolchain builds.
+SP_SRC := $(wildcard src/amiga/stackprobe/*.c)
+SP_GEN := $(foreach l,bsdsocket miami usergroup,$(BUILD)/gen/sp/$(l)_calls.h)
+all: $(BUILD)/stackprobe
+$(BUILD)/gen/sp/%_calls.h: src/amiga/stackprobe/probe_lvos.txt tools/gen_lvos.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/gen_lvos.py call vbcc $< $* $@
+$(BUILD)/stackprobe: $(SP_SRC) src/amiga/stackprobe/stackprobe.h $(SP_GEN)
+	PATH=$(VBCC)/bin:$$PATH VBCC=$(VBCC) $(VBCC)/bin/vc +aos68k -c99 -O2 -cpu=68000 -I$(NDK)/Include_H -I$(BUILD)/gen \
+		-o $@ $(SP_SRC) -lamiga
+
 # ---------------------------------------------------------------- SDK ----
 sdk:
 	$(PYTHON) tools/gen_lvos.py sdk src/amiga/lib_lvos.txt riptide sdk

@@ -448,3 +448,140 @@ the same emulated machines:
 Until a stack runs under the same conditions, this section compares
 Riptide only with itself: the baseline exists to catch regressions and to
 measure the Phase 2 optimisations.
+
+## 12. Measured features: stackprobe
+
+`stackprobe` (see `docs/AMIGA.md`, "stackprobe") asks a running stack, through
+the public APIs only, which features it has and how they behave: every
+bsdsocket.library call, every `SocketBaseTagList()` code, TCP and UDP
+semantics on loopback, socket options, WaitSelect(), descriptors, IPv6, and
+the extension APIs (Roadshow, miami.library, usergroup.library). It is
+plain 68000 code, so the same binary ran under every stack below. The
+reports are in `docs/stackprobe/*.json`; `docs/stackprobe/RESULTS.md` has
+every test side by side, made by `tools/stackprobe_compare.py`.
+
+**How it was run** (`tests/amiga/run_fsuae_stackprobe.sh`, one emulator run
+per stack, October 2026). The machine was identical for every stack:
+- **Emulator:** FS-UAE 3.2.35, A1200 preset (68020, 2 MB chip + 8 MB fast RAM).
+- **OS:** a real Kickstart 3.1.4 ROM (46.143) and Workbench 3.1.4, so each stack
+  ran under the OS it was written for. The ROM and Workbench are not part of
+  this repository.
+- **Network:** one interface, `uaenet.device` unit 0 at 10.0.2.15/24, with
+  nothing on the other end. The tests use loopback and that interface, so
+  DNS and the `PEER=` tests were skipped. That costs every stack the same two
+  tests.
+
+These are emulator results, not measurements on real hardware.
+
+| Stack | Version | Obtained |
+|---|---|---|
+| Riptide | 0.23 (this repository) | built here |
+| AmiNetXDuo | 1.0.0-rc2 (NetX Duo 6.5.2), commit eba3a41 | nightly release binary of 29.10.2026; its "full" stack installed into the system as its Installer's system layout does, with a static `DEVS:NetInterfaces/eth0` |
+| AmiTCP_NG | 4.1.8, source commit 90575fa (8.10.2026) | built from source with `amigadev/crosstools:m68k-amigaos` (gcc 6.5), its library, usergroup.library and AddNetInterface |
+| MiamiDx | 1.0c (10.04.2000), evaluation version | the user's `MiamiDx10cmain.lha` with Aminet `comm/tcp/MiamiDx10c-MUI.lha` and MUI 3.8, laid out as `Install_MiamiDx` does; settings imported in its GUI from the MiamiInit file below and saved |
+| Miami | 3.2b (09.11.98), 68020 version, evaluation version | Aminet `comm/tcp/Miami32b-020.lha`, which holds only the program: no GUI module. MiamiInit 3.0 (from the MiamiDx archive) wrote the settings, which Miami imported (`IMPORTMIAMIINIT=… SAVESETTINGS NOGUI`); it ran without a GUI |
+| PrismNet | bsdsocket.library 4.4 (lwIP 2.2.1), commit 0caa32c (28.10.2026) | built from source, same toolchain (its stack targets; one unrelated tool needs headers the toolchain lacks) |
+| tolunnet | 1.2.0-rc6, commit a8d53df (8.10.2026) | built from source, same toolchain; its usergroup.library does not compile against that toolchain's NDK headers, so it ran without one |
+| AmiTCP 3.0b2 | bsdsocket.library 3.28 (1994) | Aminet `comm/net/AmiTCP-bin-30b2.lha`, set up as its HowToInstall describes |
+
+GitHub release downloads are blocked here, so AmiTCP_NG, PrismNet and
+tolunnet were built from their sources with the cross-compiler their build
+scripts name, in a network-less container. AmiNetXDuo needs a newer
+toolchain than the one available, and its release binary was used instead.
+
+The two Miamis were set up through their GUIs (MiamiInit's and MiamiDx's
+windows, driven with `tests/amiga/fsuae_pointer.py`); the probe runs then
+started them with the saved settings and sent `ONLINE` to their ARexx port.
+MiamiInit insists on a gateway, so they have 10.0.2.2 as default route (no
+machine answers there; the other stacks have no default route). Both are
+unregistered evaluation versions. Their documented limits: a nag requester
+at start (only on the first, unconfigured start here; nothing had to be
+clicked in the probe runs), a warning after 30 minutes online and a
+disconnect after 60 (a probe run takes under a minute), and no multicast,
+T/TCP, IP filter or miamibpf/miamipcap libraries. Those last count against
+them below as unsupported.
+
+| Stack | bsdsocket | Passed | Failed | Unsupported | Skipped | Score |
+|---|---|---|---|---|---|---|
+| Riptide 0.23 | 4.1 | 174 | 1 | 17 | 2 | 91 % |
+| AmiNetXDuo 1.0.0-rc2 | 4.11 | 162 | 5 | 13 | 2 | 90 % |
+| AmiTCP_NG 4.1.8 | 4.1 | 154 | 5 | 13 | 2 | 90 % |
+| MiamiDx 1.0c (evaluation) | 4.1 | 155 | 6 | 23 | 2 | 84 % |
+| Miami 3.2b (evaluation) | 4.1 | 153 | 8 | 23 | 2 | 83 % |
+| PrismNet (lwIP 2.2.1) | 4.4 | 139 | 16 | 17 | 2 | 81 % |
+| tolunnet 1.2.0-rc6 | 4.1 | 129 | 11 | 24 | 2 | 79 % |
+| AmiTCP 3.0b2 | 3.28 | 131 | 9 | 29 | 4 | 78 % |
+
+The score is passed / (passed + failed + unsupported). It measures breadth
+and correctness together, and the extension families weigh in:
+- **Riptide and the Miamis:** 13 tests of miami.library (Riptide offers it
+  as its compatibility alias). Their unsupported are the Roadshow-only calls.
+- **AmiNetXDuo, AmiTCP_NG, PrismNet, tolunnet:** the Roadshow calls instead.
+
+So read the failures more than the percentages. Riptide also ran on the AROS
+ROM (174 passed, the same results), and AmiTCP 3.0b2 on an emulated plain
+68000 (131 passed, the same as on the 68020).
+
+What each stack did not do (failures, from `RESULTS.md`):
+
+* **Riptide**: no SIGURG signal when urgent data arrives (the data itself,
+  the except set and SIOCATMARK work).
+* **AmiNetXDuo**:
+  - **TCP close:** neither SO_LINGER 0 nor closing with unread data resets
+    the peer.
+  - **Urgent data:** SIOCATMARK is 0 at the mark.
+  - **UDP:** a connected socket never learns ECONNREFUSED; broadcast is
+    allowed without SO_BROADCAST.
+* **AmiTCP_NG**:
+  - `getprotobynumber(6)` finds nothing.
+  - Closing a socket with unread data does not reset the peer (RFC 2525).
+  - `MSG_DONTWAIT` is not known (a blocking `recv()` waits).
+  - Datagrams of 32 KB and more are refused on loopback.
+* **MiamiDx 1.0c** and **Miami 3.2b** (the same results except where noted):
+  - **Close and recv:** closing with unread data does not reset the peer;
+    `MSG_DONTWAIT` is not known (a blocking `recv()` waits).
+  - **UDP:** datagrams of 32 KB and more are refused (ENOBUFS).
+  - **WaitSelect():** a 20 ms timeout lasts 200 ms.
+  - **miami.library:** `inet_pton()` does not take an IPv6 address (Miami
+    has no IPv6). In Miami 3.2b `if_nameindex()` and its friends do not
+    agree with each other.
+  - **Urgent data** (Miami 3.2b only): no SIGURG signal.
+* **PrismNet**:
+  - **Urgent data:** not delivered (except set, `MSG_OOB`, SIOCATMARK,
+    SIGURG), and no FIOASYNC signal.
+  - **UDP:** a connected socket never learns ECONNREFUSED; broadcast is
+    allowed without SO_BROADCAST.
+  - **Options:** SO_REUSEPORT, SO_DONTROUTE and SO_OOBINLINE are accepted but
+    cannot be read back.
+  - **netdb:** `getnetby*()` and `getprotoent()`/`getservent()` find nothing.
+  - **Sockets:** at most 14 per program here (ENOBUFS).
+  - **Close:** closing with unread data does not reset the peer.
+* **tolunnet**:
+  - `inet_network("10.1")` gives 10.0.0.1, not 10.1 (0x0a01).
+  - `gethostbyaddr(127.0.0.1)` finds nothing.
+  - **TCP close:** SO_LINGER 0 does not reset the peer.
+  - **Urgent data:** MSG_WAITALL returns early; urgent data is not in the
+    except set; no SIGURG; SIOCATMARK is 0.
+  - **UDP:** a 64 KB datagram is refused (ENOBUFS); a connected socket does
+    not learn ECONNREFUSED; broadcast is allowed without SO_BROADCAST.
+  - **Sockets:** at most 48 per program here.
+* **AmiTCP 3.0b2**:
+  - **netdb:** `getprotobynumber(6)` and `getnetbyname("loopback")` find
+    nothing.
+  - **Close and recv:** closing with unread data does not reset the peer;
+    `MSG_DONTWAIT` is not known.
+  - **UDP:** datagrams of 32 KB and more say EMSGSIZE.
+  - **usergroup.library:** knows no users or groups without its setup.
+  - **Missing:** no IPv6, no multicast, no AmiTCP 4 socket events and no
+    Roadshow calls (unsupported, not failed).
+
+Not in the table:
+
+* **MiamiDx 1.0c** (the user's archive): its Installer refuses to continue
+  without the separate MUI GUI module (`MiamiDx10-MUI.lha`, not in the
+  archive), and MiamiDx needs settings made through that GUI. Started by
+  hand, it did not open a bsdsocket.library, so there was nothing to probe.
+* **AmiNetXDuo** could not be built. It needs its own pinned m68k-amigaos GCC
+  (15/16, newlib), which is published only as a GitHub release asset that the
+  proxy here blocks. The available gcc 6.5 (libnix) toolchain fails its
+  toolchain check.
