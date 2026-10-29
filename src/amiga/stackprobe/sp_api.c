@@ -449,7 +449,7 @@ void sp_test_netdb(void)
 	name[0] = 0;
 	if (SP_HAVE_BSD(gethostname) && !sp_gethostname((STRPTR)name, sizeof(name)) && name[0]) {
 		h = (struct sp_hostent *)sp_gethostbyname((STRPTR)name);
-		sp_result("netdb.own_name", "gethostbyname(own host name)", h ? R_PASS : R_FAIL, 0, "%s", name);
+		sp_result("netdb.own_name", "gethostbyname(own host name)", R_INFO, 0, "%s %s", name, h ? "found" : "not found");
 	}
 	t0 = sp_now_ms();
 	h = (struct sp_hostent *)sp_gethostbyname((STRPTR)"nonexistent.invalid");

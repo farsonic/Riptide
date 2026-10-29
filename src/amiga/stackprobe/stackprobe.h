@@ -74,6 +74,7 @@
 #define MSG_PEEK     0x02
 #define MSG_WAITALL  0x40
 #define MSG_DONTWAIT 0x80
+#define FIOSETOWN  0x8004667cUL
 #define FIOASYNC   0x8004667dUL
 #define FIONBIO    0x8004667eUL
 #define FIONREAD   0x4004667fUL

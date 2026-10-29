@@ -328,6 +328,8 @@ static void tcp_flags(void)
 			SetSignal(0, 1UL << sig);
 		if (SP_HAVE_BSD(SocketBaseTagList))
 			sp_SocketBaseTagList((APTR)t);
+		v = (LONG)FindTask(NULL);
+		sp_IoctlSocket(s, FIOSETOWN, (APTR)&v);
 		sp_send(c, (APTR)"ab", 2, 0);
 		r = sp_send(c, (APTR)"U", 1, MSG_OOB);
 		Delay(10);
@@ -377,6 +379,8 @@ static void tcp_flags(void)
 			SetSignal(0, 1UL << sig);
 			if (SP_HAVE_BSD(SocketBaseTagList))
 				sp_SocketBaseTagList((APTR)t);
+			v = (LONG)FindTask(NULL);
+			sp_IoctlSocket(s, FIOSETOWN, (APTR)&v);
 			v = 1;
 			r = sp_IoctlSocket(s, FIOASYNC, (APTR)&v);
 			sp_send(c, (APTR)"io", 2, 0);
@@ -506,7 +510,11 @@ void sp_test_udp(void)
 	e = sp_wait(u, 0, 1000) == 1 ? sp_recv(u, buf + 8, 8, 0) : -1;
 	sp_result("udp.truncate", "a short read drops the rest of the datagram", PASSIF(r == 4 && e == 4 &&
 	          !memcmp(buf + 8, "next", 4)), 0, NULL);
-	/* big datagrams (fragments on loopback when MTU is small) */
+	/* big datagrams (fragments on loopback when MTU is small); 4.4BSD
+	 * limits a UDP send to the socket's send buffer, so raise both first */
+	v = 65535;
+	sp_setsockopt(w, SOL_SOCKET, SO_SNDBUF, (APTR)&v, sizeof(v));
+	sp_setsockopt(u, SOL_SOCKET, SO_RCVBUF, (APTR)&v, sizeof(v));
 	big = malloc(65000);
 	if (big) {
 		static const LONG sizes[] = { 1472, 8192, 32768, 65000 };
@@ -566,7 +574,9 @@ void sp_test_udp(void)
 		mr.imr_interface.s_addr = INADDR_ANY;
 		r = sp_setsockopt(u, IPPROTO_IP, IP_ADD_MEMBERSHIP, (APTR)&mr, sizeof(mr));
 		e = r < 0 ? sp_errno() : 0;
-		sp_result("udp.mcast_join", "IP_ADD_MEMBERSHIP 239.1.2.3", PASSIF(r == 0), e, NULL);
+		sp_result("udp.mcast_join", "IP_ADD_MEMBERSHIP 239.1.2.3", r == 0 ? R_PASS : e == EADDRNOTAVAIL ||
+		          e == ENETUNREACH ? R_SKIP : R_FAIL, e, r < 0 && (e == EADDRNOTAVAIL || e == ENETUNREACH) ?
+		          "no multicast interface" : NULL);
 		if (r == 0) {
 			w = sp_socket(AF_INET, SOCK_DGRAM, 0);
 			sp_setsockopt(w, IPPROTO_IP, IP_MULTICAST_LOOP, (APTR)&one, sizeof(one));

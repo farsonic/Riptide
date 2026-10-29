@@ -369,7 +369,7 @@ LONG sp_recv_all(LONG s, char *buf, LONG len, LONG ms)
 }
 
 /* ---- which stack, which machine ---- */
-static char stack_name[40], stack_version[48], release[128], idstring[96], cpu[16], os[32];
+static char stack_name[40], stack_version[48], release[128], idstring[96], cpu[16], os[32], romid[64], wbver[16];
 
 static int contains(const char *s, const char *w)
 {
@@ -402,7 +402,13 @@ static void detect(const char *label)
 	            a & AFF_68020 ? "68020" : a & AFF_68010 ? "68010" : "68000");
 	if (a & (AFF_68881 | AFF_68882 | AFF_FPU40))
 		strcat(cpu, "+FPU");
-	sprintf(os, "exec %u.%u", eb->LibNode.lib_Version, eb->SoftVer);
+	sprintf(os, "Kickstart %u.%u", (unsigned)eb->LibNode.lib_Version, (unsigned)eb->SoftVer);
+	if (eb->LibNode.lib_IdString)
+		copy_clean(romid, (const char *)eb->LibNode.lib_IdString, sizeof(romid));
+	if ((l = OpenLibrary((STRPTR)"version.library", 0)) != NULL) {
+		sprintf(wbver, "%u.%u", (unsigned)l->lib_Version, (unsigned)l->lib_Revision);
+		CloseLibrary(l);
+	}
 	if (SocketBase->lib_IdString)
 		copy_clean(idstring, (const char *)SocketBase->lib_IdString, sizeof(idstring));
 	tags[0] = SBTM_GETVAL(SBTC_RELEASESTRPTR);
@@ -477,7 +483,9 @@ static void write_json(const char *path)
 	json_str(f, idstring);
 	fprintf(f, ", \"bsdsocket\": \"%u.%u\"},\n", (unsigned)(SocketBase ? SocketBase->lib_Version : 0),
 	        (unsigned)(SocketBase ? SocketBase->lib_Revision : 0));
-	fprintf(f, " \"system\": {\"cpu\": \"%s\", \"os\": \"%s\"},\n", cpu, os);
+	fprintf(f, " \"system\": {\"cpu\": \"%s\", \"os\": \"%s\", \"exec\": ", cpu, os);
+	json_str(f, romid);
+	fprintf(f, ", \"workbench\": \"%s\"},\n", wbver);
 	fprintf(f, " \"options\": {\"quick\": %d, \"perf\": %d, \"peer\": %s},\n", sp_quick, sp_perf, sp_peer ? "true" : "false");
 	fprintf(f, " \"tests\": [\n");
 	for (i = 0; i < nres; i++) {
@@ -570,9 +578,9 @@ int main(void)
 		return 5;
 	}
 	detect((const char *)args[6]);
-	printf("\nStack: %s %s (bsdsocket.library %u.%u)\n  release: %s\n  id: %s\n  CPU %s, %s\n", stack_name,
-	       stack_version, SocketBase->lib_Version, SocketBase->lib_Revision, release[0] ? release : "-",
-	       idstring[0] ? idstring : "-", cpu, os);
+	printf("\nStack: %s %s (bsdsocket.library %u.%u)\n  release: %s\n  id: %s\n  CPU %s, %s (%s), Workbench %s\n",
+	       stack_name, stack_version, (unsigned)SocketBase->lib_Version, (unsigned)SocketBase->lib_Revision,
+	       release[0] ? release : "-", idstring[0] ? idstring : "-", cpu, os, romid, wbver[0] ? wbver : "-");
 	if (sp_peer) {
 		ULONG a = sp_inet_addr((STRPTR)sp_peer);
 		if (a == 0xffffffffUL) {
