@@ -154,6 +154,7 @@ sound_card = none
 floppy_drive_count = 0
 automatic_input_grab = 0
 video_sync = off
+zoom = full
 uae_sana2 = 1
 uaenet_pcap = $ST_IF
 CFG

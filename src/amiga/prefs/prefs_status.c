@@ -551,7 +551,7 @@ void rp_st_summary(const struct rp_status_model *m, char *buf, int len)
 	char up[32], cpu[24];
 
 	if (!m->running) {
-		rt_strlcpy(buf, "Riptide is not running. Start it with \"Riptide\" in a Shell, or its icon.", (size_t)len);
+		rt_strlcpy(buf, "Riptide is not running. Start it from its icon or a Shell.", (size_t)len);
 		return;
 	}
 	rp_fmt_uptime(up, sizeof(up), m->st.uptime_s);

@@ -146,7 +146,7 @@ static void graph_legend(struct RastPort *rp, LONG x0, LONG y0, LONG x1, const s
 	} else {
 		rp_fmt_rate(a, sizeof(a), v0);
 		rp_fmt_rate(b, sizeof(b), v1);
-		rt_snprintf(lg, sizeof(lg), "%s: in %s, out %s", title, a, b);
+		rt_snprintf(lg, sizeof(lg), "%s%s%s in, %s out", title, title[0] ? ": " : "", a, b);
 		rp_fmt_rate(sc, sizeof(sc), sc0);
 	}
 	theme_fill(rp, x0, y0, x1, y0 + theme_fh(), tpen(T_WINDOW));
@@ -343,8 +343,10 @@ DISPATCHER(graph_dispatch)
 			tick_fn();
 		return 0;
 	case MUIM_Draw: {
-		ULONG f = ((struct MUIP_Draw *)msg)->flags;
+		ULONG f;
+		/* the Area class fills in the flags (MUI_Redraw() leaves them to it) */
 		DoSuperMethodA(cl, obj, msg);
+		f = ((struct MUIP_Draw *)msg)->flags;
 		d = INST_DATA(cl, obj);
 		if (!d->hist)
 			return 0;
@@ -755,8 +757,10 @@ DISPATCHER(table_dispatch)
 		((struct table_data *)INST_DATA(cl, obj))->shown = 0;
 		break;
 	case MUIM_Draw: {
-		ULONG f = ((struct MUIP_Draw *)msg)->flags;
+		ULONG f;
+		/* the Area class fills in the flags (MUI_Redraw() leaves them to it) */
 		DoSuperMethodA(cl, obj, msg);
+		f = ((struct MUIP_Draw *)msg)->flags;
 		d = INST_DATA(cl, obj);
 		if (f & (MADF_DRAWOBJECT | MADF_DRAWUPDATE))
 			tb_draw(d, obj, !(f & MADF_DRAWOBJECT));
@@ -917,8 +921,10 @@ DISPATCHER(ifview_dispatch)
 		((struct ifview_data *)INST_DATA(cl, obj))->shown = 0;
 		break;
 	case MUIM_Draw: {
-		ULONG f = ((struct MUIP_Draw *)msg)->flags;
+		ULONG f;
+		/* the Area class fills in the flags (MUI_Redraw() leaves them to it) */
 		DoSuperMethodA(cl, obj, msg);
+		f = ((struct MUIP_Draw *)msg)->flags;
 		if (f & (MADF_DRAWOBJECT | MADF_DRAWUPDATE))
 			ifv_draw(INST_DATA(cl, obj), obj, !(f & MADF_DRAWOBJECT));
 		return 0;
@@ -1003,8 +1009,10 @@ DISPATCHER(stext_dispatch)
 		((struct stext_data *)INST_DATA(cl, obj))->shown = 0;
 		break;
 	case MUIM_Draw: {
-		ULONG f = ((struct MUIP_Draw *)msg)->flags;
+		ULONG f;
+		/* the Area class fills in the flags (MUI_Redraw() leaves them to it) */
 		DoSuperMethodA(cl, obj, msg);
+		f = ((struct MUIP_Draw *)msg)->flags;
 		if (f & (MADF_DRAWOBJECT | MADF_DRAWUPDATE))
 			st_draw(INST_DATA(cl, obj), obj, !(f & MADF_DRAWOBJECT));
 		return 0;
@@ -1169,7 +1177,7 @@ Object *status_page_build(Object *app, ULONG chosen_id)
 	rt_strlcpy(t_sum, "Reading Riptide's state ...\n", sizeof(t_sum));
 	o_sum = mui_newc(stext_mcc, MUIA_SText_Text, (ULONG)t_sum, MUIA_SText_Lines, 2, TAGEND);
 	o_total = mui_newc(graph_mcc, MUIA_Graph_Hist, (ULONG)&model.total, MUIA_Graph_Kind, GK_BYTES,
-	                   MUIA_Graph_Title, (ULONG)"All traffic", MUIA_Graph_Lines, compact ? 3 : 6, MUIA_Graph_Ticker, 1,
+	                   MUIA_Graph_Title, (ULONG)"Traffic", MUIA_Graph_Lines, compact ? 3 : 6, MUIA_Graph_Ticker, 1,
 	                   TAGEND);
 	o_cpu = mui_newc(graph_mcc, MUIA_Graph_Hist, (ULONG)&model.cpu_hist, MUIA_Graph_Kind, GK_CPU, MUIA_Graph_Title,
 	                 (ULONG)"CPU", MUIA_Graph_Lines, compact ? 3 : 6, MUIA_HorizWeight, 35, TAGEND);
@@ -1185,7 +1193,7 @@ Object *status_page_build(Object *app, ULONG chosen_id)
 	rt_strlcpy(cg_title, "No connection", sizeof(cg_title));
 	{
 		static char h0[400], h1[400], h2[400], h3[400];
-		theme_bubble_to(h0, sizeof(h0), "All traffic", "What all interfaces but loopback received (columns) and "
+		theme_bubble_to(h0, sizeof(h0), "Traffic", "What all interfaces but loopback received (columns) and "
 		                "sent (line) each second over the last minute.");
 		mui_set(o_total, MUIA_ShortHelp, (ULONG)h0);
 		theme_bubble_to(h1, sizeof(h1), "CPU", "How busy the Riptide process was each second (columns), "
