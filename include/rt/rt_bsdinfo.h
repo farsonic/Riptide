@@ -69,7 +69,7 @@ u32 rt_bsd_route_dump(u32 flags, u8 *buf, u32 len);
 #define RT_BSD_MBSTAT_SIZE   28
 #define RT_BSD_MRTSTAT_SIZE  32
 #define RT_BSD_RTSTAT_SIZE   10
-#define RT_BSD_TCPSTAT_SIZE  196
+#define RT_BSD_TCPSTAT_SIZE  208
 #define RT_BSD_UDPSTAT_SIZE  36
 #define RT_BSD_PCD_SIZE      24  /* struct protocol_connection_data */
 

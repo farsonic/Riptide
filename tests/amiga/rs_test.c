@@ -493,7 +493,7 @@ static void test_resolver(void)
 static void test_stats(void)
 {
 	static const LONG types[] = { 0, 1, 2, 3, 4, 5, 6, 7, 9, 10 };
-	static const LONG sizes[] = { 184, 36, 96, 28, 32, 10, 196, 36, -1, -1 };
+	static const LONG sizes[] = { 184, 36, 96, 28, 32, 10, 208, 36, -1, -1 };
 	ULONG st[64];
 	UBYTE pcd[24 * 32];
 	struct sockaddr_in s = sin_of(ip(127, 0, 0, 1), 7777);
