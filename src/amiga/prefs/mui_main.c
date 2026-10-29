@@ -685,6 +685,10 @@ static Object *field_page(int p)
 		if (f->type == F_CHECK || f->type == F_CYCLE)
 			mui_do(g, MUIM_Notify, f->type == F_CHECK ? MUIA_Selected : MUIA_Cycle_Active, MUIV_EveryTime,
 			       (ULONG)app, 2, MUIM_Application_ReturnID, ID_FIELD + i);
+		else if ((f->flags & FL_IF) && p == P_IFACE)
+			/* Return in a card's field: the list of cards shows it */
+			mui_do(g, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime, (ULONG)app, 2,
+			       MUIM_Application_ReturnID, ID_IFEDIT);
 		field_to_gadget(i);
 	}
 	if (p == P_IFACE) {
@@ -1269,6 +1273,11 @@ static int command(ULONG id)
 	case ID_IFADD:
 	case ID_IFDEL:
 		card_cmd(id);
+		show_status();
+		return 0;
+	case ID_IFEDIT:
+		harvest_card(0);
+		cards_show();
 		show_status();
 		return 0;
 	case ID_STATUS_CONN:
