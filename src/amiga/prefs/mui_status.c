@@ -1121,10 +1121,25 @@ static void tick(void)
 		rt_strlcpy(t_sum + strlen(t_sum), "\nThe page fills in by itself when it starts.",
 		           sizeof(t_sum) - strlen(t_sum));
 	}
-	mui_set(o_sum, MUIA_SText_Text, (ULONG)t_sum);
-	mui_set(o_total, MUIA_Graph_Hist, (ULONG)&model.total);
-	mui_set(o_cpu, MUIA_Graph_Hist, (ULONG)&model.cpu_hist);
-	mui_set(o_ifv, MUIA_IfView_Update, TRUE);
+	{
+		static u32 acc[4], nacc;
+		u32 a = log_ms(), b, c, e;
+		mui_set(o_sum, MUIA_SText_Text, (ULONG)t_sum);
+		b = log_ms();
+		mui_set(o_total, MUIA_Graph_Hist, (ULONG)&model.total);
+		mui_set(o_cpu, MUIA_Graph_Hist, (ULONG)&model.cpu_hist);
+		c = log_ms();
+		mui_set(o_ifv, MUIA_IfView_Update, TRUE);
+		e = log_ms();
+		acc[0] += b - a;
+		acc[1] += c - b;
+		acc[2] += e - c;
+		if (++nacc == 10) {
+			rp_log("DBG 10 ticks: summary %lu ms, graphs %lu ms, interfaces %lu ms", (unsigned long)acc[0],
+			       (unsigned long)acc[1], (unsigned long)acc[2]);
+			acc[0] = acc[1] = acc[2] = nacc = 0;
+		}
+	}
 	for (i = 0; i < model.nconn; i++) {
 		rp_st_conn_row(&model.conns[i], rowbuf[i], sizeof(rowbuf[i]));
 		rows[i] = rowbuf[i];

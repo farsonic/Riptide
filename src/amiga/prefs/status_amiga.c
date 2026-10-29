@@ -1,9 +1,12 @@
 /*
- * Riptide - RiptidePrefs: reading Riptide's tables for the Status page.
- * Once a second while the page is shown: bsdsocket.library and
- * riptide.library are opened, the tables read with RiptideSysCtl() and
- * both libraries closed again, so the editor never keeps Riptide from
- * quitting. Nothing is read when the RIPTIDE port is missing.
+ * Riptide - RiptidePrefs: reading Riptide's tables for the Status page,
+ * once a second while the page is shown. Riptide 0.23 and later answer
+ * one RTCMD_TABLES message on the RIPTIDE port with all of them, which
+ * needs no library (opening and closing riptide.library costs more than
+ * the reads on a 68020, and an open library would keep Riptide from
+ * quitting). Older versions: bsdsocket.library and riptide.library are
+ * opened, the tables read with RiptideSysCtl() and both closed again.
+ * Nothing is read when the RIPTIDE port is missing.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "cmd/cmdlib.h"
@@ -64,6 +67,89 @@ static int fetch(int k)
 	return 0;
 }
 
+/* keep the dump of table k (len bytes at d) in its buffer */
+static int store(int k, const u8 *d, u32 len)
+{
+	if (len < sizeof(hdr[k]))
+		return -1;
+	if (cap[k] < len) {
+		if (buf[k])
+			FreeVec(buf[k]);
+		cap[k] = len + len / 2 + 256;
+		buf[k] = AllocVec(cap[k], MEMF_ANY);
+		if (!buf[k]) {
+			cap[k] = 0;
+			return -1;
+		}
+	}
+	memcpy(buf[k], d, len);
+	memcpy(&hdr[k], d, sizeof(hdr[k]));
+	if (hdr[k].version != RT_CTL_VERSION || hdr[k].recsize == 0 ||
+	    len < sizeof(hdr[k]) + (u32)hdr[k].count * hdr[k].recsize)
+		return -1;
+	return 0;
+}
+
+/* the port: one message and its reply buffer, made on the first read */
+#define REPLY_SIZE 65536
+static struct MsgPort *rport;
+static struct RiptideMsg *rmsg;
+static u8 *rbuf;
+static int port_old;            /* Riptide answered EINVAL: use the library */
+
+/* The tables of mask (bit k: table k) through the port. 0, or -1 when
+ * this Riptide cannot (then port_old is set) or is gone. */
+static int port_read(u32 mask)
+{
+	struct MsgPort *port;
+	char *t;
+	u32 off = 0;
+	int k;
+
+	if (!rport && !(rport = CreateMsgPort()))
+		return -1;
+	if (!rmsg && !(rmsg = AllocVec(sizeof(*rmsg), MEMF_PUBLIC | MEMF_CLEAR)))
+		return -1;
+	if (!rbuf && !(rbuf = AllocVec(REPLY_SIZE, MEMF_PUBLIC)))
+		return -1;
+	memset(rmsg, 0, sizeof(*rmsg));
+	rmsg->msg.mn_Node.ln_Type = NT_MESSAGE;
+	rmsg->msg.mn_ReplyPort = rport;
+	rmsg->msg.mn_Length = sizeof(*rmsg);
+	rmsg->cmd = RTCMD_TABLES;
+	rmsg->reply = (STRPTR)rbuf;
+	rmsg->replysize = REPLY_SIZE;
+	t = rmsg->text;
+	for (k = 0; k < D_N; k++)
+		if (mask & (1u << k))
+			t += rt_snprintf(t, 8, "%d ", what[k]);
+	Forbid();
+	port = FindPort((CONST_STRPTR)RIPTIDE_PORTNAME);
+	if (port)
+		PutMsg(port, &rmsg->msg);
+	Permit();
+	if (!port)
+		return -1;
+	WaitPort(rport);
+	GetMsg(rport);
+	if (rmsg->result) {
+		if (rmsg->result == RT_EINVAL)
+			port_old = 1;
+		return -1;
+	}
+	/* number, length, dump; 4-byte aligned */
+	while (off + 8 <= rmsg->replylen && off + 8 <= REPLY_SIZE) {
+		u32 w = *(u32 *)(rbuf + off), len = *(u32 *)(rbuf + off + 4);
+		if (off + 8 + len > REPLY_SIZE)
+			break;
+		for (k = 0; k < D_N; k++)
+			if ((u32)what[k] == w && (mask & (1u << k)))
+				have[k] = len && store(k, rbuf + off + 8, len) == 0;
+		off += 8 + ((len + 3u) & ~3u);
+	}
+	return 0;
+}
+
 void rp_status_free(void)
 {
 	int k;
@@ -76,6 +162,16 @@ void rp_status_free(void)
 		have[k] = 0;
 	}
 	reads = 0;
+	if (rbuf)
+		FreeVec(rbuf);
+	if (rmsg)
+		FreeVec(rmsg);
+	if (rport)
+		DeleteMsgPort(rport);
+	rbuf = NULL;
+	rmsg = NULL;
+	rport = NULL;
+	port_old = 0;
 }
 
 /* milliseconds from dos.library's clock (1/50 s steps are enough for rates) */
@@ -98,24 +194,38 @@ int rp_status_read(struct rp_status_model *m)
 		rp_status_free();
 		return 0;
 	}
-	SocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4);
-	RiptideBase = SocketBase ? OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, 1) : NULL;
-	if (!RiptideBase) {
-		if (SocketBase)
+	{
+		u32 mask = 0;
+		for (k = 0; k < D_N; k++)
+			if (k < D_SLOW || reads % 5 == 0 || !have[k])
+				mask |= 1u << k;
+		if (port_old || port_read(mask) < 0) {
+			if (!port_old) {
+				if (m->running)
+					rp_status_stopped(m);
+				return 0;
+			}
+			/* an older Riptide: through the library */
+			SocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4);
+			RiptideBase = SocketBase ? OpenLibrary((CONST_STRPTR)RIPTIDE_LIB_NAME, 1) : NULL;
+			if (!RiptideBase) {
+				if (SocketBase)
+					CloseLibrary(SocketBase);
+				SocketBase = NULL;
+				if (m->running)
+					rp_status_stopped(m);
+				rp_status_free();
+				return 0;
+			}
+			for (k = 0; k < D_N; k++)
+				if (mask & (1u << k))
+					have[k] = fetch(k) == 0;
+			CloseLibrary(RiptideBase);
 			CloseLibrary(SocketBase);
-		SocketBase = NULL;
-		if (m->running)
-			rp_status_stopped(m);
-		rp_status_free();
-		return 0;
+			RiptideBase = SocketBase = NULL;
+		}
+		reads++;
 	}
-	for (k = 0; k < D_N; k++)
-		if (k < D_SLOW || reads % 5 == 0 || !have[k])
-			have[k] = fetch(k) == 0;
-	reads++;
-	CloseLibrary(RiptideBase);
-	CloseLibrary(SocketBase);
-	RiptideBase = SocketBase = NULL;
 	memset(&in, 0, sizeof(in));
 	in.now_ms = now_ms();
 #define RECS(k) (have[k] ? buf[k] + sizeof(struct rt_ctl_hdr) : NULL)
