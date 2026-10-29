@@ -28,6 +28,8 @@
 #include <exec/io.h>
 #include <exec/errors.h>
 #include <exec/devices.h>
+#include <exec/interrupts.h>
+#include <hardware/intbits.h>
 #include <devices/timer.h>
 #include <dos/dos.h>
 #include <dos/dosextens.h>
@@ -59,6 +61,7 @@ static inline void rt_newlist(struct List *l)
 #define RT_AMIGA_ECLOCKFREQ(eb) ((eb)->ex_EClockFrequency)
 #define RT_AMIGA_ATTNFLAGS(eb) ((eb)->AttnFlags)
 #define RT_AMIGA_THISTASK(eb) ((eb)->ThisTask)
+#define RT_AMIGA_VBLANKFREQ(eb) ((eb)->VBlankFrequency)
 
 #else /* GCC */
 
@@ -67,6 +70,7 @@ static inline void rt_newlist(struct List *l)
 #define RT_AMIGA_ECLOCKFREQ(eb) (*(ULONG *)((UBYTE *)(eb) + EXECBASE_ECLOCK_OFS))
 #define RT_AMIGA_ATTNFLAGS(eb) (*(UWORD *)((UBYTE *)(eb) + EXECBASE_ATTNFLAGS_OFS))
 #define RT_AMIGA_THISTASK(eb) (*(struct Task *volatile *)((UBYTE *)(eb) + EXECBASE_THISTASK_OFS))
+#define RT_AMIGA_VBLANKFREQ(eb) (*(UBYTE *)((UBYTE *)(eb) + EXECBASE_VBLANKFREQ_OFS))
 
 #endif
 

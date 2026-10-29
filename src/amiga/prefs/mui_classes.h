@@ -41,4 +41,12 @@ extern struct MUI_CustomClass *nav_mcc, *head_mcc, *qbutton_mcc, *qlabel_mcc, *s
 
 /* the page list's help bubbles follow theme_tips() */
 
+/* for classes in other files (mui_status.c) */
+ULONG mc_tagval(Msg msg, ULONG tag, ULONG def);       /* a tag's value in OM_NEW / OM_SET */
+int   mc_has_tag(Msg msg, ULONG tag);
+LONG  mc_measure(const char *s, int key);             /* text width in the theme's font */
+void  mc_minmax(Msg msg, LONG minw, LONG defw, LONG maxw, LONG minh, LONG defh, LONG maxh);
+int   mc_inside(Object *obj, struct IntuiMessage *im);
+void  mc_handler(Object *obj, struct IClass *cl, struct MUI_EventHandlerNode *ehn, ULONG events, int add);
+
 #endif

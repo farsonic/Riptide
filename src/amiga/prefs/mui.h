@@ -120,6 +120,20 @@ struct MUI_EventHandlerNode {
 	ULONG  ehn_Events;
 };
 
+/* a timer (MUIM_Application_AddInputHandler with MUIIHNF_TIMER): MUI sends
+ * ihn_Method to ihn_Object every ihn_millis milliseconds */
+struct MUI_InputHandlerNode {
+	struct MinNode ihn_Node;
+	Object *ihn_Object;
+	UWORD  ihn_millis;      /* the SDK's ihn_stuff.ihn_timer union */
+	UWORD  ihn_current;
+	ULONG  ihn_Flags;
+	ULONG  ihn_Method;
+};
+#define MUIIHNF_TIMER                     (1UL << 0)
+#define MUIM_Application_AddInputHandler  0x8042f099UL
+#define MUIM_Application_RemInputHandler  0x8042e7afUL
+
 /* asl.library's file requester, as MUI_AllocAslRequest() gives it */
 struct rt_filereq {
 	UBYTE  fr_Reserved0[4];
@@ -177,6 +191,8 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIA_Window_ScreenTitle      0x804234b0UL
 #define MUIA_Window_LeftEdge         0x80426c65UL
 #define MUIA_Window_TopEdge          0x80427c66UL
+#define MUIA_Window_Width            0x8042dcaeUL
+#define MUIA_Window_Height           0x80425846UL
 #define MUIA_Window_Sleep            0x8042e7dbUL
 #define MUIA_Window_RefWindow        0x804201f4UL
 #define MUIA_Window_Activate         0x80428d2fUL

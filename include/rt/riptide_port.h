@@ -24,6 +24,15 @@
  *                  "interface eth1 device=a2065.device unit=0",
  *                  "interface eth1 delete", "sysctl -a",
  *                  "capture start iface=eth0", "capture save RAM:x.pcap".
+ *   RTCMD_TABLES   (0.23) read tables of include/rt/rt_ctl.h without opening
+ *                  a library: text holds their numbers (RT_CTL_*, decimal,
+ *                  separated by spaces, e.g. "42 1 18"); needs a reply
+ *                  buffer, which gets for each table a ULONG number, a
+ *                  ULONG length and the dump as net.riptide.<number> gives
+ *                  it (struct rt_ctl_hdr and the records), the next one at
+ *                  the next 4-byte boundary. A table that failed or did not
+ *                  fit has length 0 (and RTMSGF_TRUNCATED is set). replylen
+ *                  is the bytes used. Older Riptide versions answer EINVAL.
  *
  * Reply: result is 0 or a positive errno (BSD numbering); the text reply
  * (output, or the error message) goes to 'reply' when the client supplies
@@ -41,6 +50,7 @@
 #define RTCMD_STATUS   1
 #define RTCMD_QUIT     2
 #define RTCMD_COMMAND  3
+#define RTCMD_TABLES   4
 
 #define RTMSGF_TRUNCATED 1
 

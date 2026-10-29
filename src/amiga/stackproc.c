@@ -6,6 +6,7 @@
  */
 #include "amiga_priv.h"
 #include "rt/rt_capture.h"
+#include "rt/rt_sysctl.h"
 
 #define DEFAULT_CONFIG "ENV:Riptide/riptide.conf"
 #define DEFAULT_HOSTS  "ENV:Riptide/hosts"
@@ -564,6 +565,47 @@ static char *reply_buf(struct RiptideMsg *m, u32 *len)
 	return m->text;
 }
 
+/* RTCMD_TABLES: the tables numbered in list (decimal, spaces between)
+ * into out, each as a number, a length and the dump, 4-byte aligned;
+ * returns the bytes used (lock held) */
+static u32 read_tables(const char *list, char *out, u32 olen, ULONG *flags)
+{
+	s32 mib[3];
+	u32 used = 0;
+
+	*flags = 0;
+	mib[0] = 4;             /* CTL_NET */
+	mib[1] = RT_CTL_MIB_RIPTIDE;
+	while (*list) {
+		const char *e;
+		unsigned long w;
+		u32 *hd, dl;
+		while (*list == ' ')
+			list++;
+		w = rt_strtoul(list, &e, 10);
+		if (e == list)
+			break;
+		list = e;
+		if (used + 8 > olen) {
+			*flags = RTMSGF_TRUNCATED;
+			break;
+		}
+		hd = (u32 *)(out + used);
+		dl = olen - used - 8;
+		mib[2] = (s32)w;
+		if (rt_sysctl_bymib(mib, 3, out + used + 8, &dl, NULL, 0) != 0) {
+			dl = 0;
+			*flags = RTMSGF_TRUNCATED;
+		}
+		hd[0] = (u32)w;
+		hd[1] = dl;
+		used += 8 + ((dl + 3u) & ~3u);
+		if (used > olen)
+			used = olen;
+	}
+	return used;
+}
+
 static void handle_port(void)
 {
 	struct RiptideMsg *m;
@@ -612,6 +654,20 @@ static void handle_port(void)
 			m->result = r < 0 ? -r : 0;
 			amiga_log_flush();
 			break;
+		case RTCMD_TABLES:
+			if (out == m->text) {
+				m->result = RT_EINVAL;
+				rt_strlcpy(out, "TABLES needs a reply buffer\n", olen);
+				break;
+			}
+			m->text[sizeof(m->text) - 1] = 0;
+			rt_lock();
+			used = read_tables(m->text, out, olen, &m->flags);
+			rt_unlock();
+			m->replylen = used;
+			m->result = 0;
+			ReplyMsg(&m->msg);
+			continue;
 		default:
 			m->result = RT_EINVAL;
 			rt_strlcpy(out, "unknown command\n", olen);
@@ -689,6 +745,41 @@ int amiga_stack_start(const char *config, int selftest)
 	return 0;
 }
 
+/* The CPU meter (net.riptide.status, RiptidePrefs' Status page): while it
+ * runs, a vertical blank interrupt server (rt_cpu_vbl in rt_m68k.s) counts
+ * 50 or 60 ticks a second and those in which this process was waiting
+ * for work. Sampling costs nothing per packet; the server is only in the
+ * chain while someone reads the table. */
+static struct rt_cpu_samples cpu_samples;
+static struct Interrupt cpu_int;
+static int cpu_int_in;
+
+static void cpu_meter_follow(int on)
+{
+	if (on && !cpu_int_in) {
+		cpu_samples.task = FindTask(NULL);
+		cpu_int.is_Node.ln_Type = NT_INTERRUPT;
+		cpu_int.is_Node.ln_Pri = 0;
+		cpu_int.is_Node.ln_Name = (char *)"Riptide CPU meter";
+		cpu_int.is_Data = &cpu_samples;
+		cpu_int.is_Code = rt_cpu_vbl;
+		AddIntServer(INTB_VERTB, &cpu_int);
+		cpu_int_in = 1;
+	} else if (!on && cpu_int_in) {
+		RemIntServer(INTB_VERTB, &cpu_int);
+		cpu_int_in = 0;
+	}
+}
+
+void rt_cpu_counts(u32 *now, u32 *idle, u32 *hz)
+{
+	u8 f = RT_AMIGA_VBLANKFREQ(SysBase);
+
+	*now = cpu_samples.ticks;
+	*idle = cpu_samples.waiting;
+	*hz = f ? f : 50;
+}
+
 void amiga_stack_loop(void)
 {
 	char msg[128];
@@ -710,8 +801,10 @@ void amiga_stack_loop(void)
 				ai->poll(ai);
 		rt_rx_batch_end();
 		ms = rt_stack_poll();
+		rt_cpu_meter_poll();
 		RT_PROF_EXIT(RT_PROF_STACK);
 		rt_unlock();
+		cpu_meter_follow(rt_cpu_meter);
 		amiga_log_flush();
 		if (quit_requested == 2)
 			break;
@@ -772,6 +865,7 @@ void amiga_stack_loop(void)
 		if (quit_requested == 2)
 			break;
 	}
+	cpu_meter_follow(0);
 }
 
 void amiga_stack_stop(void)

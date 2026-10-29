@@ -18,7 +18,9 @@
 
 enum {
 	P_IFACE, P_ADDR, P_ALIAS, P_VLAN, P_NAMES, P_TIME, P_TCP, P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE,
-	P_QOS, P_QRULE, P_OTHER, RP_NPAGES
+	P_QOS, P_QRULE, P_OTHER,
+	P_STATUS,                   /* live state, no settings (shown first) */
+	RP_NPAGES
 };
 #define RP_FIRST_ADVANCED P_CONN    /* pages from here on are "Advanced" */
 

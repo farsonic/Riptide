@@ -34,7 +34,8 @@ ST_SRC    := st_main st_xml st_http st_util
 # the ftp test, a minimal speedtest HTTP server for the speedtest test
 TESTTOOLS := ftpd-test httpd-test netbench udpblast
 # RiptidePrefs (src/amiga/prefs): preferences editor for riptide.conf (MUI and GadTools)
-PREFS_SRC := riptideprefs conf_edit prefs_fields prefs_io gt_prefs mui_main mui_classes mui_theme mui_lang mui_util
+PREFS_SRC := riptideprefs conf_edit prefs_fields prefs_io gt_prefs mui_main mui_classes mui_theme mui_lang mui_util \
+             mui_status prefs_status status_amiga
 
 # IPv6 variants of ping and traceroute (ping6.c / traceroute6.c include
 # ping.c / traceroute.c); NETTOOLS is the list of tools linked with cmdlib
@@ -60,7 +61,7 @@ CFLAGS  := -m68020 -mtune=68020-60 -DRT_ARCH_M68K_ASM -O2 -std=gnu99 -ffreestand
            -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter \
            -Isrc/amiga/include -Isrc/amiga -Isrc/amiga/os -I$(BUILD) -Iinclude -Iinclude/rt
 LDFLAGS := -T src/amiga/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments
-GEN_H   := $(foreach l,exec dos timer locale battclock intuition gadtools graphics,$(BUILD)/gen/$(l)_calls.h) \
+GEN_H   := $(foreach l,exec dos timer locale battclock intuition gadtools graphics icon,$(BUILD)/gen/$(l)_calls.h) \
            $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h \
            $(BUILD)/gen/muimaster_calls.h
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)

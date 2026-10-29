@@ -17,6 +17,7 @@
 #include "rt/rt_arch.h"
 #include "rt/rt_host.h"
 #include "rt/rt_diag.h"
+#include "rt/rt_ctl.h"
 #include "host_priv.h"
 
 /* ---- stack lock ---- */
@@ -470,4 +471,13 @@ int rt_file_write(void *f, const void *p, u32 n)
 int rt_file_close(void *f)
 {
 	return fclose(f) == 0 ? 0 : -1;
+}
+
+/* the CPU meter on the host: the profile clock, and what the tests put
+ * into rt_cpu_idle */
+void rt_cpu_counts(u32 *now, u32 *idle, u32 *hz)
+{
+	*now = rt_prof_ticks();
+	*idle = rt_cpu_idle;
+	*hz = rt_prof_hz();
 }

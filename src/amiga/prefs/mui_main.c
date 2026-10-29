@@ -17,6 +17,7 @@
 #include "prefs/mui_theme.h"
 #include "prefs/mui_classes.h"
 #include "prefs/mui_ids.h"
+#include "prefs/mui_status.h"
 
 #define NF RP_NFIELDS_MAX
 #define IS_LIST(p) (rp_page_list(p) >= 0)
@@ -614,7 +615,15 @@ static Object *list_page(int p)
 
 static Object *build_page(int p)
 {
-	Object *body = IS_LIST(p) ? list_page(p) : field_page(p), *filler, *note;
+	Object *body, *filler, *note;
+
+	if (p == P_STATUS) {
+		ULONG in = theme_compact() ? 4 : 10;
+		body = status_page_build(app, ID_STATUS_CONN, ID_STATUS_UPD);
+		return body ? mui_new(MUIC_Group, MUIA_InnerLeft, 12, MUIA_InnerRight, 12, MUIA_InnerTop, in,
+		                      MUIA_InnerBottom, in - 2, MUIA_Group_Child, (ULONG)body, TAGEND) : NULL;
+	}
+	body = IS_LIST(p) ? list_page(p) : field_page(p);
 
 	note = label(has_form(p) ? rp_lform_note(p) : rp_pages[p].note, QL_NOTE);
 	filler = IS_LIST(p) ? NULL : rect();
@@ -946,6 +955,12 @@ static int command(ULONG id)
 		return 0;
 	}
 	switch (id) {
+	case ID_STATUS_CONN:
+		status_table_chosen();
+		return 0;
+	case ID_STATUS_UPD:
+		status_update_chosen();
+		return 0;
 	case ID_FRONT:
 		/* another RiptidePrefs was started: this window to the front */
 		mui_set(app, MUIA_Application_Iconified, FALSE);
@@ -1048,6 +1063,8 @@ static void free_all(void)
 	if (app)
 		MUI_DisposeObject(app);
 	app = win = NULL;
+	status_page_free();
+	status_classes_free();
 	rp_classes_free();
 	for (i = 0; i < NF; i++) {
 		rp_free(fhelp[i]);
@@ -1094,9 +1111,9 @@ int mui_run(const struct rp_gui_args *a)
 	}
 	theme_set_dark(a->theme >= 0 ? a->theme : rp_eprefs_get("dark", 0));
 	theme_set_tips(rp_eprefs_get("bubbles", 1));
-	page = a->page >= 0 ? a->page : 0;
+	page = a->page >= 0 ? a->page : P_STATUS;
 	pubname = a->pubscreen;
-	if (rp_classes_make() < 0) {
+	if (rp_classes_make() < 0 || status_classes_make() < 0) {
 		rp_log("cannot make the classes");
 		goto out;
 	}
@@ -1130,13 +1147,15 @@ int mui_run(const struct rp_gui_args *a)
 		goto out;
 	}
 	rp_log("window open, page %d, %s theme", page, theme_dark() ? "dark" : "light");
+	rp_log("window %ldx%ld at %ld,%ld", (long)mui_get(win, MUIA_Window_Width), (long)mui_get(win, MUIA_Window_Height),
+	       (long)mui_get(win, MUIA_Window_LeftEdge), (long)mui_get(win, MUIA_Window_TopEdge));
 	rp_request_fn = mui_request;
 	show_status();
 	{
 		/* for the DEBUG log: the bubbles of the first setting and page */
 		const char *h1 = (const char *)mui_get(fobj[0], MUIA_ShortHelp);
 		const char *h2 = (const char *)mui_do(nav, MUIM_CreateShortHelp, (ULONG)_mleft(nav) + 20,
-		                                      (ULONG)_mtop(nav) + (theme_compact() ? 1 : theme_fh() + 10));
+		                                      (ULONG)_mtop(nav) + 2);
 		rp_log("bubble field: %s", h1 ? h1 : "(none)");
 		rp_log("bubble page: %s", h2 ? h2 : "(none)");
 	}

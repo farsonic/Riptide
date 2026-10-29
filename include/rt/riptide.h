@@ -55,6 +55,8 @@ int rt_tcp_bg_command(int argc, char **argv, char *out, u32 outlen);
 void rt_tcp_bg_status(char *buf, u32 len);   /* "" without rules */
 /* one line on socket buffer memory for STATUS */
 void rt_tcp_mem_status(char *buf, u32 len);
+/* the same as numbers (KB); returns 0 normal, 1 under pressure, 2 at the limit */
+u8 rt_tcp_mem_info(u32 *used_kb, u32 *pressure_kb, u32 *high_kb);
 int rt_udp_list(struct rt_pcb_info *out, int max);
 int rt_raw_list(struct rt_pcb_info *out, int max);
 
@@ -111,6 +113,9 @@ extern s32 rt_dns_tcp;          /* dns.tcp_fallback: TC answers again over TCP *
 /* "dns edns_size N | edns on|off | tcp on|off | negttl N | failttl N | flush |
  * reset | status" (lock held) */
 int  rt_dns_command(int argc, char **argv, char *out, u32 outlen);
+/* lookups answered by the cache, by a cached negative answer, and not
+ * repeated after a failure (dns.stats.*) */
+void rt_dns_cache_stats(u32 *hits, u32 *neg_hits, u32 *fail_hits);
 /* BIND style raw interface (res_* / dn_* calls for library clients), called
  * WITHOUT the lock. res_mkquery: only op 0 (QUERY); returns length or -1.
  * res_send: answer length (copy truncated to anslen) or -h_errno.

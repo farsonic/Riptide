@@ -333,6 +333,8 @@ static const char *const icons[IC_NICONS] = {
 	/* OTHER: a page of text with a folded corner */
 	"cw F 3 1 12 14 ci P 6 3 1 10 1 13 4 13 14 3 14 3 1 L 10 1 10 4 L 10 4 13 4 cd L 5 7 11 7 L 5 9 11 9 "
 	"L 5 11 9 11",
+	/* STATUS: a screen with a line graph going up and down */
+	"cw F 2 3 13 10 ci R 1 2 14 11 L 5 14 10 14 L 7 12 7 13 ca P 5 3 9 6 6 8 8 10 4 12 6",
 };
 
 /* the pen of an icon colour letter */

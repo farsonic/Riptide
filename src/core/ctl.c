@@ -629,6 +629,40 @@ static int h_mcast(const struct rt_sysctl *e, void *old, u32 *oldlen, const void
 	return r;
 }
 
+/* ---- the stack at a glance, and the CPU meter ---- */
+
+volatile u8 rt_cpu_meter;
+u32 rt_cpu_idle;
+static u32 ctl_start_ms, cpu_meter_ms;
+
+/* the meter stops 12 s after the last read of net.riptide.status (the
+ * Status page reads every 1, 2 or 5 s) */
+void rt_cpu_meter_poll(void)
+{
+	if (rt_cpu_meter && rt_now_ms() - cpu_meter_ms > 12000u)
+		rt_cpu_meter = 0;
+}
+
+static int h_status(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
+{
+	struct rt_ctl_status st;
+
+	if (!old)
+		return dump_emit(NULL, oldlen, sizeof(st), 1, NULL);
+	memset(&st, 0, sizeof(st));
+	rt_strlcpy(st.version, RIPTIDE_VERSION_STRING, sizeof(st.version));
+	st.uptime_s = (rt_now_ms() - ctl_start_ms) / 1000u;
+	st.mem_state = rt_tcp_mem_info(&st.mem_used_kb, &st.mem_pressure_kb, &st.mem_high_kb);
+	st.buf_kb = rt_buf_bytes_total() >> 10;
+	rt_ntp_ctl(&st);
+	rt_dns_cache_stats(&st.dns_hits, &st.dns_neg_hits, &st.dns_fail_hits);
+	rt_cpu_counts(&st.cpu_now, &st.cpu_idle, &st.cpu_hz);
+	st.cpu_on = rt_cpu_meter;
+	cpu_meter_ms = rt_now_ms();
+	rt_cpu_meter = 1;
+	return dump_emit(old, oldlen, sizeof(st), 1, &st);
+}
+
 static int h_stats(const struct rt_sysctl *e, void *old, u32 *oldlen, const void *newp, u32 newlen)
 {
 	return dump_emit(old, oldlen, (u16)e->max, 1, e->ptr);
@@ -665,10 +699,12 @@ static const struct rt_sysctl ctl_sysctls[] = {
 	STATS("igmpstat", RT_CTL_IGMPSTAT, rt_igmpstat),
 	DUMP("addrs4", RT_CTL_ADDRS4, h_addrs4, "rt_ctl_hdr + struct rt_ctl_addr4[]"),
 	DUMP("qos", RT_CTL_QOS, h_qos, "rt_ctl_hdr + struct rt_ctl_qos[]"),
+	DUMP("status", RT_CTL_STATUS, h_status, "rt_ctl_hdr + one struct rt_ctl_status"),
 };
 
 void rt_ctl_init(void)
 {
+	ctl_start_ms = rt_now_ms();
 	rt_sysctl_register(ctl_sysctls, (int)RT_ARRAY_SIZE(ctl_sysctls));
 }
 

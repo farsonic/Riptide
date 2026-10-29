@@ -15,7 +15,7 @@ enum {
 	/* Settings menu */
 	ID_DARK = 300, ID_TIPS,
 	/* not menu items: the window reporting */
-	ID_CANCEL = 400, ID_PAGE, ID_FRONT,
+	ID_CANCEL = 400, ID_PAGE, ID_FRONT, ID_STATUS_CONN, ID_STATUS_UPD,
 	/* the buttons of a message: ID_DLGBTN + button */
 	ID_DLGBTN = 450,
 	/* list pages: ID_LIST + page * 4 + LIST_SEL/ADD/REPL/DEL */

@@ -23,7 +23,7 @@ struct MUI_CustomClass *nav_mcc, *head_mcc, *qbutton_mcc, *qlabel_mcc, *status_m
 #define SHIFTS     (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)
 
 /* the tag's value in an OM_NEW/OM_SET message, or def */
-static ULONG tagval(Msg msg, ULONG tag, ULONG def)
+ULONG mc_tagval(Msg msg, ULONG tag, ULONG def)
 {
 	struct TagItem *t = ((struct opSet *)msg)->ops_AttrList;
 
@@ -38,13 +38,13 @@ static ULONG tagval(Msg msg, ULONG tag, ULONG def)
 	return def;
 }
 
-static int has_tag(Msg msg, ULONG tag)
+int mc_has_tag(Msg msg, ULONG tag)
 {
-	return tagval(msg, tag, 0x7fffffffUL) != 0x7fffffffUL;
+	return mc_tagval(msg, tag, 0x7fffffffUL) != 0x7fffffffUL;
 }
 
 /* a text measuring rastport in the theme's font */
-static LONG measure(const char *s, int key)
+LONG mc_measure(const char *s, int key)
 {
 	struct RastPort rp;
 
@@ -53,7 +53,7 @@ static LONG measure(const char *s, int key)
 }
 
 /* the rows of a MUI_MinMax */
-static void minmax(Msg msg, LONG minw, LONG defw, LONG maxw, LONG minh, LONG defh, LONG maxh)
+void mc_minmax(Msg msg, LONG minw, LONG defw, LONG maxw, LONG minh, LONG defh, LONG maxh)
 {
 	struct MUI_MinMax *m = ((struct MUIP_AskMinMax *)msg)->MinMaxInfo;
 
@@ -66,14 +66,14 @@ static void minmax(Msg msg, LONG minw, LONG defw, LONG maxw, LONG minh, LONG def
 }
 
 /* the pointer in an object */
-static int inside(Object *obj, struct IntuiMessage *im)
+int mc_inside(Object *obj, struct IntuiMessage *im)
 {
 	return im->MouseX >= _mleft(obj) && im->MouseX <= _mright(obj) && im->MouseY >= _mtop(obj) &&
 	       im->MouseY <= _mbottom(obj);
 }
 
 /* add or remove an object's event handler (between MUIM_Setup and Cleanup) */
-static void handler(Object *obj, struct IClass *cl, struct MUI_EventHandlerNode *ehn, ULONG events, int add)
+void mc_handler(Object *obj, struct IClass *cl, struct MUI_EventHandlerNode *ehn, ULONG events, int add)
 {
 	if (add) {
 		ehn->ehn_Priority = 0;
@@ -111,10 +111,23 @@ static int nav_isz(void)
 	return theme_compact() ? 0 : nav_rowh() - 2 < 16 ? nav_rowh() - 2 : 16;
 }
 
-/* the top of row i (page i) below the object's top */
-static LONG nav_rowy(int i)
+/* The list's order: Status first, then the settings in page order. pos
+ * is a row of the list, page a P_* number. */
+static int nav_page_at(int pos)
 {
-	return nav_headh() * (i >= RP_FIRST_ADVANCED ? 2 : 1) + (LONG)i * nav_rowh();
+	return pos == 0 ? P_STATUS : pos - 1;
+}
+
+static int nav_pos(int page)
+{
+	return page == P_STATUS ? 0 : page + 1;
+}
+
+/* the top of row pos below the object's top ("Settings" heads row 1,
+ * "Advanced" the first advanced page) */
+static LONG nav_rowy(int pos)
+{
+	return nav_headh() * ((pos >= 1) + (pos >= RP_FIRST_ADVANCED + 1)) + (LONG)pos * nav_rowh();
 }
 
 /* the page under y, or -1 */
@@ -125,7 +138,7 @@ static int nav_hit(Object *obj, LONG y)
 	for (i = 0; i < RP_NPAGES; i++) {
 		LONG t = _mtop(obj) + nav_rowy(i);
 		if (y >= t && y < t + nav_rowh())
-			return i;
+			return nav_page_at(i);
 	}
 	return -1;
 }
@@ -139,22 +152,25 @@ static void nav_draw(struct nav_data *d, Object *obj)
 	theme_fill(rp, x, _mtop(obj), r - 1, _mbottom(obj), tpen(T_PANEL));
 	theme_line(rp, r, _mtop(obj), r, _mbottom(obj), tpen(T_BORDER));
 	if (nav_headh()) {
-		theme_text(rp, x + 10, _mtop(obj) + (nav_headh() - fh) / 2 + 1, "Settings", tpen(T_DIM), 1);
-		theme_text(rp, x + 10, _mtop(obj) + nav_rowy(RP_FIRST_ADVANCED) - nav_headh() + (nav_headh() - fh) / 2 + 1,
+		theme_text(rp, x + 10, _mtop(obj) + nav_rowy(1) - nav_headh() + (nav_headh() - fh) / 2 + 1, "Settings",
+		           tpen(T_DIM), 1);
+		theme_text(rp, x + 10,
+		           _mtop(obj) + nav_rowy(RP_FIRST_ADVANCED + 1) - nav_headh() + (nav_headh() - fh) / 2 + 1,
 		           "Advanced", tpen(T_DIM), 1);
 	}
 	for (i = 0; i < RP_NPAGES; i++) {
+		int p = nav_page_at(i);
 		LONG t = _mtop(obj) + nav_rowy(i), b = t + nav_rowh() - 1;
-		if (i == d->active) {
+		if (p == d->active) {
 			theme_fill(rp, x, t, r - 1, b, tpen(T_PRESSED));
 			theme_fill(rp, x, t, x + 2, b, tpen(T_ACCENT));
-		} else if (i == d->hot) {
+		} else if (p == d->hot) {
 			theme_fill(rp, x, t, r - 1, b, tpen(T_HOVER));
 		}
 		if (isz)
-			theme_icon(rp, i, x + 10, t + (nav_rowh() - isz) / 2, isz, 0);
-		theme_text(rp, x + 10 + gap, t + (nav_rowh() - fh) / 2, rp_pages[i].title, tpen(T_TEXT),
-		           i == d->active);
+			theme_icon(rp, p, x + 10, t + (nav_rowh() - isz) / 2, isz, 0);
+		theme_text(rp, x + 10 + gap, t + (nav_rowh() - fh) / 2, rp_pages[p].title, tpen(T_TEXT),
+		           p == d->active);
 	}
 }
 
@@ -180,13 +196,13 @@ DISPATCHER(nav_dispatch)
 			return 0;
 		d = INST_DATA(cl, obj);
 		memset(d, 0, sizeof(*d));
-		d->active = (int)tagval(msg, MUIA_Nav_Active, 0);
+		d->active = (int)mc_tagval(msg, MUIA_Nav_Active, 0);
 		d->hot = -1;
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
-		if (has_tag(msg, MUIA_Nav_Active)) {
-			int p = (int)tagval(msg, MUIA_Nav_Active, 0);
+		if (mc_has_tag(msg, MUIA_Nav_Active)) {
+			int p = (int)mc_tagval(msg, MUIA_Nav_Active, 0);
 			if (p >= 0 && p < RP_NPAGES && p != d->active) {
 				d->active = p;
 				if (d->shown)
@@ -206,11 +222,11 @@ DISPATCHER(nav_dispatch)
 		int i;
 		DoSuperMethodA(cl, obj, msg);
 		for (i = 0; i < RP_NPAGES; i++)
-			if ((ww = measure(rp_pages[i].title, 0) + 1) > w)
+			if ((ww = mc_measure(rp_pages[i].title, 0) + 1) > w)
 				w = ww;
 		w += 10 + (nav_isz() ? nav_isz() + 8 : 0) + 14;
 		ww = nav_rowy(RP_NPAGES) + 4;
-		minmax(msg, w, w, w, ww, ww, MUI_MAXMAX);
+		mc_minmax(msg, w, w, w, ww, ww, MUI_MAXMAX);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -218,11 +234,11 @@ DISPATCHER(nav_dispatch)
 			return FALSE;
 		theme_setup(obj);
 		d = INST_DATA(cl, obj);
-		handler(obj, cl, &d->ehn, IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_RAWKEY, 1);
+		mc_handler(obj, cl, &d->ehn, IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_RAWKEY, 1);
 		return TRUE;
 	case MUIM_Cleanup:
 		d = INST_DATA(cl, obj);
-		handler(obj, cl, &d->ehn, 0, 0);
+		mc_handler(obj, cl, &d->ehn, 0, 0);
 		theme_cleanup(obj);
 		break;
 	case MUIM_Show:
@@ -243,14 +259,14 @@ DISPATCHER(nav_dispatch)
 		if (!im || !d->shown)
 			return 0;
 		if (im->Class == IDCMP_MOUSEMOVE) {
-			i = inside(obj, im) ? nav_hit(obj, im->MouseY) : -1;
+			i = mc_inside(obj, im) ? nav_hit(obj, im->MouseY) : -1;
 			if (i != d->hot) {
 				d->hot = i;
 				MUI_Redraw(obj, MADF_DRAWOBJECT);
 			}
 			return 0;
 		}
-		if (im->Class == IDCMP_MOUSEBUTTONS && im->Code == SELECTDOWN && inside(obj, im)) {
+		if (im->Class == IDCMP_MOUSEBUTTONS && im->Code == SELECTDOWN && mc_inside(obj, im)) {
 			i = nav_hit(obj, im->MouseY);
 			if (i >= 0)
 				nav_go(obj, i);
@@ -259,7 +275,7 @@ DISPATCHER(nav_dispatch)
 		if (im->Class == IDCMP_RAWKEY && !(im->Code & IECODE_UP_PREFIX)) {
 			int back = (im->Qualifier & SHIFTS) != 0;
 			if (im->Code == RAW_P) {
-				nav_go(obj, (d->active + (back ? RP_NPAGES - 1 : 1)) % RP_NPAGES);
+				nav_go(obj, nav_page_at((nav_pos(d->active) + (back ? RP_NPAGES - 1 : 1)) % RP_NPAGES));
 				return MUI_EventHandlerRC_Eat;
 			}
 			if (im->Code == RAW_ESC) {
@@ -267,9 +283,12 @@ DISPATCHER(nav_dispatch)
 				mui_do(_app(obj), MUIM_Application_ReturnID, ID_CANCEL);
 				return MUI_EventHandlerRC_Eat;
 			}
-			if ((im->Code == RAW_UP && d->active > 0) || (im->Code == RAW_DOWN && d->active < RP_NPAGES - 1)) {
-				nav_go(obj, d->active + (im->Code == RAW_UP ? -1 : 1));
-				return MUI_EventHandlerRC_Eat;
+			{
+				int pos = nav_pos(d->active);
+				if ((im->Code == RAW_UP && pos > 0) || (im->Code == RAW_DOWN && pos < RP_NPAGES - 1)) {
+					nav_go(obj, nav_page_at(pos + (im->Code == RAW_UP ? -1 : 1)));
+					return MUI_EventHandlerRC_Eat;
+				}
 			}
 		}
 		return 0;
@@ -370,12 +389,12 @@ DISPATCHER(head_dispatch)
 			return 0;
 		d = INST_DATA(cl, obj);
 		memset(d, 0, sizeof(*d));
-		d->page = (int)tagval(msg, MUIA_Head_Page, 0);
+		d->page = (int)mc_tagval(msg, MUIA_Head_Page, 0);
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
-		if (has_tag(msg, MUIA_Head_Page)) {
-			d->page = (int)tagval(msg, MUIA_Head_Page, 0);
+		if (mc_has_tag(msg, MUIA_Head_Page)) {
+			d->page = (int)mc_tagval(msg, MUIA_Head_Page, 0);
 			if (d->shown)
 				MUI_Redraw(obj, MADF_DRAWOBJECT);
 		}
@@ -383,7 +402,7 @@ DISPATCHER(head_dispatch)
 	case MUIM_AskMinMax: {
 		LONG h = head_h(), w = theme_fh() * 36;
 		DoSuperMethodA(cl, obj, msg);
-		minmax(msg, w, w, MUI_MAXMAX, h, h, h);
+		mc_minmax(msg, w, w, MUI_MAXMAX, h, h, h);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -445,22 +464,22 @@ DISPATCHER(qbutton_dispatch)
 			return 0;
 		d = INST_DATA(cl, obj);
 		memset(d, 0, sizeof(*d));
-		d->label = (const char *)tagval(msg, MUIA_QButton_Label, (ULONG)"");
-		d->key = (UWORD)tagval(msg, MUIA_QButton_Key, 0);
-		d->id = tagval(msg, MUIA_QButton_ID, 0);
+		d->label = (const char *)mc_tagval(msg, MUIA_QButton_Label, (ULONG)"");
+		d->key = (UWORD)mc_tagval(msg, MUIA_QButton_Key, 0);
+		d->id = mc_tagval(msg, MUIA_QButton_ID, 0);
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
-		if ((has_tag(msg, MUIA_Selected) || has_tag(msg, MUIA_Disabled)) && d->shown) {
+		if ((mc_has_tag(msg, MUIA_Selected) || mc_has_tag(msg, MUIA_Disabled)) && d->shown) {
 			ULONG r = DoSuperMethodA(cl, obj, msg);
 			MUI_Redraw(obj, MADF_DRAWOBJECT);
 			return r;
 		}
 		break;
 	case MUIM_AskMinMax: {
-		LONG w = measure(((struct qbutton_data *)INST_DATA(cl, obj))->label, 1) + 24, h = theme_fh() + 8;
+		LONG w = mc_measure(((struct qbutton_data *)INST_DATA(cl, obj))->label, 1) + 24, h = theme_fh() + 8;
 		DoSuperMethodA(cl, obj, msg);
-		minmax(msg, w, w, MUI_MAXMAX, h, h, h);
+		mc_minmax(msg, w, w, MUI_MAXMAX, h, h, h);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -468,11 +487,11 @@ DISPATCHER(qbutton_dispatch)
 			return FALSE;
 		theme_setup(obj);
 		d = INST_DATA(cl, obj);
-		handler(obj, cl, &d->ehn, IDCMP_MOUSEMOVE | (d->key ? IDCMP_RAWKEY : 0), 1);
+		mc_handler(obj, cl, &d->ehn, IDCMP_MOUSEMOVE | (d->key ? IDCMP_RAWKEY : 0), 1);
 		return TRUE;
 	case MUIM_Cleanup:
 		d = INST_DATA(cl, obj);
-		handler(obj, cl, &d->ehn, 0, 0);
+		mc_handler(obj, cl, &d->ehn, 0, 0);
 		theme_cleanup(obj);
 		break;
 	case MUIM_Show:
@@ -498,7 +517,7 @@ DISPATCHER(qbutton_dispatch)
 		}
 		if (im->Class != IDCMP_MOUSEMOVE)
 			return 0;
-		in = inside(obj, im);
+		in = mc_inside(obj, im);
 		if (in != d->hot) {
 			d->hot = in;
 			MUI_Redraw(obj, MADF_DRAWOBJECT);
@@ -581,15 +600,15 @@ DISPATCHER(qlabel_dispatch)
 			return 0;
 		d = INST_DATA(cl, obj);
 		memset(d, 0, sizeof(*d));
-		d->text = (const char *)tagval(msg, MUIA_QLabel_Text, (ULONG)"");
-		d->kind = (int)tagval(msg, MUIA_QLabel_Kind, QL_LABEL);
+		d->text = (const char *)mc_tagval(msg, MUIA_QLabel_Text, (ULONG)"");
+		d->kind = (int)mc_tagval(msg, MUIA_QLabel_Kind, QL_LABEL);
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
-		if (has_tag(msg, MUIA_QLabel_Text) || has_tag(msg, MUIA_Disabled)) {
+		if (mc_has_tag(msg, MUIA_QLabel_Text) || mc_has_tag(msg, MUIA_Disabled)) {
 			ULONG r;
-			if (has_tag(msg, MUIA_QLabel_Text))
-				d->text = (const char *)tagval(msg, MUIA_QLabel_Text, (ULONG)"");
+			if (mc_has_tag(msg, MUIA_QLabel_Text))
+				d->text = (const char *)mc_tagval(msg, MUIA_QLabel_Text, (ULONG)"");
 			r = DoSuperMethodA(cl, obj, msg);
 			if (d->shown)
 				MUI_Redraw(obj, MADF_DRAWOBJECT);
@@ -598,18 +617,18 @@ DISPATCHER(qlabel_dispatch)
 		break;
 	case MUIM_AskMinMax: {
 		d = INST_DATA(cl, obj);
-		LONG w = measure(d->text, d->kind == QL_LABEL) + 2, h = theme_fh() + 2;
+		LONG w = mc_measure(d->text, d->kind == QL_LABEL) + 2, h = theme_fh() + 2;
 		if (d->kind == QL_TEXT) {
 			struct RastPort rp;
 			InitRastPort(&rp);
 			h = text_lines(&rp, tr(d->text), &w) * (theme_fh() + 1);
 			w += 2;
 			DoSuperMethodA(cl, obj, msg);
-			minmax(msg, w, w, w, h, h, h);
+			mc_minmax(msg, w, w, w, h, h, h);
 			return 0;
 		}
 		DoSuperMethodA(cl, obj, msg);
-		minmax(msg, d->kind == QL_NOTE ? 0 : w, w, MUI_MAXMAX, h, h, d->kind == QL_LABEL ? MUI_MAXMAX : h);
+		mc_minmax(msg, d->kind == QL_NOTE ? 0 : w, w, MUI_MAXMAX, h, h, d->kind == QL_LABEL ? MUI_MAXMAX : h);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -657,8 +676,8 @@ DISPATCHER(status_dispatch)
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
-		if (has_tag(msg, MUIA_Status_Text)) {
-			d->text = (const char *)tagval(msg, MUIA_Status_Text, (ULONG)"");
+		if (mc_has_tag(msg, MUIA_Status_Text)) {
+			d->text = (const char *)mc_tagval(msg, MUIA_Status_Text, (ULONG)"");
 			if (d->shown)
 				MUI_Redraw(obj, MADF_DRAWOBJECT);
 		}
@@ -666,7 +685,7 @@ DISPATCHER(status_dispatch)
 	case MUIM_AskMinMax: {
 		LONG h = theme_fh() + 6;
 		DoSuperMethodA(cl, obj, msg);
-		minmax(msg, 0, 100, MUI_MAXMAX, h, h, h);
+		mc_minmax(msg, 0, 100, MUI_MAXMAX, h, h, h);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -713,15 +732,15 @@ DISPATCHER(line_dispatch)
 		if (!(obj = (Object *)DoSuperMethodA(cl, obj, msg)))
 			return 0;
 		d = INST_DATA(cl, obj);
-		d->vert = (int)tagval(msg, MUIA_Line_Vert, 0);
+		d->vert = (int)mc_tagval(msg, MUIA_Line_Vert, 0);
 		return (ULONG)obj;
 	case MUIM_AskMinMax:
 		d = INST_DATA(cl, obj);
 		DoSuperMethodA(cl, obj, msg);
 		if (d->vert)
-			minmax(msg, 1, 1, 1, 0, 0, MUI_MAXMAX);
+			mc_minmax(msg, 1, 1, 1, 0, 0, MUI_MAXMAX);
 		else
-			minmax(msg, 0, 0, MUI_MAXMAX, 1, 1, 1);
+			mc_minmax(msg, 0, 0, MUI_MAXMAX, 1, 1, 1);
 		return 0;
 	case MUIM_Setup:
 		if (!DoSuperMethodA(cl, obj, msg))

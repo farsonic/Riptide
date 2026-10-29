@@ -64,6 +64,7 @@ NDK_STRUCTS = (
     S('timeval', 'tv_secs', 'tv_micro', ref='timeval') +
     S('EClockVal', 'ev_hi', 'ev_lo') +
     S('timerequest', 'tr_node', 'tr_time') +
+    S('Interrupt', 'is_Node', 'is_Data', 'is_Code') +
     S('Locale', 'loc_Flags', 'loc_CountryCode', 'loc_GMTOffset')[1:] +   # partial: no sizeof
     S('TagItem', 'ti_Tag', 'ti_Data') +
     S('Hook', 'h_Entry', 'h_SubEntry', 'h_Data') +
@@ -77,7 +78,8 @@ NDK_STRUCTS = (
     [('EXECBASE_LIBLIST_OFS', '=', 'struct ExecBase', 'LibList'),
      ('EXECBASE_PORTLIST_OFS', '=', 'struct ExecBase', 'PortList'),
      ('EXECBASE_ATTNFLAGS_OFS', '=', 'struct ExecBase', 'AttnFlags'),
-     ('EXECBASE_ECLOCK_OFS', '=', 'struct ExecBase', 'ex_EClockFrequency')]
+     ('EXECBASE_ECLOCK_OFS', '=', 'struct ExecBase', 'ex_EClockFrequency'),
+     ('EXECBASE_VBLANKFREQ_OFS', '=', 'struct ExecBase', 'VBlankFrequency')]
 )
 # intuition/gadtools/graphics/workbench (RiptidePrefs, src/amiga/os/intuition.h);
 # Screen and Window are declared only up to the last field used
@@ -96,6 +98,7 @@ GUI_STRUCTS = (
     S('EasyStruct', 'es_Flags', 'es_Title', 'es_TextFormat', 'es_GadgetFormat') +
     S('WBArg', 'wa_Lock', 'wa_Name') +
     S('WBStartup', 'sm_Process', 'sm_NumArgs', 'sm_ArgList') +
+    S('DiskObject', 'do_Gadget', 'do_Type', 'do_DefaultTool', 'do_ToolTypes') +
     # the MUI editor (src/amiga/prefs/mui.h)
     [('struct Screen', 'ViewPort', 'struct Screen', 'ViewPort')] +
     S('ViewPort', 'ColorMap') +
@@ -134,13 +137,14 @@ MUI_STRUCTS = (
     S('MUI_EventHandlerNode', 'ehn_Node', 'ehn_Priority', 'ehn_Flags', 'ehn_Object', 'ehn_Class', 'ehn_Events') +
     S('MUIP_AskMinMax', 'MinMaxInfo') + S('MUIP_Draw', 'flags') + S('MUIP_HandleEvent', 'imsg', 'muikey') +
     S('MUIP_CreateShortHelp', 'mx', 'my') +
+    S('MUI_InputHandlerNode', 'ihn_Node', 'ihn_Object', 'ihn_Flags', 'ihn_Method') +
     [('struct rt_filereq', f, 'struct FileRequester', f) for f in ('fr_File', 'fr_Drawer')]
 )
 MUI_CONSTS = '''MUIA_Application_Title MUIA_Application_Version MUIA_Application_Copyright MUIA_Application_Author
 MUIA_Application_Description MUIA_Application_Base MUIA_Application_Window MUIA_Application_Sleep
 MUIA_Application_UseCommodities MUIA_Application_UseRexx MUIA_Window_Title MUIA_Window_ID MUIA_Window_RootObject
 MUIA_Window_Open MUIA_Window_CloseRequest MUIA_Window_Menustrip MUIA_Window_PublicScreen MUIA_Window_ActiveObject
-MUIA_Window_Window MUIA_Window_Screen MUIA_Window_ScreenTitle MUIA_Window_LeftEdge MUIA_Window_TopEdge
+MUIA_Window_Window MUIA_Window_Screen MUIA_Window_ScreenTitle MUIA_Window_LeftEdge MUIA_Window_TopEdge MUIA_Window_Width MUIA_Window_Height
 MUIA_Window_Sleep MUIA_Window_RefWindow MUIA_Window_Activate MUIA_Group_Child MUIA_Group_Horiz MUIA_Group_Columns MUIA_Group_PageMode MUIA_Group_ActivePage
 MUIA_Group_Spacing MUIA_Group_HorizSpacing MUIA_Group_VertSpacing MUIA_Group_SameSize MUIA_InnerLeft
 MUIA_InnerRight MUIA_InnerTop MUIA_InnerBottom MUIA_HorizWeight MUIA_VertWeight MUIA_Frame MUIA_Background
@@ -160,7 +164,8 @@ MUIV_List_Active_Off MUIV_List_Insert_Bottom MUIV_List_ConstructHook_String MUIV
 MUIO_Checkmark MUIO_Cycle MUIO_String MUIO_MenustripNM MUI_EventHandlerRC_Eat MUI_MAXMAX MADF_DRAWOBJECT MUIE_SingleTask
 MUIA_Application_SingleTask MUIA_Application_DoubleStart MUIA_Application_Iconified MUIM_Window_ToFront MUIM_Window_ScreenToFront
 MADF_DRAWUPDATE MPEN_SHINE MPEN_HALFSHINE MPEN_BACKGROUND MPEN_HALFSHADOW MPEN_SHADOW MPEN_TEXT MPEN_FILL MPEN_MARK
-MUIKEY_PRESS MUIKEY_UP MUIKEY_DOWN'''.split()
+MUIKEY_PRESS MUIKEY_UP MUIKEY_DOWN MUIIHNF_TIMER MUIM_Application_AddInputHandler
+MUIM_Application_RemInputHandler'''.split()
 MUI_RT_CONSTS = '''ASL_FileRequest ASLFR_TitleText ASLFR_InitialFile ASLFR_InitialDrawer ASLFR_DoSaveMode'''.split()
 SANA_STRUCTS = (
     S('IOSana2Req', 'ios2_WireError', 'ios2_PacketType', 'ios2_SrcAddr', 'ios2_DstAddr',
@@ -172,7 +177,7 @@ SANA_STRUCTS = (
     S('Sana2SpecialStatRecord', 'Type', 'Count', 'String') +
     S('Sana2SpecialStatHeader', 'RecordCountMax', 'RecordCountSupplied')
 )
-NDK_CONSTS = '''NT_LIBRARY NT_MSGPORT NT_MESSAGE NT_REPLYMSG NT_TASK NT_PROCESS LIBF_CHANGED
+NDK_CONSTS = '''NT_INTERRUPT INTB_VERTB NT_LIBRARY NT_MSGPORT NT_MESSAGE NT_REPLYMSG NT_TASK NT_PROCESS LIBF_CHANGED
 LIBF_SUMUSED LIBF_DELEXP PA_SIGNAL PA_IGNORE SIGBREAKF_CTRL_C SIGBREAKF_CTRL_D SIGBREAKF_CTRL_E
 SIGBREAKF_CTRL_F SIGF_SINGLE IOF_QUICK CMD_READ CMD_WRITE CMD_NONSTD IOERR_ABORTED MEMF_PUBLIC MEMF_CLEAR
 MEMF_ANY TAG_DONE TAG_IGNORE TAG_MORE TAG_SKIP TAG_USER UNIT_MICROHZ UNIT_VBLANK TR_ADDREQUEST
@@ -371,14 +376,14 @@ def main():
         inc = os.path.join(ndk, 'Include_H')
         ok &= check_against(tmp, 'ndk', NDK_STRUCTS, NDK_CONSTS, ['exec.h', 'dos.h', 'devices.h'],
                             ['exec/types.h', 'exec/execbase.h', 'exec/semaphores.h', 'exec/io.h', 'exec/devices.h',
-                             'exec/memory.h', 'exec/errors.h', 'devices/timer.h', 'libraries/locale.h', 'dos/dos.h',
+                             'exec/memory.h', 'exec/errors.h', 'exec/interrupts.h', 'hardware/intbits.h', 'devices/timer.h', 'libraries/locale.h', 'dos/dos.h',
                              'dos/dosextens.h', 'dos/dosasl.h', 'dos/var.h', 'dos/dostags.h', 'utility/tagitem.h', 'utility/hooks.h'],
                             [inc])
         ok &= check_against(tmp, 'ndk-gui', GUI_STRUCTS, GUI_CONSTS, ['exec.h', 'dos.h', 'intuition.h'],
                             ['exec/types.h', 'intuition/intuition.h', 'intuition/screens.h',
                              'intuition/classes.h', 'intuition/classusr.h', 'libraries/gadtools.h',
                              'graphics/text.h', 'graphics/rastport.h', 'graphics/view.h', 'devices/inputevent.h',
-                             'workbench/startup.h'], [inc])
+                             'workbench/startup.h', 'workbench/workbench.h'], [inc])
         mui = os.environ.get('MUI_SDK')
         if mui and os.path.isdir(mui):
             ok &= check_against(tmp, 'mui-sdk', MUI_STRUCTS, MUI_CONSTS,
@@ -436,7 +441,7 @@ def main():
         for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd'),
                          ('locale', 'locale_lib.fd'), ('battclock', 'battclock_lib.fd'),
                          ('intuition', 'intuition_lib.fd'), ('gadtools', 'gadtools_lib.fd'),
-                         ('graphics', 'graphics_lib.fd')):
+                         ('graphics', 'graphics_lib.fd'), ('icon', 'icon_lib.fd')):
             ok &= check_lvos(t, lib, os.path.join(ndk, 'FD', fdn))
     print('ALL OK' if ok else 'MISMATCHES FOUND')
     return 0 if ok else 1

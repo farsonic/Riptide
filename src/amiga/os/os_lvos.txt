@@ -9,6 +9,8 @@
 126 void Enable()
 132 void Forbid()
 138 void Permit()
+168 void AddIntServer(LONG intNumber d0, struct Interrupt* interrupt a1)
+174 void RemIntServer(LONG intNumber d0, struct Interrupt* interrupt a1)
 198 APTR AllocMem(ULONG byteSize d0, ULONG requirements d1)
 210 void FreeMem(APTR memoryBlock a1, ULONG byteSize d0)
 216 ULONG AvailMem(ULONG requirements d1)
@@ -154,6 +156,13 @@
 306 void RectFill(struct RastPort* rp a1, LONG xMin d0, LONG yMin d1, LONG xMax d2, LONG yMax d3)
 324 LONG WritePixel(struct RastPort* rp a1, LONG x d0, LONG y d1)
 342 void SetAPen(struct RastPort* rp a1, ULONG pen d0)
+348 void SetBPen(struct RastPort* rp a1, ULONG pen d0)
 354 void SetDrMd(struct RastPort* rp a1, ULONG drawMode d0)
+396 void ScrollRaster(struct RastPort* rp a1, LONG dx d0, LONG dy d1, LONG xMin d2, LONG yMin d3, LONG xMax d4, LONG yMax d5)
 840 LONG ObtainBestPenA(struct ColorMap* cm a0, ULONG r d1, ULONG g d2, ULONG b d3, const struct TagItem* tags a1)
 948 void ReleasePen(struct ColorMap* cm a0, ULONG n d0)
+
+@lib icon IconBase basetype=Library
+78  struct DiskObject* GetDiskObject(CONST_STRPTR name a0)
+90  void FreeDiskObject(struct DiskObject* diskobj a0)
+96  UBYTE* FindToolType(CONST_STRPTR* toolTypeArray a0, CONST_STRPTR typeName a1)

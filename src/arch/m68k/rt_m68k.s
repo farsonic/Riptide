@@ -34,6 +34,8 @@
 	xdef	rt_copy_020
 	xdef	_rt_copy_040
 	xdef	rt_copy_040
+	xdef	_rt_cpu_vbl
+	xdef	rt_cpu_vbl
 
 ; ---------------------------------------------------------------------------
 ; u32 rt_csum_020(const void *data, u32 len, u32 sum)
@@ -362,4 +364,20 @@ rt_copy_040:
 	beq.s	.n1
 	move.b	(a0),(a1)
 .n1:
+	rts
+
+; rt_cpu_vbl: an AmigaOS vertical blank interrupt server (exec calls it
+; with a1 = is_Data) for Riptide's CPU meter. is_Data points to
+; struct rt_cpu_samples { struct Task *task; u32 ticks; u32 waiting; }:
+; each call counts a tick, and a waiting one when the task's tc_State
+; (offset 15) is TS_WAIT (4). Returns with Z set so the chain goes on.
+_rt_cpu_vbl:
+rt_cpu_vbl:
+	move.l	(a1),a0
+	addq.l	#1,4(a1)
+	cmp.b	#4,15(a0)
+	bne.s	.busy
+	addq.l	#1,8(a1)
+.busy:
+	moveq	#0,d0
 	rts

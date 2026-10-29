@@ -44,6 +44,14 @@ rm -rf "$dh0"
 mkdir -p "$dh0/C" "$dh0/S" "$dh0/out" "$dh0/go" "$dh0/Libs" "$dh0/MUI" "$dh0/ENV/Riptide" \
 	"$dh0/Prefs/Env-Archive/Riptide"
 cp "$BUILD/RiptidePrefs" "$dh0/C/"
+# copies with icons for the tool type starts (the ROM has no Copy)
+mkdir -p "$dh0/tt1" "$dh0/tt2"
+cp "$BUILD/RiptidePrefs" "$dh0/tt1/"
+cp "$BUILD/RiptidePrefs" "$dh0/tt2/"
+${PYTHON:-python3} tools/mkicon.py tool "$dh0/tt1/RiptidePrefs.info" --image prefs \
+	--tooltype PAGE=Names --tooltype DEBUG=DH0:out/tt1 >/dev/null
+${PYTHON:-python3} tools/mkicon.py tool "$dh0/tt2/RiptidePrefs.info" --image prefs \
+	--tooltype GADTOOLS --tooltype PAGE=Names --tooltype DEBUG=DH0:out/tt2 >/dev/null
 cp -r "$MUI_DIR/Libs/." "$dh0/Libs/"
 [ -d "$MUI_DIR/Images" ] && cp -r "$MUI_DIR/Images" "$dh0/MUI/"
 
@@ -188,8 +196,12 @@ int main(int argc, char **argv)
 	long t, n;
 	if (argc < 4 || !(rp = CreateMsgPort()))
 		return 20;
+	static char path[128];
 	seg = LoadSeg((STRPTR)argv[1]);
-	dir = Lock((STRPTR)"DH0:C", ACCESS_READ);
+	/* the program's drawer and name, as Workbench gives them */
+	strncpy(path, argv[1], sizeof(path) - 1);
+	*PathPart((STRPTR)path) = 0;
+	dir = Lock((STRPTR)path, ACCESS_READ);
 	if (!seg || !dir) {
 		say(argv[3], "cannot load\n");
 		return 20;
@@ -202,7 +214,7 @@ int main(int argc, char **argv)
 		return 20;
 	}
 	arg.wa_Lock = dir;
-	arg.wa_Name = (BYTE *)"RiptidePrefs";
+	arg.wa_Name = (BYTE *)FilePart((STRPTR)argv[1]);
 	wbs.sm_Message.mn_Node.ln_Type = NT_MESSAGE;
 	wbs.sm_Message.mn_ReplyPort = rp;
 	wbs.sm_Message.mn_Length = sizeof(wbs);
@@ -452,6 +464,10 @@ DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb3
 DH0:C/tps RiptidePrefs DH0:out/ps3
 DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb4
 DH0:C/tps RiptidePrefs DH0:out/ps4
+DH0:C/twb DH0:tt1/RiptidePrefs 120 DH0:out/wb5
+DH0:C/tps RiptidePrefs DH0:out/ps5
+DH0:C/twb DH0:tt2/RiptidePrefs 120 DH0:out/wb6
+DH0:C/tps RiptidePrefs DH0:out/ps6
 DH0:C/tcover 3
 Echo "rc $RC" >DH0:out/zz_cover
 DH0:C/RiptidePrefs PAGE=Names
@@ -463,7 +479,7 @@ key s
 waitfor wb1 60
 # b: a change, Save, Apply
 wbnext w02-wb-open
-key p p p p
+key p p p p p
 key h shift+Right BackSpace BackSpace BackSpace
 typ zeus
 key Return
@@ -475,7 +491,7 @@ key Return
 waitfor wb2 60
 # c: a change, Save, Later
 wbnext w05-wb-open
-key p p p p
+key p p p p p
 key h shift+Right BackSpace BackSpace BackSpace BackSpace
 typ mars
 key Return
@@ -485,19 +501,28 @@ key Escape
 waitfor wb3 60
 # d: a change, Cancel
 wbnext w07-wb-open
-key p p p p
+key p p p p p
 key h shift+Right BackSpace BackSpace BackSpace BackSpace
 typ venus
 key Return
 key Escape
 waitfor wb4 60
+# e, f: the icon's tool types: PAGE=Names and DEBUG=, then GADTOOLS too
+wbnext w07b-tooltypes-mui
+key Escape
+waitfor wb5 60
+wbnext w07c-tooltypes-gadtools
+key Escape
+waitfor wb6 60
 # afterwards: a window opens, the editor opens again
 rc0 zz_cover 30
 wbnext w08-after
 key Escape
 rc0 zz_after 60
 cleanup_uae
-for n in 1 2 3 4; do
+grep -q 'window open, page 4' "$dh0/out/tt1" 2>/dev/null || fail "tool types: not the MUI editor on Names (tt1: $(head -c 300 "$dh0/out/tt1" 2>/dev/null))"
+grep -q 'GadTools editor' "$dh0/out/tt2" 2>/dev/null || fail "tool types: GADTOOLS did not choose the GadTools editor"
+for n in 1 2 3 4 5 6; do
 	grep -q '^wbreply ok' "$dh0/out/wb$n" 2>/dev/null || fail "Workbench start $n: $(cat "$dh0/out/wb$n" 2>/dev/null)"
 	grep -q '^no' "$dh0/out/ps$n" 2>/dev/null || fail "Workbench start $n: the process is still there"
 done
