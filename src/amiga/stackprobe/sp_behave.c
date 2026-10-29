@@ -158,9 +158,15 @@ static void tcp_errors(void)
 	char buf[8];
 	ULONG t0;
 
-	/* refused */
+	/* refused: a port nothing listens on (not a well-known one: Miami
+	   answers discard and echo itself), found by binding and closing */
 	c = sp_socket(AF_INET, SOCK_STREAM, 0);
-	sp_sin(&a, INADDR_LOOPBACK, 9);
+	sp_sin(&a, INADDR_LOOPBACK, 0);
+	len = sizeof(a);
+	if (sp_bind(c, (APTR)&a, sizeof(a)) < 0 || sp_getsockname(c, (APTR)&a, &len) < 0)
+		sp_sin(&a, INADDR_LOOPBACK, 7099);
+	sp_close(&c);
+	c = sp_socket(AF_INET, SOCK_STREAM, 0);
 	sp_watchdog(5000);
 	t0 = sp_now_ms();
 	r = sp_connect(c, (APTR)&a, sizeof(a));

@@ -433,7 +433,7 @@ static void detect(const char *label)
 	 * first; the version: the first number after that name, else the
 	 * first word with a digit, else the library version */
 	{
-		static const char *const known[] = { "Riptide", "AmiTCP_NG", "Roadshow", "Genesis", "MiamiDx", "Miami",
+		static const char *const known[] = { "Riptide", "AmiTCP_NG", "Roadshow", "Genesis", "MiamiDx", "MiamiDeluxe", "Miami",
 		                                     "PrismNet", "tolunnet", "AmiNetXDuo", "AmiTCP", "MorphOS", NULL };
 		const char *at = NULL;
 		int i;

@@ -5,7 +5,7 @@
 # uaenet.device unit 0 with the static address 10.0.2.15/24 (nothing is
 # on the other end; the tests run over loopback and that interface).
 #
-#   STACK=riptide|amitcp|amitcp_ng|miamidx|aminetxduo|tolunnet|prismnet \
+#   STACK=riptide|amitcp|amitcp_ng|aminetxduo|miamidx|miami|tolunnet|prismnet \
 #     tests/amiga/run_fsuae_stackprobe.sh OUT.json [PROBE_ARGS]
 #
 # The machine is the same for every stack: A1200, 68020 (FS-UAE A1200
@@ -88,8 +88,27 @@ install_amitcp_ng() {
 	echo 'C:AddNetInterface eth0 >Out:start.log'
 }
 
+# AmiNetXDuo release archive, its "full" stack installed into the system as
+# the Installer's system layout does, with a static DEVS:NetInterfaces/eth0
+install_aminetxduo() {
+	d=${STACK_DIR:?the unpacked AmiNetXDuo drawer}
+	cp "$d/Libs/bsdsocket.library" "$d/Libs/usergroup.library" "$d/Libs/tls.library" "$sys/Libs/"
+	for f in "$d"/C/*; do
+		[ -f "$f" ] && cp "$f" "$sys/C/"
+	done
+	cp -R "$d/Devs/Internet" "$sys/Devs/"
+	mkdir -p "$sys/Devs/NetInterfaces"
+	printf 'DEVICE=uaenet.device\nUNIT=0\nCONFIGURE=STATIC\nADDRESS=10.0.2.15\nNETMASK=255.255.255.0\n' \
+		> "$sys/Devs/NetInterfaces/eth0"
+	echo 'C:AddNetInterface DEVS:NetInterfaces/eth0 >Out:start.log'
+	echo 'C:ShowNetStatus >>Out:start.log'
+}
+
 # a stack whose STACK_DIR holds files to copy over System: (Libs/, Devs/,
-# C/, S/ ...) and an optional "start" file with the commands that start it
+# C/, S/ ...) and an optional "start" file with the commands that start it.
+# MiamiDx and Miami are run this way: their drawer as Miami:, settings saved
+# from their GUI (docs/COMPARISON.md section 12), and a start file that
+# starts RexxMast and the program and sends ONLINE to the MIAMI.1 port
 install_tree() {
 	d=${STACK_DIR:?the install tree of the stack}
 	for x in "$d"/*; do
@@ -103,6 +122,7 @@ case $STACK in
 riptide) install_riptide > "$us" ;;
 amitcp) install_amitcp > "$us" ;;
 amitcp_ng) install_amitcp_ng > "$us" ;;
+aminetxduo) install_aminetxduo > "$us" ;;
 *) install_tree > "$us" ;;
 esac
 
