@@ -137,8 +137,9 @@ def screen_hash(path):
     """Hash of the screen without the (red) pointer."""
     with open(path, "rb") as f:
         im = Image.open(f).convert("RGB")
-    mask = Image.new("L", im.size, 0)
-    mask.putdata([255 if pointer_red(*p) else 0 for p in im.getdata()])
+    d = im.tobytes()
+    mask = Image.frombytes("L", im.size, bytes(255 if pointer_red(d[i], d[i + 1], d[i + 2]) else 0
+                                                for i in range(0, len(d), 3)))
     im.paste((0, 0, 0), mask=mask)
     return hashlib.md5(im.tobytes()).hexdigest()
 
