@@ -12,11 +12,15 @@
  * The classes here draw in the theme like those of mui_classes.c:
  *   graph   a 60 second history of two values (a struct rp_hist)
  *   tabs    a row of labels that switches a page group (keys 1 to 4)
- *   table   rows of columns separated by '\t'; a row can be chosen
+ *   table   rows of two lines: a text, then columns separated by '\t';
+ *           a row can be chosen
  *   ifview  every interface: three lines, its speeds and a small graph
  *   stext   a fixed number of lines of text that change
  * The total-traffic graph also owns the timer: it starts when the page is
  * shown and stops when it is hidden, so nothing is read on other pages.
+ * Its period is the Update setting (1, 2 or 5 s, or paused), and at
+ * least STOPPED_MS while Riptide is not running: then a read only looks
+ * for Riptide starting and draws nothing unless it did.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stddef.h>
@@ -34,6 +38,7 @@
 #define MUIA_Graph_Lines   (RTAG + 0x704)  /* (init) height in text lines */
 #define MUIA_Graph_Ticker  (RTAG + 0x705)  /* (init) runs the page's timer */
 #define MUIM_Graph_Tick    (RTAG + 0x780)  /* the timer */
+#define MUIM_Graph_Retime  (RTAG + 0x781)  /* the timer again, at status_period() */
 #define MUIA_Tabs_Labels   (RTAG + 0x801)  /* (init) const char *const *, NULL-ended */
 #define MUIA_Tabs_Active   (RTAG + 0x802)  /* (init, set, get, notify) */
 #define MUIA_Table_Rows    (RTAG + 0x901)  /* (set) const char *const *; set again to redraw */
@@ -84,33 +89,6 @@ static void text_fit(struct RastPort *rp, LONG x, LONG y, LONG maxw, const char 
 	}
 	if (n > 0)
 		theme_text(rp, x, y, t, pen, bold);
-}
-
-/* text_fit() for an address: when it is too wide its end (the port) stays,
- * after "..": as many of the last characters as fit */
-static void text_fit_tail(struct RastPort *rp, LONG x, LONG y, LONG maxw, const char *s, LONG pen)
-{
-	char t[160];
-	int n, lo, hi;
-
-	n = (int)strlen(s);
-	if (!n || theme_textlen(rp, s) <= maxw) {
-		text_fit(rp, x, y, maxw, s, pen, 0);
-		return;
-	}
-	/* the smallest start k with ".." and s + k fitting */
-	lo = 1;
-	hi = n;
-	while (lo < hi) {
-		int mid = (lo + hi) / 2;
-		rt_snprintf(t, sizeof(t), "..%s", s + mid);
-		if (theme_textlen(rp, t) <= maxw)
-			hi = mid;
-		else
-			lo = mid + 1;
-	}
-	rt_snprintf(t, sizeof(t), "..%s", s + lo);
-	text_fit(rp, x, y, maxw, t, pen, 0);
 }
 
 /* A line of text that changes: drawn again only when it differs from what
@@ -305,14 +283,31 @@ struct graph_data {
 
 static void (*tick_fn)(void);
 
+/* the Update setting: 0 every second, 1 every 2 s, 2 every 5 s, 3 paused */
+#define STOPPED_MS 3000
+static const ULONG upd_ms[4] = { 1000, 2000, 5000, 0 };
+static int upd, upd_running = -1;
+
+/* the timer's period now, 0 for none */
+static ULONG status_period(void)
+{
+	ULONG ms = upd_ms[upd & 3];
+
+	if (ms && upd_running == 0 && ms < STOPPED_MS)
+		ms = STOPPED_MS;
+	return ms;
+}
+
 static void graph_timer(Object *obj, struct graph_data *d, int on)
 {
 	if (!d->ticker || on == d->timer_on)
 		return;
+	if (on && !status_period())
+		return;
 	if (on) {
 		memset(&d->ihn, 0, sizeof(d->ihn));
 		d->ihn.ihn_Object = obj;
-		d->ihn.ihn_millis = 1000;
+		d->ihn.ihn_millis = status_period();
 		d->ihn.ihn_Flags = MUIIHNF_TIMER;
 		d->ihn.ihn_Method = MUIM_Graph_Tick;
 		mui_do(_app(obj), MUIM_Application_AddInputHandler, (ULONG)&d->ihn);
@@ -383,6 +378,13 @@ DISPATCHER(graph_dispatch)
 		d = INST_DATA(cl, obj);
 		if (d->shown && tick_fn)
 			tick_fn();
+		return 0;
+	case MUIM_Graph_Retime:
+		d = INST_DATA(cl, obj);
+		if (d->ticker && d->shown && (!d->timer_on || d->ihn.ihn_millis != status_period())) {
+			graph_timer(obj, d, 0);
+			graph_timer(obj, d, 1);
+		}
 		return 0;
 	case MUIM_Draw: {
 		ULONG f;
@@ -581,19 +583,34 @@ struct table_data {
 	/* what is on screen, for updates */
 	int valid, drawn_n, drawn_active, drawn_hot, drawn_fit;
 	LONG drawn_x[TB_COLS + 1], drawn_w;
-	char cache[TB_ROWS][120];
+	char cache[TB_ROWS][200];
 };
 
-static LONG tb_rowh(void)
+/* the header's height and a row's (two lines) */
+static LONG tb_headh(void)
 {
 	return theme_fh() + (theme_compact() ? 1 : 3);
 }
 
-/* cell c of a '\t' row into buf */
+static LONG tb_rowh(void)
+{
+	return 2 * theme_fh() + (theme_compact() ? 2 : 5);
+}
+
+/* the columns of a row: what follows its first line */
+static const char *cols(const char *row)
+{
+	const char *nl = strchr(row, '\n');
+
+	return nl ? nl + 1 : row;
+}
+
+/* cell c of a row's columns into buf */
 static void cell(const char *row, int c, char *buf, int len)
 {
 	int k = 0;
 
+	row = cols(row);
 	while (c > 0 && *row) {
 		if (*row++ == '\t')
 			c--;
@@ -613,7 +630,7 @@ static int ncols(const char *row)
 }
 
 /* The x of each column in a width of w: each as wide as its widest cell,
- * the addresses (columns 1 and 2) giving way when that is too wide. */
+ * the last one giving way when that is too wide. */
 static void tb_layout(struct table_data *d, struct RastPort *rp, LONG w, LONG *x, int *nc)
 {
 	LONG cw[TB_COLS] = { 0 }, sum = 0;
@@ -631,21 +648,6 @@ static void tb_layout(struct table_data *d, struct RastPort *rp, LONG w, LONG *x
 		}
 		sum += cw[c];
 	}
-	/* too wide: the addresses give way first, the wider one each step
-	 * (cut at their start, the ports stay), then the last column */
-	while (sum > w && n > 2) {
-		int k = cw[1] >= cw[2] ? 1 : 2;
-		LONG cut, room = cw[k] - 50;
-		if (room <= 0)
-			room = cw[k = 3 - k] - 50;
-		if (room <= 0)
-			break;
-		cut = sum - w < 4 ? sum - w : (sum - w) / 2 + 1;
-		if (cut > room)
-			cut = room;
-		cw[k] -= cut;
-		sum -= cut;
-	}
 	if (sum > w && cw[n - 1] > sum - w)
 		cw[n - 1] -= sum - w;
 	x[0] = 0;
@@ -654,12 +656,14 @@ static void tb_layout(struct table_data *d, struct RastPort *rp, LONG w, LONG *x
 	*nc = n;
 }
 
-/* row r at y: its background (chosen, under the pointer, plain) and cells */
+/* row r at y: its background (chosen, under the pointer, plain), the
+ * first line across the width and the cells below it */
 static void tb_row(struct table_data *d, Object *obj, struct RastPort *rp, const LONG *x, int nc, int r, LONG ry)
 {
-	LONG l = _mleft(obj) + 2, rh = tb_rowh();
-	char t[64];
-	int c;
+	LONG l = _mleft(obj) + 2, rh = tb_rowh(), fh = theme_fh(), y1 = ry + (theme_compact() ? 1 : 2);
+	char t[120];
+	const char *nl = strchr(d->rows[r], '\n');
+	int c, k;
 
 	if (r == d->active) {
 		theme_fill(rp, _mleft(obj) + 1, ry, _mright(obj) - 1, ry + rh - 1, tpen(T_PRESSED));
@@ -667,12 +671,15 @@ static void tb_row(struct table_data *d, Object *obj, struct RastPort *rp, const
 	} else {
 		theme_fill(rp, _mleft(obj) + 1, ry, _mright(obj) - 1, ry + rh - 1, tpen(r == d->hot ? T_HOVER : T_HEAD));
 	}
+	k = nl ? (int)(nl - d->rows[r]) : 0;
+	if (k > (int)sizeof(t) - 1)
+		k = (int)sizeof(t) - 1;
+	memcpy(t, d->rows[r], (size_t)k);
+	t[k] = 0;
+	text_fit(rp, l + 2, y1, _mwidth(obj) - 10, t, tpen(T_TEXT), 0);
 	for (c = 0; c < nc; c++) {
 		cell(d->rows[r], c, t, sizeof(t));
-		if (c == 1 || c == 2)
-			text_fit_tail(rp, l + x[c], ry + (rh - theme_fh()) / 2, x[c + 1] - x[c] - 6, t, tpen(T_TEXT));
-		else
-			text_fit(rp, l + x[c], ry + (rh - theme_fh()) / 2, x[c + 1] - x[c] - 6, t, tpen(T_TEXT), 0);
+		text_fit(rp, l + x[c], y1 + fh + 1, x[c + 1] - x[c] - 6, t, tpen(c == 0 ? T_TEXT : T_DIM), 0);
 	}
 	rt_strlcpy(d->cache[r], d->rows[r], sizeof(d->cache[r]));
 }
@@ -680,29 +687,29 @@ static void tb_row(struct table_data *d, Object *obj, struct RastPort *rp, const
 static void tb_draw(struct table_data *d, Object *obj, int update)
 {
 	struct RastPort *rp = _rp(obj);
-	LONG x[TB_COLS + 1], l = _mleft(obj) + 2, rh = tb_rowh(), y = _mtop(obj), fh = theme_fh();
+	LONG x[TB_COLS + 1], l = _mleft(obj) + 2, rh = tb_rowh(), hh = tb_headh(), y = _mtop(obj), fh = theme_fh();
 	LONG w = _mwidth(obj) - 4;
 	char t[64];
 	int nc, c, r, fit;
 
 	tb_layout(d, rp, w, x, &nc);
-	fit = (int)((_mbottom(obj) - y - rh) / rh);
+	fit = (int)((_mbottom(obj) - y - hh) / rh);
 	/* only the rows that changed, when the columns and rows stayed */
 	if (update && d->valid && d->drawn_n == d->n && d->drawn_fit == fit && d->drawn_w == w &&
 	    d->drawn_active == d->active && d->drawn_hot == d->hot && d->n <= fit && d->n > 0 &&
 	    !memcmp(d->drawn_x, x, sizeof(LONG) * (size_t)(nc + 1))) {
 		for (r = 0; r < d->n; r++)
 			if (strcmp(d->cache[r], d->rows[r]))
-				tb_row(d, obj, rp, x, nc, r, y + rh + (LONG)r * rh);
+				tb_row(d, obj, rp, x, nc, r, y + hh + (LONG)r * rh);
 		return;
 	}
 	theme_fill(rp, _mleft(obj), _mtop(obj), _mright(obj), _mbottom(obj), tpen(T_HEAD));
 	theme_rect(rp, _mleft(obj), _mtop(obj), _mright(obj), _mbottom(obj), tpen(T_BORDER));
 	for (c = 0; c < nc; c++) {
 		cell(d->header, c, t, sizeof(t));
-		text_fit(rp, l + x[c], y + (rh - fh) / 2, x[c + 1] - x[c] - 6, t, tpen(T_DIM), 1);
+		text_fit(rp, l + x[c], y + (hh - fh) / 2, x[c + 1] - x[c] - 6, t, tpen(T_DIM), 1);
 	}
-	y += rh;
+	y += hh;
 	theme_line(rp, _mleft(obj) + 1, y - 1, _mright(obj) - 1, y - 1, tpen(T_BORDER));
 	d->valid = 1;
 	d->drawn_n = d->n;
@@ -728,7 +735,7 @@ static void tb_draw(struct table_data *d, Object *obj, int update)
 
 static int tb_hit(struct table_data *d, Object *obj, LONG y)
 {
-	LONG top = _mtop(obj) + tb_rowh();
+	LONG top = _mtop(obj) + tb_headh();
 	int r;
 
 	if (y < top)
@@ -782,9 +789,9 @@ DISPATCHER(table_dispatch)
 		}
 		break;
 	case MUIM_AskMinMax: {
-		LONG h = tb_rowh() * 3 + 4;
+		LONG h = tb_headh() + tb_rowh() * 2 + 4;
 		DoSuperMethodA(cl, obj, msg);
-		mc_minmax(msg, 160, 400, MUI_MAXMAX, h, tb_rowh() * 8, MUI_MAXMAX);
+		mc_minmax(msg, 160, 400, MUI_MAXMAX, h, tb_headh() + tb_rowh() * 4, MUI_MAXMAX);
 		return 0;
 	}
 	case MUIM_Setup:
@@ -1076,7 +1083,7 @@ DISPATCHER(stext_dispatch)
  * the page
  * ================================================================== */
 static struct rp_status_model model;
-static Object *o_sum, *o_total, *o_cpu, *o_tabs, *o_tpages, *o_ifv, *o_table, *o_cgraph, *o_names, *o_counters;
+static Object *o_sum, *o_total, *o_cpu, *o_tabs, *o_tpages, *o_ifv, *o_table, *o_cgraph, *o_names, *o_counters, *o_upd;
 static char t_sum[200], t_names[1200], t_counters[1200];
 static char rowbuf[RP_ST_NCONN][200];
 static const char *rows[RP_ST_NCONN];
@@ -1149,9 +1156,17 @@ static void show_conn_graph(void)
 static void tick(void)
 {
 	char mem[160];
-	int i;
+	int i, was = upd_running;
+	ULONG period = status_period();
 
 	rp_status_read(&model);
+	upd_running = model.running != 0;
+	/* the timer's period follows Riptide running or not */
+	if (status_period() != period)
+		mui_do(_app(o_total), MUIM_Application_PushMethod, (ULONG)o_total, 1, MUIM_Graph_Retime);
+	/* still not running: nothing changed, nothing to draw */
+	if (!model.running && was == 0)
+		return;
 	rp_st_summary(&model, t_sum, sizeof(t_sum));
 	if (model.running) {
 		rp_st_memory(&model, mem, sizeof(mem));
@@ -1185,6 +1200,16 @@ static void tick(void)
 	       (unsigned long)model.tx_bps, (unsigned long)model.cpu_pm);
 }
 
+void status_update_chosen(void)
+{
+	upd = (int)mui_get(o_upd, MUIA_Cycle_Active) & 3;
+	rp_eprefs_set("status_update", upd);
+	rp_eprefs_save();
+	rp_log("status: update %d", upd);
+	if (o_total)
+		mui_do(o_total, MUIM_Graph_Retime);
+}
+
 void status_table_chosen(void)
 {
 	cur_conn = (int)(LONG)mui_get(o_table, MUIA_Table_Active);
@@ -1204,11 +1229,33 @@ static Object *vfill(Object *o)
 	               (ULONG)mui_new(MUIC_Rectangle, TAGEND), TAGEND);
 }
 
-Object *status_page_build(Object *app, ULONG chosen_id)
+Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 {
-	Object *top, *conn, *g;
+	static const char *upd_labels[5];
+	static char hu[400];
+	Object *top, *conn, *g, *head, *ul;
 	int compact = theme_compact();
 
+	upd = rp_eprefs_get("status_update", 0) & 3;
+	upd_running = -1;
+	upd_labels[0] = tr("Every second");
+	upd_labels[1] = tr("Every 2 s");
+	upd_labels[2] = tr("Every 5 s");
+	upd_labels[3] = tr("Paused");
+	upd_labels[4] = NULL;
+	o_upd = mui_make(MUIO_Cycle, (ULONG)tr("Up_date"), (ULONG)upd_labels);
+	ul = mui_newc(qlabel_mcc, MUIA_QLabel_Text, (ULONG)"Up_date", MUIA_QLabel_Kind, QL_LABEL, TAGEND);
+	if (!o_upd || !ul)
+		return NULL;
+	mui_set(o_upd, MUIA_Cycle_Active, (ULONG)upd);
+	mui_set(o_upd, MUIA_CycleChain, 1);
+	theme_bubble_to(hu, sizeof(hu), "Update", "How often the page reads Riptide and draws again. Drawing "
+	                "takes time from a 68020: a download that keeps it busy ran about 20 % slower with the "
+	                "page updating every second, about 5 % every 5 s. Paused keeps what is shown.");
+	mui_set(o_upd, MUIA_ShortHelp, (ULONG)hu);
+	mui_set(ul, MUIA_ShortHelp, (ULONG)hu);
+	mui_do(o_upd, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
+	       update_id);
 	rp_status_init(&model);
 	cur_conn = -1;
 	cur_key.set = 0;
@@ -1260,7 +1307,12 @@ Object *status_page_build(Object *app, ULONG chosen_id)
 	       MUIA_Group_ActivePage, MUIV_TriggerValue);
 	mui_do(o_table, MUIM_Notify, MUIA_Table_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
 	       chosen_id);
-	g = mui_new(MUIC_Group, MUIA_Group_VertSpacing, compact ? 2 : 6, MUIA_Group_Child, (ULONG)o_sum,
+	head = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 6, MUIA_Group_Child, (ULONG)o_sum,
+	               MUIA_Group_Child, (ULONG)ul, MUIA_Group_Child, (ULONG)o_upd, TAGEND);
+	if (!head)
+		return NULL;
+	mui_set(o_upd, MUIA_HorizWeight, 0);
+	g = mui_new(MUIC_Group, MUIA_Group_VertSpacing, compact ? 2 : 6, MUIA_Group_Child, (ULONG)head,
 	            MUIA_Group_Child, (ULONG)top, MUIA_Group_Child, (ULONG)o_tabs, MUIA_Group_Child, (ULONG)o_tpages,
 	            TAGEND);
 	return g;
@@ -1276,5 +1328,5 @@ void status_page_free(void)
 {
 	tick_fn = NULL;
 	rp_status_free();
-	o_sum = o_total = o_cpu = o_tabs = o_tpages = o_ifv = o_table = o_cgraph = o_names = o_counters = NULL;
+	o_sum = o_total = o_cpu = o_tabs = o_tpages = o_ifv = o_table = o_cgraph = o_names = o_counters = o_upd = NULL;
 }

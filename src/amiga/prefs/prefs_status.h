@@ -164,10 +164,11 @@ void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int 
 void rp_st_if_rates(const struct rp_st_if *f, char *buf, int len);
 /* "Received 12.3 MB in 9 123 packets, sent 1.20 MB in 4 000, 0 errors" */
 void rp_st_if_totals(const struct rp_st_if *f, char *buf, int len);
-/* a connection as columns separated by '\t':
- * state, local, remote, RTT, cwnd, rate, flags, program */
+/* a connection in two lines: both ends ("10.0.0.2:1025  to  1.2.3.4:80",
+ * a listener only its own), '\n', then columns separated by '\t':
+ * state, RTT, window (with ECN), speed, program */
 void rp_st_conn_row(const struct rp_st_conn *c, char *buf, int len);
-/* the column titles in the same order */
+/* the titles of the second line's columns */
 const char *rp_st_conn_header(void);
 /* "Names and time" and "Counters" as lines separated by '\n' */
 void rp_st_names_text(const struct rp_status_model *m, char *buf, int len);

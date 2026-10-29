@@ -650,12 +650,13 @@ void rp_st_if_totals(const struct rp_st_if *f, char *buf, int len)
 
 const char *rp_st_conn_header(void)
 {
-	return "State\tLocal\tRemote\tRTT\tWindow\tSpeed\tProgram";
+	return "State\tRTT\tWindow\tSpeed\tProgram";
 }
 
 void rp_st_conn_row(const struct rp_st_conn *c, char *buf, int len)
 {
 	char l[52], r[52], rtt[16], spd[24], cw[24];
+	int k;
 
 	rp_fmt_addr_port(l, sizeof(l), c->laddr, c->lport);
 	if (c->state == 1)
@@ -674,7 +675,12 @@ void rp_st_conn_row(const struct rp_st_conn *c, char *buf, int len)
 		rp_fmt_rate(spd, sizeof(spd), c->rx_bps > c->tx_bps ? c->rx_bps : c->tx_bps);
 	else
 		rt_strlcpy(spd, "-", sizeof(spd));
-	rt_snprintf(buf, (size_t)len, "%s\t%s\t%s\t%s\t%s\t%s\t%s", rp_tcp_state_words(c->state), l, r, rtt, cw, spd,
+	if (c->state == 1)
+		rt_snprintf(buf, (size_t)len, "%s\n", l);
+	else
+		rt_snprintf(buf, (size_t)len, "%s  to  %s\n", l, r);
+	k = (int)strlen(buf);
+	rt_snprintf(buf + k, (size_t)(len - k), "%s\t%s\t%s\t%s\t%s", rp_tcp_state_words(c->state), rtt, cw, spd,
 	            c->prog[0] ? c->prog : "-");
 }
 

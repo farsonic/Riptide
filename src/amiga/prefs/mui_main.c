@@ -619,7 +619,7 @@ static Object *build_page(int p)
 
 	if (p == P_STATUS) {
 		ULONG in = theme_compact() ? 4 : 10;
-		body = status_page_build(app, ID_STATUS_CONN);
+		body = status_page_build(app, ID_STATUS_CONN, ID_STATUS_UPD);
 		return body ? mui_new(MUIC_Group, MUIA_InnerLeft, 12, MUIA_InnerRight, 12, MUIA_InnerTop, in,
 		                      MUIA_InnerBottom, in - 2, MUIA_Group_Child, (ULONG)body, TAGEND) : NULL;
 	}
@@ -957,6 +957,9 @@ static int command(ULONG id)
 	switch (id) {
 	case ID_STATUS_CONN:
 		status_table_chosen();
+		return 0;
+	case ID_STATUS_UPD:
+		status_update_chosen();
 		return 0;
 	case ID_FRONT:
 		/* another RiptidePrefs was started: this window to the front */

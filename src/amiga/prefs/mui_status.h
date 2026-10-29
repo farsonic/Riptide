@@ -9,8 +9,11 @@
 
 int  status_classes_make(void);
 void status_classes_free(void);
-/* the page's contents; a click on a connection makes app return chosen_id */
-Object *status_page_build(Object *app, ULONG chosen_id);
+/* the page's contents; a click on a connection makes app return
+ * chosen_id, a change of the Update setting update_id */
+Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id);
+/* call when app returned update_id */
+void status_update_chosen(void);
 /* call when app returned chosen_id */
 void status_table_chosen(void);
 /* show tab t (0 interfaces, 1 connections, 2 names and time, 3 counters) */

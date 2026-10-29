@@ -330,11 +330,12 @@ static void test_model(void)
 	CHECK(m.conns[0].lport == 1025 && m.conns[0].rx_bps == 4096);
 	CHECK(m.conns[2].state == 1);
 	rp_st_conn_row(&m.conns[0], b, sizeof(b));
-	CHECK_STR(b, "Connected\t192.168.1.20:1025\t93.184.216.34:80\t23 ms\t10 ECN\t4.00 KB/s\tAWeb");
+	CHECK_STR(b, "192.168.1.20:1025  to  93.184.216.34:80\nConnected\t23 ms\t10 ECN\t4.00 KB/s\tAWeb");
 	rp_st_conn_row(&m.conns[2], b, sizeof(b));
-	CHECK_STR(b, "Listening\t0.0.0.0:21\t*\t-\t-\t-\tftpd");
+	CHECK_STR(b, "0.0.0.0:21\nListening\t-\t-\t-\tftpd");
 	rp_st_conn_row(&m.conns[1], b, sizeof(b));
 	CHECK(strstr(b, "\t-") != NULL && strstr(b, "ECN") == NULL);
+	CHECK_STR(rp_st_conn_header(), "State\tRTT\tWindow\tSpeed\tProgram");
 	CHECK(m.conns[0].hist.n == 2 && rp_hist_at(&m.conns[0].hist, 0, 1) == 234);
 	/* names and counters */
 	rp_st_names_text(&m, b, sizeof(b));
