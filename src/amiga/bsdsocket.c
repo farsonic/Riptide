@@ -1,5 +1,6 @@
 /*
- * Riptide - bsdsocket.library (AmiTCP 4 API, 46 functions).
+ * Riptide - bsdsocket.library (AmiTCP 4 API, 46 functions; the Roadshow
+ * extensions after them are in roadshow.c).
  *
  * Every function runs in the calling task. Results follow the AmiTCP
  * conventions: -1 and the per-task errno (also written through the
