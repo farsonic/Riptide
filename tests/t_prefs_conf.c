@@ -943,6 +943,172 @@ static void test_fields(void)
 	rp_conf_free(&c);
 }
 
+/* several cards: two interface lines, a VLAN and addresses on the second
+ * card and on its VLAN, a default route with dev and metric */
+static const char *multi_conf =
+	"# two cards\n"
+	"hostname amy\n"
+	"interface eth0 device=uaenet.device unit=0\n"
+	"dhcp eth0\n"
+	"ifconfig eth0 alias 10.0.1.2/24\n"
+	"interface eth1 device=a2065.device unit=0   # the second card\n"
+	"ifconfig eth1 192.168.2.5/24 up\n"
+	"route add default 192.168.2.1 dev eth1 metric 10\n"
+	"interface eth1.20 vlan=20 parent=eth1 dhcp pcp=3\n"
+	"ifconfig eth1.20 alias 10.20.0.2/24\n"
+	"nameserver 192.168.2.1\n";
+
+static void test_multi(void)
+{
+	struct rp_conf c;
+	struct rp_lnames nm;
+	struct rp_lvals v;
+	char *t, out[RP_LONG], err[160], row[120];
+	int k, fi;
+
+	roundtrip("multi", multi_conf);
+	CHECK(rp_conf_load(&c, multi_conf, strlen(multi_conf)) == 0);
+	CHECK(rp_other_count(&c) == 0);
+	CHECK(!strcmp(c.cur.ifc[0].ifname, "eth0") && c.cur.ifc[0].dhcp == 1);
+	CHECK(!strcmp(c.cur.ifc[1].ifname, "eth1") && !strcmp(c.cur.ifc[1].device, "a2065.device"));
+	CHECK(c.cur.ifc[1].dhcp == 0 && !strcmp(c.cur.ifc[1].addr, "192.168.2.5/24"));
+	CHECK(!strcmp(c.cur.ifc[1].gateway, "192.168.2.1") && c.cur.ifc[1].metric == 10);
+	CHECK(!c.cur.ifc[2].ifname[0] && !c.cur.ifc[3].ifname[0]);
+	CHECK(rp_list_count(&c, RP_LIST_VLAN) == 1 && !strcmp(rp_list_get(&c, RP_LIST_VLAN, 0), "eth1|20 dhcp pcp=3"));
+	CHECK(rp_list_count(&c, RP_LIST_ALIAS) == 2);
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ALIAS, 0), "10.0.1.2/24"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ALIAS, 1), "eth1.20|10.20.0.2/24"));
+	CHECK(rp_iface_find(&c.cur, "ETH1") == 1 && rp_iface_find(&c.cur, "eth2") < 0);
+	CHECK(rp_iface_users(&c.cur, 1) == 2);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+
+	/* the forms: names and the cycles */
+	rp_lform_names(&c.cur, P_ALIAS, &nm);
+	CHECK(nm.n == 3 && !strcmp(nm.name[0], "eth0") && !strcmp(nm.name[1], "eth1") && !strcmp(nm.name[2], "eth1.20"));
+	rp_lform_get(P_ALIAS, "eth1.20|10.20.0.2/24", &nm, &v);
+	CHECK(v.cy[LA_IF] == 2 && !strcmp(v.tx[LA_ADDR], "10.20.0.2/24"));
+	CHECK(rp_lform_put(P_ALIAS, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+	      !strcmp(out, "eth1.20|10.20.0.2/24"));
+	v.cy[LA_IF] = 0;
+	CHECK(rp_lform_put(P_ALIAS, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 && !strcmp(out, "10.20.0.2/24"));
+	rp_list_row(P_ALIAS, "eth1.20|10.20.0.2/24", &nm, row, sizeof(row));
+	CHECK(!strcmp(row, "eth1.20: 10.20.0.2/24") || (fprintf(stderr, "%s\n", row), 0));
+	rp_lform_names(&c.cur, P_VLAN, &nm);
+	CHECK(nm.n == 2);
+	rp_lform_get(P_VLAN, "eth1|20 dhcp pcp=3", &nm, &v);
+	CHECK(v.cy[LV_PARENT] == 1 && !strcmp(v.tx[LV_NAME], "eth1.20") && v.cy[LV_PCP] == 4);
+	CHECK(rp_lform_put(P_VLAN, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+	      !strcmp(out, "eth1|20 dhcp pcp=3"));
+	rp_list_row(P_VLAN, "eth1|20 dhcp pcp=3", &nm, row, sizeof(row));
+	CHECK(!strcmp(row, "eth1.20: DHCP, PCP 3") || (fprintf(stderr, "%s\n", row), 0));
+	rp_iface_row(&c.cur.ifc[1], row, sizeof(row));
+	CHECK(!strcmp(row, "eth1: a2065.device unit 0, 192.168.2.5/24") || (fprintf(stderr, "%s\n", row), 0));
+
+	/* the fields follow the card chosen */
+	rp_ifsel = 1;
+	fi = rp_find(&c.cur, c.cur.ifc[1].device);
+	CHECK(fi >= 0 && !strcmp(rp_fstr(&c.cur, fi), "a2065.device"));
+	CHECK(rp_fparse(&c.cur, fi, "x.device", err, sizeof(err)) == 0 && !strcmp(c.cur.ifc[1].device, "x.device"));
+	CHECK(!strcmp(c.cur.ifc[0].device, "uaenet.device"));
+	strcpy(c.cur.ifc[1].device, "a2065.device");
+	rp_ifsel = 3;                               /* an empty slot: the first card */
+	CHECK(rp_ifcur(&c.cur) == 0 && !strcmp(rp_fstr(&c.cur, fi), "uaenet.device"));
+	rp_ifsel = 0;
+
+	/* a third card, static, with a router */
+	k = rp_iface_add(&c.cur);
+	CHECK(k == 2 && !strcmp(c.cur.ifc[2].ifname, "eth2") && c.cur.ifc[2].dhcp == 1);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && rp_ifsel == 2);    /* no device yet */
+	strcpy(c.cur.ifc[2].device, "a2065.device");
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && !strcmp(err, "another card uses this device and unit already"));
+	c.cur.ifc[2].unit = 1;
+	c.cur.ifc[2].dhcp = 0;
+	strcpy(c.cur.ifc[2].addr, "172.16.0.9/16");
+	strcpy(c.cur.ifc[2].gateway, "172.16.0.1");
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	t = text_of(&c);
+	CHECK((t && strstr(t, "route add default 192.168.2.1 dev eth1 metric 10\n"
+	                     "interface eth2 device=a2065.device unit=1\n"
+	                     "ifconfig eth2 172.16.0.9/16 up\n"
+	                     "route add default 172.16.0.1 dev eth2 metric 20\n"
+	                     "interface eth1.20")) || (fprintf(stderr, "%s", t), 0));
+	free(t);
+	rp_conf_commit(&c);
+
+	/* renaming the second card: its lines, VLAN and the VLAN's address follow */
+	rp_ifsel = 1;
+	fi = rp_find(&c.cur, c.cur.ifc[1].ifname);
+	CHECK(rp_fparse(&c.cur, fi, "lan1", err, sizeof(err)) == 0);
+	CHECK(rp_fparse(&c.cur, fi, "a.b", err, sizeof(err)) < 0);
+	rp_ifsel = 0;
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_VLAN, 0), "lan1|20 dhcp pcp=3"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ALIAS, 1), "lan1.20|10.20.0.2/24"));
+	cmds[0] = 0;
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);
+	t = text_of(&c);
+	CHECK((t && strstr(t, "interface lan1 device=a2065.device unit=0   # the second card\n"
+	                     "ifconfig lan1 192.168.2.5/24 up\n"
+	                     "route add default 192.168.2.1 dev lan1 metric 10\n") &&
+	      strstr(t, "interface lan1.20 vlan=20 parent=lan1 dhcp pcp=3\n"
+	                "ifconfig lan1.20 alias 10.20.0.2/24\n")) || (fprintf(stderr, "%s", t), 0));
+	free(t);
+	rp_conf_commit(&c);
+
+	/* an address on the third card while Riptide runs */
+	CHECK(rp_list_add(&c, RP_LIST_ALIAS, "eth2|172.17.0.9/16") == 0);
+	cmds[0] = 0;
+	CHECK(rp_live_commands(&c, collect, NULL) == 0 && !strcmp(cmds, "ifconfig eth2 alias 172.17.0.9/16;"));
+	t = text_of(&c);
+	CHECK((t && strstr(t, "ifconfig eth2 alias 172.17.0.9/16\n"));
+	free(t);
+	rp_conf_commit(&c);
+
+	/* removing the second card takes its VLAN and their addresses with it */
+	rp_iface_delete(&c.cur, 1);
+	CHECK(!c.cur.ifc[1].ifname[0] && rp_list_count(&c, RP_LIST_VLAN) == 0 && rp_list_count(&c, RP_LIST_ALIAS) == 2);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	t = text_of(&c);
+	CHECK(t && !strstr(t, "lan1") && strstr(t, "interface eth2") && strstr(t, "ifconfig eth0 alias 10.0.1.2/24\n")) || (fprintf(stderr, "%s", t), 0));
+	free(t);
+	rp_conf_free(&c);
+
+	/* a VLAN or address on a card that is not there: kept as other lines;
+	 * a fifth card too */
+	{
+		static const char *more =
+			"interface eth0 device=a.device\n"
+			"interface eth1 device=b.device\n"
+			"interface eth2 device=c.device\n"
+			"interface eth3 device=d.device\n"
+			"interface eth4 device=e.device\n"
+			"interface eth9.5 vlan=5 parent=eth9 dhcp\n"
+			"ifconfig eth9 alias 10.9.0.1/24\n"
+			"interface eth1 device=f.device\n";
+		roundtrip("more cards", more);
+		CHECK(rp_conf_load(&c, more, strlen(more)) == 0);
+		CHECK(rp_other_count(&c) == 4 && !strcmp(c.cur.ifc[3].ifname, "eth3"));
+		CHECK(rp_iface_add(&c.cur) < 0);
+		strcpy(c.cur.ifc[3].ifname, "ETH1");
+		CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && rp_ifsel == 3 &&
+		      !strcmp(err, "another card has this name already"));
+		rp_ifsel = 0;
+		rp_conf_free(&c);
+	}
+	/* entries that name a missing card or VLAN */
+	CHECK(rp_conf_load(&c, "", 0) == 0);
+	CHECK(rp_list_add(&c, RP_LIST_VLAN, "eth5|7 dhcp") == 0);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && strstr(err, "no card eth5"));
+	rp_list_set(&c, RP_LIST_VLAN, 0, "");
+	CHECK(rp_list_add(&c, RP_LIST_ALIAS, "eth0.7|10.7.0.1/24") == 0);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && strstr(err, "no card or VLAN eth0.7"));
+	CHECK(rp_list_add(&c, RP_LIST_VLAN, "7 up") == 0);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	t = text_of(&c);
+	CHECK(t && strstr(t, "ifconfig eth0.7 alias 10.7.0.1/24\n") && strstr(t, "interface eth0.7 vlan=7 parent=eth0 up\n"));
+	free(t);
+	rp_conf_free(&c);
+}
+
 int main(void)
 {
 	test_fields();
@@ -962,6 +1128,7 @@ int main(void)
 	test_lforms();
 	test_dns();
 	test_linklocal();
+	test_multi();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }
