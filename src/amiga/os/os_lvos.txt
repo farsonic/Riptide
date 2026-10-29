@@ -161,3 +161,8 @@
 396 void ScrollRaster(struct RastPort* rp a1, LONG dx d0, LONG dy d1, LONG xMin d2, LONG yMin d3, LONG xMax d4, LONG yMax d5)
 840 LONG ObtainBestPenA(struct ColorMap* cm a0, ULONG r d1, ULONG g d2, ULONG b d3, const struct TagItem* tags a1)
 948 void ReleasePen(struct ColorMap* cm a0, ULONG n d0)
+
+@lib icon IconBase basetype=Library
+78  struct DiskObject* GetDiskObject(CONST_STRPTR name a0)
+90  void FreeDiskObject(struct DiskObject* diskobj a0)
+96  UBYTE* FindToolType(CONST_STRPTR* toolTypeArray a0, CONST_STRPTR typeName a1)

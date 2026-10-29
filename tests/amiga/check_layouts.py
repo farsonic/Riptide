@@ -98,6 +98,7 @@ GUI_STRUCTS = (
     S('EasyStruct', 'es_Flags', 'es_Title', 'es_TextFormat', 'es_GadgetFormat') +
     S('WBArg', 'wa_Lock', 'wa_Name') +
     S('WBStartup', 'sm_Process', 'sm_NumArgs', 'sm_ArgList') +
+    S('DiskObject', 'do_Gadget', 'do_Type', 'do_DefaultTool', 'do_ToolTypes') +
     # the MUI editor (src/amiga/prefs/mui.h)
     [('struct Screen', 'ViewPort', 'struct Screen', 'ViewPort')] +
     S('ViewPort', 'ColorMap') +
@@ -382,7 +383,7 @@ def main():
                             ['exec/types.h', 'intuition/intuition.h', 'intuition/screens.h',
                              'intuition/classes.h', 'intuition/classusr.h', 'libraries/gadtools.h',
                              'graphics/text.h', 'graphics/rastport.h', 'graphics/view.h', 'devices/inputevent.h',
-                             'workbench/startup.h'], [inc])
+                             'workbench/startup.h', 'workbench/workbench.h'], [inc])
         mui = os.environ.get('MUI_SDK')
         if mui and os.path.isdir(mui):
             ok &= check_against(tmp, 'mui-sdk', MUI_STRUCTS, MUI_CONSTS,
@@ -440,7 +441,7 @@ def main():
         for lib, fdn in (('exec', 'exec_lib.fd'), ('dos', 'dos_lib.fd'), ('timer', 'timer_lib.fd'),
                          ('locale', 'locale_lib.fd'), ('battclock', 'battclock_lib.fd'),
                          ('intuition', 'intuition_lib.fd'), ('gadtools', 'gadtools_lib.fd'),
-                         ('graphics', 'graphics_lib.fd')):
+                         ('graphics', 'graphics_lib.fd'), ('icon', 'icon_lib.fd')):
             ok &= check_lvos(t, lib, os.path.join(ndk, 'FD', fdn))
     print('ALL OK' if ok else 'MISMATCHES FOUND')
     return 0 if ok else 1

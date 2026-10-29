@@ -282,7 +282,7 @@ static void test_model(void)
 	rp_st_summary(&m, b, sizeof(b));
 	CHECK(strstr(b, "not running") != NULL);
 	feed(&m, 100000, 1);
-	CHECK(m.running && m.nif == 3);
+	CHECK(m.running && m.nif == 3 && m.have_st);
 	CHECK(!m.cpu_ok);                             /* one sample: no CPU share yet */
 	CHECK(m.ifs[1].rx_bps == 0 && m.ifs[1].hist.n == 0);
 	rp_st_summary(&m, b, sizeof(b));
@@ -384,7 +384,10 @@ static void test_model(void)
 		memset(&in, 0, sizeof(in));
 		in.now_ms = 1;
 		rp_status_update(&m, &in);
-		CHECK(m.running && m.nif == 0 && !m.have_tcpst);
+		CHECK(m.running && m.nif == 0 && !m.have_tcpst && !m.have_st);
+		/* no status table (0.22 or older): only that it runs */
+		rp_st_summary(&m, b, sizeof(b));
+		CHECK(strstr(b, "does not report") != NULL);
 		rp_st_counters_text(&m, b, sizeof(b));
 		CHECK(strstr(b, "No counters") != NULL);
 	}

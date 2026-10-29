@@ -44,6 +44,12 @@ rm -rf "$dh0"
 mkdir -p "$dh0/C" "$dh0/S" "$dh0/out" "$dh0/go" "$dh0/Libs" "$dh0/MUI" "$dh0/ENV/Riptide" \
 	"$dh0/Prefs/Env-Archive/Riptide"
 cp "$BUILD/RiptidePrefs" "$dh0/C/"
+# icons for the tool type starts (copied next to RiptidePrefs when needed)
+mkdir -p "$dh0/icons"
+${PYTHON:-python3} tools/mkicon.py tool "$dh0/icons/tt1.info" --image prefs \
+	--tooltype PAGE=Names --tooltype DEBUG=DH0:out/tt1 >/dev/null
+${PYTHON:-python3} tools/mkicon.py tool "$dh0/icons/tt2.info" --image prefs \
+	--tooltype GADTOOLS --tooltype PAGE=Names --tooltype DEBUG=DH0:out/tt2 >/dev/null
 cp -r "$MUI_DIR/Libs/." "$dh0/Libs/"
 [ -d "$MUI_DIR/Images" ] && cp -r "$MUI_DIR/Images" "$dh0/MUI/"
 
@@ -452,6 +458,11 @@ DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb3
 DH0:C/tps RiptidePrefs DH0:out/ps3
 DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb4
 DH0:C/tps RiptidePrefs DH0:out/ps4
+Copy DH0:icons/tt1.info DH0:C/RiptidePrefs.info
+DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb5
+Copy DH0:icons/tt2.info DH0:C/RiptidePrefs.info
+DH0:C/twb DH0:C/RiptidePrefs 120 DH0:out/wb6
+Delete DH0:C/RiptidePrefs.info QUIET
 DH0:C/tcover 3
 Echo "rc $RC" >DH0:out/zz_cover
 DH0:C/RiptidePrefs PAGE=Names
@@ -491,13 +502,22 @@ typ venus
 key Return
 key Escape
 waitfor wb4 60
+# e, f: the icon's tool types: PAGE=Names and DEBUG=, then GADTOOLS too
+wbnext w07b-tooltypes-mui
+key Escape
+waitfor wb5 60
+wbnext w07c-tooltypes-gadtools
+key Escape
+waitfor wb6 60
 # afterwards: a window opens, the editor opens again
 rc0 zz_cover 30
 wbnext w08-after
 key Escape
 rc0 zz_after 60
 cleanup_uae
-for n in 1 2 3 4; do
+grep -q 'window open, page 4' "$dh0/out/tt1" 2>/dev/null || fail "tool types: not the MUI editor on Names (tt1: $(head -c 300 "$dh0/out/tt1" 2>/dev/null))"
+grep -q 'GadTools editor' "$dh0/out/tt2" 2>/dev/null || fail "tool types: GADTOOLS did not choose the GadTools editor"
+for n in 1 2 3 4 5 6; do
 	grep -q '^wbreply ok' "$dh0/out/wb$n" 2>/dev/null || fail "Workbench start $n: $(cat "$dh0/out/wb$n" 2>/dev/null)"
 	grep -q '^no' "$dh0/out/ps$n" 2>/dev/null || fail "Workbench start $n: the process is still there"
 done

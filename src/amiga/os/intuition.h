@@ -116,6 +116,20 @@ struct WBArg {
 	BYTE  *wa_Name;
 };
 
+/* workbench/workbench.h */
+struct DiskObject {
+	UWORD  do_Magic;
+	UWORD  do_Version;
+	struct Gadget do_Gadget;
+	UBYTE  do_Type;
+	char  *do_DefaultTool;
+	char **do_ToolTypes;
+	LONG   do_CurrentX, do_CurrentY;
+	APTR   do_DrawerData;
+	char  *do_ToolWindow;
+	LONG   do_StackSize;
+};
+
 struct WBStartup {
 	struct Message sm_Message;
 	struct MsgPort *sm_Process;

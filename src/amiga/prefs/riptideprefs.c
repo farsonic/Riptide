@@ -16,6 +16,8 @@
  *
  * With MUI 3.8 or later installed the MUI editor opens (mui_main.c), else
  * the GadTools one (gt_prefs.c); GADTOOLS asks for the GadTools one.
+ * Started from Workbench, the icon's tool types PAGE=, GADTOOLS,
+ * PUBSCREEN=, THEME= and DEBUG= do the same as the arguments.
  * PAGE opens on a page (its name, e.g. PAGE=Ports, or number), CMD runs a
  * menu command once the window is open and THEME picks the MUI editor's
  * colours for this run (for screenshots and testing); DEBUG writes a log.
@@ -27,9 +29,17 @@
 #include "prefs/prefs_io.h"
 #include "prefs/prefs_gui.h"
 
-#if !defined(__VBCC__)
+#if defined(__VBCC__)
+#include <workbench/startup.h>
+#include <workbench/workbench.h>
+#include <proto/icon.h>
+#else
 #include "os/intuition.h"
+#include "gen/icon_calls.h"
 #endif
+
+struct Library *IconBase;
+static struct WBStartup *wbstart;      /* the Workbench start, NULL from a Shell */
 
 const char riptideprefs_version[] = "$VER: RiptidePrefs " RIPTIDE_VERSION_STRING " (" RIPTIDE_DATE ")";
 
@@ -72,6 +82,49 @@ static int page_arg(const char *s)
 	return -1;
 }
 
+/* Workbench: the tool types of our icon into args (PUBSCREEN, GADTOOLS,
+ * PAGE, THEME, DEBUG as in the template below); the strings are copied */
+static void wb_tooltypes(LONG *args)
+{
+	static char pub[64], pg[32], theme[8], dbg[64];
+	struct DiskObject *dob;
+	BPTR old;
+	const char *v;
+
+	if (!wbstart || wbstart->sm_NumArgs < 1 || !wbstart->sm_ArgList)
+		return;
+	IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 36);
+	if (!IconBase)
+		return;
+	old = CurrentDir(wbstart->sm_ArgList[0].wa_Lock);
+	dob = GetDiskObject((CONST_STRPTR)wbstart->sm_ArgList[0].wa_Name);
+	if (dob) {
+		CONST_STRPTR *tt = (CONST_STRPTR *)dob->do_ToolTypes;
+		if ((v = (const char *)FindToolType(tt, (CONST_STRPTR)"PUBSCREEN")) != NULL && *v) {
+			rt_strlcpy(pub, v, sizeof(pub));
+			args[4] = (LONG)pub;
+		}
+		if (FindToolType(tt, (CONST_STRPTR)"GADTOOLS"))
+			args[5] = 1;
+		if ((v = (const char *)FindToolType(tt, (CONST_STRPTR)"PAGE")) != NULL && *v) {
+			rt_strlcpy(pg, v, sizeof(pg));
+			args[6] = (LONG)pg;
+		}
+		if ((v = (const char *)FindToolType(tt, (CONST_STRPTR)"THEME")) != NULL && *v) {
+			rt_strlcpy(theme, v, sizeof(theme));
+			args[8] = (LONG)theme;
+		}
+		if ((v = (const char *)FindToolType(tt, (CONST_STRPTR)"DEBUG")) != NULL && *v) {
+			rt_strlcpy(dbg, v, sizeof(dbg));
+			args[9] = (LONG)dbg;
+		}
+		FreeDiskObject(dob);
+	}
+	CurrentDir(old);
+	CloseLibrary(IconBase);
+	IconBase = NULL;
+}
+
 /* CLI: FROM,EDIT/S,USE/S,SAVE/S,PUBSCREEN/K,GADTOOLS/S,PAGE/K,CMD/K/N,THEME/K,DEBUG/K */
 static int prefs_main(int from_cli)
 {
@@ -88,6 +141,9 @@ static int prefs_main(int from_cli)
 			return CL_ERROR;
 		}
 		rp_from_path = (const char *)args[0];
+		rp_log_open((const char *)args[9]);
+	} else {
+		wb_tooltypes(args);
 		rp_log_open((const char *)args[9]);
 	}
 	ga.pubscreen = (const char *)args[4];
@@ -135,6 +191,8 @@ static int prefs_main(int from_cli)
 int main(int argc, char **argv)
 {
 	rp_wb = argc == 0;
+	if (rp_wb)
+		wbstart = (struct WBStartup *)argv;
 	return prefs_main(!rp_wb);
 }
 #else
@@ -166,6 +224,7 @@ long amiga_main(char *s, long l)
 	if (!me->pr_CLI) {
 		WaitPort(&me->pr_MsgPort);
 		wbmsg = GetMsg(&me->pr_MsgPort);
+		wbstart = (struct WBStartup *)wbmsg;
 		rp_wb = 1;
 	}
 	rc = CL_FAIL;
