@@ -312,7 +312,7 @@ key Escape
 waitfile zz_2 60
 shot s08-compact 14
 # the interfaces that did not fit: a click on the list
-$ptr click 400 135 >/dev/null
+$ptr click 600 400 >/dev/null    # the interface list (screenshot pixels)
 shot s08b-compact-more-interfaces 4
 key 2
 shot s09-compact-connections 4
