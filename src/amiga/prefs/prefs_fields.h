@@ -48,6 +48,9 @@ enum { F_STR, F_NUM, F_CHECK, F_CYCLE };
 /* the card the Interface and Address pages show (an index of
  * rp_model.ifc[]; the first card when that slot is not used) */
 extern int rp_ifsel;
+/* after rp_validate() failed on a VLAN or extra address (a card or VLAN
+ * that is not there): its page, else -1 */
+extern int rp_vpage;
 
 struct rp_field {
 	unsigned char page, type, flags;

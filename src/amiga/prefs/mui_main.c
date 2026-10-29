@@ -36,6 +36,15 @@ static char *lfhelp[RP_NLFIELDS_MAX];
 static const char *lcyl[RP_NLFIELDS_MAX][14];
 static struct rp_lvals lv;
 static int page;
+/* the cards: the Interface page's list and buttons, the Address page's
+ * card cycle; the cycles of names (DYN_*) are made anew when the names
+ * change, inside a group of their own (dynbox) */
+enum { DYN_ADDR, DYN_ALIAS, DYN_VLAN, DYN_N };
+static Object *iflist, *ifbtn[2], *dynbox[DYN_N], *dyncyc[DYN_N];
+static char *ifhelp[3], *dynhelp;
+static struct rp_lnames dynnm[DYN_N];
+static const char *dynlab[DYN_N][RP_NIF + RP_NVLAN + 1];
+static int dynfield[DYN_N] = { -1, LA_IF, LV_PARENT };
 static char status_text[120];
 static const char *pubname;     /* PUBSCREEN=, for the message windows */
 
@@ -226,16 +235,11 @@ static int has_form(int p)
 	return 0;
 }
 
-/* the interface's name as typed on the Interface page (the VLANs are
- * named after it) */
-static const char *cur_ifname(void)
+/* the names a form's cycle offers (the cards, and for addresses their
+ * VLANs too) */
+static const struct rp_lnames *form_names(int p)
 {
-	int fi = rp_find(&rp_cfg.cur, rp_cfg.cur.ifname);
-	const char *s = fi >= 0 && fobj[fi] ? (const char *)mui_get(fobj[fi], MUIA_String_Contents) : NULL;
-
-	while (s && *s == ' ')
-		s++;
-	return s && *s ? s : rp_cfg.cur.ifname;
+	return &dynnm[p == P_ALIAS ? DYN_ALIAS : DYN_VLAN];
 }
 
 /* which fields of the form apply (the address only with Static), and
@@ -285,7 +289,7 @@ static void form_read(int p)
 		else if (rp_lfields[i].type != LF_INFO)
 			rt_strlcpy(lv.tx[i], (const char *)mui_get(lfobj[i], MUIA_String_Contents), RP_LFTEXT);
 	}
-	rp_lform_update(p, &lv, cur_ifname());
+	rp_lform_update(p, &lv, form_names(p));
 }
 
 static void fill_list(int p)
@@ -300,7 +304,7 @@ static void fill_list(int p)
 	for (i = 0; i < n; i++) {
 		const char *e = rp_list_at(p, i);
 		if (has_form(p)) {
-			rp_list_row(p, e, cur_ifname(), row, sizeof(row));
+			rp_list_row(p, e, form_names(p), row, sizeof(row));
 			e = row;
 		}
 		mui_do(lst[p], MUIM_List_InsertSingle, (ULONG)e, MUIV_List_Insert_Bottom);
@@ -312,11 +316,173 @@ static void fill_list(int p)
 static void form_clear(int p)
 {
 	if (has_form(p)) {
-		rp_lform_get(p, NULL, cur_ifname(), &lv);
+		rp_lform_get(p, NULL, form_names(p), &lv);
 		form_show(p);
 	} else if (lline[p]) {
 		mui_nnset(lline[p], MUIA_String_Contents, (ULONG)"");
 	}
+}
+
+/* the card a cycle or list position stands for (they skip unused slots) */
+static int card_at(int pos)
+{
+	int k;
+
+	for (k = 0; k < RP_NIF; k++)
+		if (rp_cfg.cur.ifc[k].ifname[0] && pos-- == 0)
+			return k;
+	return 0;
+}
+
+static int card_pos(int k)
+{
+	int i, pos = 0;
+
+	for (i = 0; i < k; i++)
+		pos += rp_cfg.cur.ifc[i].ifname[0] != 0;
+	return pos;
+}
+
+/* A cycle of names (DYN_*) with the names now in dynnm[d]: made anew in its
+ * group when they changed (MUI 3.8's cycles cannot change their labels). */
+static void dyn_set(int d, const struct rp_lnames *nm)
+{
+	static const char *const labels[DYN_N] = { "Car_d", NULL, NULL };
+	const char *lab = d == DYN_ADDR ? labels[d] : rp_lfields[dynfield[d]].label;
+	Object *c;
+	int i, live, same = dyncyc[d] && nm->n == dynnm[d].n;
+
+	for (i = 0; same && i < nm->n; i++)
+		same = !strcmp(nm->name[i], dynnm[d].name[i]);
+	if (same || !dynbox[d])
+		return;
+	dynnm[d] = *nm;
+	for (i = 0; i < nm->n; i++)
+		dynlab[d][i] = dynnm[d].name[i];
+	dynlab[d][i] = NULL;
+	if (!nm->n) {
+		dynlab[d][0] = "eth0";
+		dynlab[d][1] = NULL;
+	}
+	c = mui_make(MUIO_Cycle, (ULONG)tr(lab), (ULONG)dynlab[d]);
+	if (!c)
+		return;
+	mui_set(c, MUIA_CycleChain, 1);
+	mui_set(c, MUIA_HorizWeight, 0);
+	if (d == DYN_ADDR) {
+		if (theme_tips())
+			mui_set(c, MUIA_ShortHelp, (ULONG)dynhelp);
+		mui_do(c, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID, ID_IFCYC);
+	} else {
+		if (theme_tips())
+			mui_set(c, MUIA_ShortHelp, (ULONG)lfhelp[dynfield[d]]);
+		mui_do(c, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID,
+		       ID_LFIELD + dynfield[d]);
+	}
+	live = win && mui_get(win, MUIA_Window_Open);
+	if (live)
+		mui_do(dynbox[d], MUIM_Group_InitChange);
+	if (dyncyc[d]) {
+		mui_do(dynbox[d], OM_REMMEMBER, (ULONG)dyncyc[d]);
+		MUI_DisposeObject(dyncyc[d]);
+	}
+	mui_do(dynbox[d], OM_ADDMEMBER, (ULONG)c);
+	if (live)
+		mui_do(dynbox[d], MUIM_Group_ExitChange);
+	dyncyc[d] = c;
+	if (d != DYN_ADDR)
+		lfobj[dynfield[d]] = c;
+}
+
+/* the Interface page's list of cards and the Address page's cycle */
+static void cards_show(void)
+{
+	struct rp_lnames nm;
+	char row[160];
+	int k;
+
+	if (iflist) {
+		mui_set(iflist, MUIA_List_Quiet, TRUE);
+		mui_do(iflist, MUIM_List_Clear);
+		for (k = 0; k < RP_NIF; k++)
+			if (rp_cfg.cur.ifc[k].ifname[0]) {
+				rp_iface_row(&rp_cfg.cur.ifc[k], row, sizeof(row));
+				mui_do(iflist, MUIM_List_InsertSingle, (ULONG)row, MUIV_List_Insert_Bottom);
+			}
+		mui_set(iflist, MUIA_List_Quiet, FALSE);
+		mui_nnset(iflist, MUIA_List_Active, (ULONG)card_pos(rp_ifcur(&rp_cfg.cur)));
+	}
+	nm.n = rp_iface_names(&rp_cfg.cur, nm.name, RP_NIF, 0);
+	dyn_set(DYN_ADDR, &nm);
+	if (dyncyc[DYN_ADDR])
+		mui_nnset(dyncyc[DYN_ADDR], MUIA_Cycle_Active, (ULONG)card_pos(rp_ifcur(&rp_cfg.cur)));
+	if (ifbtn[1])
+		mui_set(ifbtn[1], MUIA_Disabled, (ULONG)(rp_ifcur(&rp_cfg.cur) == 0));
+}
+
+/* the names the address and VLAN forms offer, after cards or VLANs changed */
+static void names_show(void)
+{
+	struct rp_lnames nm;
+	int p;
+
+	for (p = P_ALIAS; p <= P_VLAN; p++) {
+		int d = p == P_ALIAS ? DYN_ALIAS : DYN_VLAN, same, i;
+		rp_lform_names(&rp_cfg.cur, p, &nm);
+		same = nm.n == dynnm[d].n;
+		for (i = 0; same && i < nm.n; i++)
+			same = !strcmp(nm.name[i], dynnm[d].name[i]);
+		if (same)
+			continue;
+		dyn_set(d, &nm);
+		if (lst[p]) {
+			int sel = (int)(LONG)mui_get(lst[p], MUIA_List_Active);
+			fill_list(p);
+			mui_nnset(lst[p], MUIA_List_Active, sel >= 0 ? (ULONG)sel : (ULONG)MUIV_List_Active_Off);
+			if (sel >= 0 && rp_list_at(p, sel))
+				rp_lform_get(p, rp_list_at(p, sel), form_names(p), &lv);
+			else
+				rp_lform_get(p, NULL, form_names(p), &lv);
+			form_show(p);
+		}
+	}
+}
+
+/* The text of the chosen card's string fields into the model (before
+ * another card is shown, the page changes or the card is renamed); with
+ * loud, a bad one is shown with a message and -1 returned. */
+static int harvest_card(int loud)
+{
+	char err[80], msg[200], name[48];
+	int i;
+
+	for (i = 0; i < rp_nfields; i++) {
+		const struct rp_field *f = &rp_fields[i];
+		if (!fobj[i] || !(f->flags & FL_IF) || (f->type != F_STR && f->type != F_NUM))
+			continue;
+		if (rp_fparse(&rp_cfg.cur, i, (const char *)mui_get(fobj[i], MUIA_String_Contents), err, sizeof(err)) < 0 &&
+		    loud) {
+			rp_flabel(i, name, sizeof(name));
+			rt_snprintf(msg, sizeof(msg), "%s: %s", tr(name), tr(err));
+			mui_set(win, MUIA_Window_ActiveObject, (ULONG)fobj[i]);
+			rp_message(msg);
+			return -1;
+		}
+	}
+	return 0;
+}
+
+/* card k on the Interface and Address pages */
+static void card_choose(int k)
+{
+	int i;
+
+	rp_ifsel = k;
+	for (i = 0; i < rp_nfields; i++)
+		if (rp_fields[i].flags & FL_IF)
+			field_to_gadget(i);
+	update_disabled();
+	cards_show();
 }
 
 /* everything from the model, after it was replaced (Open, Restore ...) */
@@ -324,6 +490,9 @@ static void refresh_all(void)
 {
 	int i;
 
+	rp_ifsel = rp_ifcur(&rp_cfg.cur);
+	cards_show();
+	names_show();
 	for (i = 0; i < rp_nfields; i++)
 		field_to_gadget(i);
 	for (i = 0; i < RP_NPAGES; i++)
@@ -382,6 +551,13 @@ static int validate(void)
 
 	if (rp_validate(&rp_cfg.cur, &fi, err, sizeof(err)) == 0)
 		return 0;
+	if (rp_vpage >= 0) {
+		/* a VLAN or address names a card that is not there */
+		go_page(rp_vpage);
+		rp_message(tr(err));
+		return -1;
+	}
+	card_choose(rp_ifsel);
 	rp_flabel(fi, name, sizeof(name));
 	rt_snprintf(msg, sizeof(msg), "%s: %s", tr(name), tr(err));
 	go_page(rp_fields[fi].page);
@@ -421,6 +597,52 @@ static Object *field_gadget(int i)
 	return g;
 }
 
+/* The Interface page's list of cards with New card and Remove card
+ * beside it: a few rows, the settings of the card chosen below. */
+static Object *cards_build(void)
+{
+	static const char *const names[2] = { "N_ew card", "Rem_ove card" };
+	static const char *const helps[3] = {
+		"The network cards Riptide uses. Click one to see and change its settings below and on the "
+		"Address page.",
+		"Adds a network card: enter its SANA-II device and unit below.",
+		"Removes the card chosen, with its VLANs and their addresses. The first card stays.",
+	};
+	Object *lvo, *col;
+	int k;
+
+	iflist = mui_new(MUIC_List, MUIA_Frame, MUIV_Frame_InputList, MUIA_List_ConstructHook,
+	                 MUIV_List_ConstructHook_String, MUIA_List_DestructHook, MUIV_List_DestructHook_String, TAGEND);
+	lvo = iflist ? mui_new(MUIC_Listview, MUIA_Listview_List, (ULONG)iflist, MUIA_CycleChain, 1, MUIA_FixHeightTxt,
+	                       (ULONG)(theme_compact() ? "\n" : "\n\n\n"), TAGEND) : NULL;
+	col = mui_new(MUIC_Group, MUIA_Group_Spacing, 4, MUIA_HorizWeight, 0, TAGEND);
+	if (!lvo || !col)
+		return NULL;
+	ifhelp[0] = bubble_dup("Cards", helps[0]);
+	mui_set(lvo, MUIA_ShortHelp, (ULONG)ifhelp[0]);
+	for (k = 0; k < 2; k++) {
+		char name[16];
+		const char *s;
+		int n = 0;
+		ifbtn[k] = button(names[k]);
+		if (!ifbtn[k])
+			return NULL;
+		for (s = names[k]; *s && n < (int)sizeof(name) - 1; s++)
+			if (*s != '_')
+				name[n++] = *s;
+		name[n] = 0;
+		ifhelp[k + 1] = bubble_dup(name, helps[k + 1]);
+		mui_set(ifbtn[k], MUIA_ShortHelp, (ULONG)ifhelp[k + 1]);
+		mui_do(col, OM_ADDMEMBER, (ULONG)ifbtn[k]);
+		mui_do(ifbtn[k], MUIM_Notify, MUIA_Pressed, FALSE, (ULONG)app, 2, MUIM_Application_ReturnID,
+		       k ? ID_IFDEL : ID_IFADD);
+	}
+	mui_do(col, OM_ADDMEMBER, (ULONG)rect());
+	mui_do(iflist, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID, ID_IFLIST);
+	return mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, MUIA_VertWeight, 0, MUIA_Group_Child,
+	               (ULONG)lvo, MUIA_Group_Child, (ULONG)col, TAGEND);
+}
+
 /* the settings of a page: a label and a gadget per row */
 static Object *field_page(int p)
 {
@@ -430,6 +652,17 @@ static Object *field_page(int p)
 
 	if (!cols)
 		return NULL;
+	if (p == P_ADDR) {
+		/* which card's address: a cycle of the cards' names */
+		Object *l = label("Car_d", QL_LABEL);
+		dynbox[DYN_ADDR] = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 0, TAGEND);
+		dynhelp = bubble_dup("Card", "Whose address this page shows. Add and remove cards on the Interface page.");
+		if (!l || !dynbox[DYN_ADDR])
+			return NULL;
+		mui_set(l, MUIA_ShortHelp, (ULONG)dynhelp);
+		mui_do(cols, OM_ADDMEMBER, (ULONG)l);
+		mui_do(cols, OM_ADDMEMBER, (ULONG)hgroup2(dynbox[DYN_ADDR], rect()));
+	}
 	for (i = 0; i < rp_nfields; i++) {
 		const struct rp_field *f = &rp_fields[i];
 		Object *g, *cell;
@@ -454,6 +687,11 @@ static Object *field_page(int p)
 			       (ULONG)app, 2, MUIM_Application_ReturnID, ID_FIELD + i);
 		field_to_gadget(i);
 	}
+	if (p == P_IFACE) {
+		Object *cards = cards_build();
+		return cards ? mui_new(MUIC_Group, MUIA_Group_Spacing, theme_compact() ? 2 : 6, MUIA_Group_Child, (ULONG)cards,
+		                       MUIA_Group_Child, (ULONG)cols, TAGEND) : NULL;
+	}
 	return cols;
 }
 
@@ -472,6 +710,9 @@ static Object *lform_gadget(int i)
 		g = mui_make(MUIO_String, (ULONG)tr(f->label), (ULONG)f->size);
 		break;
 	case LF_CYCLE:
+		if (f->flags & LF_NAMES)
+			/* made by dyn_set() into this group */
+			return mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 0, MUIA_HorizWeight, 0, TAGEND);
 		for (k = 0; f->cy[k] && k < 13; k++)
 			lcyl[i][k] = tr(f->cy[k]);
 		lcyl[i][k] = NULL;
@@ -521,17 +762,24 @@ static Object *lform_build(int p)
 			return NULL;
 		for (k = i; k <= last; k++) {
 			char name[48];
-			lfobj[k] = lform_gadget(k);
+			Object *g = lform_gadget(k);
 			lflab[k] = label(rp_lfields[k].label, QL_LABEL);
-			if (!lfobj[k] || !lflab[k])
+			if (!g || !lflab[k])
 				return NULL;
 			rp_lflabel(k, name, sizeof(name));
 			lfhelp[k] = bubble_dup(name, rp_lfields[k].help);
-			mui_set(lfobj[k], MUIA_ShortHelp, (ULONG)lfhelp[k]);
 			mui_set(lflab[k], MUIA_ShortHelp, (ULONG)lfhelp[k]);
+			if (rp_lfields[k].flags & LF_NAMES) {
+				/* the cycle of names comes in dyn_set() */
+				dynbox[p == P_ALIAS ? DYN_ALIAS : DYN_VLAN] = g;
+				lfobj[k] = NULL;
+			} else {
+				lfobj[k] = g;
+				mui_set(g, MUIA_ShortHelp, (ULONG)lfhelp[k]);
+			}
 			if (k > i)
 				mui_do(row, OM_ADDMEMBER, (ULONG)lflab[k]);
-			mui_do(row, OM_ADDMEMBER, (ULONG)lfobj[k]);
+			mui_do(row, OM_ADDMEMBER, (ULONG)g);
 			fills |= rp_lfields[k].type == LF_NUM || rp_lfields[k].type == LF_STR;
 		}
 		if (!fills && (r = rect()) != NULL)
@@ -539,7 +787,12 @@ static Object *lform_build(int p)
 		mui_do(cols, OM_ADDMEMBER, (ULONG)lflab[i]);
 		mui_do(cols, OM_ADDMEMBER, (ULONG)row);
 	}
-	rp_lform_get(p, NULL, rp_cfg.cur.ifname, &lv);
+	{
+		struct rp_lnames nm;
+		rp_lform_names(&rp_cfg.cur, p, &nm);
+		dyn_set(p == P_ALIAS ? DYN_ALIAS : DYN_VLAN, &nm);
+	}
+	rp_lform_get(p, NULL, form_names(p), &lv);
 	form_show(p);
 	return cols;
 }
@@ -751,6 +1004,7 @@ static int build_window(const char *pubscreen)
 	mui_do(nav, MUIM_Notify, MUIA_Nav_Active, MUIV_EveryTime, (ULONG)head, 3, MUIM_Set, MUIA_Head_Page,
 	       MUIV_TriggerValue);
 	mui_do(nav, MUIM_Notify, MUIA_Nav_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID, ID_PAGE);
+	cards_show();
 	update_disabled();
 	return 0;
 }
@@ -786,6 +1040,12 @@ static void set_tips(int on)
 	for (i = 0; i < 4; i++)
 		if (btn[i])
 			mui_set(btn[i], MUIA_ShortHelp, on ? (ULONG)bhelp[i] : 0);
+	for (i = 0; i < 2; i++)
+		if (ifbtn[i])
+			mui_set(ifbtn[i], MUIA_ShortHelp, on ? (ULONG)ifhelp[i + 1] : 0);
+	for (i = 0; i < DYN_N; i++)
+		if (dyncyc[i])
+			mui_set(dyncyc[i], MUIA_ShortHelp, !on ? 0 : i == DYN_ADDR ? (ULONG)dynhelp : (ULONG)lfhelp[dynfield[i]]);
 }
 
 /* ---- commands ---- */
@@ -889,7 +1149,7 @@ static void list_cmd(int p, int op)
 	if (op == LIST_SEL) {
 		if (sel >= 0 && rp_list_at(p, sel)) {
 			if (has_form(p)) {
-				rp_lform_get(p, rp_list_at(p, sel), cur_ifname(), &lv);
+				rp_lform_get(p, rp_list_at(p, sel), form_names(p), &lv);
 				form_show(p);
 			} else {
 				mui_nnset(lline[p], MUIA_String_Contents, (ULONG)rp_list_at(p, sel));
@@ -899,7 +1159,7 @@ static void list_cmd(int p, int op)
 	}
 	if (has_form(p) && op != LIST_DEL) {
 		form_read(p);
-		if (rp_lform_put(p, &lv, entry, sizeof(entry), &fi, err, sizeof(err)) < 0) {
+		if (rp_lform_put(p, &lv, form_names(p), entry, sizeof(entry), &fi, err, sizeof(err)) < 0) {
 			form_complain(fi, err);
 			return;
 		}
@@ -924,6 +1184,44 @@ static void list_cmd(int p, int op)
 	if (op == LIST_DEL)
 		form_clear(p);
 	mui_nnset(lst[p], MUIA_List_Active, r >= 0 ? (ULONG)r : (ULONG)MUIV_List_Active_Off);
+	if (p == P_VLAN)
+		names_show();         /* the addresses may go on the new VLAN */
+}
+
+/* New card and Remove card on the Interface page */
+static void card_cmd(ULONG id)
+{
+	char msg[200];
+	int k = rp_ifcur(&rp_cfg.cur), n;
+
+	if (harvest_card(1) < 0)
+		return;
+	if (id == ID_IFADD) {
+		k = rp_iface_add(&rp_cfg.cur);
+		if (k < 0) {
+			rt_snprintf(msg, sizeof(msg), tr("Riptide takes up to %ld cards here."), (long)RP_NIF);
+			rp_message(msg);
+			return;
+		}
+		card_choose(k);
+		names_show();
+		/* the driver is what a new card needs first */
+		for (n = 0; n < rp_nfields; n++)
+			if ((rp_fields[n].flags & FL_IF) && rp_fields[n].off == offsetof(struct rp_iface, device) && fobj[n])
+				mui_set(win, MUIA_Window_ActiveObject, (ULONG)fobj[n]);
+		return;
+	}
+	if (k == 0)
+		return;
+	n = rp_iface_users(&rp_cfg.cur, k);
+	if (n) {
+		rt_snprintf(msg, sizeof(msg), tr("Remove %s with its %ld VLANs and addresses?"), rp_cfg.cur.ifc[k].ifname,
+		            (long)n);
+		if (!rp_request(msg, "Remove|Keep"))
+			return;
+	}
+	rp_iface_delete(&rp_cfg.cur, k);
+	refresh_all();
 }
 
 /* run a command; 1 when the editor should close */
@@ -955,6 +1253,24 @@ static int command(ULONG id)
 		return 0;
 	}
 	switch (id) {
+	case ID_IFLIST:
+	case ID_IFCYC: {
+		LONG pos = (LONG)mui_get(id == ID_IFLIST ? iflist : dyncyc[DYN_ADDR],
+		                         id == ID_IFLIST ? MUIA_List_Active : MUIA_Cycle_Active);
+		if (pos < 0 || card_at((int)pos) == rp_ifcur(&rp_cfg.cur))
+			return 0;
+		if (harvest_card(1) < 0) {
+			cards_show();             /* back to the card shown */
+			return 0;
+		}
+		card_choose(card_at((int)pos));
+		return 0;
+	}
+	case ID_IFADD:
+	case ID_IFDEL:
+		card_cmd(id);
+		show_status();
+		return 0;
 	case ID_STATUS_CONN:
 		status_table_chosen();
 		return 0;
@@ -971,14 +1287,11 @@ static int command(ULONG id)
 		return 0;
 	case ID_PAGE:
 		page = (int)mui_get(nav, MUIA_Nav_Active);
-		/* the interface may have been renamed: the VLANs follow */
-		if (page == P_VLAN) {
-			int sel = (int)(LONG)mui_get(lst[page], MUIA_List_Active);
-			fill_list(page);
-			mui_nnset(lst[page], MUIA_List_Active, sel >= 0 ? (ULONG)sel : (ULONG)MUIV_List_Active_Off);
-			form_read(page);
-			form_show(page);
-		}
+		/* a card may have been renamed or its driver changed: the list of
+		 * cards and the names the forms offer follow */
+		harvest_card(0);
+		cards_show();
+		names_show();
 		return 0;
 	case ID_SAVE:
 	case ID_USE:
@@ -1086,6 +1399,17 @@ static void free_all(void)
 		rp_free(bhelp[i]);
 		bhelp[i] = NULL;
 		btn[i] = NULL;
+	}
+	for (i = 0; i < 3; i++) {
+		rp_free(ifhelp[i]);
+		ifhelp[i] = NULL;
+	}
+	rp_free(dynhelp);
+	dynhelp = NULL;
+	iflist = ifbtn[0] = ifbtn[1] = NULL;
+	for (i = 0; i < DYN_N; i++) {
+		dynbox[i] = dyncyc[i] = NULL;
+		dynnm[i].n = 0;
 	}
 }
 

@@ -61,7 +61,7 @@ int rp_page_list(int page)
 #define SC(i) M(sc) + (i) * sizeof(long), sizeof(long)
 #define MI(f) offsetof(struct rp_iface, f), sizeof(((struct rp_iface *)0)->f)
 
-int rp_ifsel;
+int rp_ifsel, rp_vpage = -1;
 #define SS(i) M(ss) + (i) * RP_SSLEN, RP_SSLEN
 
 static const char *const cy_dhcp[] = { "DHCP", "Static", NULL };
@@ -386,6 +386,7 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 	char names[RP_NIF + RP_NVLAN][RP_IFNAMELEN], ifn[RP_IFNAMELEN];
 	int i, k, j, nn;
 
+	rp_vpage = -1;
 	for (k = 0; k < RP_NIF; k++) {
 		const struct rp_iface *f = &m->ifc[k];
 		if (!f->ifname[0])
@@ -418,6 +419,7 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 		rp_entry_if(m, m->vlan[i], ifn, sizeof(ifn));
 		if (rp_iface_find(m, ifn) < 0) {
 			*fi = 0;
+			rp_vpage = P_VLAN;
 			rt_snprintf(err, (size_t)errlen, "VLAN %s: there is no card %s (VLANs page)",
 			            rp_entry_body(m->vlan[i]), ifn);
 			return -1;
@@ -428,6 +430,7 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 			if (!rt_strcasecmp(ifn, ifn2) && rt_strtoul(rp_entry_body(m->vlan[i]), NULL, 10) ==
 			                                     rt_strtoul(rp_entry_body(m->vlan[j]), NULL, 10)) {
 				*fi = 0;
+				rp_vpage = P_VLAN;
 				rt_snprintf(err, (size_t)errlen, "VLAN %lu is on %s twice (VLANs page)",
 				            rt_strtoul(rp_entry_body(m->vlan[i]), NULL, 10), ifn);
 				return -1;
@@ -441,6 +444,7 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 			;
 		if (j == nn) {
 			*fi = 0;
+			rp_vpage = P_ALIAS;
 			rt_snprintf(err, (size_t)errlen, "Extra address %s: there is no card or VLAN %s",
 			            rp_entry_body(m->alias[i]), ifn);
 			return -1;

@@ -222,6 +222,7 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIA_Selected                0x8042654bUL
 #define MUIA_Pressed                 0x80423535UL
 #define MUIA_FixHeight               0x8042a92bUL
+#define MUIA_FixHeightTxt            0x804276f2UL
 #define MUIA_UserData                0x80420313UL
 #define MUIA_NoNotify                0x804237f9UL
 #define MUIA_String_Contents         0x80428ffdUL
