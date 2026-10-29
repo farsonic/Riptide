@@ -15,7 +15,8 @@
 #     tests/amiga/run_fsuae_prefs_status.sh [BUILD] [OUTDIR]
 #
 # ST_IF, ST_PEER, ST_NET (first three octets) choose other veth names and
-# subnet; DL_SIZE the timed download (bytes). Needs root, fs-uae, Xvfb (or
+# subnet; DL_SIZE the timed download (bytes); ST_UPDATE the Status page's
+# Update setting for the run (0, 1, 2 for every 1, 2, 5 s; default 0). Needs root, fs-uae, Xvfb (or
 # DISPLAY), xdotool, ImageMagick, Python PIL, vbcc + NDK and vasm.
 # SPDX-License-Identifier: GPL-2.0-only
 set -u
@@ -145,6 +146,11 @@ route add default $ST_NET.1
 nameserver $ST_NET.1
 CONF
 cp "$dh0/S/riptide.conf" "$dh0/Prefs/Env-Archive/Riptide/riptide.conf"
+# the Status page's Update setting (0 every second, 1 every 2 s, 2 every 5 s)
+if [ -n "${ST_UPDATE:-}" ]; then
+	printf 'status_update=%s\n' "$ST_UPDATE" >"$dh0/ENV/Riptide/RiptidePrefs.prefs"
+	cp "$dh0/ENV/Riptide/RiptidePrefs.prefs" "$dh0/Prefs/Env-Archive/Riptide/"
+fi
 cp "$dh0/S/riptide.conf" "$dh0/ENV/Riptide/riptide.conf"
 cat > "$work/test.fs-uae" <<CFG
 [fs-uae]
