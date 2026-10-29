@@ -12,6 +12,8 @@
 # d0-d7/a0-a5. '#' starts a comment. BASEVAR '-' means the callers pass the
 # library base explicitly as the first argument (drivers with many bases).
 # resource=1: a resource (no standard library vectors; bias 6 is a call).
+# guard=BIAS:MACRO: in "call" headers, the functions beyond BIAS only when
+# MACRO is defined (their names may clash with another library's calls).
 # A row whose comment is "# private" is a ##private entry of the SDK FD
 # file (implemented, but left out of the SDK headers).
 #
@@ -112,9 +114,14 @@ def gen_call(lib, cc, out):
     if not explicit:
         o.append('extern %s%s;' % (base_decl(lib), lib.basevar))
     pfx = lib.opts.get('callprefix', '')
+    gbias, gmacro = (lib.opts['guard'].split(':') + [''])[:2] if 'guard' in lib.opts else (None, None)
+    guarded = False
     for f in lib.funcs:
         if f.bias <= 24 and 'resource' not in lib.opts:
             continue
+        if gbias and f.bias > int(gbias) and not guarded:
+            o.append('#ifdef %s' % gmacro)
+            guarded = True
         name = pfx + f.name
         names = [n for t, n, r in f.args]
         o.append('#define LVO_%s_%s (-%d)' % (lib.name, f.name, f.bias))
@@ -153,6 +160,8 @@ def gen_call(lib, cc, out):
         else:
             o.append('\treturn (%s)_d0;' % f.ret)
         o.append('}')
+    if guarded:
+        o.append('#endif /* %s */' % gmacro)
     o.append('#endif')
     open(out, 'w').write('\n'.join(o) + '\n')
 

@@ -5,7 +5,7 @@
 # against the FD file of the API its compat alias provides, by
 # tests/amiga/check_layouts.sh.
 
-@lib bsdsocket SocketBase prefix=bsd_
+@lib bsdsocket SocketBase prefix=bsd_ guard=300:RT_BSDSOCKET_V4
 6   ULONG LibOpen(ULONG version d0) = bsd_libopen
 12  ULONG LibClose() = bsd_libclose
 18  ULONG LibExpunge() = rtlib_expunge

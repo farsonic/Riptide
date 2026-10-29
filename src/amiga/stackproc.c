@@ -686,6 +686,7 @@ int amiga_stack_start(const char *config, int selftest)
 	int r;
 
 	rt_sock_async_hook = amiga_async_hook;
+	amiga_rs_init();
 	/* Above ordinary programs (0) so received frames are taken off the
 	 * driver promptly; 'priority N' in the config changes it. */
 	if (!selftest)
