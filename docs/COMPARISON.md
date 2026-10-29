@@ -210,16 +210,23 @@ slightly between runs (seeded but timing dependent).
 
 | | MiamiDx | Roadshow | Riptide |
 |---|---|---|---|
-| bsdsocket.library | AmiTCP 4 (46 LVOs) | AmiTCP 4.0 API [RS-DOC] plus many extensions (below) | AmiTCP 4, all 46 functions |
+| bsdsocket.library | AmiTCP 4 (46 LVOs) | AmiTCP 4.0 API [RS-DOC] plus many extensions (below) | AmiTCP 4, all 46 functions, and the Roadshow extensions at Roadshow's vector offsets (below) |
 | Extended API | miami.library 21: sysctl, getaddrinfo & co., fd callbacks, packet filter hooks, SSL | In bsdsocket.library itself [RS-DOC]: routing (`AddRouteTagList`, `DeleteRouteTagList`, `ChangeRouteTagList`, `GetRouteInfo`), interfaces (`AddInterfaceTagList`, `ConfigureInterfaceTagList`, `QueryInterfaceTagList`, `ObtainInterfaceList`, `RemoveInterface`), DNS (`AddDomainNameServer`, `ObtainDomainNameServerList`, `SetDefaultDomainName`...), monitoring (`AddNetMonitorHookTagList`, `GetNetworkStatistics`), BPF (`bpf_open`...), mbuf access, `ObtainRoadshowData`/`ChangeRoadshowData`, server sockets, `gethostbyname_r`, `getaddrinfo`/`getnameinfo` | `riptide.library` 2 (the MiamiDx API under Riptide names, plus `RiptideConnectName()`) and a compat alias under the old name; `net.riptide.*` tables via `RiptideSysCtl()`; the RIPTIDE command port; BSD routing and ARP ioctls |
 | usergroup.library | Yes | **Unverified** | Yes, single user |
 
-Riptide does **not** implement any of Roadshow's bsdsocket.library
-extensions. Programs that call `AddRouteTagList()`, `ObtainInterfaceList()`,
-`bpf_open()`, `ObtainRoadshowData()` and the like get no such vectors
-(Riptide's bsdsocket.library ends at LVO -300, `GetSocketEvents()`). Tools
-written for Roadshow's API therefore do not work with Riptide; tools written
-for the plain AmiTCP API or for MiamiDx's documented API do.
+Riptide implements Roadshow's bsdsocket.library extensions at the vector
+offsets of the Roadshow SDK (`bpf_open()` at -366 to `getnameinfo()` at
+-822; `docs/AMIGA.md`, "Roadshow extensions"): the packet filter, routes,
+interfaces and DHCP address allocation, monitoring hooks, statistics, DNS,
+the netdb enumeration, address conversion, `RoadshowData`,
+`gethostbyname_r()` and Roadshow's `getaddrinfo()` family. Changes go
+through the same code as Riptide's configuration language. Not provided:
+the kernel memory (`mbuf_*`) calls (no mbufs), the private IP filter calls
+(`ipf_*`), and an Internet superserver (`ProcessIsServer()` is always FALSE).
+`IFC_GetPeerAddress`/`IFC_GetDNS` need SANA-II R4 address queries that
+Riptide's driver layer does not make. We could not run Roadshow itself
+(section 11), so the comparison with it rests on its SDK documentation, and
+on Roadshow programs we could try (section 12).
 
 ## 6. Drivers and configuration
 
@@ -285,14 +292,16 @@ Riptide is younger and narrower. Be aware of these before choosing it:
   neither of the others has, is there, but only host-side: no stateful
   DHCPv6, no RFC 3542 ancillary data, and SANA-II drivers need a
   multicast filter.
-* **No firewall, NAT or packet filter hooks**, no BPF API or live
-  tcpdump (only capture to pcap files), no SOCKS, no SSL
+* **No firewall or NAT**: Roadshow's monitoring hooks (which can drop
+  ICMP, UDP, connection requests and packets) and BPF channels are there,
+  but no rule-based filter; no live tcpdump program (capture to pcap
+  files, or a program of one's own on the BPF API), no SOCKS, no SSL
   (`RiptideOpenSSL()` returns NULL), no inetd, no `TCP:` handler, no
   IDN.
 * **No server-side TCP Fast Open** (the client side is there).
-* **Roadshow's API extensions** (routing, interface, DNS, monitoring, BPF,
-  `RoadshowData`) are not implemented, so Roadshow-specific tools do not
-  run.
+* **Roadshow's API extensions** are implemented except the kernel memory
+  (`mbuf_*`) and IP filter (`ipf_*`) calls, the superserver and SANA-II R4
+  peer/DNS queries (section 5).
 * **MiamiDx's private vectors** (resolver internals, kvm access, settings
   database) return 0, so MiamiDx's own NetStat, DiG and NSLookup do not
   work with Riptide's compat alias.
