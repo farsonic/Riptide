@@ -230,6 +230,23 @@ static void cv_tick(Object *obj, struct cview_data *d)
 	if (!d->running && !was)
 		return;             /* still not running: nothing to draw */
 	cv_summary();
+	{
+		/* for the DEBUG log: the first card's packets as shown */
+		char name[RP_CNT_NAME], val[24], rate[24];
+		int r;
+		static const char want[] = "\tPackets received";
+		for (r = 0; r < model.n; r++) {
+			size_t l = strlen(model.rows[r].name);
+			if (!strncmp(model.rows[r].name, "Interface eth", 13) && l > sizeof(want) - 1 &&
+			    !strcmp(model.rows[r].name + l - (sizeof(want) - 1), want))
+				break;
+		}
+		if (r < model.n) {
+			rp_cnt_text(&model, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+			rp_log("counters: %d rows, %s: %s received %s%s", model.n, model.zeroed ? "since zero" : "since start",
+			       val, rate, "");
+		}
+	}
 	if (d->shown)
 		MUI_Redraw(obj, MADF_DRAWUPDATE);
 }

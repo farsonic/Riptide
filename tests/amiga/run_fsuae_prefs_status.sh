@@ -302,6 +302,13 @@ waitfile ready 600 && {
 	shot s04-counters
 	key 1
 	shot s05-interfaces-later 6
+	# the Counters page (the last page: Shift-P from Status), Zero, Since start
+	key shift+p
+	shot s05b-counters 6
+	key z
+	shot s05c-counters-zero 4
+	key t
+	shot s05d-counters-since-start 4
 	key Escape
 }
 waitfile zz_1 60
@@ -325,6 +332,10 @@ cleanup_uae
 kill "$ppid" 2>/dev/null
 ppid=
 grep -q '^window open' "$dh0/out/log1" 2>/dev/null || fail "the MUI editor did not open"
+# the Counters page: counts that grow, then since Zero, then since start again
+awk '/^counters: / { n++ } /^counters: .*since start/ { s++ } /^counters: .*since zero/ { z++ }
+     END { exit !(n >= 3 && s >= 2 && z >= 1) }' "$dh0/out/log1" ||
+	fail "the Counters page did not read, zero and go back ($(grep '^counters:' "$dh0/out/log1" | tr '\n' ' '))"
 # every window inside its screen
 for lg in log0 log1 log3; do
 	awk '/^screen [0-9]+x[0-9]+/ { split($2, s, "x") } /^window [0-9]+x[0-9]+ at/ { split($2, w, "x"); split($4, p, ",");
