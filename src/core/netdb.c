@@ -163,3 +163,24 @@ const struct rt_protoent_info *rt_getprotobynumber(int proto)
 			return &protocols[i];
 	return NULL;
 }
+
+/* Enumeration (getservent(), getprotoent(), getnetent()): entry i, or
+ * NULL past the end. */
+const struct rt_servent_info *rt_servent_at(unsigned i)
+{
+	return i < RT_ARRAY_SIZE(services) ? &services[i] : NULL;
+}
+
+const struct rt_protoent_info *rt_protoent_at(unsigned i)
+{
+	return i < RT_ARRAY_SIZE(protocols) ? &protocols[i] : NULL;
+}
+
+static const struct rt_netent_info networks[] = {
+	{ "loopback", { "loopback-net", NULL }, 127 },
+};
+
+const struct rt_netent_info *rt_netent_at(unsigned i)
+{
+	return i < RT_ARRAY_SIZE(networks) ? &networks[i] : NULL;
+}

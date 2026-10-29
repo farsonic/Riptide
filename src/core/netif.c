@@ -159,6 +159,7 @@ void rt_netif_remove(struct rt_netif *nif)
 	rt_ip6_ifenable(nif, 0);
 	rt_mdns_if_gone(nif);
 	rt_ipv4ll_if_gone(nif);
+	rt_bpf_if_gone(nif);
 	rt_ip_mc_flush(nif);
 	rt_route_flush_if(nif);
 	rt_arp_flush(nif, 0);
@@ -276,6 +277,11 @@ static void alias_remove(struct rt_netif *nif, int i)
 	nif->nalias--;
 }
 
+void (*rt_netif_addr_hook)(struct rt_netif *nif);
+u8 rt_mon_mask;
+int (*rt_mon_hook)(int type, const u32 *src, const u32 *dst, const void *hdr);
+int (*rt_mon_packet_hook)(int out, const void *lh, u32 lhlen, const void *data, u32 len);
+
 int rt_netif_addr_add(struct rt_netif *nif, u32 addr, u32 netmask, u32 bcast)
 {
 	int i;
@@ -302,6 +308,8 @@ int rt_netif_addr_add(struct rt_netif *nif, u32 addr, u32 netmask, u32 bcast)
 	reinstall_connected(nif);
 	if ((nif->flags & RT_IFF_UP) && nif->type == RT_IFT_ETHER)
 		rt_arp_announce(nif, addr);
+	if (rt_netif_addr_hook)
+		rt_netif_addr_hook(nif);
 	return 0;
 }
 
@@ -325,6 +333,8 @@ int rt_netif_addr_del(struct rt_netif *nif, u32 addr)
 	rt_route_changed();
 	rt_arp_flush(nif, 1);
 	reinstall_connected(nif);
+	if (rt_netif_addr_hook)
+		rt_netif_addr_hook(nif);
 	return 0;
 }
 
@@ -350,6 +360,8 @@ int rt_netif_set_addr(struct rt_netif *nif, u32 addr, u32 netmask, u32 peer)
 	nif->dstaddr = 0;
 	if (!addr) {
 		install_connected(nif);    /* the additional addresses' */
+		if (old && rt_netif_addr_hook)
+			rt_netif_addr_hook(nif);
 		return 0;
 	}
 	if (nif->type == RT_IFT_PTP) {
@@ -366,6 +378,8 @@ int rt_netif_set_addr(struct rt_netif *nif, u32 addr, u32 netmask, u32 peer)
 	/* reports sent before had source 0.0.0.0 (or the old address) */
 	if ((nif->flags & RT_IFF_UP) && addr != old)
 		rt_igmp_if_up(nif);
+	if (rt_netif_addr_hook)
+		rt_netif_addr_hook(nif);
 	return 0;
 }
 
@@ -431,6 +445,13 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
 		nif->stats.imcasts++;
 	if (rt_capture_on)
 		rt_capture_frame(nif, b, RT_CAP_IN, ethertype, srchw, flags);
+	if (rt_bpf_on)
+		rt_bpf_tap(nif, b, 0, ethertype, srchw, NULL, flags);
+	if (rt_mon_on(RT_MON_PACKET) && rt_mon_packet_hook(0, NULL, 0, b->data, b->len) != RT_MA_CONTINUE) {
+		nif->stats.iqdrops++;
+		rt_buf_free(b);
+		return;
+	}
 	if (!(nif->flags & RT_IFF_UP)) {
 		nif->stats.iqdrops++;
 		rt_buf_free(b);
@@ -511,6 +532,16 @@ void rt_netif_tx_wait(struct rt_netif *nif)
 		rt_timer_mod(&tx_stall_timer, due);
 }
 
+/* MHT_Packet on the way out: 1 if the hook dropped b (freed). */
+int rt_netif_mon_out(struct rt_netif *nif, struct rt_buf *b)
+{
+	if (nif->type == RT_IFT_LOOP || rt_mon_packet_hook(1, NULL, 0, b->data, b->len) == RT_MA_CONTINUE)
+		return 0;
+	nif->stats.oerrors++;
+	rt_buf_free(b);
+	return 1;
+}
+
 int rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
 	RT_PROF_EV(RT_EV_DRV_TX);
@@ -519,6 +550,10 @@ int rt_netif_xmit(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u16 e
 		return rt_qos_xmit(nif, b, dsthw, ethertype);
 	if (rt_capture_on)
 		rt_capture_frame(nif, b, RT_CAP_OUT, ethertype, NULL, 0);
+	if (rt_bpf_on)
+		rt_bpf_tap(nif, b, 1, ethertype, NULL, dsthw, 0);
+	if (rt_mon_on(RT_MON_PACKET) && rt_netif_mon_out(nif, b))
+		return -RT_EACCES;
 	return nif->link_output(nif, b, dsthw, ethertype);
 }
 

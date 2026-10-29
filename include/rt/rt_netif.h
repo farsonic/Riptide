@@ -211,6 +211,9 @@ int  rt_ip_is_broadcast(u32 addr, const struct rt_netif *nif);
  * -errno or 0; lock held. */
 int  rt_netif_addr_add(struct rt_netif *nif, u32 addr, u32 netmask, u32 bcast);
 int  rt_netif_addr_del(struct rt_netif *nif, u32 addr);
+/* OS hook: an IPv4 address of nif was set, added or removed (lock held;
+ * Roadshow's SBTC_SIG_ADDRESS_CHANGE_MASK). NULL if unused. */
+extern void (*rt_netif_addr_hook)(struct rt_netif *nif);
 /* Is addr the primary or an additional address of nif? */
 int  rt_netif_has_addr(const struct rt_netif *nif, u32 addr);
 /* Source address on nif for a packet to 'dst' (via 'nexthop', 0 = dst):
