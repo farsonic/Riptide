@@ -15,6 +15,7 @@
  *   table   rows of two lines: a text, then columns separated by '\t';
  *           a row can be chosen
  *   ifview  every interface: three lines, its speeds and a small graph
+ *           (as tall as all of them, in a Scrollgroup)
  *   stext   a fixed number of lines of text that change
  * The total-traffic graph also owns the timer: it starts when the page is
  * shown and stops when it is hidden, so nothing is read on other pages.
@@ -60,6 +61,7 @@ enum { GK_BYTES, GK_CPU, GK_CONN };
 #endif
 
 static struct MUI_CustomClass *graph_mcc, *tabs_mcc, *table_mcc, *ifview_mcc, *stext_mcc;
+static Object *o_ifgroup;           /* the Virtgroup around the interfaces */
 
 /* ---- drawing helpers ---- */
 /* text cut to fit maxw pixels (the longest start that fits, found by
@@ -863,7 +865,7 @@ struct ifview_data {
 	const struct rp_status_model *m;
 	int shown;
 	/* what is on screen, for updates */
-	int valid, drawn_nif;
+	int valid, drawn_nif, laid_nif;
 	const char *drawn_msg;      /* the message shown instead of interfaces */
 	LONG drawn_w, drawn_h;
 	char cache[RP_ST_NIF][IFV_LINES][120];
@@ -958,13 +960,27 @@ DISPATCHER(ifview_dispatch)
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
-		if (mc_has_tag(msg, MUIA_IfView_Update) && d->shown)
-			MUI_Redraw(obj, MADF_DRAWUPDATE);
+		if (mc_has_tag(msg, MUIA_IfView_Update) && d->shown) {
+			int n = d->m && d->m->running ? d->m->nif : 0;
+			if (n != d->laid_nif && o_ifgroup) {
+				/* another number of interfaces: the height again */
+				mui_do(o_ifgroup, MUIM_Group_InitChange);
+				mui_do(o_ifgroup, MUIM_Group_ExitChange);
+			} else {
+				MUI_Redraw(obj, MADF_DRAWUPDATE);
+			}
+		}
 		break;
-	case MUIM_AskMinMax:
+	case MUIM_AskMinMax: {
+		/* room for every interface: the Scrollgroup around it scrolls */
+		LONG h;
+		d = INST_DATA(cl, obj);
+		h = ifv_blockh() * (d->m && d->m->running && d->m->nif ? d->m->nif : 1);
+		d->laid_nif = d->m && d->m->running ? d->m->nif : 0;
 		DoSuperMethodA(cl, obj, msg);
-		mc_minmax(msg, 160, 400, MUI_MAXMAX, ifv_blockh(), ifv_blockh() * 3, MUI_MAXMAX);
+		mc_minmax(msg, 160, 400, MUI_MAXMAX, h, h, h);
 		return 0;
+	}
 	case MUIM_Setup:
 		if (!DoSuperMethodA(cl, obj, msg))
 			return FALSE;
@@ -1237,7 +1253,7 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 {
 	static const char *upd_labels[5];
 	static char hu[400];
-	Object *top, *conn, *g, *head, *ul;
+	Object *top, *conn, *g, *head, *ul, *ifscroll;
 	int compact = theme_compact();
 
 	upd = rp_eprefs_get("status_update", 0) & 3;
@@ -1302,7 +1318,12 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 	conn = mui_new(MUIC_Group, MUIA_Group_Spacing, 4, MUIA_Group_Child, (ULONG)o_table, MUIA_Group_Child,
 	               (ULONG)o_cgraph, TAGEND);
 	/* every tab may grow, so the page takes the window's spare height */
-	o_tpages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, MUIA_Group_Child, (ULONG)o_ifv, MUIA_Group_Child,
+	o_ifgroup = mui_new(MUIC_Virtgroup, MUIA_Group_Spacing, 0, MUIA_Group_Child, (ULONG)o_ifv, TAGEND);
+	ifscroll = o_ifgroup ? mui_new(MUIC_Scrollgroup, MUIA_Scrollgroup_FreeHoriz, FALSE, MUIA_Scrollgroup_Contents,
+	                               (ULONG)o_ifgroup, TAGEND) : NULL;
+	if (!ifscroll)
+		return NULL;
+	o_tpages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, MUIA_Group_Child, (ULONG)ifscroll, MUIA_Group_Child,
 	                   (ULONG)conn, MUIA_Group_Child, (ULONG)vfill(o_names), MUIA_Group_Child,
 	                   (ULONG)vfill(o_counters), TAGEND);
 	if (!top || !conn || !o_tpages)
@@ -1336,4 +1357,5 @@ void status_page_free(void)
 	tick_fn = NULL;
 	rp_status_free();
 	o_sum = o_total = o_cpu = o_tabs = o_tpages = o_ifv = o_table = o_cgraph = o_names = o_counters = o_upd = NULL;
+	o_ifgroup = NULL;
 }

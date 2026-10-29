@@ -1119,7 +1119,9 @@ installed; `PAGE` opens on a page (its name, e.g. `PAGE=Ports`, or its
 number from 0), `CMD` runs a command of the MUI editor's menus once the
 window is open (the numbers are in `src/amiga/prefs/mui_ids.h`, e.g.
 `CMD=105` About), `THEME` picks the MUI editor's colours for this run, and
-`DEBUG` writes a log of what the editor does.
+`DEBUG` writes a log of what the editor does. Started from Workbench,
+the same tool types in RiptidePrefs' icon do the same: `PAGE=Names`,
+`GADTOOLS`, `PUBSCREEN=name`, `THEME=DARK`, `DEBUG=file`.
 
 One editor at a time: started again while one is open (from a Shell or
 its icon, either editor), RiptidePrefs brings the open window to the
@@ -1258,15 +1260,20 @@ pages from too.
 ### The Status page
 
 The first page of the MUI editor (and the last of the GadTools one) shows
-what Riptide is doing, read again every second while the page is on
-screen; on other pages, or with the window closed, nothing is read. It
-changes nothing. Each second RiptidePrefs asks Riptide for its tables
+what Riptide is doing, read again while the page is on screen (every
+second, or as the **Update** setting under the tabs says: every 2 or 5
+seconds, or Paused, which keeps what is shown; it is kept in
+`ENVARC:Riptide/RiptidePrefs.prefs`); on other pages, or with the window
+closed, nothing is read. It changes nothing. Each second RiptidePrefs asks Riptide for its tables
 (`net.riptide.status`, `ifaces`, `tcpinfo`, `tcpstat`, `ipstat`; every
 fifth second also `addrs6`, `routes` and `dns`) with one `RTCMD_TABLES`
 message on the [RIPTIDE port](#the-riptide-port), so it opens no library
 and never keeps Riptide from quitting (with Riptide 0.22 or older it
 opens `riptide.library` for each read and closes it again). When Riptide
-is not running the page says so and fills in by itself once it starts.
+is not running the page says so, looks for it only every 3 seconds and
+draws nothing until it starts; then it fills in by itself. A Riptide that
+answers without figures (0.22 and older have no `net.riptide.status`) is
+shown as running, without uptime, CPU and memory.
 The graphs scroll by one column a second and only the text that changed
 is drawn again. Still, drawing on a planar screen is work for a 68020:
 on an emulated A1200 with a 640x480 256-colour screen, a download that
@@ -1290,9 +1297,10 @@ need the last bit of speed.
   *Interfaces*: each interface (VLANs too) in three lines (state, driver
   or VLAN, MTU; IPv4 address, gateway, DHCP state and lease left or
   link-local; IPv6 addresses), its speeds in and out, and its own graph.
-  *Connections*: every TCP connection (state, both ends, round trip time,
-  window in packets and ECN, speed, and the program that opened it, from
-  0.23), moving ones first; click one to see its round trip time (line)
+  *Connections*: every TCP connection in two lines, both ends in full
+  first (`192.168.1.2:1025  to  93.184.216.34:80`, a listener only its
+  own), then its state, round trip time, window in packets and ECN,
+  speed, and the program that opened it (from 0.23), moving ones first; click one to see its round trip time (line)
   and window (columns) over the last minute below. *Names and time*: host
   name, name servers, name cache hits, and NTP (server, when it last
   synced, the clock's offset then, round trip, next sync, why the last
@@ -1301,7 +1309,8 @@ need the last bit of speed.
   holes, drops for memory and IP drops.
 * **GadTools editor:** the same in seven lines of text (summary, memory,
   the first interface but loopback with its speeds, TCP, time), refreshed
-  every second by a timer.
+  every second by a timer (every 3 s while Riptide is not running); only
+  the lines that changed are drawn again.
 
 The arithmetic and wording are in `src/amiga/prefs/prefs_status.c`
 (host-tested by `tests/t_prefs_status.c`: rates over counters that wrap,
@@ -1311,9 +1320,10 @@ its classes (graph, tabs, table, interface list, text) in `mui_status.c`.
 
 Only the first `interface` line with `device=` and its `dhcp`/`ifconfig`/
 `route add default`/`ifconfig IF alias` lines and its VLANs (`interface
-IF.ID vlan=ID parent=IF` with only `dhcp`, `address=`, `up` and `pcp=`)
-are on the Interface, Address, Extra addresses and VLANs pages; other
-interfaces (VLAN lines with other options or names among them) and routes
+IF.ID vlan=ID parent=IF` with `dhcp`, `address=`, `up`, `pcp=`, `mtu=`,
+`tcpwindow=`, `ipv4=`, `ipv6=` and `qos=`) are on the Interface, Address,
+Extra addresses and VLANs pages; other interfaces (VLAN lines with other
+options or names among them) and routes
 appear under Other lines. The background rules are edited as their sysctls; a
 `background ...` keyword line stays under Other lines (it sets the same
 values, so keep only one of the two). List entries that stay keep their
@@ -2673,8 +2683,8 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/test_installer.sh` | Runs `Install_Riptide` with a Linux build of InstallerLG (`INSTALLERLG=`; Aminet `util/sys/InstallerLG.src.lha`, `make` in `build/`) against a fake Amiga tree, with the script's `C:`, `S:`, `ENV:`, `ENVARC:`, `LIBS:` and `SYS:` mapped to directories: Novice (programs, docs, RiptidePrefs in `SYS:Prefs`, riptide.conf, hosts, User-Startup block), Novice again (configuration kept, one block), Pretend (nothing written), Expert with a leftover `LIBS:bsdsocket.library` and another stack in memory, Average with another SANA-II device and a static address, and uninstall. That build answers every question with its default (askbool: the first choice). |
 | `tests/t_prefs_conf.c` (host) | RiptidePrefs' configuration parser and writer (`src/amiga/prefs/conf_edit.c`): byte-for-byte round trips (comments, quotes, trailing comments, CRLF, no final newline, empty file), parsing, each kind of edit (in place, inserted, removed, DHCP ↔ static), the Other lines list, input validation and the live commands for Apply; the settings table of both editors (`prefs_fields.c`): a help text and a key for every setting, no key twice on a page or taken by P/S/U/A/C, at most seven rows a page, number and string input, validation and list entries. |
 | `tests/amiga/run_vamos_prefs.sh build/amiga/RiptidePrefs` | (in `make -f Makefile.amiga check`) `RiptidePrefs FROM ... SAVE` / `USE` without a window under vamos: the files in `ENVARC:`/`ENV:` equal the input, the second Save leaves `riptide.conf.bak`, error return codes. |
-| `MUI_DIR=... tests/amiga/run_fsuae_prefs_single.sh build/amiga` | RiptidePrefs on FS-UAE (AROS) with MUI 3.8: one editor at a time (with the MUI and then the GadTools editor open under a covering window, starting it again as either editor, or as from Workbench, ends that copy with rc 0 and no window, and brings the open one to the front; `USE` still works; Save afterwards), and starting from Workbench: a launcher the script builds (`twb`) starts RiptidePrefs as Workbench does (a process without a CLI and a WBStartup message) and waits for the reply, with a stand-in for Riptide's `RIPTIDE` port that answers and logs every command: Save without changes, Save with a change answering Apply (the command reaches the port) and Later (saved, not applied), and Cancel; each start must be replied and its process gone, and a window and the editor must still open afterwards. |
-| `FSUAE_PCAP=... MUI_DIR=... tests/amiga/run_fsuae_prefs_status.sh build/amiga` | RiptidePrefs' Status page on bridged FS-UAE (AROS, MUI 3.8; root; veth `rts0`/`rts1`, 192.168.171.0/24, or `ST_IF`, `ST_PEER`, `ST_NET`) with the real stack: `tests/amiga/status_peer.py` on the host gives a steady download, a slow upload and timed downloads; screenshots of every tab (640 × 480, 256 colours), dark on 640 × 512 with 8 colours, the compact layout, the GadTools editor's Status page, and both editors with Riptide not running; the `DEBUG` log must show reads with traffic in and out and a CPU share. It also times the same download (`DL_SIZE`, 4 MB) with RiptidePrefs closed and with the Status page open. |
+| `MUI_DIR=... tests/amiga/run_fsuae_prefs_single.sh build/amiga` | RiptidePrefs on FS-UAE (AROS) with MUI 3.8: one editor at a time (with the MUI and then the GadTools editor open under a covering window, starting it again as either editor, or as from Workbench, ends that copy with rc 0 and no window, and brings the open one to the front; `USE` still works; Save afterwards), and starting from Workbench: a launcher the script builds (`twb`) starts RiptidePrefs as Workbench does (a process without a CLI and a WBStartup message) and waits for the reply, with a stand-in for Riptide's `RIPTIDE` port that answers and logs every command: Save without changes, Save with a change answering Apply (the command reaches the port) and Later (saved, not applied), and Cancel; each start must be replied and its process gone, and a window and the editor must still open afterwards. Then two copies with icons (`tools/mkicon.py`): tool types `PAGE=Names` and `DEBUG=` must open the MUI editor on Names, and `GADTOOLS` the GadTools editor. |
+| `FSUAE_PCAP=... MUI_DIR=... tests/amiga/run_fsuae_prefs_status.sh build/amiga` | RiptidePrefs' Status page on bridged FS-UAE (AROS, MUI 3.8; root; veth `rts0`/`rts1`, 192.168.171.0/24, or `ST_IF`, `ST_PEER`, `ST_NET`) with the real stack: `tests/amiga/status_peer.py` on the host gives a steady download, a slow upload and timed downloads; screenshots of every tab (640 × 480, 256 colours), dark on 640 × 512 with 8 colours, the compact layout, the GadTools editor's Status page, and both editors with Riptide not running; the `DEBUG` log must show reads with traffic in and out and a CPU share. Riptide has two VLANs besides eth0 (`ST_VLANS`), and every window must fit its screen (the window's size from the log). It also times the same download (`DL_SIZE`, 4 MB) with RiptidePrefs closed, on another page and with the Status page open; `ST_UPDATE=0`, `1` or `2` sets the page's Update setting (1, 2 or 5 s). |
 | `MUI_DIR=... tests/amiga/run_fsuae_prefs_mui.sh build/amiga` | RiptidePrefs' MUI editor on FS-UAE (AROS) with MUI 3.8 (`MUI_DIR`: the `MUI` drawer of Aminet `util/libs/mui38usr.lha`; the AROS ROM lacks diskfont, iffparse, locale, commodities, asl and datatypes.library, so `tests/amiga/mkstublib.py` makes stand-ins that fail every call, and MUI runs without disk fonts, saved MUI settings, catalogs or file requesters, and shows no help bubbles). The keyboard edits of the GadTools test must give the same `riptide.conf`, the list pages through their forms (an extra address after a refused one, a VLAN with priority 4, a second one made static with an MTU through Replace, a QoS rule); screenshots of every page on a 640 × 480 256-colour screen (light) and a 640 × 512 8-colour one (dark), and the 640 × 256 Workbench (compact layout, a page lit under the pointer; the AROS ROM opens no screen wider than 640, so larger ones are not tested here); About through `CMD=`, Dark Theme saved and used by the next start, Reset to Defaults with Use, Cancel changing nothing, `GADTOOLS`, the three forms in the compact layout, and the bubble texts (`DEBUG` log). Run it for `build/amiga-gcc` too. |
 | `tests/amiga/run_fsuae_prefs.sh build/amiga` | RiptidePrefs on FS-UAE (AROS; no MUI there, so the GadTools editor): opens the window, walks every page (screenshots in OUTDIR), switches to a static address and saves to get the validation requester, edits host name, domain, DNS, NTP, mDNS, an extra address, a VLAN and an Other line with the keyboard (xdotool), saves, and compares `ENVARC:` (exact expected file), `ENV:` and the `.bak`. Run it for `build/amiga-gcc` too. |
 | `tests/amiga/check_icons.sh` | The icon layout of `tools/mkicon.py` against the NDK's `workbench/workbench.h` (compiled for m68k), and every `.info` file of `build/package` parsed back. |

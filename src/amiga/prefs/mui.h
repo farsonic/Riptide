@@ -164,6 +164,8 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIC_Text         "Text.mui"
 #define MUIC_Rectangle    "Rectangle.mui"
 #define MUIC_Image        "Image.mui"
+#define MUIC_Virtgroup    "Virtgroup.mui"
+#define MUIC_Scrollgroup  "Scrollgroup.mui"
 
 #define MUIA_Application_Title       0x804281b8UL
 #define MUIA_Application_Version     0x8042b33fUL
@@ -192,6 +194,8 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIA_Window_LeftEdge         0x80426c65UL
 #define MUIA_Window_TopEdge          0x80427c66UL
 #define MUIA_Window_Width            0x8042dcaeUL
+#define MUIA_Scrollgroup_Contents    0x80421261UL
+#define MUIA_Scrollgroup_FreeHoriz   0x804292f3UL
 #define MUIA_Window_Height           0x80425846UL
 #define MUIA_Window_Sleep            0x8042e7dbUL
 #define MUIA_Window_RefWindow        0x804201f4UL
