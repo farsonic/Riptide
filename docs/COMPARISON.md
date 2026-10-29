@@ -226,8 +226,13 @@ the kernel memory (`mbuf_*`) calls (no mbufs), the private IP filter calls
 (`ipf_*`), and an Internet superserver (`ProcessIsServer()` is always FALSE).
 `IFC_GetPeerAddress`/`IFC_GetDNS` need SANA-II R4 address queries that
 Riptide's driver layer does not make. We could not run Roadshow itself
-(section 11), so the comparison with it rests on its SDK documentation, and
-on Roadshow programs we could try (section 12).
+(section 11), so the comparison with it rests on its SDK documentation and
+on Roadshow programs we could try. NetMon 0.34 (Aminet
+`comm/net/netmon.lha`, freeware: an interface monitor "for Roadshow" built
+on `ObtainInterfaceList()` and `QueryInterfaceTagList()`) ran under Riptide
+on Kickstart 3.1.4 with MUI 3.8 in FS-UAE. Its `WRITESTATS` statistics
+in `ENV:` counted the 1680 bytes that ten loopback pings moved through
+`lo0`.
 
 ## 6. Drivers and configuration
 

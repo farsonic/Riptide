@@ -2554,6 +2554,11 @@ The socket structures themselves come from the usual network headers.
 `tests/amiga/rs_test.c`, built from the SDK, calls every vector and is run
 by `tests/amiga/run_fsuae_roadshow.sh`.
 
+**Roadshow programs.** NetMon 0.34 (Aminet `comm/net/netmon.lha`), an
+interface monitor written for Roadshow, runs under Riptide. It finds the
+interfaces and shows their traffic, and its `WRITESTATS` option writes
+the same counters to `ENV:`.
+
 ## Compatibility notes
 
 **Per-opener library bases.** As in the historical stack, every task that
