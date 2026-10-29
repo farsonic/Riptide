@@ -57,16 +57,31 @@ enum { GK_BYTES, GK_CPU, GK_CONN };
 static struct MUI_CustomClass *graph_mcc, *tabs_mcc, *table_mcc, *ifview_mcc, *stext_mcc;
 
 /* ---- drawing helpers ---- */
-/* text cut to fit maxw pixels */
+/* text cut to fit maxw pixels (the longest start that fits, found by
+ * halving: a few TextLength() calls, not one per character) */
 static void text_fit(struct RastPort *rp, LONG x, LONG y, LONG maxw, const char *s, LONG pen, int bold)
 {
 	char t[160];
-	int n;
+	int n, lo, hi;
 
 	rt_strlcpy(t, s, sizeof(t));
 	n = (int)strlen(t);
-	while (n > 0 && theme_textlen(rp, t) > maxw)
-		t[--n] = 0;
+	if (n && theme_textlen(rp, t) > maxw) {
+		lo = 0;
+		hi = n;
+		while (lo < hi) {
+			int mid = (lo + hi + 1) / 2;
+			char c = t[mid];
+			t[mid] = 0;
+			if (theme_textlen(rp, t) <= maxw)
+				lo = mid;
+			else
+				hi = mid - 1;
+			t[mid] = c;
+		}
+		n = lo;
+		t[n] = 0;
+	}
 	if (n > 0)
 		theme_text(rp, x, y, t, pen, bold);
 }

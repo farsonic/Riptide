@@ -1260,12 +1260,16 @@ pages from too.
 The first page of the MUI editor (and the last of the GadTools one) shows
 what Riptide is doing, read again every second while the page is on
 screen; on other pages, or with the window closed, nothing is read. It
-changes nothing. Each second RiptidePrefs opens `bsdsocket.library` and
-`riptide.library`, reads Riptide's tables with `RiptideSysCtl()`
-(`net.riptide.status`, `ifaces`, `addrs6`, `routes`, `tcpinfo`, `dns`,
-`tcpstat`, `ipstat`) and closes both again, so it never keeps Riptide
-from quitting. When Riptide is not running the page says so and fills in
-by itself once it starts.
+changes nothing. Each second RiptidePrefs asks Riptide for its tables
+(`net.riptide.status`, `ifaces`, `tcpinfo`, `tcpstat`, `ipstat`; every
+fifth second also `addrs6`, `routes` and `dns`) with one `RTCMD_TABLES`
+message on the [RIPTIDE port](#the-riptide-port), so it opens no library
+and never keeps Riptide from quitting (with Riptide 0.22 or older it
+opens `riptide.library` for each read and closes it again). When Riptide
+is not running the page says so and fills in by itself once it starts.
+The graphs scroll by one column a second and only the text that changed
+is drawn again, so the page costs little even on a 68020 with a
+256-colour screen.
 
 * **At the top:** whether Riptide runs, its version and uptime, the share
   of the CPU its process used in the last second, and the memory sockets
@@ -1988,6 +1992,7 @@ The public message port `RIPTIDE` takes a `struct RiptideMsg`
 | `RTCMD_STATUS` (1) | status text, as `Riptide STATUS` prints it |
 | `RTCMD_QUIT` (2) | quit if no program has the libraries open, else `result` = EBUSY |
 | `RTCMD_COMMAND` (3) | `text` holds one line of the configuration language (all keywords above, including `interface ...` and `interface NAME delete`), or a query: `sysctl -a`, `sysctl [-n] NAME...`, `sysctl [-w] NAME=VALUE`. `capture ...` (packet capture) answers with its status line; `capture save FILE` writes the file from Riptide's process before it replies. `profile ...` and `debug ...` answer in the reply text (the table, the ring) |
+| `RTCMD_TABLES` (4) | 0.23: tables of [`net.riptide.*`](#tables-riptidesysctl-and-netriptide) without opening a library: `text` holds their numbers (e.g. `42 1 18`); a reply buffer is needed and gets, for each table, a ULONG number, a ULONG length and the dump as `RiptideSysCtl()` gives it, the next one 4-byte aligned (length 0 and `RTMSGF_TRUNCATED` for a table that failed or did not fit; `replylen` is the bytes used). RiptidePrefs' Status page reads this way once a second: opening and closing `riptide.library` costs more than the reads on a 68020, and an open library would keep Riptide from quitting. Older versions answer EINVAL |
 
 The client allocates the message in public memory, sets `mn_ReplyPort`
 and `mn_Length = sizeof(struct RiptideMsg)`, and may point `reply` /
