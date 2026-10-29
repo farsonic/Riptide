@@ -14,8 +14,9 @@
  *   tabs    a row of labels that switches a page group (keys 1 to 4)
  *   table   rows of two lines: a text, then columns separated by '\t';
  *           a row can be chosen
- *   ifview  every interface: three lines, its speeds and a small graph
- *           (as tall as all of them, in a Scrollgroup)
+ *   ifview  every interface: three lines, its speeds and a small graph;
+ *           when they do not all fit, as many as fit and a line saying
+ *           which: a click or cursor down shows the next ones
  *   stext   a fixed number of lines of text that change
  * The total-traffic graph also owns the timer: it starts when the page is
  * shown and stops when it is hidden, so nothing is read on other pages.
@@ -54,6 +55,8 @@
 enum { GK_BYTES, GK_CPU, GK_CONN };
 
 #define RAW_1 0x01
+#define RAW_UP    0x4c
+#define RAW_DOWN  0x4d
 #define RAW_LEFT  0x4f
 #define RAW_RIGHT 0x4e
 #ifndef SELECTDOWN
@@ -61,7 +64,6 @@ enum { GK_BYTES, GK_CPU, GK_CONN };
 #endif
 
 static struct MUI_CustomClass *graph_mcc, *tabs_mcc, *table_mcc, *ifview_mcc, *stext_mcc;
-static Object *o_ifgroup;           /* the Virtgroup around the interfaces */
 
 /* ---- drawing helpers ---- */
 /* text cut to fit maxw pixels (the longest start that fits, found by
@@ -862,10 +864,12 @@ DISPATCHER(table_dispatch)
  * ================================================================== */
 #define IFV_LINES 4
 struct ifview_data {
+	struct MUI_EventHandlerNode ehn;
 	const struct rp_status_model *m;
-	int shown;
+	int shown, first;           /* the first interface shown */
+	int fit;                    /* how many fit (as last drawn) */
 	/* what is on screen, for updates */
-	int valid, drawn_nif, laid_nif;
+	int valid, drawn_nif, drawn_first;
 	const char *drawn_msg;      /* the message shown instead of interfaces */
 	LONG drawn_w, drawn_h;
 	char cache[RP_ST_NIF][IFV_LINES][120];
@@ -883,7 +887,7 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 	LONG y = _mtop(obj), bh = ifv_blockh(), fh = theme_fh(), l = _mleft(obj), r = _mright(obj);
 	LONG gw = (r - l) / 3, tw;
 	char ln[IFV_LINES][120];
-	int i, k, nl = theme_compact() ? 3 : 4;
+	int i, k, fit, nl = theme_compact() ? 3 : 4;
 
 	if (gw < 90)
 		gw = 90;
@@ -900,9 +904,21 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 		return;
 	}
 	d->drawn_msg = NULL;
+	/* as many as fit; when that is not all, a line says which */
+	fit = (int)(_mheight(obj) / bh);
+	if (fit < 1)
+		fit = 1;
+	if (d->m->nif > fit) {
+		fit = (int)((_mheight(obj) - fh - 2) / bh);
+		if (fit < 1)
+			fit = 1;
+	}
+	if (d->first >= d->m->nif || d->m->nif <= fit)
+		d->first = 0;
+	d->fit = fit;
 	/* everything again when the interfaces or the size changed */
 	if (update && (!d->valid || d->drawn_nif != d->m->nif || d->drawn_w != _mwidth(obj) ||
-	               d->drawn_h != _mheight(obj))) {
+	               d->drawn_h != _mheight(obj) || d->drawn_first != d->first)) {
 		theme_fill(rp, l, _mtop(obj), r, _mbottom(obj), tpen(T_WINDOW));
 		update = 0;
 	}
@@ -913,17 +929,15 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 				d->cache[i][k][0] = 0;
 		}
 	}
-	for (i = 0; i < d->m->nif; i++) {
+	if (!update && d->m->nif > fit) {
+		int last = d->first + fit < d->m->nif ? d->first + fit : d->m->nif;
+		rt_snprintf(ln[0], sizeof(ln[0]), "Interfaces %d to %d of %d: click for more", d->first + 1, last,
+		            d->m->nif);
+		text_fit(rp, l, _mbottom(obj) - fh, r - l, ln[0], tpen(T_DIM), 0);
+	}
+	for (i = d->first; i < d->m->nif && i < d->first + fit; i++) {
 		const struct rp_st_if *f = &d->m->ifs[i];
 		LONG yy = y + 2;
-		if (y + bh - 1 > _mbottom(obj)) {
-			if (!update) {
-				rt_snprintf(ln[0], sizeof(ln[0]), "%d more interface%s ...", d->m->nif - i,
-				            d->m->nif - i == 1 ? "" : "s");
-				theme_text(rp, l, y > _mbottom(obj) - fh ? _mbottom(obj) - fh : y, ln[0], tpen(T_DIM), 0);
-			}
-			break;
-		}
 		rp_st_if_lines(f, ln[0], ln[1], ln[2], sizeof(ln[0]));
 		rp_st_if_rates(f, ln[3], sizeof(ln[3]));
 		if (nl == 3)
@@ -941,6 +955,7 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 			theme_line(rp, l, y - 2, r, y - 2, tpen(T_BORDER));
 	}
 	d->valid = 1;
+	d->drawn_first = d->first;
 	d->drawn_nif = d->m->nif;
 	d->drawn_w = _mwidth(obj);
 	d->drawn_h = _mheight(obj);
@@ -960,33 +975,23 @@ DISPATCHER(ifview_dispatch)
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
-		if (mc_has_tag(msg, MUIA_IfView_Update) && d->shown) {
-			int n = d->m && d->m->running ? d->m->nif : 0;
-			if (n != d->laid_nif && o_ifgroup) {
-				/* another number of interfaces: the height again */
-				mui_do(o_ifgroup, MUIM_Group_InitChange);
-				mui_do(o_ifgroup, MUIM_Group_ExitChange);
-			} else {
-				MUI_Redraw(obj, MADF_DRAWUPDATE);
-			}
-		}
+		if (mc_has_tag(msg, MUIA_IfView_Update) && d->shown)
+			MUI_Redraw(obj, MADF_DRAWUPDATE);
 		break;
-	case MUIM_AskMinMax: {
-		/* room for every interface: the Scrollgroup around it scrolls */
-		LONG h;
-		d = INST_DATA(cl, obj);
-		h = ifv_blockh() * (d->m && d->m->running && d->m->nif ? d->m->nif : 1);
-		d->laid_nif = d->m && d->m->running ? d->m->nif : 0;
+	case MUIM_AskMinMax:
 		DoSuperMethodA(cl, obj, msg);
-		mc_minmax(msg, 160, 400, MUI_MAXMAX, h, h, h);
+		mc_minmax(msg, 160, 400, MUI_MAXMAX, ifv_blockh(), ifv_blockh() * 3, MUI_MAXMAX);
 		return 0;
-	}
 	case MUIM_Setup:
 		if (!DoSuperMethodA(cl, obj, msg))
 			return FALSE;
 		theme_setup(obj);
+		d = INST_DATA(cl, obj);
+		mc_handler(obj, cl, &d->ehn, IDCMP_MOUSEBUTTONS | IDCMP_RAWKEY, 1);
 		return TRUE;
 	case MUIM_Cleanup:
+		d = INST_DATA(cl, obj);
+		mc_handler(obj, cl, &d->ehn, 0, 0);
 		theme_cleanup(obj);
 		break;
 	case MUIM_Show:
@@ -997,6 +1002,27 @@ DISPATCHER(ifview_dispatch)
 	case MUIM_Hide:
 		((struct ifview_data *)INST_DATA(cl, obj))->shown = 0;
 		break;
+	case MUIM_HandleEvent: {
+		/* the next interfaces: a click, cursor down (up goes back) */
+		struct IntuiMessage *im = ((struct MUIP_HandleEvent *)msg)->imsg;
+		int n, step = 0;
+		d = INST_DATA(cl, obj);
+		if (!im || !d->shown || !d->m || !d->m->running)
+			return 0;
+		n = d->m->nif;
+		if (im->Class == IDCMP_MOUSEBUTTONS && im->Code == SELECTDOWN && mc_inside(obj, im))
+			step = 2;
+		else if (im->Class == IDCMP_RAWKEY && (im->Code == RAW_DOWN || im->Code == RAW_UP))
+			step = im->Code == RAW_DOWN ? 1 : -1;
+		if (!step || n <= d->fit || d->fit < 1)
+			return 0;
+		if (step == 2)
+			d->first = d->first + d->fit < n ? d->first + d->fit : 0;
+		else
+			d->first = (d->first + n + step) % n;
+		MUI_Redraw(obj, MADF_DRAWOBJECT);
+		return MUI_EventHandlerRC_Eat;
+	}
 	case MUIM_Draw: {
 		ULONG f;
 		/* the Area class fills in the flags (MUI_Redraw() leaves them to it) */
@@ -1253,7 +1279,7 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 {
 	static const char *upd_labels[5];
 	static char hu[400];
-	Object *top, *conn, *g, *head, *ul, *ifscroll;
+	Object *top, *conn, *g, *head, *ul;
 	int compact = theme_compact();
 
 	upd = rp_eprefs_get("status_update", 0) & 3;
@@ -1318,12 +1344,7 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 	conn = mui_new(MUIC_Group, MUIA_Group_Spacing, 4, MUIA_Group_Child, (ULONG)o_table, MUIA_Group_Child,
 	               (ULONG)o_cgraph, TAGEND);
 	/* every tab may grow, so the page takes the window's spare height */
-	o_ifgroup = mui_new(MUIC_Virtgroup, MUIA_Group_Spacing, 0, MUIA_Group_Child, (ULONG)o_ifv, TAGEND);
-	ifscroll = o_ifgroup ? mui_new(MUIC_Scrollgroup, MUIA_Scrollgroup_FreeHoriz, FALSE, MUIA_Scrollgroup_Contents,
-	                               (ULONG)o_ifgroup, TAGEND) : NULL;
-	if (!ifscroll)
-		return NULL;
-	o_tpages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, MUIA_Group_Child, (ULONG)ifscroll, MUIA_Group_Child,
+	o_tpages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, MUIA_Group_Child, (ULONG)o_ifv, MUIA_Group_Child,
 	                   (ULONG)conn, MUIA_Group_Child, (ULONG)vfill(o_names), MUIA_Group_Child,
 	                   (ULONG)vfill(o_counters), TAGEND);
 	if (!top || !conn || !o_tpages)
@@ -1357,5 +1378,4 @@ void status_page_free(void)
 	tick_fn = NULL;
 	rp_status_free();
 	o_sum = o_total = o_cpu = o_tabs = o_tpages = o_ifv = o_table = o_cgraph = o_names = o_counters = o_upd = NULL;
-	o_ifgroup = NULL;
 }
