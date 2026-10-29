@@ -1,7 +1,9 @@
 #!/bin/sh
 # Riptide - run stackprobe (src/amiga/stackprobe) under one Amiga TCP/IP
 # stack on FS-UAE and keep its JSON report, to compare stacks with
-# tools/stackprobe_compare.py. Loopback tests only (no network needed).
+# tools/stackprobe_compare.py. Every stack gets the same interface:
+# uaenet.device unit 0 with the static address 10.0.2.15/24 (nothing is
+# on the other end; the tests run over loopback and that interface).
 #
 #   STACK=riptide|amitcp|amitcp_ng|miamidx|aminetxduo|tolunnet|prismnet \
 #     tests/amiga/run_fsuae_stackprobe.sh OUT.json [PROBE_ARGS]
@@ -46,7 +48,8 @@ us=$work/user-startup   # commands that start the stack (AmigaDOS)
 install_riptide() {
 	d=${STACK_DIR:-build/amiga}
 	cp "$d/Riptide" "$d/rtcheck" "$sys/C/"
-	printf 'hostname stackprobe\n' > "$sys/S/riptide.conf"
+	printf 'hostname stackprobe\ninterface eth0 device=uaenet.device unit=0\nifconfig eth0 10.0.2.15/24\n' \
+		> "$sys/S/riptide.conf"
 	echo 'C:rtcheck START="C:Riptide >Out:stack.log CONFIG=S:riptide.conf" NOCHECK >Out:start.log'
 }
 
@@ -56,6 +59,7 @@ install_amitcp() {
 	cp -R "${STACK_DIR:?the unpacked AmiTCP-3.0b2 directory}" "$sys/AmiTCP"
 	printf 'HOST 127.0.0.1 stackprobe\n' > "$sys/AmiTCP/db/netdb-myhost"
 	sed -i 's#^WITH \([a-z.-]*\)#WITH AmiTCP:db/\1#' "$sys/AmiTCP/db/netdb"
+	printf 'uae dev=uaenet.device\n' >> "$sys/AmiTCP/db/interfaces"
 	echo 'Assign AmiTCP: SYS:AmiTCP'
 	echo 'Assign LIBS: AmiTCP:libs ADD'
 	echo 'Assign DEVS: AmiTCP:devs ADD'
@@ -64,6 +68,7 @@ install_amitcp() {
 	echo 'SYS:Rexxc/WaitForPort AMITCP'
 	echo 'AmiTCP:bin/ifconfig lo0 localhost >Out:start.log'
 	echo 'AmiTCP:bin/route add localhost localhost >>Out:start.log'
+	echo 'AmiTCP:bin/ifconfig uae/0 10.0.2.15 netmask 255.255.255.0 >>Out:start.log'
 	echo 'AmiTCP:bin/netstat -rn >>Out:start.log'
 }
 
@@ -75,7 +80,11 @@ install_amitcp_ng() {
 	mkdir -p "$sys/AmiTCP"
 	cp -R "$d/install/db" "$sys/AmiTCP/db"
 	[ -d "$d/install/Devs" ] && cp -R "$d/install/Devs/." "$sys/Devs/"
+	cp "$d/build/AddNetInterface" "$sys/C/"
+	mkdir -p "$sys/Devs/NetInterfaces"
+	printf 'device=uaenet.device\nunit=0\naddress=10.0.2.15\nnetmask=255.255.255.0\n' > "$sys/Devs/NetInterfaces/eth0"
 	echo 'Assign AmiTCP: SYS:AmiTCP'
+	echo 'C:AddNetInterface eth0 >Out:start.log'
 }
 
 # a stack whose STACK_DIR holds files to copy over System: (Libs/, Devs/,

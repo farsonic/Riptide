@@ -176,6 +176,9 @@ static void add(const char *id, const char *desc, int res, LONG err, LONG ms, co
 	sp_watchdog(0);
 	if (res == R_PASS || res == R_INFO)
 		err = 0;
+	/* the stack itself says it has no such feature */
+	if (res == R_FAIL && (err == ENOSYS || err == EOPNOTSUPP))
+		res = R_UNSUP;
 	printf("  %-4s  %-28s %-38s", resshort[res], id, desc);
 	if (val[0])
 		printf(" %s", val);
@@ -426,28 +429,46 @@ static void detect(const char *label)
 	tags[2] = TAG_DONE;
 	if (SP_HAVE_BSD(SocketBaseTagList) && !sp_SocketBaseTagList((APTR)tags) && tags[1])
 		copy_clean(release, (const char *)tags[1], sizeof(release));
-	if ((l = OpenLibrary((STRPTR)"riptide.library", 0)) != NULL) {
-		strcpy(stack_name, "Riptide");
-		CloseLibrary(l);
-	} else if (contains(release, "Roadshow") || contains(idstring, "Roadshow")) {
-		strcpy(stack_name, "Roadshow");
-	} else if (contains(release, "Genesis") || contains(idstring, "Genesis")) {
-		strcpy(stack_name, "Genesis");
-	} else if (contains(release, "Miami") || contains(idstring, "Miami") || MiamiBase) {
-		strcpy(stack_name, "Miami");
-	} else if (contains(release, "AmiTCP") || contains(idstring, "AmiTCP")) {
-		strcpy(stack_name, "AmiTCP");
-	} else if (contains(release, "MorphOS") || contains(idstring, "MorphOS")) {
-		strcpy(stack_name, "MorphOS netstack");
-	} else {
-		copy_clean(stack_name, release[0] ? release : idstring[0] ? idstring : "unknown", 20);
-		if (strchr(stack_name, ' '))
-			*strchr(stack_name, ' ') = 0;
+	/* the stack: a name in the release or library id string, most specific
+	 * first; the version: the first number after that name, else the
+	 * first word with a digit, else the library version */
+	{
+		static const char *const known[] = { "Riptide", "AmiTCP_NG", "Roadshow", "Genesis", "MiamiDx", "Miami",
+		                                     "PrismNet", "tolunnet", "AmiNetXDuo", "AmiTCP", "MorphOS", NULL };
+		const char *at = NULL;
+		int i;
+		for (i = 0; known[i] && !at; i++) {
+			const char *src[2], *p;
+			int k;
+			src[0] = release;
+			src[1] = idstring;
+			for (k = 0; k < 2 && !at; k++)
+				for (p = src[k]; *p; p++)
+					if (!sp_strnicmp(p, known[i], strlen(known[i]))) {
+						strcpy(stack_name, known[i]);
+						at = p + strlen(known[i]);
+						break;
+					}
+		}
+		if (!at && (l = OpenLibrary((STRPTR)"riptide.library", 0)) != NULL) {
+			strcpy(stack_name, "Riptide");
+			CloseLibrary(l);
+		} else if (!at && MiamiBase) {
+			strcpy(stack_name, "Miami");
+		} else if (!at) {
+			copy_clean(stack_name, release[0] ? release : idstring[0] ? idstring : "unknown", 20);
+			if (strchr(stack_name, ' '))
+				*strchr(stack_name, ' ') = 0;
+		}
+		for (v = at ? at : release; *v; v++)
+			if (*v >= '0' && *v <= '9' && (v == release || v[-1] == ' ' || v[-1] == 'v' || v[-1] == 'V' ||
+			                               v[-1] == '('))
+				break;
+		if (!*v && at)
+			for (v = release; *v; v++)
+				if (*v >= '0' && *v <= '9' && (v == release || v[-1] == ' '))
+					break;
 	}
-	/* the version: the first word with a digit in the release string */
-	for (v = release; *v; v++)
-		if (*v >= '0' && *v <= '9' && (v == release || v[-1] == ' ' || v[-1] == 'v' || v[-1] == 'V'))
-			break;
 	if (*v) {
 		size_t n = strcspn(v, " ()");
 		if (n >= sizeof(stack_version))
@@ -455,7 +476,7 @@ static void detect(const char *label)
 		memcpy(stack_version, v, n);
 		stack_version[n] = 0;
 	} else {
-		sprintf(stack_version, "%u.%u", SocketBase->lib_Version, SocketBase->lib_Revision);
+		sprintf(stack_version, "%u.%u", (unsigned)SocketBase->lib_Version, (unsigned)SocketBase->lib_Revision);
 	}
 	if (label && *label)
 		copy_clean(stack_name, label, sizeof(stack_name));

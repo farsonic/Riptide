@@ -234,20 +234,21 @@ void sp_test_api(void)
 	}
 	NEED(Inet_NtoA, "api.inet_ntoa", "Inet_NtoA(127.0.0.1)") {
 		STRPTR p = sp_Inet_NtoA(INADDR_LOOPBACK);
-		ok_or_fail("api.inet_ntoa", "Inet_NtoA(127.0.0.1)", p && !strcmp((char *)p, "127.0.0.1"), NULL, NULL);
+		sp_result("api.inet_ntoa", "Inet_NtoA(127.0.0.1)", p && !strcmp((char *)p, "127.0.0.1") ? R_PASS : R_FAIL, 0, NULL);
 	}
 	NEED(inet_addr, "api.inet_addr", "inet_addr(\"10.1.2.3\")") {
-		ok_or_fail("api.inet_addr", "inet_addr(\"10.1.2.3\")", sp_inet_addr((STRPTR)"10.1.2.3") == 0x0a010203UL, NULL, NULL);
+		sp_result("api.inet_addr", "inet_addr(\"10.1.2.3\")", sp_inet_addr((STRPTR)"10.1.2.3") == 0x0a010203UL ? R_PASS : R_FAIL,
+		          0, NULL);
 	}
 	NEED(Inet_LnaOf, "api.inet_lnaof", "Inet_LnaOf/NetOf/MakeAddr") {
 		ULONG lna = sp_Inet_LnaOf(0x0a010203UL), net = SP_HAVE_BSD(Inet_NetOf) ? sp_Inet_NetOf(0x0a010203UL) : 0;
 		ULONG mk = SP_HAVE_BSD(Inet_MakeAddr) ? sp_Inet_MakeAddr(net, lna) : 0;
-		ok_or_fail("api.inet_lnaof", "Inet_LnaOf/NetOf/MakeAddr", lna == 0x010203UL && net == 10 && mk == 0x0a010203UL,
-		           NULL, NULL);
+		sp_result("api.inet_lnaof", "Inet_LnaOf/NetOf/MakeAddr", lna == 0x010203UL && net == 10 && mk == 0x0a010203UL ?
+		          R_PASS : R_FAIL, 0, NULL);
 	}
 	NEED(inet_network, "api.inet_network", "inet_network(\"10.1\")") {
 		ULONG n = sp_inet_network((STRPTR)"10.1");
-		ok_or_fail("api.inet_network", "inet_network(\"10.1\")", n == 0x0a01UL, "%s", n == 0x0a01UL ? "" : "other value");
+		sp_result("api.inet_network", "inet_network(\"10.1\")", n == 0x0a01UL ? R_PASS : R_FAIL, 0, "%08lx", (unsigned long)n);
 	}
 	NEED(gethostname, "api.gethostname", "gethostname()") {
 		buf[0] = 0;
@@ -566,7 +567,10 @@ static void ext_roadshow(void)
 	}
 	NEED_RS(bpf_open, "ext.rs_bpf", "bpf_open()/bpf_close() (packet filter)") {
 		LONG ch = sp_bpf_open(0);
-		sp_result("ext.rs_bpf", "bpf_open()/bpf_close() (packet filter)", ch >= 0 ? R_PASS : R_FAIL, sp_errno(), NULL);
+		LONG e = ch < 0 ? sp_errno() : 0;
+		/* ENXIO: no packet filter channel (the documented answer of a stack without one) */
+		sp_result("ext.rs_bpf", "bpf_open()/bpf_close() (packet filter)", ch >= 0 ? R_PASS : e == 6 ? R_UNSUP : R_FAIL, e,
+		          NULL);
 		if (ch >= 0 && SP_HAVE_BSD(bpf_close))
 			sp_bpf_close(ch);
 	}
