@@ -39,6 +39,12 @@ def shot(path):
     subprocess.run(["import", "-window", "root", path], check=True)
 
 
+def pointer_red(r, g, b):
+    """The pointer's red: AROS draws it (255, 0, 0)-ish, Kickstart 3.1.4
+    (238, 68, 68), close to but not RiptidePrefs' dark-theme red (229, 83, 75)."""
+    return (r > 200 and g < 60 and b < 60) or (abs(r - 238) <= 6 and abs(g - 68) <= 6 and abs(b - 68) <= 6)
+
+
 def find_pointer(path):
     im = Image.open(path).convert("RGB")
     w, h = im.size
@@ -47,8 +53,7 @@ def find_pointer(path):
     for y in range(h):
         for x in range(w):
             r, g, b = px[x, y]
-            # AROS draws it (255, 0, 0)-ish, Kickstart 3.1.4 (238, 68, 68)
-            if r > 200 and g < 100 and b < 100:
+            if pointer_red(r, g, b):
                 if best is None or (y, x) < (best[1], best[0]):
                     best = (x, y)
     return best
@@ -132,10 +137,8 @@ def screen_hash(path):
     """Hash of the screen without the (red) pointer."""
     with open(path, "rb") as f:
         im = Image.open(f).convert("RGB")
-    r, g, b = im.split()
-    red = Image.eval(r, lambda v: 255 if v > 200 else 0)
-    notgreen = Image.eval(g, lambda v: 255 if v < 100 else 0)
-    mask = Image.composite(red, Image.new("L", im.size, 0), notgreen)
+    mask = Image.new("L", im.size, 0)
+    mask.putdata([255 if pointer_red(*p) else 0 for p in im.getdata()])
     im.paste((0, 0, 0), mask=mask)
     return hashlib.md5(im.tobytes()).hexdigest()
 
