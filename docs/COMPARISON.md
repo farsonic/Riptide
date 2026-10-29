@@ -59,7 +59,8 @@ RiptidePrefs. It is also the only one with its source open and its
 behaviour tested against a reference TCP (Linux). MiamiDx and Roadshow
 are complete products with decades of use on real Amigas and features
 around the protocol engine that Riptide does not have: PPP dial-up,
-firewall and NAT, a BPF API (and, in MiamiDx, multicast routing).
+firewall and NAT (and, in MiamiDx, multicast routing). Riptide implements
+Roadshow's bsdsocket.library API extensions, BPF included (section 5).
 Riptide has run only in emulators so far, so its real-hardware speed and
 robustness are unproven. Section 9 lists where it is behind.
 
