@@ -7,7 +7,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 | Stack | bsdsocket | Passed | Failed | Unsupported | Skipped | Score | Machine |
 |---|---|---|---|---|---|---|---|
-| Riptide 0.23 | 4.1 | 174 | 1 | 17 | 2 | 91 % | 68020, Kickstart 46.143 |
+| Riptide 0.24 | 4.1 | 175 | 0 | 17 | 2 | 91 % | 68020, Kickstart 46.143 |
 | AmiNetXDuo 1.0.0-rc2 | 4.11 | 162 | 5 | 13 | 2 | 90 % | 68020, Kickstart 46.143 |
 | AmiTCP_NG 4.1.8 | 4.1 | 154 | 5 | 13 | 2 | 90 % | 68020, Kickstart 46.143 |
 | MiamiDeluxe 1.0c | 4.1 | 155 | 6 | 23 | 2 | 84 % | 68020, Kickstart 46.143 |
@@ -18,7 +18,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### libs
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `bsdsocket` BSD sockets (AmiTCP API) | 4.1 | 4.11 | 4.1 | 4.1 | 4.1 | 4.4 | 4.1 | 3.28 |
 | `usergroup` users and groups (AmiTCP) | 4.1 | 4.0 | 4.1 | 4.1 | 4.1 | 4.3 | - | 4.1 |
@@ -36,7 +36,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### api
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `socket` socket() TCP | yes | yes | yes | yes | yes | yes | yes | yes |
 | `bind_listen` bind(), listen(), getsockname() | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -73,7 +73,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### tags
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `breakmask` SBTC_BREAKMASK get | yes | yes | yes | yes | yes | yes | yes | yes |
 | `sigiomask` SBTC_SIGIOMASK get | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -103,7 +103,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### netdb
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `localhost` gethostbyname("localhost") | yes | yes | yes | yes | yes | yes | yes | yes |
 | `numeric` gethostbyname("127.0.0.1") | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -120,7 +120,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### tcp
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `echo` loopback transfer, data checked | yes | yes | yes | yes | yes | yes | yes | yes |
 | `half_close` shutdown(write): peer reads EOF, still sends | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -136,12 +136,12 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 | `backlog` connections completed with listen(5), no accept | 6 of 8 | 5 of 8 | 8 of 8 | 8 of 8 | 8 of 8 | 5 of 8 | 5 of 8 | 8 of 8 |
 | `eaddrinuse` bind() to a listening port says EADDRINUSE | yes | yes | yes | yes | yes | yes | yes | yes |
 | `reuseaddr` SO_REUSEADDR binds a port in TIME_WAIT | yes | yes | yes | yes | yes | yes | yes | yes |
-| `ephemeral` ports bind(0) picks (10 sockets) | 50192-65230 | 49769-64074 | 51804-65515 | 1055-1064 | 1055-1064 | 63964-63973 | 50155-50164 | 1053-1062 |
+| `ephemeral` ports bind(0) picks (10 sockets) | 51574-65359 | 49769-64074 | 51804-65515 | 1055-1064 | 1055-1064 | 63964-63973 | 50155-50164 | 1053-1062 |
 | `msg_peek` MSG_PEEK leaves the data | yes | yes | yes | yes | yes | yes | yes | yes |
 | `msg_dontwait` MSG_DONTWAIT on a blocking socket | yes | yes | FAIL (EINTR) | FAIL (EINTR) | FAIL (EINTR) | yes | yes | FAIL (EINTR) |
 | `msg_waitall` MSG_WAITALL gets the whole 6 bytes | yes | yes | yes | yes | yes | yes | FAIL | yes |
 | `oob_select` urgent data shows in the except set | yes | yes | yes | yes | yes | FAIL | FAIL | yes |
-| `sigurg` SIGURG signal for urgent data | FAIL | yes | yes | yes | FAIL | FAIL | FAIL | yes |
+| `sigurg` SIGURG signal for urgent data | yes | yes | yes | yes | FAIL | FAIL | FAIL | yes |
 | `oob_recv` recv(MSG_OOB) gets the urgent byte | yes | yes | yes | yes | yes | FAIL | - | yes |
 | `siocatmark` SIOCATMARK at the mark | yes | FAIL | yes | yes | yes | FAIL | FAIL | yes |
 | `oobinline` SO_OOBINLINE puts the byte in line | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -149,7 +149,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### udp
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `loopback` UDP datagram on loopback | yes | yes | yes | yes | yes | yes | yes | yes |
 | `truncate` a short read drops the rest of the datagram | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -168,7 +168,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### options
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `so_reuseaddr` SO_REUSEADDR | yes | yes | yes | yes | yes | yes | yes | yes |
 | `so_reuseport` SO_REUSEPORT | yes | yes | yes | yes | yes | FAIL (ENOPROTOOPT) | - | - |
@@ -197,7 +197,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### select
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `timeout_20` WaitSelect() 20 ms timeout lasts | 21 ms | 22 ms | 27 ms | FAIL | FAIL | 22 ms | 30 ms | 31 ms |
 | `timeout_100` WaitSelect() 100 ms timeout lasts | 101 ms | 121 ms | 116 ms | 201 ms | 201 ms | 102 ms | 101 ms | 116 ms |
@@ -211,7 +211,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### misc
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `many_sockets` sockets one program can open | yes | yes | yes | yes | yes | yes | yes | yes |
 | `socket_to_process` a socket handed to another process | yes | yes | yes | yes | yes | yes | yes | yes |
@@ -221,7 +221,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### ipv6
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `socket` AF_INET6 socket | yes | yes | - | - | - | - | - | - |
 | `bind_listen` bind() and listen() on ::1 | yes | yes |  |  |  |  |  |  |
@@ -233,7 +233,7 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### ext
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `rs_interfaces` ObtainInterfaceList() (Roadshow) | - | yes | yes | - | - | yes | - | - |
 | `rs_routes` GetRouteInfo() (Roadshow) | - | yes | yes | - | - | yes | - | - |
@@ -275,6 +275,6 @@ drawer; how they were made: `docs/COMPARISON.md` section 12. Emulated
 
 #### peer
 
-| Test | Riptide 0.23 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
+| Test | Riptide 0.24 | AmiNetXDuo 1.0.0-rc2 | AmiTCP_NG 4.1.8 | MiamiDeluxe 1.0c | Miami 3.2b | PrismNet 4.3 | tolunnet 1.2.0-rc6 | AmiTCP 3.0b2 |
 |---|---|---|---|---|---|---|---|---|
 | `tcp_echo` TCP echo with the peer | skip | skip | skip | skip | skip | skip | skip | skip |

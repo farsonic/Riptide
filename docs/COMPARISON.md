@@ -503,7 +503,7 @@ them below as unsupported.
 
 | Stack | bsdsocket | Passed | Failed | Unsupported | Skipped | Score |
 |---|---|---|---|---|---|---|
-| Riptide 0.23 | 4.1 | 174 | 1 | 17 | 2 | 91 % |
+| Riptide 0.24 | 4.1 | 175 | 0 | 17 | 2 | 91 % |
 | AmiNetXDuo 1.0.0-rc2 | 4.11 | 162 | 5 | 13 | 2 | 90 % |
 | AmiTCP_NG 4.1.8 | 4.1 | 154 | 5 | 13 | 2 | 90 % |
 | MiamiDx 1.0c (evaluation) | 4.1 | 155 | 6 | 23 | 2 | 84 % |
@@ -519,13 +519,16 @@ and correctness together, and the extension families weigh in:
 - **AmiNetXDuo, AmiTCP_NG, PrismNet, tolunnet:** the Roadshow calls instead.
 
 So read the failures more than the percentages. Riptide also ran on the AROS
-ROM (174 passed, the same results), and AmiTCP 3.0b2 on an emulated plain
+ROM (175 passed, the same results), and AmiTCP 3.0b2 on an emulated plain
 68000 (131 passed, the same as on the 68020).
 
 What each stack did not do (failures, from `RESULTS.md`):
 
-* **Riptide**: no SIGURG signal when urgent data arrives (the data itself,
-  the except set and SIOCATMARK work).
+* **Riptide**: nothing since 0.24. 0.23 sent no SIGURG signal to a
+  socket's FIOSETOWN owner when urgent data arrived (only to FIOASYNC
+  sockets); found by stackprobe and fixed. Its unsupported tests are the
+  Roadshow extension calls and the legacy socket.library, inet.library,
+  ifconfig.library, miamibpf and miamipcap libraries.
 * **AmiNetXDuo**:
   - **TCP close:** neither SO_LINGER 0 nor closing with unread data resets
     the peer.
