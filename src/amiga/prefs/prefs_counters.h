@@ -80,8 +80,13 @@ void rp_cnt_since_start(struct rp_cnt_model *m);
  * indented), the value ("1 234", counts since Zero when zeroed) and the
  * change per second ("+12/s", "" when none or not a count) */
 void rp_cnt_text(const struct rp_cnt_model *m, int i, char *name, int nlen, char *val, int vlen, char *rate, int rlen);
-/* the line above the rows: "Counts since Riptide started (up 1:02:03)."
+/* the line above the rows: "Counts since Riptide started."
  * or "Counts since Zero, 2 min ago." */
 void rp_cnt_summary(const struct rp_cnt_model *m, char *buf, int len);
+
+/* ---- AmigaOS only (status_amiga.c) ---- */
+/* Read the tables into m when Riptide runs: 1, else 0 (m then says "not
+ * running"). */
+int rp_counters_read(struct rp_cnt_model *m);
 
 #endif

@@ -35,7 +35,7 @@ ST_SRC    := st_main st_xml st_http st_util
 TESTTOOLS := ftpd-test httpd-test netbench udpblast
 # RiptidePrefs (src/amiga/prefs): preferences editor for riptide.conf (MUI and GadTools)
 PREFS_SRC := riptideprefs conf_edit prefs_fields prefs_io gt_prefs mui_main mui_classes mui_theme mui_lang mui_util \
-             mui_status prefs_status status_amiga
+             mui_status prefs_status status_amiga mui_counters prefs_counters
 
 # IPv6 variants of ping and traceroute (ping6.c / traceroute6.c include
 # ping.c / traceroute.c); NETTOOLS is the list of tools linked with cmdlib

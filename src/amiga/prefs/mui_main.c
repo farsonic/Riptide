@@ -18,6 +18,7 @@
 #include "prefs/mui_classes.h"
 #include "prefs/mui_ids.h"
 #include "prefs/mui_status.h"
+#include "prefs/mui_counters.h"
 
 #define NF RP_NFIELDS_MAX
 #define IS_LIST(p) (rp_page_list(p) >= 0)
@@ -880,6 +881,12 @@ static Object *build_page(int p)
 		return body ? mui_new(MUIC_Group, MUIA_InnerLeft, 12, MUIA_InnerRight, 12, MUIA_InnerTop, in,
 		                      MUIA_InnerBottom, in - 2, MUIA_Group_Child, (ULONG)body, TAGEND) : NULL;
 	}
+	if (p == P_COUNTERS) {
+		ULONG in = theme_compact() ? 4 : 10;
+		body = counters_page_build();
+		return body ? mui_new(MUIC_Group, MUIA_InnerLeft, 12, MUIA_InnerRight, 12, MUIA_InnerTop, in,
+		                      MUIA_InnerBottom, in - 2, MUIA_Group_Child, (ULONG)body, TAGEND) : NULL;
+	}
 	body = IS_LIST(p) ? list_page(p) : field_page(p);
 
 	note = label(has_form(p) ? rp_lform_note(p) : rp_pages[p].note, QL_NOTE);
@@ -1050,6 +1057,7 @@ static void set_tips(int on)
 	for (i = 0; i < DYN_N; i++)
 		if (dyncyc[i])
 			mui_set(dyncyc[i], MUIA_ShortHelp, !on ? 0 : i == DYN_ADDR ? (ULONG)dynhelp : (ULONG)lfhelp[dynfield[i]]);
+	counters_tips(on);
 }
 
 /* ---- commands ---- */
@@ -1387,6 +1395,8 @@ static void free_all(void)
 	app = win = NULL;
 	status_page_free();
 	status_classes_free();
+	counters_page_free();
+	counters_classes_free();
 	rp_classes_free();
 	for (i = 0; i < NF; i++) {
 		rp_free(fhelp[i]);
@@ -1446,7 +1456,7 @@ int mui_run(const struct rp_gui_args *a)
 	theme_set_tips(rp_eprefs_get("bubbles", 1));
 	page = a->page >= 0 ? a->page : P_STATUS;
 	pubname = a->pubscreen;
-	if (rp_classes_make() < 0 || status_classes_make() < 0) {
+	if (rp_classes_make() < 0 || status_classes_make() < 0 || counters_classes_make() < 0) {
 		rp_log("cannot make the classes");
 		goto out;
 	}
