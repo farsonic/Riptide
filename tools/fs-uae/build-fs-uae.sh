@@ -7,6 +7,8 @@
 #     all but the first one per interrupt)
 #   * uaenet.device lets multicast through to its multicast filter (IPv6
 #     neighbour discovery needs it)
+#   * uaenet.device honours the SANA-II R3 DMA callbacks: frames move
+#     straight between the emulator and Riptide's buffers (faster)
 #
 #   tools/fs-uae/build-fs-uae.sh [WORKDIR]      (default: ~/fs-uae-riptide)
 #

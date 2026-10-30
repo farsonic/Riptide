@@ -783,6 +783,11 @@ your LAN with its own MAC address: DHCP from your router, IPv6 from your
 router's advertisements, no slirp, no NAT. Use
 `interface eth0 device=uaenet.device unit=2` without `tcpwindow`. It needs
 a wired interface and permission to capture; see `tools/fs-uae/README.md`.
+The patched `uaenet.device` also honours Riptide's SANA-II DMA callbacks
+(the emulator moves each frame straight into or out of Riptide's buffer,
+no copy on the 68k): on an emulated A1200 that is 799 → 901 KB/s down
+and 480 → 698 KB/s up (`docs/COMPARISON.md` 11). Builds from before
+Riptide 0.26 need rebuilding with the current patch to get it.
 
 **A stack that stops answering under FS-UAE with the AROS ROM.** On FS-UAE
 3.2.35 with the AROS Kickstart replacement ROM, a busy host occasionally
