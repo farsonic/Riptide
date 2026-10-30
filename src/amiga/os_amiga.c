@@ -69,6 +69,23 @@ int rt_lock_held(void)
 	return stack_sem.ss_Owner == FindTask(NULL) && stack_sem.ss_NestCount > 0;
 }
 
+/* ss_QueueCount: -1 free, 0 held and nobody waiting, n > 0 waiters */
+int rt_lock_wanted(void)
+{
+	return stack_sem.ss_QueueCount > 0;
+}
+
+int rt_lock_yield(void)
+{
+	if (stack_sem.ss_QueueCount <= 0 || stack_sem.ss_NestCount != 1)
+		return 0;
+	RT_PROF_EV(RT_EV_LOCK_YIELD);
+	rt_unlock();
+	/* the waiter (higher priority) runs now; we continue when it is done */
+	rt_lock();
+	return 1;
+}
+
 /* ---- clocks ---- */
 
 /*

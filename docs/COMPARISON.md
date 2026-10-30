@@ -407,6 +407,32 @@ the 68040 and 13 % on the 68060; the uploads by 5 % or less. A speed lab
 run with `BASELINE=tests/amiga/netbench-baseline.json` fails when a median
 is more than 10 % below the baseline.
 
+**0.26, and a real Kickstart.** The runs above boot FS-UAE's AROS ROM
+replacement. With the user's Kickstart 3.1.4 (`KICKSTART=`) the same
+emulated A1200 is faster, most of all on loopback, and the figures below
+are what an emulated A1200 with its own ROM does. Medians of 3, GCC
+build; the three runs of each spread by 1 % or less unless noted:
+
+| A1200, 68020 14 MHz, Kickstart 3.1.4 | Download KB/s | Upload KB/s |
+|---|---|---|
+| 0.25 | 799.4 | 479.5 |
+| 0.26 (`movem.l` copy, TCP ms clock per entry, `delack_batch`, lock yield in `send()`) | 818.5 | 498.9 |
+| 0.25 on FS-UAE with the DMA callbacks (`tools/fs-uae` patch 0004) | 901.0 | 698.3 |
+| 0.26 on FS-UAE with the DMA callbacks | 918.8 | 682.2 |
+
+The DMA callbacks are the biggest single item: the emulator moves each
+frame straight between its buffers and Riptide's, so neither
+`CopyToBuff` nor `CopyFromBuff` runs on the 68k. They are part of the
+combined FS-UAE patch from 0.26 (older builds of it need rebuilding), and
+only help a stack that offers the SANA-II R3 DMA callbacks, which of the
+stacks in section 12 only Riptide does. On the AROS ROM 0.26 measured
+704.7/461.9 KB/s on the 68020 (0.25: 694.2/475.1; the uploads of both
+spread by 5-8 %) and 2550.4/1308.6 on the 68040 (0.25: 2470.4/1323.0).
+`docs/DESIGN.md` ("Where a segment's time goes") has the per-segment
+budget these came from and the changes measured and dropped. The
+`a4000-040` preset cannot use the A1200 Kickstart (no `68040.library` on
+the install disks), so the 68040 figures stay AROS ROM ones.
+
 For scale: on a patched FS-UAE bridged to a home network on a Mac, with
 FS-UAE's CPU speed setting not cycle-exact, a user measured about
 60 Mbit/s down and 29 Mbit/s up with AmiSpeedTest against a server over

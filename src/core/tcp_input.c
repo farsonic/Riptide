@@ -520,9 +520,11 @@ static void __tcp_ack_snd_check(struct tcp_sock *tp, int ofo_possible)
 		        (tp->ack.pending & ICSK_ACK_NOW) ? ", requested" : "",
 		        sysctl_tcp_quickack ? ", quickack sysctl" : "");
 		/* in a receive batch: one ACK at its end, but stretch it over
-		 * no more than 2 * delack_segs segments */
+		 * no more than net.inet.tcp.delack_batch segments (the batch is
+		 * what arrived while the last one was processed: a CPU-bound
+		 * receiver ACKs a batch at a time, as Linux does under GRO) */
 		if (rx_batch_depth && !(tp->ack.pending & ICSK_ACK_NOW) &&
-		    tp->rcv_nxt - tp->rcv_wup < (u32)(2 * sysctl_tcp_delack_segs) * tp->ack.rcv_mss) {
+		    tp->rcv_nxt - tp->rcv_wup < (u32)sysctl_tcp_delack_batch * tp->ack.rcv_mss) {
 			tcp_batch_add(tp, TCP_BATCH_ACK);
 			return;
 		}

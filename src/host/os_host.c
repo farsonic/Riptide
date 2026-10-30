@@ -4,6 +4,7 @@
  */
 #define _GNU_SOURCE
 #include <pthread.h>
+#include <sched.h>
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -25,6 +26,8 @@
 static pthread_mutex_t stack_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t lock_owner;
 static volatile int lock_owned;
+/* contention is noted by a blocked rt_lock(); cleared by the yield */
+static volatile int lock_wanted;
 
 void rt_lock(void)
 {
@@ -33,7 +36,10 @@ void rt_lock(void)
 		pthread_mutex_lock(&stack_lock);
 		rt_prof_add(RT_PROF_LOCK_APP, rt_prof_ticks() - t0);
 	} else if (!rt_prof_on) {
-		pthread_mutex_lock(&stack_lock);
+		if (pthread_mutex_trylock(&stack_lock) != 0) {
+			lock_wanted = 1;
+			pthread_mutex_lock(&stack_lock);
+		}
 	}
 	lock_owner = pthread_self();
 	lock_owned = 1;
@@ -50,6 +56,22 @@ void rt_unlock(void)
 int rt_lock_held(void)
 {
 	return lock_owned && pthread_equal(lock_owner, pthread_self());
+}
+
+int rt_lock_wanted(void)
+{
+	return lock_wanted;
+}
+
+int rt_lock_yield(void)
+{
+	if (!lock_wanted)
+		return 0;
+	lock_wanted = 0;
+	rt_unlock();
+	sched_yield();
+	rt_lock();
+	return 1;
 }
 
 /* ---- program name and memory (policies, TCP memory limits) ---- */

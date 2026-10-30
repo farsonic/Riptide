@@ -235,6 +235,7 @@ so two runs of the same download can be compared without restarting:
 | `net.inet.tcp.recvspace`, `sendspace` | 32768, 32768 | initial buffer sizes |
 | `net.inet.tcp.rmem_max`, `moderate_rcvbuf` | 65536, 1 | receive buffer auto-tuning and its limit (host test builds: 262144) |
 | `net.inet.tcp.delack_segs` | 2 | send an ACK every N full-sized segments (1 = every segment) |
+| `net.inet.tcp.delack_batch` | 8 | frames that arrived together are one receive batch, ACKed once at its end: the most segments one such ACK covers (2 to 64; 0.26, before it was `2 * delack_segs`) |
 | `net.inet.tcp.delack_ms` | 200 | longest an ACK is delayed (ms) |
 | `net.inet.tcp.quickack` | 0 | 1 = never delay ACKs |
 | `net.inet.tcp.cc` | cubic | congestion control for new connections (`cubic`, `reno`, `ledbat`) |
@@ -258,8 +259,10 @@ segments are unacknowledged, but only if the window it advertises is not
 smaller than the last one; otherwise the ACK waits until the application
 reads (or for the delayed ACK timer). Frames that arrive together are
 handled as one batch: the ACKs `delack_segs` calls for within it go out as
-one at its end, covering at most `2 * delack_segs` segments (duplicate
-ACKs are never held). A reader that empties the window by small reads
+one at its end, covering at most `delack_batch` segments (duplicate
+ACKs are never held). A CPU-bound receiver thus ACKs a batch at a time,
+as Linux does under GRO; the sender's congestion control counts the
+bytes an ACK covers (RFC 3465), so stretch ACKs cost it nothing. A reader that empties the window by small reads
 gets a window update once the window can open by four segments (or a
 quarter of the buffer) or the queue is empty, not after every read. The SANA-II read count is changed
 with `ip link set NAME reads N` (see below). `netstat -T` shows the effect
@@ -783,6 +786,11 @@ your LAN with its own MAC address: DHCP from your router, IPv6 from your
 router's advertisements, no slirp, no NAT. Use
 `interface eth0 device=uaenet.device unit=2` without `tcpwindow`. It needs
 a wired interface and permission to capture; see `tools/fs-uae/README.md`.
+The patched `uaenet.device` also honours Riptide's SANA-II DMA callbacks
+(the emulator moves each frame straight into or out of Riptide's buffer,
+no copy on the 68k): on an emulated A1200 that is 799 → 901 KB/s down
+and 480 → 698 KB/s up (`docs/COMPARISON.md` 11). Builds from before
+Riptide 0.26 need rebuilding with the current patch to get it.
 
 **A stack that stops answering under FS-UAE with the AROS ROM.** On FS-UAE
 3.2.35 with the AROS Kickstart replacement ROM, a busy host occasionally
@@ -2694,15 +2702,19 @@ no FPU, Blitter or Copper code):
 
 | CPU | Checksum | Copy (user/driver memory) | Copy between packet buffers |
 |---|---|---|---|
-| 68020, 68030 | `csum_020` | `copy_020` | `copy_020` |
-| 68040, 68060 | `csum_020` | `copy_020` | `copy_040` (MOVE16) |
+| 68020, 68030 | `csum_020` | `copy_020m` | `copy_020m` |
+| 68040, 68060 | `csum_020` | `copy_020m` | `copy_040` (MOVE16) |
 
 * `csum_020` is an unrolled `addx.l` loop (16 longs per iteration, entered
-  by a computed jump for the remainder). `copy_020` aligns the destination
-  and runs 16 `move.l` per iteration. `csum_copy_020` copies and sums in
-  one pass; TCP uses it to build each segment it sends, UDP to take
-  the payload from the program, and the SANA-II `CopyToBuff` callback to
-  take each received frame.
+  by a computed jump for the remainder). `copy_020m` aligns the destination
+  and moves 32 bytes per iteration with two `movem.l` over eight registers
+  (copies under 96 bytes take `copy_020`, 16 `move.l` per iteration): on
+  the emulated A1200 a 1460-byte copy runs at 5740 KB/s against 4995 for
+  `copy_020` (0.26; `Riptide BENCH` shows both). `csum_copy_020` copies
+  and sums in one pass; TCP uses it to build each segment it sends, UDP to
+  take the payload from the program, and the SANA-II `CopyToBuff` callback
+  to take each received frame (a `movem.l` version of it was slower: the
+  seven `addx.l` between the two `movem.l` cost what the moves saved).
 * There is no separate 68060 checksum: the emulators give no 68060 timing
   that could justify one, so `csum_020` serves every CPU. On the 68060
   plain `move.l` copies are used for any memory, as on the 68020.

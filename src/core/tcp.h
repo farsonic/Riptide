@@ -521,7 +521,7 @@ extern s32 sysctl_tcp_timestamps, sysctl_tcp_window_scaling, sysctl_tcp_sack,
            sysctl_tcp_slow_start_after_idle, sysctl_tcp_max_orphans,
            sysctl_tcp_mssdflt,
            sysctl_tcp_keepidle, sysctl_tcp_keepintvl, sysctl_tcp_max_tw,
-           sysctl_tcp_delack_segs, sysctl_tcp_delack_ms, sysctl_tcp_quickack,
+           sysctl_tcp_delack_segs, sysctl_tcp_delack_batch, sysctl_tcp_delack_ms, sysctl_tcp_quickack,
            sysctl_tcp_syn_rto_initial_ms, sysctl_tcp_syn_rto_max_ms, sysctl_tcp_syn_backoff,
            sysctl_tcp_connect_timeout, sysctl_tcp_syn_icmp_abort, sysctl_tcp_keepalive_all,
            sysctl_tcp_fastopen, sysctl_tcp_fastopen_all, sysctl_tcp_fastopen_blackhole;
@@ -552,9 +552,19 @@ extern u32 tcp_orphan_count;
 extern u32 tcp_tw_count;
 
 /* ---- small helpers ---- */
-static inline u32 tcp_jiffies(void) { return rt_now_ms(); }
-extern u64 tcp_clock_us;               /* refreshed at every entry point */
-static inline void tcp_mstamp_refresh(void) { tcp_clock_us = rt_now_us(); }
+/* Clocks: refreshed at every entry point (tcp_enter), like Linux's
+ * tcp_mstamp_refresh(); inside TCP tcp_jiffies() is then a load, not a
+ * call into the OS layer (a segment reads it some twenty times). Outside
+ * an entry bracket (tcp_nest 0: tables read by ctl) it reads the OS clock. */
+extern u64 tcp_clock_us;
+extern u32 tcp_clock_ms;
+extern int tcp_nest;
+static inline u32 tcp_jiffies(void) { return tcp_nest ? tcp_clock_ms : rt_now_ms(); }
+static inline void tcp_mstamp_refresh(void)
+{
+	tcp_clock_us = rt_now_us();
+	tcp_clock_ms = rt_now_ms();
+}
 u32 tcp_seconds(void);
 
 static inline u32 tcp_rto_min(void) { return (u32)sysctl_tcp_rto_min_ms; }

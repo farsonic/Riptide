@@ -16,7 +16,7 @@
 
 #ifdef RT_ARCH_M68K_ASM
 /* Riptide needs a 68020; its routines are a safe start before rt_init(). */
-struct rt_arch_ops rt_arch = { rt_csum_020, rt_csum_copy_020, rt_copy_020, rt_copy_020 };
+struct rt_arch_ops rt_arch = { rt_csum_020, rt_csum_copy_020, rt_copy_020m, rt_copy_020m };
 #else
 struct rt_arch_ops rt_arch = { rt_csum_partial_c, rt_csum_copy_c, rt_copy_c, rt_copy_c };
 #endif
@@ -56,6 +56,8 @@ static const char *copy_name(copy_fn f)
 #ifdef RT_ARCH_M68K_ASM
 	if (f == rt_copy_020)
 		return "copy_020";
+	if (f == rt_copy_020m)
+		return "copy_020m";
 	if (f == rt_copy_040)
 		return "copy_040";
 #endif
@@ -136,8 +138,8 @@ int rt_arch_select(const char *routines)
 		 * buffers. */
 		o.csum = rt_csum_020;
 		o.csum_copy = rt_csum_copy_020;
-		o.copy = rt_copy_020;
-		o.copy_buf = (level >= 40 && arch_move16 && !arch_move16_vetoed) ? rt_copy_040 : rt_copy_020;
+		o.copy = rt_copy_020m;
+		o.copy_buf = (level >= 40 && arch_move16 && !arch_move16_vetoed) ? rt_copy_040 : rt_copy_020m;
 	}
 #endif
 	rt_arch.csum = o.csum;

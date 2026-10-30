@@ -7,6 +7,7 @@
 ;   u32  rt_csum_copy_020(void *dst, const void *src, u32 len, u32 sum)
 ;   void rt_copy_020(void *dst, const void *src, u32 len)
 ;   void rt_copy_040(void *dst, const void *src, u32 len)    68040/68060 only
+;   void rt_copy_020m(void *dst, const void *src, u32 len)   movem.l variant
 ;
 ; Calling convention: arguments on the stack, d0/d1/a0/a1 scratch, result
 ; in d0. vbcc (+aos68k) and m68k-linux-gnu-gcc both use it. Every symbol is
@@ -34,6 +35,8 @@
 	xdef	rt_copy_020
 	xdef	_rt_copy_040
 	xdef	rt_copy_040
+	xdef	_rt_copy_020m
+	xdef	rt_copy_020m
 	xdef	_rt_cpu_vbl
 	xdef	rt_cpu_vbl
 
@@ -364,6 +367,69 @@ rt_copy_040:
 	beq.s	.n1
 	move.b	(a0),(a1)
 .n1:
+	rts
+
+; ---------------------------------------------------------------------------
+; void rt_copy_020m(void *dst, const void *src, u32 len)
+; As rt_copy_020, but the aligned middle moves 32 bytes per iteration with
+; two movem.l over eight registers: a third of the instructions (and of the
+; instruction fetches, which a 68020's 256-byte cache does not hold) of
+; eight move.l (a0)+,(a1)+. Copies under 96 bytes go to rt_copy_020.
+	cnop	0,4
+_rt_copy_020m:
+rt_copy_020m:
+	move.l	12(sp),d0		; dst 4(sp), src 8(sp), len 12(sp)
+	cmp.l	#96,d0
+	blo	rt_copy_020
+	movem.l	d2-d7/a2-a3,-(sp)	; 8 registers: dst 36(sp), src 40(sp), len 44(sp)
+	move.l	36(sp),a1
+	move.l	40(sp),a0
+	move.l	44(sp),d0
+	move.w	a1,d1			; align the destination to 4
+	btst	#0,d1
+	beq.s	.d2
+	move.b	(a0)+,(a1)+
+	subq.l	#1,d0
+.d2:
+	move.w	a1,d1
+	btst	#1,d1
+	beq.s	.d4
+	move.w	(a0)+,(a1)+
+	subq.l	#2,d0
+.d4:
+	move.l	d0,d1
+	lsr.l	#5,d1			; 32-byte blocks (>= 2)
+.blk:
+	movem.l	(a0)+,d2-d7/a2-a3
+	movem.l	d2-d7/a2-a3,(a1)
+	lea	32(a1),a1
+	subq.l	#1,d1
+	bne.s	.blk
+	btst	#4,d0			; the rest: 16, 8, 4, 2, 1 bytes
+	beq.s	.n16
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+.n16:
+	btst	#3,d0
+	beq.s	.n8
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+.n8:
+	btst	#2,d0
+	beq.s	.n4
+	move.l	(a0)+,(a1)+
+.n4:
+	btst	#1,d0
+	beq.s	.n2
+	move.w	(a0)+,(a1)+
+.n2:
+	btst	#0,d0
+	beq.s	.n1
+	move.b	(a0),(a1)
+.n1:
+	movem.l	(sp)+,d2-d7/a2-a3
 	rts
 
 ; rt_cpu_vbl: an AmigaOS vertical blank interrupt server (exec calls it

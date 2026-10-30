@@ -680,6 +680,21 @@ static int sock_sendit(struct rt_socket *so, const struct rt_iov *iov0, int iovc
 			if (!stream || sent >= total)
 				break;
 			iov_advance(&iov, &cnt, (u32)r);
+			/* A large send() holds the lock for the copy of every
+			 * segment; the Riptide process waiting behind it has
+			 * ACKs that would open the window and segments to send
+			 * (tcp_v4_send() stops early when it is waiting). Let it
+			 * in. The wait entry keeps the socket alive meanwhile. */
+			if (rt_lock_wanted()) {
+				if (!waiting) {
+					wait_begin(so, &we);
+					waiting = 1;
+				}
+				if (rt_lock_yield() && (so->state & SOCK_SS_DEAD)) {
+					r = -RT_EBADF;
+					break;
+				}
+			}
 			continue;
 		}
 		if (r == 0 && !stream)

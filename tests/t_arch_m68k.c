@@ -92,7 +92,7 @@ static void one(u32 len, u32 sa, u32 da, u32 sum, int pattern)
 {
 	u8 *s = src_area + GUARD + sa, *d = dst_area + GUARD + da;
 	u32 ref, got, i;
-	copy_fn copies[2];
+	copy_fn copies[3];
 	int k, nc = 0;
 
 	fill(src_area, len + 2 * GUARD + 16, pattern);
@@ -104,6 +104,7 @@ static void one(u32 len, u32 sa, u32 da, u32 sum, int pattern)
 	CHECK((got == 0) == (ref == 0));
 
 	copies[nc++] = rt_copy_020;
+	copies[nc++] = rt_copy_020m;
 	if (have_move16 > 0)
 		copies[nc++] = rt_copy_040;
 	for (k = -1; k < nc; k++) {
@@ -117,7 +118,7 @@ static void one(u32 len, u32 sa, u32 da, u32 sum, int pattern)
 			       "csum_copy_020 len %u sa %u da %u sum %08x: %08x vs %08x", (unsigned)len,
 			       (unsigned)sa, (unsigned)da, (unsigned)sum, (unsigned)got, (unsigned)ref);
 		CHECKF(memcmp(d, s, len) == 0, "%s len %u sa %u da %u: data",
-		       k < 0 ? "csum_copy_020" : k == 0 ? "copy_020" : "copy_040",
+		       k < 0 ? "csum_copy_020" : k == 0 ? "copy_020" : k == 1 ? "copy_020m" : "copy_040",
 		       (unsigned)len, (unsigned)sa, (unsigned)da);
 		for (i = 0; i < GUARD + da; i++)
 			if (dst_area[i] != 0xa5)
@@ -185,6 +186,9 @@ static void test_huge(void)
 	memset(d, 0, n + 16);
 	rt_copy_020(d, s, n);
 	CHECK(memcmp(d, s, n) == 0 && d[n] == 0);
+	memset(d, 0, n + 16);
+	rt_copy_020m(d, s, n);
+	CHECK(memcmp(d, s, n) == 0 && d[n] == 0);
 	if (have_move16 > 0) {
 		memset(d, 0, n + 16);
 		rt_copy_040(d, s, n);
@@ -246,18 +250,18 @@ static void test_dispatch(void)
 	rt_arch_describe(d, sizeof(d));
 	SAY(stdout, "selected: %s\n", d);
 	CHECK(rt_arch.csum == rt_csum_020 && rt_arch.csum_copy == rt_csum_copy_020);
-	CHECK(rt_arch.copy == rt_copy_020);
-	CHECK(rt_arch.copy_buf == (cpu >= 68040 && have_move16 > 0 ? rt_copy_040 : rt_copy_020));
+	CHECK(rt_arch.copy == rt_copy_020m);
+	CHECK(rt_arch.copy_buf == (cpu >= 68040 && have_move16 > 0 ? rt_copy_040 : rt_copy_020m));
 	CHECK(rt_arch_select("generic") == 0 && rt_arch.csum == rt_csum_partial_c &&
 	      rt_arch.copy == rt_copy_c && rt_arch.copy_buf == rt_copy_c);
 	CHECK(rt_arch_select("bogus") == -RT_EINVAL);
-	CHECK(rt_arch_select("020") == 0 && rt_arch.csum == rt_csum_020 && rt_arch.copy_buf == rt_copy_020);
+	CHECK(rt_arch_select("020") == 0 && rt_arch.csum == rt_csum_020 && rt_arch.copy_buf == rt_copy_020m);
 	rt_arch_cpu = 68030;
 	CHECK(rt_arch_select("040") == -RT_EOPNOTSUPP && rt_arch_select("060") == -RT_EOPNOTSUPP);
 	rt_arch_cpu = 68060;
 	CHECK(rt_sysctl_set_text("riptide.cpu.move16", "1") == 0);
 	CHECK(rt_arch_select("060") == 0 && rt_arch.copy_buf == rt_copy_040);
-	CHECK(rt_sysctl_set_text("riptide.cpu.move16", "0") == 0 && rt_arch.copy_buf == rt_copy_020);
+	CHECK(rt_sysctl_set_text("riptide.cpu.move16", "0") == 0 && rt_arch.copy_buf == rt_copy_020m);
 	{
 		char v[96];
 		u32 l = sizeof(v);

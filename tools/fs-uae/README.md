@@ -13,19 +13,23 @@ patch also fixes two `uaenet.device` bugs:
 * multicast frames were dropped before the multicast filter, which breaks
   IPv6 neighbour discovery on a real network.
 
-`fs-uae-3.2.35-riptide.patch` is the three of these in one, for building:
+`fs-uae-3.2.35-riptide.patch` is the four of these in one, for building:
 
 * `0001-uaenet-deliver-every-queued-frame.patch`: the frame-drop fix;
 * `0002-uaenet-pass-multicast-to-the-multicast-filter.patch`: the
   multicast fix;
 * `0003-uaenet-bridge-to-host-interfaces-libpcap.patch`: the libpcap
-  backend (`src/uaenet_pcap.cpp`, configure option `--enable-uaenet-pcap`).
+  backend (`src/uaenet_pcap.cpp`, configure option `--enable-uaenet-pcap`);
+* `0004-uaenet-sana2-dma-callbacks.patch`: `uaenet.device` honours the
+  SANA-II R3 DMA callbacks (`S2_DMACopyToBuff32`, `S2_DMACopyFromBuff32`):
+  a frame is moved by the emulator straight into or out of the stack's
+  buffer, with no `CopyToBuff`/`CopyFromBuff` copy on the 68k. Riptide
+  offers the callbacks (0.13), and on an emulated A1200 (68020, Kickstart
+  3.1.4) the speed lab went from 799 to 901 KB/s down and from 480 to 698
+  KB/s up with them (`docs/COMPARISON.md` 11). Other stacks are not
+  affected (they do not offer the callbacks).
 
-They apply to v3.2.35 in that order.
-`0004-uaenet-sana2-dma-callbacks.patch` (optional, not in the combined
-patch) applies on top: `uaenet.device` then honours the SANA-II R3 DMA
-callbacks, which tests Riptide's DMA path (the frame goes straight into
-Riptide's buffer, no `CopyToBuff` on the 68k). `issue-1-uaenet-frame-drops.md` and
+They apply to v3.2.35 in that order. `issue-1-uaenet-frame-drops.md` and
 `issue-2-uaenet-lan-bridge.md` are the reports for FS-UAE's maintainer.
 
 The patch is GPL-2.0 like FS-UAE. It was tested on Linux and on macOS (a
