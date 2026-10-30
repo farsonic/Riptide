@@ -312,9 +312,61 @@ to about 2220 µs per segment in `BENCH TX`, and netbench uploads from
 from the application (`rt_csum_copy_020`), about 450 µs in the driver's
 `SendIO()` (the uaenet device copies the frame through `CopyFromBuff`),
 and the TCP/IP code; interrupts and the emulated device take a share the
-profiler cannot see. A driver with `S2_DMACopyFromBuff32` would save its
-copy only for frames that start on a 32-bit boundary, which TCP frames
-(behind a 14-byte Ethernet header) do not.
+profiler cannot see. A driver with `S2_DMACopyFromBuff32` saves its copy
+for frames that start on a 32-bit boundary: in cooked mode (the driver
+adds the Ethernet header) a TCP segment does, and FS-UAE with the DMA
+patch moves it without a 68k copy (below); in raw mode the 14-byte
+Ethernet header sits in front and the driver copies.
+
+### Where a segment's time goes (0.26)
+
+Measured on the emulated A1200 (68020, 14 MHz, 8 MB Fast RAM) with a
+real Kickstart 3.1.4, the `tools/fs-uae` libpcap build and the 0.25 GCC
+build, to see what is left to gain. Download 799 KB/s = 1.85 ms per
+1460-byte segment, about 26,000 cycles; upload 480 KB/s = 3.05 ms.
+
+| Download, per segment | µs | How measured |
+|---|---|---|
+| driver `CopyToBuff` (copy + sum, `rt_csum_copy_020`) | 358 | `Riptide BENCH`: 4114 KB/s at 1460 bytes |
+| copy to the application (`rt_copy_020`) | 283 | BENCH: 4995 KB/s; `rt_copy_020m` 5740 = 246 µs |
+| IP + TCP input, queueing, the `recv()` call | ~500 | about 2,000 instructions (`qemu-m68k` count of `t_rx_bench`: `rt_ip_input` 164, `rt_tcp_input` 96, `tcp_rcv_established` 83, `tcp_v4_recv` 134, buffers 150, clocks 270 ...), at the 68020's cost of fetching code its 256-byte cache does not hold |
+| ACKs | ~90 | one per 10 segments (window updates after reads) at about 900 µs each |
+| the rest | ~600 | exec's interrupt and task switches, the emulated `uaenet.device`, `SendIO()` of the next read, the library call glue: nothing the profiler sees |
+
+| Upload, per segment | µs | |
+|---|---|---|
+| copy and sum from the application | 346 | BENCH |
+| TCP output, IP output, driver `SendIO` | ~700 | about 900 instructions |
+| the driver's `CopyFromBuff` and the device | ~1000 | the DMA callbacks remove it: 480 → 698 KB/s |
+| ACK input (Linux ACKs every second segment) | ~400 | about 1,000 instructions per ACK |
+| the rest | ~600 | as above |
+
+What the 68020 pays for each OS service (BENCH, Fast RAM): `ReadEClock()`
+45 µs, an uncached `rt_now_ms()` 95, `rt_lock()`+`rt_unlock()` 28,
+`rt_buf_alloc()`+`rt_buf_free()` 90 (with the lock), a timer request
+sent and aborted 287.
+
+What this round did about it (speed lab medians of 3, 68020, Kickstart
+3.1.4): the `movem.l` copy, TCP's millisecond clock as a load, one ACK
+per receive batch of up to 8 segments and the lock yield in long
+`send()`s: 799.4 → 818.5 KB/s down, 479.5 → 498.9 up. The FS-UAE patch's
+DMA callbacks (no `CopyToBuff`/`CopyFromBuff` on the 68k, the emulator
+moves the frame): 901.0 down and 698.3 up with the 0.25 stack, 918.8
+and 682.2 with 0.26 (the uploads of the two spread by 2 %). Tried and measured slower: stopping the application's push
+loop between segments when the Riptide process waits for the lock
+(uploads 499 → 447 KB/s: more lock hand-overs and task switches than
+ACKs processed sooner), and a `movem.l` copy-and-sum (3989 against 4123
+KB/s: the seven `addx.l` between the two `movem.l` cost what the moves
+saved). Not worth it on this CPU: cheaper clock reads elsewhere (ARP,
+routes: a few per segment), smaller `rt_buf` resets (two or three per
+segment, 60 µs together), fewer window-update ACKs (one per ten
+segments). What remains is the 68020 itself: two bus-bound copies of
+every byte and some 3,000 instructions of fetch-bound code per segment,
+and the exec and driver work per frame that no stack controls.
+
+The `a4000-040` preset cannot be measured with the A1200 Kickstart: the
+68040 needs `68040.library`, which the 3.1.4 install disks here do not
+have, and ran at 706 KB/s; the 68040 figures are from the AROS ROM.
 
 ## TCP connection behaviour (Fast Open, connecting, keepalive, cork)
 
