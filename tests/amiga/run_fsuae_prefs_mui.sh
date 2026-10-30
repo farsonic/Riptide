@@ -445,8 +445,8 @@ sysctl net.inet.tcp.fastopen=1
 sysctl net.inet.tcp.connect_timeout=15
 sysctl net.inet.tcp.keepalive_all=120
 sysctl net.inet.tcp.cc=ledbat
-sysctl net.inet.tcp.bg_programs=AmiFTP,wget
 sysctl net.inet6.ip6.use_tempaddr=1
+sysctl net.inet.tcp.bg_programs=AmiFTP,wget
 EOF
 cmp -s "$work/orig.conf" "$conf.bak" || fail "ENVARC:Riptide/riptide.conf.bak is not the old file"
 cmp -s "$conf" "$dh0/ENV/Riptide/riptide.conf" || fail "ENV: and ENVARC: riptide.conf differ"
@@ -500,6 +500,8 @@ DH0:C/RiptidePrefs PAGE=18
 Echo "rc $RC" >DH0:out/zz_3i
 DH0:C/RiptidePrefs PAGE=Routes
 Echo "rc $RC" >DH0:out/zz_3j
+DH0:C/RiptidePrefs PAGE=Counters DEBUG=DH0:out/log3k
+Echo "rc $RC" >DH0:out/zz_3k
 EOF
 # MUI can take a while to start here: an empty Workbench is "stable" too,
 # so wait for the window first
@@ -539,13 +541,22 @@ waitfor zz_3h
 settle c11-compact-qosrules
 key Escape
 waitfor zz_3i
-# the page list scrolled (24 rows do not fit 256 lines): the last pages
+# the fourth form in the compact layout
 settle c12-compact-routes
-key shift+p
-settle c13-compact-scrolled-end
 key Escape
 waitfor zz_3j
+# the page list scrolls (23 rows do not fit 256 lines): opened on the last
+# page it shows the last rows; P wraps to Status, the first ones again
+settle c13-compact-scrolled-end
+key p
+gone="$work/c13-compact-scrolled-end.png"    # a busy host: wait for the change
+settle c14-compact-scrolled-top
+cmp -s "$work/c13-compact-scrolled-end.png" "$work/c14-compact-scrolled-top.png" &&
+	fail "P on the last page did not change the compact page list"
+key Escape
+waitfor zz_3k
 cleanup_uae
+grep -q '^command 401' "$dh0/out/log3k" 2>/dev/null || fail "P on the last page did not change the page"
 grep -q '^dark=1' "$dh0/ENV/Riptide/RiptidePrefs.prefs" 2>/dev/null || fail "Dark Theme was not saved"
 grep -q '^hostname' "$dh0/ENV/Riptide/riptide.conf" && fail "Reset to Defaults + Use kept the host name"
 grep -q '^compat aliases on' "$dh0/ENV/Riptide/riptide.conf" || fail "Reset to Defaults lost an unknown line"
