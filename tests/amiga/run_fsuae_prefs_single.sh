@@ -533,7 +533,7 @@ wbnext w08-after
 key Escape
 rc0 zz_after 60
 cleanup_uae
-grep -q 'window open, page 4' "$dh0/out/tt1" 2>/dev/null || fail "tool types: not the MUI editor on Names (tt1: $(head -c 300 "$dh0/out/tt1" 2>/dev/null))"
+grep -q 'window open, page 7' "$dh0/out/tt1" 2>/dev/null || fail "tool types: not the MUI editor on Names (tt1: $(head -c 300 "$dh0/out/tt1" 2>/dev/null))"
 grep -q 'GadTools editor' "$dh0/out/tt2" 2>/dev/null || fail "tool types: GADTOOLS did not choose the GadTools editor"
 for n in 1 2 3 4 5 6; do
 	grep -q '^wbreply ok' "$dh0/out/wb$n" 2>/dev/null || fail "Workbench start $n: $(cat "$dh0/out/wb$n" 2>/dev/null)"
