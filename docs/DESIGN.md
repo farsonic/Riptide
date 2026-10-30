@@ -79,8 +79,8 @@ time:
 |---|---|---|---|
 | `csum` | `rt_csum_partial()`: every checksum | `rt_csum_partial_c` | `rt_csum_020` |
 | `csum_copy` | `rt_csum_copy()`: copy and checksum in one pass (Linux `csum_partial_copy`) | `rt_csum_copy_c` | `rt_csum_copy_020` |
-| `copy` | `rt_copy()`: payload between user or driver memory and packet buffers | `rt_copy_c` | `rt_copy_020` |
-| `copy_buf` | `rt_copy_buf()`: packet buffer to packet buffer | `rt_copy_c` | `rt_copy_020`, or `rt_copy_040` (MOVE16) |
+| `copy` | `rt_copy()`: payload between user or driver memory and packet buffers | `rt_copy_c` | `rt_copy_020m` (`movem.l`; `rt_copy_020` under 96 bytes) |
+| `copy_buf` | `rt_copy_buf()`: packet buffer to packet buffer | `rt_copy_c` | `rt_copy_020m`, or `rt_copy_040` (MOVE16) |
 
 * `rt_copy()` and `rt_copy_buf()` call plain `memcpy()` below
   `RT_COPY_MIN` (128) bytes; the dispatch only pays off above it.
