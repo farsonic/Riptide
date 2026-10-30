@@ -65,8 +65,8 @@ changes="$top/dist/RELEASE-NOTES-v$VERSION.md"
 if [ -f "$changes" ]; then
 	# drop the title and the "unpack and run" paragraph; headings become
 	# plain lines, their bullets are indented, markup and non-ASCII go
-	awk 'NR > 5 && !/^Details: /' "$changes" | sed -e 's/^## \(.*\)/\1:/' -e 's/^\* /  * /' -e 's/^  \([^*]\)/    \1/' -e 's/^  \([A-Z]\)/    \1/' \
-	    -e 's/\*\*//g' -e 's/`//g' -e 's/\xe2\x86\x92/->/g' | cat -s | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' \
+	awk 'NR > 5 && !/^Details: /' "$changes" | sed -e 's/\*\*//g' -e 's/`//g' -e 's/\xe2\x86\x92/->/g' \
+	    -e 's/^## \(.*\)/\1:/' -e 's/^\* /  * /' -e 's/^  \([^ *]\)/    \1/' | cat -s | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' \
 	    > "$stage/changes.txt"
 else
 	echo "See https://github.com/farsonic/riptide/releases" > "$stage/changes.txt"
