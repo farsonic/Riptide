@@ -52,7 +52,8 @@ enum {
 	RP_SC_CC, RP_SC_LEDBAT_TARGET, RP_SC_LEDBAT_SLOWDOWN, RP_SC_BG_MODE, RP_SC_MEM_LOW,
 	RP_SC_MEM_PRESSURE, RP_SC_MEM_HIGH, RP_SC_HE_ENABLE, RP_SC_HE_DELAY, RP_SC_HE_RESDELAY,
 	RP_SC_HE_PREFER, RP_SC_HE_AAAA, RP_SC_QOS_INFLIGHT, RP_SC_QOS_LIMIT, RP_SC_QOS_PRIODSCP,
-	RP_SC_DNS_EDNS, RP_SC_DNS_TCP, RP_SC_MTU_PROBING, RP_SC_DNS_NEGTTL, RP_SC_ECN, RP_NSC
+	RP_SC_DNS_EDNS, RP_SC_DNS_TCP, RP_SC_MTU_PROBING, RP_SC_DNS_NEGTTL, RP_SC_ECN,
+	RP_SC_RTADV, RP_SC_TEMPADDR, RP_SC_ADDRGEN, RP_SC_DAD, RP_SC_GNA, RP_NSC
 };
 enum { RP_SS_BG_PROGRAMS, RP_SS_BG_PORTS, RP_SS_BG_LPORTS, RP_NSS };
 #define RP_SSLEN 128
@@ -76,7 +77,23 @@ extern const char *const rp_cc_names[];     /* "cubic", "reno", "ledbat" */
 #define RP_NVLAN    8
 #define RP_VLANLEN  112
 #define RP_VLAN_NKEYS 6     /* pcp mtu ipv4 ipv6 qos tcpwindow */
-enum { RP_LIST_ALIAS, RP_LIST_QRULE, RP_LIST_VLAN };
+/* Static routes ("route add ENTRY": "DEST [via GW] [dev IF] [metric N]
+ * [reject|prohibit|unreachable|blackhole]", DEST default, A.B.C.D/BITS or
+ * an IPv6 prefix, the keys in this order), static hosts ("host NAME
+ * ADDR": "NAME ADDR"), static neighbours ("arp add ENTRY": "ADDR MAC [dev
+ * IF]") and static IPv6 addresses ("ifconfig IF inet6 ADDR/PLEN [nodad]":
+ * "[IF|]ADDR/PLEN [nodad]", IF as for the extra addresses). The cards'
+ * own default routes (rp_iface.gateway) are not in the route list. */
+#define RP_NROUTE   12
+#define RP_ROUTELEN 112
+#define RP_NHOST    16
+#define RP_HOSTLEN  112
+#define RP_NNEIGH   8
+#define RP_NEIGHLEN 88
+#define RP_NADDR6   8
+#define RP_ADDR6LEN 80
+#define RP_LIST_MAXN 16     /* the longest list */
+enum { RP_LIST_ALIAS, RP_LIST_QRULE, RP_LIST_VLAN, RP_LIST_ROUTE, RP_LIST_HOST, RP_LIST_NEIGH, RP_LIST_ADDR6 };
 #define RP_IFSEP '|'
 
 /* A network card: an "interface NAME device=..." line and its address
@@ -99,6 +116,8 @@ struct rp_iface {
 	char netmask[RP_ADDR];
 	char gateway[RP_ADDR];
 	long metric;                          /* of a later card's default route (RP_UNSET: ours) */
+	long dhcp_wait;                       /* "dhcp IF wait S": seconds before link-local (RP_UNSET: default) */
+	int  ipv6;                            /* "ipv6 IF on|off": -1 no line (the stack's default), 0, 1 */
 };
 
 struct rp_model {
@@ -123,6 +142,10 @@ struct rp_model {
 	char alias[RP_NALIAS][RP_ALIASLEN];   /* "A.B.C.D/BITS" or "A.B.C.D netmask M" */
 	char qrule[RP_NQRULE][RP_LONG];       /* the words after "qos rule" */
 	char vlan[RP_NVLAN][RP_VLANLEN];      /* "ID MODE [pcp=N] ..." (see above) */
+	char route[RP_NROUTE][RP_ROUTELEN];   /* "DEST [via GW] [dev IF] [metric N] [TYPE]" */
+	char host[RP_NHOST][RP_HOSTLEN];      /* "NAME ADDR" */
+	char neigh[RP_NNEIGH][RP_NEIGHLEN];   /* "ADDR MAC [dev IF]" */
+	char addr6[RP_NADDR6][RP_ADDR6LEN];   /* "[IF|]ADDR/PLEN [nodad]" */
 };
 
 struct rp_line {
@@ -142,12 +165,19 @@ struct rp_conf {
 	struct rp_line *l_quickack, *l_delack_segs, *l_delack_ms;
 	struct rp_line *l_ipv4, *l_qos, *l_sc[RP_NSC], *l_ss[RP_NSS];
 	struct rp_line *l_alias[RP_NALIAS], *l_qrule[RP_NQRULE], *l_vlan[RP_NVLAN];
+	struct rp_line *l_ipv6if[RP_NIF];     /* "ipv6 IF on|off" of each card */
+	struct rp_line *l_sroute[RP_NROUTE], *l_host[RP_NHOST], *l_neigh[RP_NNEIGH], *l_addr6[RP_NADDR6];
 	/* what the list lines say now (conf_edit.c's sync_list()) */
 	char h_alias[RP_NALIAS][RP_ALIASLEN];
 	char h_qrule[RP_NQRULE][RP_LONG];
 	char h_vlan[RP_NVLAN][RP_VLANLEN];
+	char h_sroute[RP_NROUTE][RP_ROUTELEN];
+	char h_host[RP_NHOST][RP_HOSTLEN];
+	char h_neigh[RP_NNEIGH][RP_NEIGHLEN];
+	char h_addr6[RP_NADDR6][RP_ADDR6LEN];
 	char h_ifname[RP_IFNAME];             /* the first card's name in the alias lines */
 	char h_vifname[RP_IFNAME];            /* the parent named in its VLAN lines */
+	char h_a6ifname[RP_IFNAME];           /* the first card's name in the IPv6 address lines */
 };
 
 /* provided by the program */
@@ -190,8 +220,8 @@ void rp_iface_delete(struct rp_model *m, int k);
 void rp_iface_rename(struct rp_model *m, int k, const char *name);
 /* the card named name (case does not matter), -1 if none */
 int  rp_iface_find(const struct rp_model *m, const char *name);
-/* How many entries name card k, its VLANs or addresses on them (what a
- * delete would remove). */
+/* How many entries name card k, its VLANs, addresses on them and routes
+ * and neighbours through them (what a delete would remove). */
 int  rp_iface_users(const struct rp_model *m, int k);
 /* The names an address may be on (cards, then VLANs as PARENT.ID; with
  * vlans 0 the cards only), into names[max][RP_IFNAME+8]; their number. */
@@ -206,10 +236,18 @@ const char *rp_entry_body(const char *e);
 int  rp_valid_ip4(const char *s, int allow_prefix);
 int  rp_valid_name(const char *s);         /* host or domain name */
 int  rp_valid_ip(const char *s);           /* IPv4 or IPv6 literal */
+int  rp_valid_ip6(const char *s, int allow_prefix);   /* IPv6 literal [/0-128] */
+int  rp_valid_mac(const char *s);          /* xx:xx:xx:xx:xx:xx */
 int  rp_valid_tz(const char *s);           /* "auto" or [+-]HH[:MM] (timezone) */
 int  rp_valid_alias(const char *s);        /* A.B.C.D[/BITS] [netmask M] [broadcast B] */
 int  rp_valid_qrule(const char *s);        /* key=value words of "qos rule" */
 int  rp_valid_vlan(const char *s);         /* a VLAN entry (see above) */
+int  rp_valid_route(const char *s);        /* a route entry (see above) */
+int  rp_valid_host(const char *s);         /* NAME ADDR */
+int  rp_valid_neigh(const char *s);        /* ADDR MAC [dev IF] */
+int  rp_valid_addr6(const char *s);        /* ADDR/PLEN [nodad] (without the IF| prefix) */
+/* the "dev IF" of a route or neighbour entry into buf ("" when none) */
+void rp_entry_dev(const char *e, char *buf, size_t size);
 int  rp_valid_ports(const char *s);        /* P,P-Q,... (empty: valid) */
 int  rp_valid_programs(const char *s);     /* name,name*,... without spaces */
 

@@ -401,6 +401,34 @@ int rt_hosts_add6(const char *name, const rt_in6_addr *addr)
 	return 0;
 }
 
+int rt_hosts_remove(const char *name)
+{
+	struct host_ent *h, *prev = NULL;
+	u32 len = name ? (u32)strlen(name) : 0;
+	int n = 0;
+
+	if (len && name[len - 1] == '.')
+		len--;
+	/* every entry of that name (a name may have several addresses) */
+	for (h = hosts_head; h;) {
+		struct host_ent *next = h->next;
+		if (strlen(h->name) == len && !rt_strncasecmp(h->name, name, len)) {
+			if (prev)
+				prev->next = next;
+			else
+				hosts_head = next;
+			if (hosts_tail == h)
+				hosts_tail = prev;
+			rt_free(h);
+			n++;
+		} else {
+			prev = h;
+		}
+		h = next;
+	}
+	return n ? 0 : -RT_ENOENT;
+}
+
 void rt_hosts_clear(void)
 {
 	struct host_ent *h;
