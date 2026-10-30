@@ -62,4 +62,9 @@ keepalive, background (LEDBAT) transfers, memory limits, Happy Eyeballs
 and QoS.
 
 Docs/AMIGA.md is the manual. Riptide is free software under the GNU
-General Public License version 2 (Docs/LICENSE).
+General Public License version 2 (Docs/LICENSE). Source code:
+https://github.com/farsonic/riptide
+
+If Riptide is useful to you, you can buy its author a coffee:
+https://buymeacoffee.com/farsonic (also in RiptidePrefs: the cup at
+the top right, or Project > Support Riptide...).

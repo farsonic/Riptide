@@ -58,7 +58,29 @@ chmod 755 "$pkg/RiptidePrefs"
 # installer, readmes
 cp "$top/install/Install_Riptide" "$pkg/Install_Riptide"
 sed "s/@VERSION@/$VERSION/g" "$top/install/ReadMe" > "$pkg/ReadMe"
-sed "s/@VERSION@/$VERSION/g" "$top/install/Riptide.readme" > "$pkg/Riptide.readme"
+# the Aminet readme: the release notes (dist/RELEASE-NOTES-vVERSION.md, not
+# in git) fill its Changes section when they exist; lines stay under 78
+# columns, LF only
+changes="$top/dist/RELEASE-NOTES-v$VERSION.md"
+if [ -f "$changes" ]; then
+	# drop the title and the "unpack and run" paragraph; headings become
+	# plain lines, their bullets are indented, markup and non-ASCII go
+	awk 'NR > 5 && !/^Details: /' "$changes" | sed -e 's/^## \(.*\)/\1:/' -e 's/^\* /  * /' -e 's/^  \([^*]\)/    \1/' -e 's/^  \([A-Z]\)/    \1/' \
+	    -e 's/\*\*//g' -e 's/`//g' -e 's/\xe2\x86\x92/->/g' | cat -s | sed -e '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' \
+	    > "$stage/changes.txt"
+else
+	echo "See https://github.com/farsonic/riptide/releases" > "$stage/changes.txt"
+fi
+underline=$(printf 'Changes in %s' "$VERSION" | sed 's/./-/g')
+sed -e "s/@VERSION@/$VERSION/g" -e "s/^@UNDERLINE@$/$underline/" -e "/@CHANGES@/{r $stage/changes.txt
+d}" "$top/install/Riptide.readme" > "$pkg/Riptide.readme"
+if LC_ALL=C grep -q '[^ -~]' "$pkg/Riptide.readme"; then
+	echo "mkpackage: Riptide.readme has non-ASCII characters" >&2; exit 1
+fi
+rm -f "$stage/changes.txt"
+if awk 'length > 78 { bad = 1 } END { exit bad }' "$pkg/Riptide.readme"; then :; else
+	echo "mkpackage: Riptide.readme has a line over 78 columns" >&2; exit 1
+fi
 
 # documentation
 cp "$top/docs/AMIGA.md" "$top/docs/COMPARISON.md" "$top/README.md" "$top/LICENSE" \
@@ -85,6 +107,10 @@ find "$stage" -exec touch -d "@${SOURCE_DATE_EPOCH:-$(git -C "$top" log -1 --for
 name=riptide-$VERSION
 rm -f "$OUT/$name.lha" "$OUT/$name.zip" "$OUT/$name.adf"
 cp "$pkg/Riptide.readme" "$OUT/$name.readme"
+# Aminet wants no version number in the file names: build/aminet/riptide.lha
+# and riptide.readme are the pair to upload to ftp://main.aminet.net/new
+mkdir -p "$OUT/aminet"
+cp "$pkg/Riptide.readme" "$OUT/aminet/riptide.readme"
 
 # ---- LHA ----
 lha_kind() {
@@ -117,6 +143,7 @@ jlha)
 	(cd "$stage" && zip -qrX "$abs_out/$name.zip" Riptide.info Riptide)
 	echo "mkpackage: $OUT/$name.zip" ;;
 esac
+[ -f "$OUT/$name.lha" ] && cp "$OUT/$name.lha" "$OUT/aminet/riptide.lha" && echo "mkpackage: $OUT/aminet/riptide.lha + riptide.readme (Aminet upload pair)"
 
 # ---- ADF ----
 if command -v xdftool >/dev/null 2>&1; then

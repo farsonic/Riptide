@@ -949,6 +949,7 @@ static struct NewMenu menus[] = {
 	{ NM_ITEM, (CONST_STRPTR)"Apply", (CONST_STRPTR)"Y", 0, 0, (APTR)ID_APPLY },
 	{ NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
 	{ NM_ITEM, (CONST_STRPTR)"About...", (CONST_STRPTR)"?", 0, 0, (APTR)ID_ABOUT },
+	{ NM_ITEM, (CONST_STRPTR)"Support Riptide...", (CONST_STRPTR)"B", 0, 0, (APTR)ID_SUPPORT },
 	{ NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
 	{ NM_ITEM, (CONST_STRPTR)"Quit", (CONST_STRPTR)"Q", 0, 0, (APTR)ID_QUIT },
 	{ NM_TITLE, (CONST_STRPTR)"Edit", 0, 0, 0, 0 },
@@ -982,7 +983,7 @@ static int build_window(const char *pubscreen)
 	int i;
 
 	nav = mui_newc(nav_mcc, MUIA_Nav_Active, (ULONG)page, MUIA_ShortHelp, (ULONG)" ", TAGEND);
-	head = mui_newc(head_mcc, MUIA_Head_Page, (ULONG)page, TAGEND);
+	head = mui_newc(head_mcc, MUIA_Head_Page, (ULONG)page, MUIA_ShortHelp, (ULONG)" ", TAGEND);
 	pages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, TAGEND);
 	status = mui_newc(status_mcc, TAGEND);
 	bar = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_SameSize, TRUE, MUIA_Group_Spacing, 8,
@@ -1387,9 +1388,18 @@ static int command(ULONG id)
 		}
 		return 0;
 	case ID_ABOUT:
-		rt_snprintf(msg, sizeof(msg), "%s %s (%s)\n\n%s", "RiptidePrefs", RIPTIDE_VERSION_STRING, RIPTIDE_DATE,
+		rt_snprintf(msg, sizeof(msg), "%s %s (%s)\n\n%s\n\n%s", "RiptidePrefs", RIPTIDE_VERSION_STRING,
+		            RIPTIDE_DATE,
 		            tr("Preferences for the Riptide TCP/IP stack.\nThis window uses MUI; without MUI, "
-		               "RiptidePrefs\nopens a GadTools window with the same settings."));
+		               "RiptidePrefs\nopens a GadTools window with the same settings."),
+		            tr("Riptide is free software (GPL-2.0).\nSource: https://github.com/farsonic/riptide\n"
+		               "Buy its author a coffee:\nhttps://buymeacoffee.com/farsonic"));
+		rp_message(msg);
+		return 0;
+	case ID_SUPPORT:
+		rt_snprintf(msg, sizeof(msg), "%s", tr("Riptide is free, and takes a lot of evenings.\nIf it is useful "
+		                                       "to you, buy its author a coffee:\n\n    https://buymeacoffee.com/farsonic\n\n"
+		                                       "Thank you!"));
 		rp_message(msg);
 		return 0;
 	case ID_DEFAULTS: {

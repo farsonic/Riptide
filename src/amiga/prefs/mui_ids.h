@@ -9,7 +9,7 @@
 
 enum {
 	/* Project menu */
-	ID_OPEN = 100, ID_SAVEAS, ID_SAVE, ID_USE, ID_APPLY, ID_ABOUT, ID_QUIT,
+	ID_OPEN = 100, ID_SAVEAS, ID_SAVE, ID_USE, ID_APPLY, ID_ABOUT, ID_QUIT, ID_SUPPORT,
 	/* Edit menu */
 	ID_DEFAULTS = 200, ID_LASTSAVED, ID_RESTORE,
 	/* Settings menu */

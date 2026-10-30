@@ -347,6 +347,9 @@ static const char *const icons[IC_NICONS] = {
 	"ci L 3 3 3 13 L 6 3 6 13 L 9 3 9 13 L 12 3 12 13 ca L 1 11 14 5",
 	/* STATUS: a screen with a line graph going up and down */
 	"cw F 2 3 13 10 ci R 1 2 14 11 L 5 14 10 14 L 7 12 7 13 ca P 5 3 9 6 6 8 8 10 4 12 6",
+	/* COFFEE: a cup with a handle on a saucer, steam above (Buy Me a Coffee) */
+	"cw F 3 7 10 13 ci P 5 2 7 10 7 3 11 10 11 11 7 2 7 L 11 8 13 8 L 13 8 13 10 L 13 10 11 11 L 1 14 14 14 "
+	"ca L 5 2 5 4 L 7 1 7 3 L 9 2 9 4",
 };
 
 /* the pen of an icon colour letter */
