@@ -210,6 +210,9 @@ DH0:C/tpubscreen RPTEST 640 480 8 0x8004 "DH0:C/RiptidePrefs PUBSCREEN=RPTEST PA
 Echo "rc $RC" >DH0:out/zz_1
 EOF
 settle a01-interface
+# the emulator can drop the very first key it is sent: a Shift alone
+# first (it does nothing on the Amiga), then the real keys
+key Shift_L
 # IPv4 off (IPv6 stays on)
 key 4
 settle a01b-interface-ipv4-off
