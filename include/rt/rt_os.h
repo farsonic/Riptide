@@ -21,6 +21,12 @@
 void rt_lock(void);
 void rt_unlock(void);
 int  rt_lock_held(void);          /* debugging aid; may always return 1 */
+/* Another task waits for the lock (the Riptide process with ACKs to
+ * process while an application's send() copies): a long holder lets it
+ * in with rt_lock_yield(), which returns nonzero when it gave the lock
+ * up (the caller re-checks what it holds). Both may always answer 0. */
+int  rt_lock_wanted(void);
+int  rt_lock_yield(void);
 
 /* Monotonic clocks. rt_now_ms() wraps after ~49 days; always compare with
  * (s32)(a - b). */

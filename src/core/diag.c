@@ -104,6 +104,7 @@ u32 rt_prof_ev[RT_EV_N];
 static const char *const ev_name[RT_EV_N] = {
 	"clock reads", "clock (cached)", "locks", "lock waits", "rt_malloc", "buf allocs",
 	"buf cache miss", "kicks", "app wakeups", "driver tx", "driver rx", "stack loops",
+	"lock yields",
 };
 
 static const char *const prof_name[RT_PROF_N] = {

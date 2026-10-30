@@ -54,6 +54,8 @@ u32  rt_csum_020(const void *data, u32 len, u32 sum);
 u32  rt_csum_copy_020(void *dst, const void *src, u32 len, u32 sum);
 void rt_copy_020(void *dst, const void *src, u32 len);
 void rt_copy_040(void *dst, const void *src, u32 len);   /* MOVE16: 68040/68060 */
+void rt_copy_020m(void *dst, const void *src, u32 len);  /* movem.l blocks */
+u32  rt_csum_copy_020m(void *dst, const void *src, u32 len, u32 sum);
 #endif
 
 #ifndef RT_TOOL_BUILD  /* tools (src/amiga/cmd) link without the core */

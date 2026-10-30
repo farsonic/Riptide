@@ -92,7 +92,7 @@ static void one(u32 len, u32 sa, u32 da, u32 sum, int pattern)
 {
 	u8 *s = src_area + GUARD + sa, *d = dst_area + GUARD + da;
 	u32 ref, got, i;
-	copy_fn copies[2];
+	copy_fn copies[3];
 	int k, nc = 0;
 
 	fill(src_area, len + 2 * GUARD + 16, pattern);
@@ -104,20 +104,24 @@ static void one(u32 len, u32 sa, u32 da, u32 sum, int pattern)
 	CHECK((got == 0) == (ref == 0));
 
 	copies[nc++] = rt_copy_020;
+	copies[nc++] = rt_copy_020m;
 	if (have_move16 > 0)
 		copies[nc++] = rt_copy_040;
-	for (k = -1; k < nc; k++) {
+	for (k = -2; k < nc; k++) {
 		memset(dst_area, 0xa5, len + 2 * GUARD + 16);
-		if (k < 0)
+		if (k == -2)
 			got = rt_csum_copy_020(d, s, len, sum);
+		else if (k == -1)
+			got = rt_csum_copy_020m(d, s, len, sum);
 		else
 			copies[k](d, s, len);
 		if (k < 0)
 			CHECKF(rt_csum_fold(got) == rt_csum_fold(ref),
-			       "csum_copy_020 len %u sa %u da %u sum %08x: %08x vs %08x", (unsigned)len,
-			       (unsigned)sa, (unsigned)da, (unsigned)sum, (unsigned)got, (unsigned)ref);
+			       "csum_copy_020%s len %u sa %u da %u sum %08x: %08x vs %08x", k == -1 ? "m" : "",
+			       (unsigned)len, (unsigned)sa, (unsigned)da, (unsigned)sum, (unsigned)got, (unsigned)ref);
 		CHECKF(memcmp(d, s, len) == 0, "%s len %u sa %u da %u: data",
-		       k < 0 ? "csum_copy_020" : k == 0 ? "copy_020" : "copy_040",
+		       k == -2 ? "csum_copy_020" : k == -1 ? "csum_copy_020m" : k == 0 ? "copy_020" :
+		       k == 1 ? "copy_020m" : "copy_040",
 		       (unsigned)len, (unsigned)sa, (unsigned)da);
 		for (i = 0; i < GUARD + da; i++)
 			if (dst_area[i] != 0xa5)
@@ -183,7 +187,13 @@ static void test_huge(void)
 	CHECK(rt_csum_fold(rt_csum_copy_020(d + 1, s + 1, n, 0x1234)) == rt_csum_fold(ref));
 	CHECK(memcmp(d + 1, s + 1, n) == 0);
 	memset(d, 0, n + 16);
+	CHECK(rt_csum_fold(rt_csum_copy_020m(d + 1, s + 1, n, 0x1234)) == rt_csum_fold(ref));
+	CHECK(memcmp(d + 1, s + 1, n) == 0);
+	memset(d, 0, n + 16);
 	rt_copy_020(d, s, n);
+	CHECK(memcmp(d, s, n) == 0 && d[n] == 0);
+	memset(d, 0, n + 16);
+	rt_copy_020m(d, s, n);
 	CHECK(memcmp(d, s, n) == 0 && d[n] == 0);
 	if (have_move16 > 0) {
 		memset(d, 0, n + 16);

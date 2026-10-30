@@ -7,6 +7,8 @@
 ;   u32  rt_csum_copy_020(void *dst, const void *src, u32 len, u32 sum)
 ;   void rt_copy_020(void *dst, const void *src, u32 len)
 ;   void rt_copy_040(void *dst, const void *src, u32 len)    68040/68060 only
+;   void rt_copy_020m(void *dst, const void *src, u32 len)   movem.l variant
+;   u32  rt_csum_copy_020m(void *dst, const void *src, u32 len, u32 sum)
 ;
 ; Calling convention: arguments on the stack, d0/d1/a0/a1 scratch, result
 ; in d0. vbcc (+aos68k) and m68k-linux-gnu-gcc both use it. Every symbol is
@@ -34,6 +36,10 @@
 	xdef	rt_copy_020
 	xdef	_rt_copy_040
 	xdef	rt_copy_040
+	xdef	_rt_copy_020m
+	xdef	rt_copy_020m
+	xdef	_rt_csum_copy_020m
+	xdef	rt_csum_copy_020m
 	xdef	_rt_cpu_vbl
 	xdef	rt_cpu_vbl
 
@@ -364,6 +370,170 @@ rt_copy_040:
 	beq.s	.n1
 	move.b	(a0),(a1)
 .n1:
+	rts
+
+; ---------------------------------------------------------------------------
+; void rt_copy_020m(void *dst, const void *src, u32 len)
+; As rt_copy_020, but the aligned middle moves 32 bytes per iteration with
+; two movem.l over eight registers: a third of the instructions (and of the
+; instruction fetches, which a 68020's 256-byte cache does not hold) of
+; eight move.l (a0)+,(a1)+. Copies under 96 bytes go to rt_copy_020.
+	cnop	0,4
+_rt_copy_020m:
+rt_copy_020m:
+	move.l	12(sp),d0		; dst 4(sp), src 8(sp), len 12(sp)
+	cmp.l	#96,d0
+	blo	rt_copy_020
+	movem.l	d2-d7/a2-a3,-(sp)	; 8 registers: dst 36(sp), src 40(sp), len 44(sp)
+	move.l	36(sp),a1
+	move.l	40(sp),a0
+	move.l	44(sp),d0
+	move.w	a1,d1			; align the destination to 4
+	btst	#0,d1
+	beq.s	.d2
+	move.b	(a0)+,(a1)+
+	subq.l	#1,d0
+.d2:
+	move.w	a1,d1
+	btst	#1,d1
+	beq.s	.d4
+	move.w	(a0)+,(a1)+
+	subq.l	#2,d0
+.d4:
+	move.l	d0,d1
+	lsr.l	#5,d1			; 32-byte blocks (>= 2)
+.blk:
+	movem.l	(a0)+,d2-d7/a2-a3
+	movem.l	d2-d7/a2-a3,(a1)
+	lea	32(a1),a1
+	subq.l	#1,d1
+	bne.s	.blk
+	btst	#4,d0			; the rest: 16, 8, 4, 2, 1 bytes
+	beq.s	.n16
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+.n16:
+	btst	#3,d0
+	beq.s	.n8
+	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+
+.n8:
+	btst	#2,d0
+	beq.s	.n4
+	move.l	(a0)+,(a1)+
+.n4:
+	btst	#1,d0
+	beq.s	.n2
+	move.w	(a0)+,(a1)+
+.n2:
+	btst	#0,d0
+	beq.s	.n1
+	move.b	(a0),(a1)
+.n1:
+	movem.l	(sp)+,d2-d7/a2-a3
+	rts
+
+; ---------------------------------------------------------------------------
+; u32 rt_csum_copy_020m(void *dst, const void *src, u32 len, u32 sum)
+; As rt_csum_copy_020 (same alignment and odd-address rules), the aligned
+; middle in blocks of seven longs: one movem.l in, seven addx.l, one
+; movem.l out. The block loop and the long loop end on address compares
+; (lea, cmpa and the branches leave X alone), so one carry chain runs
+; through the whole buffer. a4 = 1 when the source started on an odd
+; address, a5 = the byte count for the tail.
+	cnop	0,4
+_rt_csum_copy_020m:
+rt_csum_copy_020m:
+	movem.l	d2-d7/a2-a5,-(sp)	; dst 44(sp), src 48(sp), len 52(sp), sum 56(sp)
+	move.l	44(sp),a1
+	move.l	48(sp),a0
+	move.l	52(sp),d1
+	moveq	#0,d0
+	sub.l	a4,a4
+	tst.l	d1
+	beq	.done
+	move.w	a0,d2
+	btst	#0,d2
+	beq.s	.even
+	move.b	(a0)+,d0
+	move.b	d0,(a1)+
+	subq.l	#1,d1
+	addq.l	#1,a4
+.even:
+	cmp.l	#2,d1
+	blo	.tail
+	move.w	a0,d2
+	btst	#1,d2
+	beq.s	.al4
+	moveq	#0,d2
+	move.w	(a0)+,d2
+	move.w	d2,(a1)+
+	add.l	d2,d0			; cannot carry
+	subq.l	#2,d1
+.al4:
+	move.l	d1,a5			; the tail needs the count
+	move.l	d1,d2
+	and.w	#-4,d2
+	lea	(a0,d2.l),a3		; a3 = end of the whole longs
+	move	#0,ccr			; X = 0
+.blk:
+	lea	28(a0),a2
+	cmpa.l	a3,a2
+	bhi.s	.rest
+	movem.l	(a0)+,d1-d7
+	addx.l	d1,d0
+	addx.l	d2,d0
+	addx.l	d3,d0
+	addx.l	d4,d0
+	addx.l	d5,d0
+	addx.l	d6,d0
+	addx.l	d7,d0
+	movem.l	d1-d7,(a1)
+	lea	28(a1),a1
+	bra.s	.blk
+.rest:
+	cmpa.l	a3,a0
+	bhs.s	.lend
+.rl:
+	move.l	(a0)+,d1
+	move.l	d1,(a1)+
+	addx.l	d1,d0
+	cmpa.l	a3,a0
+	blo.s	.rl
+.lend:
+	moveq	#0,d1
+	addx.l	d1,d0			; the last carry
+	move.l	a5,d1
+.tail:
+	btst	#1,d1
+	beq.s	.nw
+	moveq	#0,d2
+	move.w	(a0)+,d2
+	move.w	d2,(a1)+
+	add.l	d2,d0
+	moveq	#0,d2
+	addx.l	d2,d0
+.nw:
+	btst	#0,d1
+	beq.s	.fold
+	moveq	#0,d2
+	move.b	(a0),d2
+	move.b	d2,(a1)
+	lsl.w	#8,d2
+	add.l	d2,d0
+	moveq	#0,d2
+	addx.l	d2,d0
+.fold:
+	move.l	a4,d2
+	beq.s	.done
+	ror.l	#8,d0			; undo the one byte shift of the pairing
+.done:
+	add.l	56(sp),d0
+	moveq	#0,d2
+	addx.l	d2,d0
+	movem.l	(sp)+,d2-d7/a2-a5
 	rts
 
 ; rt_cpu_vbl: an AmigaOS vertical blank interrupt server (exec calls it

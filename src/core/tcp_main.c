@@ -40,6 +40,7 @@ s32 sysctl_tcp_keepidle = 7200;
 s32 sysctl_tcp_keepintvl = 75;
 s32 sysctl_tcp_max_tw = 1024;
 s32 sysctl_tcp_delack_segs = 2;
+s32 sysctl_tcp_delack_batch = 8;
 s32 sysctl_tcp_delack_ms = TCP_DELACK_MAX;
 s32 sysctl_tcp_quickack = 0;
 char sysctl_tcp_cc[16] = "cubic";
@@ -56,6 +57,7 @@ s32 sysctl_tcp_keepalive_all = 0;
 u32 tcp_orphan_count;
 u32 tcp_tw_count;
 u64 tcp_clock_us;
+u32 tcp_clock_ms;
 
 /* ---- monotonic seconds (for ts_recent_stamp / syncookies) ---- */
 static u32 secs_last_ms, secs_acc_ms, secs_now;
@@ -204,7 +206,7 @@ static struct tcp_sock *tcp_lhash[TCP_LHASH_SIZE];
 static struct tcp_sock *tcp_bhash[TCP_BHASH_SIZE];
 static struct tcp_sock *tcp_all;
 static struct tcp_sock *tcp_reap_list;
-static int tcp_nest;
+int tcp_nest;
 
 static u32 tcp_ehashfn(const rt_in6_addr *la, u16 lport, const rt_in6_addr *fa, u16 fport)
 {
@@ -1336,6 +1338,11 @@ static int tcp_v4_send(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 
 		if (tcp_mem_snd_blocked(tp))
 			space = 0;             /* socket memory at net.inet.tcp.mem_high */
+		/* another task wants the lock (the Riptide process with
+		 * ACKs): send what is queued and return; the caller
+		 * (sock_sendit) yields and comes back for the rest */
+		if (copied && rt_lock_wanted())
+			break;
 
 		if (space == 0) {
 			tcp_chrono_start(tp, TCP_CHRONO_SNDBUF);
@@ -2380,6 +2387,7 @@ static const struct rt_sysctl tcp_sysctls[] = {
 	INT_RW("net.inet.tcp.max_orphans", NO_MIB, sysctl_tcp_max_orphans, 0, 65536, "Max orphaned connections"),
 	INT_RW("net.inet.tcp.max_tw_buckets", NO_MIB, sysctl_tcp_max_tw, 0, 65536, "Max TIME_WAIT records"),
 	INT_RW("net.inet.tcp.delack_segs", NO_MIB, sysctl_tcp_delack_segs, 1, 64, "ACK every N full segments"),
+	INT_RW("net.inet.tcp.delack_batch", NO_MIB, sysctl_tcp_delack_batch, 2, 64, "One ACK per receive batch of up to N segments"),
 	INT_RW("net.inet.tcp.delack_ms", NO_MIB, sysctl_tcp_delack_ms, 1, 500, "Max delayed ACK time (ms)"),
 	INT_RW("net.inet.tcp.quickack", NO_MIB, sysctl_tcp_quickack, 0, 1, "ACK every segment at once"),
 	INT_RW("net.inet.tcp.syn_rto_initial_ms", NO_MIB, sysctl_tcp_syn_rto_initial_ms, 200, 3000,

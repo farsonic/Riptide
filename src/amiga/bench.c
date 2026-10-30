@@ -15,10 +15,11 @@
 #define BENCH_TOTAL (512u * 1024u)
 #define BENCH_MAX   8192u
 
-enum { B_CSUM_C, B_CSUM_020, B_COPY_C, B_COPY_020, B_COPY_040, B_2PASS_C, B_2PASS_020,
-       B_CSUM_COPY_020, B_COUNT };
+enum { B_CSUM_C, B_CSUM_020, B_COPY_C, B_COPY_020, B_COPY_020M, B_COPY_040, B_2PASS_C, B_2PASS_020,
+       B_CSUM_COPY_020, B_CSUM_COPY_020M, B_COUNT };
 static const char *const bench_names[B_COUNT] = {
-	"csum_c", "csum_020", "memcpy", "copy_020", "copy_040", "cpy+sum_c", "cpy+sum_020", "csum_copy_020"
+	"csum_c", "csum_020", "memcpy", "copy_020", "copy_020m", "copy_040", "cpy+sum_c", "cpy+sum_020",
+	"csum_copy_020", "csum_cpy_020m"
 };
 
 static volatile u32 bench_sink;    /* keeps the sums alive */
@@ -38,10 +39,12 @@ static void bench_run(int which, u8 *dst, const u8 *src, u32 size, u32 n)
 		case B_CSUM_020:      s += rt_csum_020(src, size, 0); break;
 		case B_COPY_C:        memcpy(dst, src, size); break;
 		case B_COPY_020:      rt_copy_020(dst, src, size); break;
+		case B_COPY_020M:     rt_copy_020m(dst, src, size); break;
 		case B_COPY_040:      rt_copy_040(dst, src, size); break;
 		case B_2PASS_C:       memcpy(dst, src, size); s += rt_csum_partial_c(dst, size, 0); break;
 		case B_2PASS_020:     rt_copy_020(dst, src, size); s += rt_csum_020(dst, size, 0); break;
 		case B_CSUM_COPY_020: s += rt_csum_copy_020(dst, src, size, 0); break;
+		case B_CSUM_COPY_020M: s += rt_csum_copy_020m(dst, src, size, 0); break;
 		}
 	}
 	bench_sink += s;

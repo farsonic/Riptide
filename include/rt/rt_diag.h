@@ -65,7 +65,8 @@
 #define RT_EV_DRV_TX       9   /* frames handed to drivers */
 #define RT_EV_DRV_RX       10  /* frames received from drivers */
 #define RT_EV_LOOP         11  /* passes of the Riptide process's main loop */
-#define RT_EV_N            12
+#define RT_EV_LOCK_YIELD   12  /* a send() gave the lock up to a waiting task */
+#define RT_EV_N            13
 
 #ifndef RT_NO_DIAG
 extern volatile int rt_prof_on;
