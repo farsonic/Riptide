@@ -824,7 +824,7 @@ static Object *lform_build(int p)
 		mui_do(cols, OM_ADDMEMBER, (ULONG)lflab[i]);
 		mui_do(cols, OM_ADDMEMBER, (ULONG)row);
 	}
-	{
+	if (page_dyn(p) >= 0) {
 		struct rp_lnames nm;
 		rp_lform_names(&rp_cfg.cur, p, &nm);
 		dyn_set(page_dyn(p), &nm);
