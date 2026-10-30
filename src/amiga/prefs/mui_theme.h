@@ -73,8 +73,9 @@ void theme_line(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1, LONG pe
 
 /* icons (one per page, IC_ + page number, and a few more) */
 enum {
-	IC_IFACE, IC_ADDR, IC_ALIAS, IC_VLAN, IC_NAMES, IC_TIME, IC_TCP, IC_CONN, IC_PORTS, IC_KA, IC_BG,
-	IC_MEM, IC_HE, IC_QOS, IC_QRULE, IC_OTHER, IC_COUNTERS, IC_STATUS,
+	IC_IFACE, IC_ADDR, IC_ALIAS, IC_VLAN, IC_ROUTE, IC_IP6, IC_ADDR6, IC_NAMES, IC_HOST, IC_TIME, IC_TCP,
+	IC_CONN, IC_PORTS, IC_KA, IC_BG, IC_MEM, IC_HE, IC_QOS, IC_QRULE, IC_NEIGH, IC_OTHER, IC_COUNTERS,
+	IC_STATUS,
 	IC_NICONS
 };
 /* icon at x,y, size pixels square; dim: everything but white in T_DISABLED */

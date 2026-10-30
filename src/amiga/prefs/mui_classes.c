@@ -20,6 +20,8 @@ struct MUI_CustomClass *nav_mcc, *head_mcc, *qbutton_mcc, *qlabel_mcc, *status_m
 #define RAW_UP     0x4C
 #define RAW_DOWN   0x4D
 #define RAW_ESC    0x45
+#define RAW_WHEEL_UP   0x7A     /* a mouse wheel, as Intuition reports it */
+#define RAW_WHEEL_DOWN 0x7B
 #define SHIFTS     (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)
 
 /* the tag's value in an OM_NEW/OM_SET message, or def */
@@ -93,22 +95,54 @@ void mc_handler(Object *obj, struct IClass *cl, struct MUI_EventHandlerNode *ehn
 struct nav_data {
 	struct MUI_EventHandlerNode ehn;
 	int active, hot, shown;
+	/* when the rows do not fit the height it got: the first row shown and
+	 * how many fit (the headings are left out then) */
+	int scroll, top, vis;
 };
 
-/* compact (short screens): no headings, no icons, rows just over the font */
+/* The rows: as tall as the theme likes (compact screens: just over the
+ * font), made lower until every page fits the screen beside the rest of
+ * the window; below a certain height the icons go. nav_fit() sets them
+ * once the screen is known. */
+static int nav_rh, nav_hh, nav_is;
+
 static int nav_rowh(void)
 {
-	return theme_fh() + (theme_compact() ? 2 : 10);
+	return nav_rh ? nav_rh : theme_fh() + (theme_compact() ? 2 : 10);
 }
 
 static int nav_headh(void)
 {
-	return theme_compact() ? 0 : theme_fh() + 8;
+	return nav_rh ? nav_hh : theme_compact() ? 0 : theme_fh() + 8;
 }
 
 static int nav_isz(void)
 {
-	return theme_compact() ? 0 : nav_rowh() - 2 < 16 ? nav_rowh() - 2 : 16;
+	return nav_rh ? nav_is : theme_compact() ? 0 : nav_rowh() - 2 < 16 ? nav_rowh() - 2 : 16;
+}
+
+/* the height of all rows with the headings, for a row height rh */
+static LONG nav_fullh(int rh, int hh)
+{
+	return 2 * hh + (LONG)RP_NPAGES * rh + 4;
+}
+
+/* the window's other parts: title bar, head, buttons, status line, borders */
+#define NAV_CHROME (theme_compact() ? 70 : 100)
+
+static void nav_fit(Object *obj)
+{
+	LONG avail = _screen(obj)->Height - NAV_CHROME, fh = theme_fh();
+	int compact = theme_compact();
+
+	nav_rh = fh + (compact ? 2 : 10);
+	nav_hh = compact ? 0 : fh + 8;
+	while (nav_rh > fh + 1 && nav_fullh(nav_rh, nav_hh) > avail) {
+		nav_rh--;
+		if (nav_hh > nav_rh)
+			nav_hh = nav_rh;
+	}
+	nav_is = compact || nav_rh - 2 < 12 ? 0 : nav_rh - 2 < 16 ? nav_rh - 2 : 16;
 }
 
 /* The list's order: Status first, then the settings in page order. pos
@@ -124,23 +158,70 @@ static int nav_pos(int page)
 }
 
 /* the top of row pos below the object's top ("Settings" heads row 1,
- * "Advanced" the first advanced page) */
-static LONG nav_rowy(int pos)
+ * "Advanced" the first advanced page; scrolled: no headings, from top) */
+static LONG nav_rowy(const struct nav_data *d, int pos)
 {
+	if (d->scroll)
+		return (LONG)(pos - d->top) * nav_rowh();
 	return nav_headh() * ((pos >= 1) + (pos >= RP_FIRST_ADVANCED + 1)) + (LONG)pos * nav_rowh();
 }
 
+/* whether the rows fit the height the object got, and which are shown
+ * (the active one always) */
+static void nav_geom(struct nav_data *d, Object *obj)
+{
+	int pos = nav_pos(d->active);
+
+	d->scroll = nav_fullh(nav_rowh(), nav_headh()) > _mheight(obj);
+	d->vis = d->scroll ? (int)((_mheight(obj) - 4) / nav_rowh()) : RP_NPAGES;
+	if (d->vis < 1)
+		d->vis = 1;
+	if (!d->scroll)
+		d->top = 0;
+	else if (pos < d->top)
+		d->top = pos;
+	else if (pos >= d->top + d->vis)
+		d->top = pos - d->vis + 1;
+	if (d->top > RP_NPAGES - d->vis)
+		d->top = RP_NPAGES - d->vis;
+	if (d->top < 0)
+		d->top = 0;
+}
+
+/* is row pos on screen? */
+static int nav_shown(const struct nav_data *d, int pos)
+{
+	return !d->scroll || (pos >= d->top && pos < d->top + d->vis);
+}
+
 /* the page under y, or -1 */
-static int nav_hit(Object *obj, LONG y)
+static int nav_hit(struct nav_data *d, Object *obj, LONG y)
 {
 	int i;
 
 	for (i = 0; i < RP_NPAGES; i++) {
-		LONG t = _mtop(obj) + nav_rowy(i);
-		if (y >= t && y < t + nav_rowh())
+		LONG t = _mtop(obj) + nav_rowy(d, i);
+		if (nav_shown(d, i) && y >= t && y < t + nav_rowh())
 			return nav_page_at(i);
 	}
 	return -1;
+}
+
+/* scrolled: the rows by n (the page shown stays) */
+static void nav_scroll(struct nav_data *d, Object *obj, int n)
+{
+	int top = d->top + n;
+
+	if (!d->scroll)
+		return;
+	if (top > RP_NPAGES - d->vis)
+		top = RP_NPAGES - d->vis;
+	if (top < 0)
+		top = 0;
+	if (top != d->top) {
+		d->top = top;
+		MUI_Redraw(obj, MADF_DRAWOBJECT);
+	}
 }
 
 static void nav_draw(struct nav_data *d, Object *obj)
@@ -149,18 +230,26 @@ static void nav_draw(struct nav_data *d, Object *obj)
 	LONG x = _mleft(obj), r = _mright(obj), fh = theme_fh();
 	int i, isz = nav_isz(), gap = isz ? isz + 8 : 0;
 
+	nav_geom(d, obj);
 	theme_fill(rp, x, _mtop(obj), r - 1, _mbottom(obj), tpen(T_PANEL));
 	theme_line(rp, r, _mtop(obj), r, _mbottom(obj), tpen(T_BORDER));
-	if (nav_headh()) {
-		theme_text(rp, x + 10, _mtop(obj) + nav_rowy(1) - nav_headh() + (nav_headh() - fh) / 2 + 1, "Settings",
+	if (nav_headh() && !d->scroll) {
+		theme_text(rp, x + 10, _mtop(obj) + nav_rowy(d, 1) - nav_headh() + (nav_headh() - fh) / 2 + 1, "Settings",
 		           tpen(T_DIM), 1);
 		theme_text(rp, x + 10,
-		           _mtop(obj) + nav_rowy(RP_FIRST_ADVANCED + 1) - nav_headh() + (nav_headh() - fh) / 2 + 1,
+		           _mtop(obj) + nav_rowy(d, RP_FIRST_ADVANCED + 1) - nav_headh() + (nav_headh() - fh) / 2 + 1,
 		           "Advanced", tpen(T_DIM), 1);
 	}
+	/* scrolled: an accent line at an edge rows are hidden behind */
+	if (d->scroll && d->top > 0)
+		theme_fill(rp, x, _mtop(obj), r - 1, _mtop(obj) + 1, tpen(T_ACCENT));
+	if (d->scroll && d->top + d->vis < RP_NPAGES)
+		theme_fill(rp, x, _mbottom(obj) - 1, r - 1, _mbottom(obj), tpen(T_ACCENT));
 	for (i = 0; i < RP_NPAGES; i++) {
 		int p = nav_page_at(i);
-		LONG t = _mtop(obj) + nav_rowy(i), b = t + nav_rowh() - 1;
+		LONG t = _mtop(obj) + nav_rowy(d, i), b = t + nav_rowh() - 1;
+		if (!nav_shown(d, i))
+			continue;
 		if (p == d->active) {
 			theme_fill(rp, x, t, r - 1, b, tpen(T_PRESSED));
 			theme_fill(rp, x, t, x + 2, b, tpen(T_ACCENT));
@@ -206,7 +295,7 @@ DISPATCHER(nav_dispatch)
 			if (p >= 0 && p < RP_NPAGES && p != d->active) {
 				d->active = p;
 				if (d->shown)
-					MUI_Redraw(obj, MADF_DRAWOBJECT);
+					MUI_Redraw(obj, MADF_DRAWOBJECT);   /* nav_geom() scrolls it into view */
 			}
 		}
 		break;
@@ -218,14 +307,17 @@ DISPATCHER(nav_dispatch)
 		}
 		break;
 	case MUIM_AskMinMax: {
-		LONG w = 0, ww;
+		LONG w = 0, ww, avail = _screen(obj)->Height - NAV_CHROME;
 		int i;
 		DoSuperMethodA(cl, obj, msg);
 		for (i = 0; i < RP_NPAGES; i++)
 			if ((ww = mc_measure(rp_pages[i].title, 0) + 1) > w)
 				w = ww;
 		w += 10 + (nav_isz() ? nav_isz() + 8 : 0) + 14;
-		ww = nav_rowy(RP_NPAGES) + 4;
+		/* every row when they fit the screen, else what fits (then scrolled) */
+		ww = nav_fullh(nav_rowh(), nav_headh());
+		if (ww > avail)
+			ww = avail > 6 * nav_rowh() ? avail : 6 * nav_rowh();
 		mc_minmax(msg, w, w, w, ww, ww, MUI_MAXMAX);
 		return 0;
 	}
@@ -233,6 +325,7 @@ DISPATCHER(nav_dispatch)
 		if (!DoSuperMethodA(cl, obj, msg))
 			return FALSE;
 		theme_setup(obj);
+		nav_fit(obj);
 		d = INST_DATA(cl, obj);
 		mc_handler(obj, cl, &d->ehn, IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_RAWKEY, 1);
 		return TRUE;
@@ -259,7 +352,7 @@ DISPATCHER(nav_dispatch)
 		if (!im || !d->shown)
 			return 0;
 		if (im->Class == IDCMP_MOUSEMOVE) {
-			i = mc_inside(obj, im) ? nav_hit(obj, im->MouseY) : -1;
+			i = mc_inside(obj, im) ? nav_hit(d, obj, im->MouseY) : -1;
 			if (i != d->hot) {
 				d->hot = i;
 				MUI_Redraw(obj, MADF_DRAWOBJECT);
@@ -267,9 +360,18 @@ DISPATCHER(nav_dispatch)
 			return 0;
 		}
 		if (im->Class == IDCMP_MOUSEBUTTONS && im->Code == SELECTDOWN && mc_inside(obj, im)) {
-			i = nav_hit(obj, im->MouseY);
+			i = nav_hit(d, obj, im->MouseY);
 			if (i >= 0)
 				nav_go(obj, i);
+			else if (d->scroll && im->MouseY < _mtop(obj) + nav_rowh())
+				nav_scroll(d, obj, -1);
+			else if (d->scroll)
+				nav_scroll(d, obj, 1);
+			return MUI_EventHandlerRC_Eat;
+		}
+		if (im->Class == IDCMP_RAWKEY && (im->Code == RAW_WHEEL_UP || im->Code == RAW_WHEEL_DOWN) &&
+		    mc_inside(obj, im)) {
+			nav_scroll(d, obj, im->Code == RAW_WHEEL_UP ? -1 : 1);
 			return MUI_EventHandlerRC_Eat;
 		}
 		if (im->Class == IDCMP_RAWKEY && !(im->Code & IECODE_UP_PREFIX)) {
@@ -295,7 +397,7 @@ DISPATCHER(nav_dispatch)
 	}
 	case MUIM_CreateShortHelp: {
 		struct MUIP_CreateShortHelp *m = (struct MUIP_CreateShortHelp *)msg;
-		int i = nav_hit(obj, m->my);
+		int i = nav_hit(INST_DATA(cl, obj), obj, m->my);
 		if (i < 0)
 			return 0;
 		return (ULONG)theme_bubble(rp_pages[i].title, rp_pages[i].help);

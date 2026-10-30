@@ -1666,17 +1666,19 @@ static void dev_drop(char *base, int n, size_t len, const char *name)
 /* the "dev OLD" (or "dev OLD.ID") of routes or neighbours say name */
 static void dev_rename(char *base, int n, size_t len, const char *old, const char *name)
 {
-	char buf[RP_ROUTELEN + RP_IFNAMELEN], dev[RP_IFNAMELEN];
+	char buf[RP_ROUTELEN + RP_IFNAMELEN];
 	int i;
 
 	for (i = 0; i < n && base[(size_t)i * len]; i++) {
 		char *e = base + (size_t)i * len, *at;
 		if (!dev_on_iface(e, old))
 			continue;
-		rp_entry_dev(e, dev, sizeof(dev));
-		at = strstr(e, dev);
-		if (!at)
+		/* the name follows " dev " */
+		for (at = e; *at && strncmp(at, " dev ", 5); at++)
+			;
+		if (!*at)
 			continue;
+		at += 5;
 		rt_snprintf(buf, sizeof(buf), "%.*s%s%s", (int)(at - e), e, name, at + strlen(old));
 		if (strlen(buf) < len)
 			copy(e, buf, len);

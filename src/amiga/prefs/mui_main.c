@@ -40,12 +40,25 @@ static int page;
 /* the cards: the Interface page's list and buttons, the Address page's
  * card cycle; the cycles of names (DYN_*) are made anew when the names
  * change, inside a group of their own (dynbox) */
-enum { DYN_ADDR, DYN_ALIAS, DYN_VLAN, DYN_N };
+enum { DYN_ADDR, DYN_ALIAS, DYN_VLAN, DYN_ROUTE, DYN_NEIGH, DYN_ADDR6, DYN_N };
 static Object *iflist, *ifbtn[2], *dynbox[DYN_N], *dyncyc[DYN_N];
 static char *ifhelp[3], *dynhelp;
 static struct rp_lnames dynnm[DYN_N];
-static const char *dynlab[DYN_N][RP_NIF + RP_NVLAN + 1];
-static int dynfield[DYN_N] = { -1, LA_IF, LV_PARENT };
+static const char *dynlab[DYN_N][RP_NIF + RP_NVLAN + 2];
+static int dynfield[DYN_N] = { -1, LA_IF, LV_PARENT, LR_IF, LN_IF, L6_IF };
+
+/* the cycle of names of a list page, -1 for a page without one */
+static int page_dyn(int p)
+{
+	switch (p) {
+	case P_ALIAS: return DYN_ALIAS;
+	case P_VLAN:  return DYN_VLAN;
+	case P_ROUTE: return DYN_ROUTE;
+	case P_NEIGH: return DYN_NEIGH;
+	case P_ADDR6: return DYN_ADDR6;
+	}
+	return -1;
+}
 static char status_text[120];
 static const char *pubname;     /* PUBSCREEN=, for the message windows */
 
@@ -251,7 +264,9 @@ static int has_form(int p)
  * VLANs too) */
 static const struct rp_lnames *form_names(int p)
 {
-	return &dynnm[p == P_ALIAS ? DYN_ALIAS : DYN_VLAN];
+	int d = page_dyn(p);
+
+	return &dynnm[d >= 0 ? d : DYN_ALIAS];
 }
 
 /* which fields of the form apply (the address only with Static), and
@@ -438,8 +453,10 @@ static void names_show(void)
 	struct rp_lnames nm;
 	int p;
 
-	for (p = P_ALIAS; p <= P_VLAN; p++) {
-		int d = p == P_ALIAS ? DYN_ALIAS : DYN_VLAN, same, i;
+	for (p = 0; p < RP_NPAGES; p++) {
+		int d = page_dyn(p), same, i;
+		if (d < 0)
+			continue;
 		rp_lform_names(&rp_cfg.cur, p, &nm);
 		same = nm.n == dynnm[d].n;
 		for (i = 0; same && i < nm.n; i++)
@@ -791,7 +808,7 @@ static Object *lform_build(int p)
 			mui_set(lflab[k], MUIA_ShortHelp, (ULONG)lfhelp[k]);
 			if (rp_lfields[k].flags & LF_NAMES) {
 				/* the cycle of names comes in dyn_set() */
-				dynbox[p == P_ALIAS ? DYN_ALIAS : DYN_VLAN] = g;
+				dynbox[page_dyn(p)] = g;
 				lfobj[k] = NULL;
 			} else {
 				lfobj[k] = g;
@@ -810,7 +827,7 @@ static Object *lform_build(int p)
 	{
 		struct rp_lnames nm;
 		rp_lform_names(&rp_cfg.cur, p, &nm);
-		dyn_set(p == P_ALIAS ? DYN_ALIAS : DYN_VLAN, &nm);
+		dyn_set(page_dyn(p), &nm);
 	}
 	rp_lform_get(p, NULL, form_names(p), &lv);
 	form_show(p);
