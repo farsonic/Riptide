@@ -200,7 +200,7 @@ waitfor() {
 # STAGES="1 2 3": the boots to run (default all)
 want() { case " ${STAGES:-1 2 3} " in *" $1 "*) return 0;; esac; return 1; }
 # the pages' names, as the page list shows them
-pages="status interface address extra vlans names time tcp connecting ports keepalive background memory he qos qosrules other counters"
+pages="status interface address extra vlans routes ipv6 ipv6addrs names hosts time tcp connecting ports keepalive background memory he qos qosrules neighbours other counters"
 
 # ---- 1: 640x480, 256 colours, light: the edits of run_fsuae_prefs.sh ----
 if want 1; then
@@ -289,6 +289,27 @@ key Return n m m m
 settle a03j2-vlan-second-card
 key d
 settle a03j3-vlans-added
+# Routes (a form): 10.0.0.0/8 through 192.168.2.2
+key p
+settle a03k-routes
+key o
+typ '10.0.0.0/8'
+key Return g
+typ '192.168.2.2'
+key Return d
+settle a03k2-routes-added
+# IPv6: temporary addresses on (Default, Off, Create)
+key p
+settle a03l-ipv6
+key t t
+settle a03l2-ipv6-edited
+# IPv6 addresses (a form): a static one on the first card
+key p
+settle a03m-ipv6addrs
+key i
+typ '2001:db8::5/64'
+key Return d
+settle a03m2-ipv6addrs-added
 # Names: replace the host name, add a domain and a name server
 key p
 settle a04-names
@@ -302,6 +323,15 @@ key 1
 typ 192.168.1.1
 key Return
 settle a05-names-edited
+# Hosts (a form): the printer
+key p
+settle a05b-hosts
+key n
+typ printer
+key Return i
+typ 192.168.1.9
+key Return d
+settle a05c-hosts-added
 # Time: NTP on with a server, mDNS on
 key p
 settle a06-time
@@ -360,6 +390,15 @@ key Return y
 settle a09l2-qosrules-form
 key d
 settle a09m-qosrules-added
+# Neighbours (a form): the printer's hardware address
+key p
+settle a09n-neighbours
+key i
+typ 192.168.1.9
+key Return h
+typ 00:11:22:33:44:55
+key Return d
+settle a09n2-neighbours-added
 key p
 settle a10-other
 # Other lines: add one
@@ -386,7 +425,11 @@ ifconfig eth1 alias 192.168.3.5/24
 interface eth0.10 vlan=10 parent=eth0 dhcp pcp=4
 interface eth0.20 vlan=20 parent=eth0 address=192.168.20.2/24 pcp=4 mtu=1400
 interface eth1.30 vlan=30 parent=eth1 dhcp pcp=4 mtu=1400
+ifconfig eth0 inet6 2001:db8::5/64
+route add 10.0.0.0/8 via 192.168.2.2
+arp add 192.168.1.9 00:11:22:33:44:55
 nameserver 192.168.1.1
+host printer 192.168.1.9
 hostname zeus    # the old name
 domain example.org
 # keep this comment
@@ -403,6 +446,7 @@ sysctl net.inet.tcp.connect_timeout=15
 sysctl net.inet.tcp.keepalive_all=120
 sysctl net.inet.tcp.cc=ledbat
 sysctl net.inet.tcp.bg_programs=AmiFTP,wget
+sysctl net.inet6.ip6.use_tempaddr=1
 EOF
 cmp -s "$work/orig.conf" "$conf.bak" || fail "ENVARC:Riptide/riptide.conf.bak is not the old file"
 cmp -s "$conf" "$dh0/ENV/Riptide/riptide.conf" || fail "ENV: and ENVARC: riptide.conf differ"
@@ -452,8 +496,10 @@ DH0:C/RiptidePrefs PAGE=2
 Echo "rc $RC" >DH0:out/zz_3g
 DH0:C/RiptidePrefs PAGE=3
 Echo "rc $RC" >DH0:out/zz_3h
-DH0:C/RiptidePrefs PAGE=14
+DH0:C/RiptidePrefs PAGE=18
 Echo "rc $RC" >DH0:out/zz_3i
+DH0:C/RiptidePrefs PAGE=Routes
+Echo "rc $RC" >DH0:out/zz_3j
 EOF
 # MUI can take a while to start here: an empty Workbench is "stable" too,
 # so wait for the window first
@@ -493,6 +539,12 @@ waitfor zz_3h
 settle c11-compact-qosrules
 key Escape
 waitfor zz_3i
+# the page list scrolled (24 rows do not fit 256 lines): the last pages
+settle c12-compact-routes
+key shift+p
+settle c13-compact-scrolled-end
+key Escape
+waitfor zz_3j
 cleanup_uae
 grep -q '^dark=1' "$dh0/ENV/Riptide/RiptidePrefs.prefs" 2>/dev/null || fail "Dark Theme was not saved"
 grep -q '^hostname' "$dh0/ENV/Riptide/riptide.conf" && fail "Reset to Defaults + Use kept the host name"
@@ -507,7 +559,7 @@ fi
 
 cleanup
 if [ $fails -eq 0 ]; then
-	echo "ok   RiptidePrefs MUI editor on FS-UAE ($BUILD): keyboard edits as the GadTools test, both themes, 3 screens, bubble texts, menus, GADTOOLS"
+	echo "ok   RiptidePrefs MUI editor on FS-UAE ($BUILD): keyboard edits as the GadTools test (routes, hosts, neighbours, IPv6 too), both themes, 3 screens, bubble texts, menus, GADTOOLS"
 	echo "     screenshots: $work/*.png"
 	exit 0
 fi

@@ -424,6 +424,39 @@ static void update_ifs(struct rp_status_model *m, const struct rp_st_input *in, 
 	}
 }
 
+/* the routing tables (the path MTU cache left out) and the neighbour
+ * caches, as far as they fit */
+static void update_routes(struct rp_status_model *m, const struct rp_st_input *in)
+{
+	int i;
+
+	m->nr4 = m->nr6 = m->nn4 = m->nn6 = m->nr4_all = m->nr6_all = m->nn4_all = m->nn6_all = 0;
+	for (i = 0; in->routes && i < in->nroutes; i++) {
+		struct rt_ctl_route r;
+		rec(&r, sizeof(r), in->routes, in->rrec, i);
+		if (r.flags & RT_CTL_RTF_PMTU)
+			continue;
+		if (m->nr4 < RP_ST_NRT)
+			m->r4[m->nr4++] = r;
+		m->nr4_all++;
+	}
+	for (i = 0; in->routes6 && i < in->nroutes6; i++) {
+		struct rt_ctl_route6 r;
+		rec(&r, sizeof(r), in->routes6, in->r6rec, i);
+		if (r.flags & RT_CTL_RTF_PMTU)
+			continue;
+		if (m->nr6 < RP_ST_NRT)
+			m->r6[m->nr6++] = r;
+		m->nr6_all++;
+	}
+	for (i = 0; in->neigh && i < in->nneigh && m->nn4 < RP_ST_NNB; i++)
+		rec(&m->n4[m->nn4++], sizeof(m->n4[0]), in->neigh, in->nrec, i);
+	m->nn4_all = in->neigh ? in->nneigh : 0;
+	for (i = 0; in->neigh6 && i < in->nneigh6 && m->nn6 < RP_ST_NNB; i++)
+		rec(&m->n6[m->nn6++], sizeof(m->n6[0]), in->neigh6, in->n6rec, i);
+	m->nn6_all = in->neigh6 ? in->nneigh6 : 0;
+}
+
 /* connections that move data first, then the established ones, then the rest */
 static int conn_rank(const struct rp_st_conn *c)
 {
@@ -534,6 +567,7 @@ void rp_status_update(struct rp_status_model *m, const struct rp_st_input *in)
 	m->have_ipst = in->ipst != NULL;
 	if (in->ipst)
 		copy_part(&m->ip, sizeof(m->ip), in->ipst, in->ipst_len);
+	update_routes(m, in);
 	m->now_ms = in->now_ms;
 	m->have_prev = 1;
 }
@@ -740,6 +774,129 @@ void rp_st_names_text(const struct rp_status_model *m, char *buf, int len)
 		k = addf(buf, len, k, "\nNext sync in %s", t);
 		break;
 	}
+}
+
+/* where a route came from, and what it does */
+static const char *route_words(u32 flags, u8 proto, u8 linkdown)
+{
+	static char w[64];
+	const char *from;
+
+	if (flags & RT_CTL_RTF_CONNECTED)
+		from = "on the cable";
+	else if ((flags & RT_CTL_RTF_DHCP) || proto == RT_PROTO_DHCP)
+		from = "DHCP";
+	else if (proto == RT_PROTO_RA)
+		from = "router advertisement";
+	else if ((flags & RT_CTL_RTF_DYNAMIC) || proto == RT_PROTO_REDIRECT)
+		from = "redirect";
+	else if (proto == RT_PROTO_BOOT)
+		from = "boot";
+	else
+		from = "static";
+	rt_snprintf(w, sizeof(w), "%s%s%s", flags & RT_CTL_RTF_REJECT ? "rejects, " : "", from,
+	            linkdown ? ", link down" : "");
+	return w;
+}
+
+static const char *nud_words(u8 state)
+{
+	static const char *const n[] = { "being looked up", "reachable", "stale", "static", "delayed", "probing",
+	                                 "failed" };
+	return state < (u8)(sizeof(n) / sizeof(n[0])) ? n[state] : "?";
+}
+
+static void mac_text(const u8 *hw, char *buf, int len)
+{
+	rt_snprintf(buf, (size_t)len, "%02x:%02x:%02x:%02x:%02x:%02x", hw[0], hw[1], hw[2], hw[3], hw[4], hw[5]);
+}
+
+void rp_st_routes_text(const struct rp_status_model *m, char *buf, int len, int maxlines)
+{
+	char d[48], g[48], t[48], mac[24];
+	int k = 0, i, lines = 0, s4 = 0, s6 = 0;
+
+	buf[0] = 0;
+	if (!m->running)
+		return;
+	if (!m->nr4_all && !m->nr6_all) {
+		addf(buf, len, k, "Routes: none");
+		return;
+	}
+	k = addf(buf, len, k, "Routes:");
+	lines++;
+	for (i = 0; i < m->nr4 && lines < maxlines - 1; i++, lines++, s4++) {
+		const struct rt_ctl_route *r = &m->r4[i];
+		if (!r->dst && !r->mask)
+			rt_strlcpy(d, "default", sizeof(d));
+		else
+			rp_fmt_ip4_plen(d, sizeof(d), r->dst, r->mask);
+		g[0] = 0;
+		if (r->gateway) {
+			rp_fmt_ip4(t, sizeof(t), r->gateway);
+			rt_snprintf(g, sizeof(g), " via %s", t);
+		}
+		t[0] = 0;
+		if (r->metric)
+			rt_snprintf(t, sizeof(t), ", metric %lu", (unsigned long)r->metric);
+		if (r->expire_s) {
+			char left[32];
+			rp_fmt_dur(left, sizeof(left), r->expire_s);
+			rt_snprintf(t + strlen(t), sizeof(t) - strlen(t), ", %s left", left);
+		}
+		k = addf(buf, len, k, "\n%s%s  %s  %s%s", d, g, r->ifname[0] ? r->ifname : "-",
+		         route_words(r->flags, r->proto, r->linkdown), t);
+	}
+	for (i = 0; i < m->nr6 && lines < maxlines - 1; i++, lines++, s6++) {
+		const struct rt_ctl_route6 *r = &m->r6[i];
+		static const u8 zero[16];
+		if (!r->plen && !memcmp(r->dst, zero, 16)) {
+			rt_strlcpy(d, "default", sizeof(d));
+		} else {
+			rp_fmt_addr_port(d, sizeof(d), r->dst, 0);
+			rt_snprintf(d + strlen(d), sizeof(d) - strlen(d), "/%u", (unsigned)r->plen);
+		}
+		g[0] = 0;
+		if (memcmp(r->gateway, zero, 16)) {
+			rp_fmt_addr_port(t, sizeof(t), r->gateway, 0);
+			rt_snprintf(g, sizeof(g), " via %s", t);
+		}
+		t[0] = 0;
+		if (r->metric)
+			rt_snprintf(t, sizeof(t), ", metric %lu", (unsigned long)r->metric);
+		if (r->expire_s) {
+			char left[32];
+			rp_fmt_dur(left, sizeof(left), r->expire_s);
+			rt_snprintf(t + strlen(t), sizeof(t) - strlen(t), ", %s left", left);
+		}
+		k = addf(buf, len, k, "\n%s%s  %s  %s%s", d, g, r->ifname[0] ? r->ifname : "-",
+		         route_words(r->flags, r->proto, r->linkdown), t);
+	}
+	if (s4 < m->nr4_all || s6 < m->nr6_all) {
+		k = addf(buf, len, k, "\n(and %d more)", m->nr4_all - s4 + m->nr6_all - s6);
+		lines++;
+	}
+	if (lines >= maxlines - 1)
+		return;
+	s4 = s6 = 0;
+	k = addf(buf, len, k, "\nNeighbours:%s", m->nn4_all + m->nn6_all ? "" : " none");
+	lines++;
+	for (i = 0; i < m->nn4 && lines < maxlines; i++, lines++, s4++) {
+		const struct rt_ctl_neigh *n = &m->n4[i];
+		rp_fmt_ip4(d, sizeof(d), n->addr);
+		mac_text(n->hwaddr, mac, sizeof(mac));
+		k = addf(buf, len, k, "\n%s  %s  %s  %s", d, n->state == RT_NUD_INCOMPLETE ? "-" : mac,
+		         n->ifname[0] ? n->ifname : "-", nud_words(n->state));
+	}
+	for (i = 0; i < m->nn6 && lines < maxlines; i++, lines++, s6++) {
+		const struct rt_ctl_neigh6 *n = &m->n6[i];
+		rp_fmt_addr_port(d, sizeof(d), n->addr, 0);
+		mac_text(n->hwaddr, mac, sizeof(mac));
+		k = addf(buf, len, k, "\n%s  %s  %s  %s%s", d, n->state == RT_NUD_INCOMPLETE ? "-" : mac,
+		         n->ifname[0] ? n->ifname : "-", nud_words(n->state), n->router ? ", router" : "");
+	}
+	if (s4 < m->nn4_all || s6 < m->nn6_all)
+		addf(buf, len, k, "\n(and %d more)", m->nn4_all - s4 + m->nn6_all - s6);
 }
 
 void rp_st_counters_text(const struct rp_status_model *m, char *buf, int len)

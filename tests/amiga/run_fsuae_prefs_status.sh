@@ -300,6 +300,8 @@ waitfile ready 600 && {
 	shot s03-names
 	key 4
 	shot s04-counters
+	key 5
+	shot s04b-routes
 	key 1
 	shot s05-interfaces-later 6
 	# the Counters page (the last page: Shift-P from Status), Zero, Since start
@@ -352,6 +354,7 @@ grep -Eq 'cpu [1-9]' "$dh0/out/log1" || fail "no CPU share in log1"
 grep -Eq '^status: running, [0-9]+ interfaces, ([3-9]|[1-9][0-9]+) connections' "$dh0/out/log1" ||
 	fail "the Status page never saw the three background connections (log1)"
 grep -q '^status: running' "$dh0/out/log3" 2>/dev/null || fail "the compact Status page did not read the stack"
+grep -Eq '^status: running, .* routes [1-9]' "$dh0/out/log1" || fail "the Status page saw no routes (log1)"
 n=$(grep -c "^dl [0-9.]* $DL_SIZE\$" "$work/peer.log" 2>/dev/null)
 [ "${n:-0}" -ge 3 ] || fail "the timed downloads did not complete ($(cat "$work/peer.log" 2>/dev/null))"
 for z in zz_0 zz_1 zz_2 zz_3 zz_4; do grep -q '^rc 0' "$dh0/out/$z" 2>/dev/null || fail "$z: $(cat "$dh0/out/$z" 2>/dev/null)"; done
@@ -369,6 +372,8 @@ sleep 15
 shot s11-not-running 6
 key 2
 shot s12-not-running-connections 3
+key 5
+shot s12b-not-running-routes 3
 key Escape
 waitfile zz_5 60
 shot s13-gadtools-not-running 8

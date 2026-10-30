@@ -147,6 +147,19 @@ struct rt_ctl_qos {
 };
 
 /* ---- routes ---- */
+/* rt_ctl_route.flags and rt_ctl_route6.flags: the RT_RTF_* values of
+ * rt_ip.h and rt_ip6.h, for readers that do not have the core headers */
+#define RT_CTL_RTF_UP        0x0001
+#define RT_CTL_RTF_GATEWAY   0x0002
+#define RT_CTL_RTF_HOST      0x0004
+#define RT_CTL_RTF_REJECT    0x0008
+#define RT_CTL_RTF_DYNAMIC   0x0010
+#define RT_CTL_RTF_STATIC    0x0800
+#define RT_CTL_RTF_CONNECTED 0x10000
+#define RT_CTL_RTF_PMTU      0x20000
+#define RT_CTL_RTF_DHCP      0x40000
+#define RT_CTL_RTF_RA        0x80000
+
 /* rt_ctl_route.proto (Linux RTPROT_* values) */
 #define RT_PROTO_REDIRECT 1
 #define RT_PROTO_KERNEL   2       /* connected (interface) routes, PMTU cache */
