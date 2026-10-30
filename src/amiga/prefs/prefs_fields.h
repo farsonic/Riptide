@@ -17,8 +17,8 @@
 #include "conf_edit.h"
 
 enum {
-	P_IFACE, P_ADDR, P_ALIAS, P_VLAN, P_NAMES, P_TIME, P_TCP, P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE,
-	P_QOS, P_QRULE, P_OTHER,
+	P_IFACE, P_ADDR, P_ALIAS, P_VLAN, P_ROUTE, P_IP6, P_ADDR6, P_NAMES, P_HOST, P_TIME, P_TCP,
+	P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE, P_QOS, P_QRULE, P_NEIGH, P_OTHER,
 	P_COUNTERS,                 /* Riptide's counts, no settings */
 	P_STATUS,                   /* live state, no settings (shown first) */
 	RP_NPAGES
@@ -64,7 +64,7 @@ struct rp_field {
 };
 extern const struct rp_field rp_fields[];
 extern const int rp_nfields;
-#define RP_NFIELDS_MAX 80       /* for per-field arrays of the editors (checked by the host test) */
+#define RP_NFIELDS_MAX 96       /* for per-field arrays of the editors (checked by the host test) */
 
 /* values in the model */
 long rp_fget(const struct rp_model *m, int fi);
@@ -120,22 +120,28 @@ enum {
 	LV_PARENT, LV_ID, LV_NAME, LV_MODE, LV_ADDR, LV_PCP, LV_MTU, LV_TCPWIN,     /* VLANs */
 	LV_IP4, LV_IP6, LV_QOS,
 	LQ_PROTO, LQ_PORTS, LQ_SIDE, LQ_PROG, LQ_PRIO, LQ_DSCP,          /* QoS rules */
+	LR_DEST, LR_GW, LR_IF, LR_METRIC, LR_TYPE,                      /* Routes */
+	LH_NAME, LH_ADDR,                                               /* Hosts */
+	LN_ADDR, LN_MAC, LN_IF,                                         /* Neighbours */
+	L6_IF, L6_ADDR, L6_DAD,                                         /* IPv6 addresses */
 	RP_NLFIELDS
 };
 extern const struct rp_lfield rp_lfields[];
 extern const int rp_nlfields;
-#define RP_NLFIELDS_MAX 24
+#define RP_NLFIELDS_MAX 40
 #define RP_LFTEXT 64
 struct rp_lvals {
 	int cy[RP_NLFIELDS_MAX];                /* LF_CYCLE: the label chosen */
 	char tx[RP_NLFIELDS_MAX][RP_LFTEXT];    /* LF_NUM, LF_STR, LF_INFO: the text */
 };
-/* The cards and VLANs the Interface and Parent cycles offer (LA_IF: the
- * cards, then the VLANs; LV_PARENT: the cards), as rp_iface_names() gives
- * them; rp_lform_names() fills it from a model. */
+/* The cards and VLANs the Interface and Parent cycles offer (LA_IF, L6_IF:
+ * the cards, then the VLANs; LV_PARENT: the cards; LR_IF, LN_IF: "Any"
+ * first, then the cards and VLANs), as rp_iface_names() gives them;
+ * rp_lform_names() fills it from a model. */
+#define RP_LNAME_ANY "Any"
 struct rp_lnames {
 	int n;
-	char name[RP_NIF + RP_NVLAN][RP_IFNAMELEN];
+	char name[RP_NIF + RP_NVLAN + 1][RP_IFNAMELEN];
 };
 void rp_lform_names(const struct rp_model *m, int page, struct rp_lnames *nm);
 /* An entry (NULL or "": a new one) into the form of its page; nm: the

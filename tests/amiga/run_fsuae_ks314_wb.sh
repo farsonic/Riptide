@@ -174,8 +174,9 @@ open_editor() {
 
 # names_host NAME: MUI editor, Names page, host name NAME (from the Status page)
 mui_host() {
+	# from the Status page: eight pages on to Names
 	n=0
-	while [ $n -lt 5 ]; do key p; n=$((n + 1)); done
+	while [ $n -lt 8 ]; do key p; n=$((n + 1)); done
 	sleep 1
 	key h
 	n=0
@@ -276,9 +277,9 @@ want 5 && wb_ok $r
 r=r6-gadtools
 if want 6 && open_editor "$GT_ICON" gt.log $r "GadTools editor"; then
 	shot $r-a-open
-	# the GadTools editor opens on Interface: four pages on to Names
+	# the GadTools editor opens on Interface: seven pages on to Names
 	n=0
-	while [ $n -lt 4 ]; do key p; n=$((n + 1)); done
+	while [ $n -lt 7 ]; do key p; n=$((n + 1)); done
 	sleep 1
 	key h
 	n=0

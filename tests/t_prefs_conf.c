@@ -104,9 +104,9 @@ static void test_parse(void)
 	CHECK(c.cur.ifc[0].unit == 0 && c.cur.ifc[0].mtu == 1500 && c.cur.ifc[0].tcpwindow == 1440 && c.cur.ifc[0].reads == RP_UNSET);
 	CHECK(c.cur.ifc[0].dhcp == 1 && c.l_dhcp[0] && !c.l_ifconfig[0]);
 	CHECK(c.cur.ipv6 == 1 && c.cur.ntp == 0 && c.cur.mdns == -1);
-	CHECK(rp_other_count(&c) == 2);
-	CHECK(!strcmp(rp_other_get(&c, 0), "host amiga 127.0.0.1"));
-	CHECK(!strcmp(rp_other_get(&c, 1), "loglevel 1"));
+	CHECK(rp_other_count(&c) == 1);
+	CHECK(!strcmp(rp_other_get(&c, 0), "loglevel 1"));
+	CHECK(rp_list_count(&c, RP_LIST_HOST) == 1 && !strcmp(rp_list_get(&c, RP_LIST_HOST, 0), "amiga 127.0.0.1"));
 	rp_conf_free(&c);
 
 	CHECK(rp_conf_load(&c, static_conf, strlen(static_conf)) == 0);
@@ -235,9 +235,9 @@ static void test_other(void)
 	char *t;
 
 	CHECK(rp_conf_load(&c, inst_dhcp, strlen(inst_dhcp)) == 0);
-	CHECK(rp_other_set(&c, 1, "loglevel 2") == 0);
+	CHECK(rp_other_set(&c, 0, "loglevel 2") == 0);
 	CHECK(rp_other_add(&c, "user bob uid=1") == 0);
-	CHECK(rp_other_set(&c, 0, "") == 0);           /* delete "host ..." */
+	CHECK(rp_list_set(&c, RP_LIST_HOST, 0, "") == 0);   /* delete "host ..." (the Hosts page) */
 	CHECK(rp_other_count(&c) == 2);
 	CHECK(rp_other_add(&c, "# comment") < 0);
 	CHECK(rp_other_set(&c, 9, "x") < 0);
@@ -1116,6 +1116,295 @@ static void test_multi(void)
 	rp_conf_free(&c);
 }
 
+/* routes, hosts, neighbours, IPv6 addresses, IPv6 on one card, the DHCP
+ * wait: every form the stack takes, some it does not */
+static const char *net_conf =
+	"hostname amy\n"
+	"interface eth0 device=uaenet.device unit=0\n"
+	"dhcp eth0 linklocal off wait 30\n"
+	"ipv6 eth0 off\n"
+	"interface eth1 device=a2065.device unit=0\n"
+	"ifconfig eth1 192.168.2.5/24 up\n"
+	"route add default 192.168.2.1 dev eth1 metric 10\n"
+	"interface eth1.20 vlan=20 parent=eth1 dhcp\n"
+	"ifconfig eth1 inet6 2001:db8:1::5/64\n"
+	"ifconfig eth1.20 inet6 2001:db8:20::5 prefixlen 48 nodad up\n"
+	"ifconfig eth0 inet6 fd00::9 delete\n"
+	"route add 10.0.0.0/8 via 192.168.2.2\n"
+	"route add -net 10.9.0.0 netmask 255.255.0.0 gw 192.168.2.3 metric 5   # the lab\n"
+	"route add -host 10.9.9.9 192.168.2.4\n"
+	"route add 192.168.7.0/24 dev eth1.20\n"
+	"route add 172.16.0.0/12 reject\n"
+	"route add -inet6 2001:db8:99::/48 via 2001:db8:1::1\n"
+	"route add default via fe80::1 dev eth1\n"
+	"route add 10.8.0.0/16 via 192.168.2.9 mtu 1400\n"
+	"host printer 192.168.2.9\n"
+	"host nas.home.lan 2001:db8:1::10\n"
+	"host printer-too 192.168.2.9 alias\n"
+	"arp add 192.168.2.9 00:11:22:33:44:55\n"
+	"arp add 2001:db8:1::9 lladdr 00:11:22:33:44:66 dev eth1\n"
+	"arp add 192.168.2.10 00:11:22:33:44:77 dev eth1 permanent\n"
+	"nameserver 192.168.2.1\n"
+	"sysctl net.inet6.ip6.use_tempaddr=2\n"
+	"sysctl net.inet6.ip6.accept_rtadv=0\n";
+
+static void e_net(struct rp_model *m)
+{
+	m->ifc[0].dhcp_wait = RP_UNSET;
+	m->ifc[0].ipv6 = -1;
+	m->ifc[1].ipv6 = 1;
+	m->sc[RP_SC_DAD] = 2;
+}
+
+static void test_netpages(void)
+{
+	struct rp_conf c;
+	struct rp_lnames nm;
+	struct rp_lvals v;
+	char *t, out[RP_LONG], err[200], row[160];
+	int fi;
+
+	roundtrip("net pages", net_conf);
+	CHECK(rp_conf_load(&c, net_conf, strlen(net_conf)) == 0);
+	CHECK(c.cur.ifc[0].dhcp_wait == 30 && c.cur.ifc[0].linklocal == 0 && c.cur.ifc[0].ipv6 == 0 && c.l_ipv6if[0]);
+	CHECK(c.cur.ifc[1].ipv6 == -1 && c.cur.ifc[1].dhcp_wait == RP_UNSET);
+	CHECK(c.cur.sc[RP_SC_TEMPADDR] == 2 && c.cur.sc[RP_SC_RTADV] == 0 && c.cur.sc[RP_SC_DAD] == RP_UNSET);
+	/* IPv6 addresses: on the second card and on its VLAN; the delete line is not ours */
+	CHECK(rp_list_count(&c, RP_LIST_ADDR6) == 2);
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ADDR6, 0), "eth1|2001:db8:1::5/64"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ADDR6, 1), "eth1.20|2001:db8:20::5/48 nodad"));
+	/* routes: every form but the mtu one; the cards' default route is not a list entry */
+	CHECK(rp_list_count(&c, RP_LIST_ROUTE) == 7 || (printf("%d routes\n", rp_list_count(&c, RP_LIST_ROUTE)), 0));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 0), "10.0.0.0/8 via 192.168.2.2"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 1), "10.9.0.0/16 via 192.168.2.3 metric 5"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 2), "10.9.9.9/32 via 192.168.2.4"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 3), "192.168.7.0/24 dev eth1.20"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 4), "172.16.0.0/12 reject"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 5), "2001:db8:99::/48 via 2001:db8:1::1"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 6), "default via fe80::1 dev eth1"));
+	CHECK(!strcmp(c.cur.ifc[1].gateway, "192.168.2.1") && c.cur.ifc[1].metric == 10);
+	/* hosts: name and address; the alias form is not ours */
+	CHECK(rp_list_count(&c, RP_LIST_HOST) == 2);
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_HOST, 0), "printer 192.168.2.9"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_HOST, 1), "nas.home.lan 2001:db8:1::10"));
+	/* neighbours: with and without dev, lladdr; the permanent one is not ours */
+	CHECK(rp_list_count(&c, RP_LIST_NEIGH) == 2);
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_NEIGH, 0), "192.168.2.9 00:11:22:33:44:55"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_NEIGH, 1), "2001:db8:1::9 00:11:22:33:44:66 dev eth1"));
+	CHECK(rp_other_count(&c) == 4 || (printf("%d other\n", rp_other_count(&c)), 0));
+	CHECK(!strcmp(rp_other_get(&c, 0), "ifconfig eth0 inet6 fd00::9 delete"));
+	CHECK(!strcmp(rp_other_get(&c, 1), "route add 10.8.0.0/16 via 192.168.2.9 mtu 1400"));
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	CHECK(rp_iface_users(&c.cur, 1) == 6);      /* the VLAN, 2 addresses, 2 routes and a neighbour */
+
+	/* edits: change one route (keeps its comment), delete one, add one of
+	 * each kind, IPv6 off on eth1, no wait on eth0 */
+	CHECK(rp_list_set(&c, RP_LIST_ROUTE, 1, "10.9.0.0/16 via 192.168.2.3 metric 7") == 0);
+	CHECK(rp_list_set(&c, RP_LIST_ROUTE, 4, "") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_ROUTE, "192.168.9.0/24 via 192.168.2.8 dev eth1 blackhole") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_HOST, "tv 192.168.2.20") == 0);
+	CHECK(rp_list_set(&c, RP_LIST_HOST, 0, "") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_NEIGH, "192.168.2.20 aa:bb:cc:dd:ee:ff dev eth1") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_ADDR6, "fd00::1/64 nodad") == 0);
+	CHECK(rp_list_set(&c, RP_LIST_ADDR6, 0, "") == 0);
+	c.cur.ifc[1].ipv6 = 0;
+	c.cur.ifc[0].dhcp_wait = RP_UNSET;
+	c.cur.sc[RP_SC_DAD] = 2;
+	t = text_of(&c);
+	CHECK((t && !strcmp(t,
+		"hostname amy\n"
+		"interface eth0 device=uaenet.device unit=0\n"
+		"dhcp eth0 linklocal off\n"
+		"ipv6 eth0 off\n"
+		"interface eth1 device=a2065.device unit=0\n"
+		"ifconfig eth1 192.168.2.5/24 up\n"
+		"route add default 192.168.2.1 dev eth1 metric 10\n"
+		"ipv6 eth1 off\n"
+		"interface eth1.20 vlan=20 parent=eth1 dhcp\n"
+		"ifconfig eth1.20 inet6 2001:db8:20::5 prefixlen 48 nodad up\n"
+		"ifconfig eth0 inet6 fd00::1/64 nodad\n"
+		"ifconfig eth0 inet6 fd00::9 delete\n"
+		"route add 10.0.0.0/8 via 192.168.2.2\n"
+		"route add 10.9.0.0/16 via 192.168.2.3 metric 7   # the lab\n"
+		"route add -host 10.9.9.9 192.168.2.4\n"
+		"route add 192.168.7.0/24 dev eth1.20\n"
+		"route add -inet6 2001:db8:99::/48 via 2001:db8:1::1\n"
+		"route add default via fe80::1 dev eth1\n"
+		"route add 192.168.9.0/24 via 192.168.2.8 dev eth1 blackhole\n"
+		"route add 10.8.0.0/16 via 192.168.2.9 mtu 1400\n"
+		"host nas.home.lan 2001:db8:1::10\n"
+		"host tv 192.168.2.20\n"
+		"host printer-too 192.168.2.9 alias\n"
+		"arp add 192.168.2.9 00:11:22:33:44:55\n"
+		"arp add 2001:db8:1::9 lladdr 00:11:22:33:44:66 dev eth1\n"
+		"arp add 192.168.2.20 aa:bb:cc:dd:ee:ff dev eth1\n"
+		"arp add 192.168.2.10 00:11:22:33:44:77 dev eth1 permanent\n"
+		"nameserver 192.168.2.1\n"
+		"sysctl net.inet6.ip6.use_tempaddr=2\n"
+		"sysctl net.inet6.ip6.accept_rtadv=0\n"
+		"sysctl net.inet6.ip6.dad_count=2\n")) || (printf("%s", t), 0));
+	free(t);
+	/* the commands for the running stack: removed first, then new */
+	cmds[0] = 0;
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);     /* the wait: a restart */
+	CHECK(!strcmp(cmds, "sysctl net.inet6.ip6.dad_count=2;"
+	                    "ifconfig eth1 inet6 2001:db8:1::5 delete;"
+	                    "ifconfig eth0 inet6 fd00::1/64 nodad;"
+	                    "route del 10.9.0.0/16 via 192.168.2.3 metric 5;"
+	                    "route del 172.16.0.0/12;"
+	                    "route add 10.9.0.0/16 via 192.168.2.3 metric 7;"
+	                    "route add 192.168.9.0/24 via 192.168.2.8 dev eth1 blackhole;"
+	                    "arp add 192.168.2.20 aa:bb:cc:dd:ee:ff dev eth1;"
+	                    "host del printer;host tv 192.168.2.20;"
+	                    "ipv6 eth1 off;") || (printf("%s\n", cmds), 0));
+	rp_conf_free(&c);
+	/* a fresh file gets its lines in a sensible order */
+	CHECK(rp_conf_load(&c, "", 0) == 0);
+	CHECK(rp_list_add(&c, RP_LIST_ROUTE, "10.0.0.0/8 via 192.168.1.2") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_HOST, "printer 192.168.1.9") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_NEIGH, "192.168.1.9 00:11:22:33:44:55") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_ADDR6, "2001:db8::5/64") == 0);
+	c.cur.ifc[0].ipv6 = 1;
+	c.cur.ifc[0].dhcp_wait = 20;
+	t = text_of(&c);
+	/* (the default interface line is not written until it changes) */
+	CHECK((t && !strcmp(t, "dhcp eth0 wait 20\n"
+	                       "ipv6 eth0 on\n"
+	                       "ifconfig eth0 inet6 2001:db8::5/64\n"
+	                       "route add 10.0.0.0/8 via 192.168.1.2\n"
+	                       "arp add 192.168.1.9 00:11:22:33:44:55\n"
+	                       "host printer 192.168.1.9\n")) || (printf("%s", t), 0));
+	free(t);
+	cmds[0] = 0;
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);
+	CHECK(strstr(cmds, "ipv6 eth0 on;") && strstr(cmds, "ifconfig eth0 inet6 2001:db8::5/64;"));
+	rp_conf_free(&c);
+
+	/* validation: the entries, and cards that are not there */
+	CHECK(rp_valid_route("default via 192.168.1.1") && rp_valid_route("10.0.0.0/8 dev eth0 metric 3"));
+	CHECK(rp_valid_route("2001:db8::/32 via 2001:db8::1") && rp_valid_route("::/0 via fe80::1 dev eth0"));
+	CHECK(rp_valid_route("172.16.0.0/12 unreachable") && rp_valid_route("default via fe80::1%eth0"));
+	CHECK(!rp_valid_route("10.0.0.0/8") && !rp_valid_route("10.0.0.0/8 via 2001:db8::1"));
+	CHECK(!rp_valid_route("2001:db8::/32 via 192.168.1.1") && !rp_valid_route("10.0.0.0/33 via 192.168.1.1"));
+	CHECK(!rp_valid_route("default via 192.168.1.1 via 192.168.1.2") && !rp_valid_route("default metric x dev eth0"));
+	CHECK(!rp_valid_route("default dev eth0 via 192.168.1.1") && !rp_valid_route("default via 192.168.1.1 mtu 1400"));
+	CHECK(rp_valid_host("printer 192.168.1.9") && rp_valid_host("nas.lan 2001:db8::9"));
+	CHECK(!rp_valid_host("printer") && !rp_valid_host("10.0.0.1 10.0.0.2") && !rp_valid_host("a b c"));
+	CHECK(rp_valid_neigh("192.168.1.9 00:11:22:33:44:55") && rp_valid_neigh("fe80::9 00:11:22:33:44:ff dev eth0"));
+	CHECK(!rp_valid_neigh("192.168.1.9 00:11:22:33:44") && !rp_valid_neigh("192.168.1.9 00:11:22:33:44:55 eth0"));
+	CHECK(rp_valid_addr6("2001:db8::5/64") && rp_valid_addr6("fd00::1/128 nodad"));
+	CHECK(!rp_valid_addr6("2001:db8::5") && !rp_valid_addr6("2001:db8::5/64 dad") && !rp_valid_addr6("1.2.3.4/24"));
+	CHECK(rp_valid_ip6("fe80::1%eth0", 0) && !rp_valid_ip6("fe80::1/129", 1) && rp_valid_ip6("::1", 0));
+	CHECK(rp_valid_mac("00:11:22:33:44:55") && rp_valid_mac("AA:bb:CC:dd:EE:ff") && !rp_valid_mac("00-11-22-33-44-55"));
+	CHECK(rp_list_entry_valid(P_ROUTE, "10.0.0.0/8 via 192.168.1.2", err, sizeof(err)));
+	CHECK(!rp_list_entry_valid(P_ROUTE, "10.0.0.0/8", err, sizeof(err)) && !strncmp(err, "Route:", 6));
+	CHECK(rp_list_entry_valid(P_ADDR6, "eth1|2001:db8::5/64", err, sizeof(err)));
+	CHECK(!rp_list_entry_valid(P_HOST, "x", err, sizeof(err)) && !strncmp(err, "Host:", 5));
+	CHECK(!rp_list_entry_valid(P_NEIGH, "x", err, sizeof(err)) && !strncmp(err, "Neighbour:", 10));
+	CHECK(rp_conf_load(&c, "", 0) == 0);
+	CHECK(rp_list_add(&c, RP_LIST_ROUTE, "10.0.0.0/8 dev eth2") == 0);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && rp_vpage == P_ROUTE && strstr(err, "no card or VLAN eth2"));
+	CHECK(rp_list_set(&c, RP_LIST_ROUTE, 0, "") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_NEIGH, "10.0.0.5 00:11:22:33:44:55 dev eth0.5") == 0);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && rp_vpage == P_NEIGH);
+	CHECK(rp_list_set(&c, RP_LIST_NEIGH, 0, "") == 0);
+	CHECK(rp_list_add(&c, RP_LIST_ADDR6, "eth3|2001:db8::5/64") == 0);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && rp_vpage == P_ADDR6);
+	rp_conf_free(&c);
+
+	/* renaming and removing a card follows into the routes, neighbours
+	 * and addresses */
+	CHECK(rp_conf_load(&c, net_conf, strlen(net_conf)) == 0);
+	rp_iface_rename(&c.cur, 1, "net1");
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 3), "192.168.7.0/24 dev net1.20"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ROUTE, 6), "default via fe80::1 dev net1"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_NEIGH, 1), "2001:db8:1::9 00:11:22:33:44:66 dev net1"));
+	CHECK(!strcmp(rp_list_get(&c, RP_LIST_ADDR6, 1), "net1.20|2001:db8:20::5/48 nodad"));
+	rp_iface_delete(&c.cur, 1);
+	CHECK(rp_list_count(&c, RP_LIST_ROUTE) == 5 && rp_list_count(&c, RP_LIST_NEIGH) == 1);
+	CHECK(rp_list_count(&c, RP_LIST_ADDR6) == 0 && rp_list_count(&c, RP_LIST_VLAN) == 0);
+	rp_conf_free(&c);
+
+	/* the forms */
+	CHECK(rp_conf_load(&c, net_conf, strlen(net_conf)) == 0);
+	rp_lform_names(&c.cur, P_ROUTE, &nm);
+	CHECK(nm.n == 4 && !strcmp(nm.name[0], RP_LNAME_ANY) && !strcmp(nm.name[2], "eth1") && !strcmp(nm.name[3], "eth1.20"));
+	rp_lform_get(P_ROUTE, "10.9.0.0/16 via 192.168.2.3 dev eth1.20 metric 5 reject", &nm, &v);
+	CHECK(!strcmp(v.tx[LR_DEST], "10.9.0.0/16") && !strcmp(v.tx[LR_GW], "192.168.2.3") && v.cy[LR_IF] == 3);
+	CHECK(!strcmp(v.tx[LR_METRIC], "5") && v.cy[LR_TYPE] == 1);
+	CHECK(rp_lform_put(P_ROUTE, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+	      !strcmp(out, "10.9.0.0/16 via 192.168.2.3 dev eth1.20 metric 5 reject"));
+	v.cy[LR_IF] = 0;
+	v.tx[LR_GW][0] = 0;
+	v.cy[LR_TYPE] = 0;
+	CHECK(rp_lform_put(P_ROUTE, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) < 0 && fi == LR_GW);
+	strcpy(v.tx[LR_GW], "2001:db8::1");
+	CHECK(rp_lform_put(P_ROUTE, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) < 0 && fi == LR_GW);
+	strcpy(v.tx[LR_DEST], "0/0");
+	CHECK(rp_lform_put(P_ROUTE, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+	      !strcmp(out, "default via 2001:db8::1 metric 5"));
+	rp_list_row(P_ROUTE, "10.9.0.0/16 via 192.168.2.3 dev eth1.20 metric 5 reject", &nm, row, sizeof(row));
+	CHECK(!strcmp(row, "10.9.0.0/16 via 192.168.2.3 on eth1.20, metric 5, reject") || (printf("%s\n", row), 0));
+	rp_lform_get(P_HOST, "printer 192.168.2.9", &nm, &v);
+	CHECK(!strcmp(v.tx[LH_NAME], "printer") && !strcmp(v.tx[LH_ADDR], "192.168.2.9"));
+	strcpy(v.tx[LH_ADDR], "192.168.2.300");
+	CHECK(rp_lform_put(P_HOST, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) < 0 && fi == LH_ADDR);
+	rp_list_row(P_HOST, "printer 192.168.2.9", &nm, row, sizeof(row));
+	CHECK(!strcmp(row, "printer = 192.168.2.9"));
+	rp_lform_names(&c.cur, P_NEIGH, &nm);
+	rp_lform_get(P_NEIGH, "2001:db8:1::9 00:11:22:33:44:66 dev eth1", &nm, &v);
+	CHECK(!strcmp(v.tx[LN_ADDR], "2001:db8:1::9") && !strcmp(v.tx[LN_MAC], "00:11:22:33:44:66") && v.cy[LN_IF] == 2);
+	CHECK(rp_lform_put(P_NEIGH, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+	      !strcmp(out, "2001:db8:1::9 00:11:22:33:44:66 dev eth1"));
+	rp_list_row(P_NEIGH, out, &nm, row, sizeof(row));
+	CHECK(!strcmp(row, "2001:db8:1::9 is 00:11:22:33:44:66 on eth1"));
+	rp_lform_names(&c.cur, P_ADDR6, &nm);
+	CHECK(nm.n == 3 && !strcmp(nm.name[2], "eth1.20"));
+	rp_lform_get(P_ADDR6, "eth1.20|2001:db8:20::5/48 nodad", &nm, &v);
+	CHECK(v.cy[L6_IF] == 2 && !strcmp(v.tx[L6_ADDR], "2001:db8:20::5/48") && v.cy[L6_DAD] == 1);
+	CHECK(rp_lform_put(P_ADDR6, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+	      !strcmp(out, "eth1.20|2001:db8:20::5/48 nodad"));
+	v.cy[L6_IF] = 0;
+	v.cy[L6_DAD] = 0;
+	CHECK(rp_lform_put(P_ADDR6, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+	      !strcmp(out, "2001:db8:20::5/48"));
+	strcpy(v.tx[L6_ADDR], "2001:db8::5");
+	CHECK(rp_lform_put(P_ADDR6, &v, &nm, out, sizeof(out), &fi, err, sizeof(err)) < 0 && fi == L6_ADDR);
+	rp_list_row(P_ADDR6, "eth1.20|2001:db8:20::5/48 nodad", &nm, row, sizeof(row));
+	CHECK(!strcmp(row, "eth1.20: 2001:db8:20::5/48, no duplicate check"));
+	rp_conf_free(&c);
+	CHECK(lform_round(P_ROUTE, "default via 192.168.1.1"));
+	{
+		/* with "dev eth0": the names of a Routes form, Any first */
+		static const struct rp_lnames nm_any = { 2, { RP_LNAME_ANY, "eth0" } };
+		rp_lform_get(P_ROUTE, "10.0.0.0/8 dev eth0 metric 3 blackhole", &nm_any, &v);
+		CHECK(v.cy[LR_IF] == 1 && v.cy[LR_TYPE] == 4);
+		CHECK(rp_lform_put(P_ROUTE, &v, &nm_any, out, sizeof(out), &fi, err, sizeof(err)) == 0 &&
+		      !strcmp(out, "10.0.0.0/8 dev eth0 metric 3 blackhole"));
+	}
+	CHECK(lform_round(P_HOST, "nas.lan 2001:db8::9"));
+	CHECK(lform_round(P_NEIGH, "192.168.1.9 00:11:22:33:44:55"));
+	CHECK(lform_round(P_ADDR6, "2001:db8::5/64 nodad"));
+
+	/* the Address page's new settings */
+	CHECK(rp_conf_load(&c, "", 0) == 0);
+	fi = rp_find(&c.cur, &c.cur.ifc[0].dhcp_wait);
+	CHECK(fi >= 0 && rp_fparse(&c.cur, fi, "45", err, sizeof(err)) == 0 && c.cur.ifc[0].dhcp_wait == 45);
+	CHECK(rp_fparse(&c.cur, fi, "0", err, sizeof(err)) < 0);
+	c.cur.ifc[0].dhcp = 0;
+	CHECK(rp_fdisabled(&c.cur, fi));
+	fi = rp_find(&c.cur, &c.cur.ifc[0].ipv6);
+	CHECK(fi >= 0 && rp_fcycle(&c.cur, fi) == 0);
+	c.cur.ifc[0].ipv6 = 0;
+	CHECK(rp_fcycle(&c.cur, fi) == 2);
+	rp_conf_free(&c);
+	t = edit(net_conf, e_net);
+	CHECK(t && strstr(t, "dhcp eth0 linklocal off\n") && !strstr(t, "ipv6 eth0 off") &&
+	      strstr(t, "route add default 192.168.2.1 dev eth1 metric 10\nipv6 eth1 on\n") &&
+	      strstr(t, "sysctl net.inet6.ip6.dad_count=2\n"));
+	free(t);
+}
+
 int main(void)
 {
 	test_fields();
@@ -1136,6 +1425,7 @@ int main(void)
 	test_dns();
 	test_linklocal();
 	test_multi();
+	test_netpages();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

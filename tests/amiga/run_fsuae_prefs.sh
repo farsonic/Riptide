@@ -156,6 +156,13 @@ key l
 typ '10 dhcp pcp=4'
 key Return d
 settle 03i-vlans-added
+# Routes, IPv6, IPv6 addresses: a look at each
+key p
+settle 03j-routes
+key p
+settle 03k-ipv6
+key p
+settle 03l-ipv6addrs
 # Names: replace the host name, add a domain and a name server
 key p
 settle 04-names
@@ -169,6 +176,9 @@ key 1
 typ 192.168.1.1
 key Return
 settle 05-names-edited
+# Hosts
+key p
+settle 05b-hosts
 # Time: NTP on with a server, mDNS on
 key p
 settle 06-time
@@ -225,6 +235,9 @@ key l
 typ 'port=22,23 priority=interactive'
 key Return d
 settle 09m-adv-qosrules-added
+# Advanced: Neighbours
+key p
+settle 09n-adv-neighbours
 key p
 settle 10-other
 # Other lines: add one

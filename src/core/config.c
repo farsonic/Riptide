@@ -1062,8 +1062,13 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 	if (!strcmp(k, "arp"))
 		return cfg_arp(argc, argv, err, errlen);
 	if (!strcmp(k, "host")) {
-		if (need_args(argc, 3, err, errlen, "host NAME A.B.C.D|IPV6"))
+		if (need_args(argc, 3, err, errlen, "host NAME A.B.C.D|IPV6 | host del NAME"))
 			return -RT_EINVAL;
+		if ((!strcmp(argv[1], "del") || !strcmp(argv[1], "delete")) && argc == 3) {
+			if (rt_hosts_remove(argv[2]) < 0)
+				return cfg_err(err, errlen, -RT_ESRCH, "host: no entry for '%s'", argv[2]);
+			return 0;
+		}
 		if (has_colon(argv[2])) {
 			rt_in6_addr a6;
 			if (parse6(argv[2], &a6, NULL, NULL) < 0)

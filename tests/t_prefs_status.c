@@ -127,6 +127,9 @@ static struct rt_ctl_status st;
 static struct rt_ctl_iface ifs[3];
 static struct rt_ctl_addr6 a6[3];
 static struct rt_ctl_route routes[2];
+static struct rt_ctl_route6 routes6[1];
+static struct rt_ctl_neigh neigh[1];
+static struct rt_ctl_neigh6 neigh6[1];
 static struct rt_ctl_tcpinfo tcp[3];
 static struct rt_ctl_dns dns;
 static struct rt_tcp_stats tcpst;
@@ -198,6 +201,34 @@ static void setup(void)
 	routes[0].ifindex = 2;
 	routes[1].gateway = ip(192, 168, 1, 254);
 	routes[1].ifindex = 3;
+	strcpy(routes[0].ifname, "eth0");
+	routes[0].flags = RT_CTL_RTF_UP | RT_CTL_RTF_CONNECTED;
+	routes[0].proto = RT_PROTO_KERNEL;
+	strcpy(routes[1].ifname, "eth0.10");
+	routes[1].flags = RT_CTL_RTF_UP | RT_CTL_RTF_GATEWAY | RT_CTL_RTF_DHCP;
+	routes[1].proto = RT_PROTO_DHCP;
+	routes[1].metric = 10;
+	routes[1].expire_s = 3661;
+	memset(routes6, 0, sizeof(routes6));
+	routes6[0].gateway[0] = 0xfe;
+	routes6[0].gateway[1] = 0x80;
+	routes6[0].gateway[15] = 1;
+	routes6[0].flags = RT_CTL_RTF_UP | RT_CTL_RTF_GATEWAY | RT_CTL_RTF_RA;
+	routes6[0].proto = RT_PROTO_RA;
+	strcpy(routes6[0].ifname, "eth0");
+	memset(neigh, 0, sizeof(neigh));
+	neigh[0].addr = ip(192, 168, 1, 254);
+	memcpy(neigh[0].hwaddr, "\x00\x11\x22\x33\x44\x55", 6);
+	neigh[0].state = RT_NUD_REACHABLE;
+	strcpy(neigh[0].ifname, "eth0");
+	memset(neigh6, 0, sizeof(neigh6));
+	neigh6[0].addr[0] = 0xfe;
+	neigh6[0].addr[1] = 0x80;
+	neigh6[0].addr[15] = 1;
+	memcpy(neigh6[0].hwaddr, "\xaa\xbb\xcc\xdd\xee\xff", 6);
+	neigh6[0].state = RT_NUD_STALE;
+	neigh6[0].router = 1;
+	strcpy(neigh6[0].ifname, "eth0");
 	memset(tcp, 0, sizeof(tcp));
 	tcp[0].state = 1;
 	tcp[0].lport = 21;
@@ -252,6 +283,15 @@ static void feed(struct rp_status_model *m, u32 now, int full)
 	in.routes = (const u8 *)routes;
 	in.nroutes = 2;
 	in.rrec = sizeof(routes[0]);
+	in.routes6 = (const u8 *)routes6;
+	in.nroutes6 = 1;
+	in.r6rec = sizeof(routes6[0]);
+	in.neigh = (const u8 *)neigh;
+	in.nneigh = 1;
+	in.nrec = sizeof(neigh[0]);
+	in.neigh6 = (const u8 *)neigh6;
+	in.nneigh6 = 1;
+	in.n6rec = sizeof(neigh6[0]);
 	in.tcp = (const u8 *)tcp;
 	in.ntcp = 3;
 	/* an older stack: tcpinfo records without the program name */
@@ -349,6 +389,26 @@ static void test_model(void)
 	CHECK(strstr(b, "ECN: 1 connection,") != NULL);
 	CHECK(!strcmp(rp_plural(1), "") && !strcmp(rp_plural(0), "s") && !strcmp(rp_plural(2), "s"));
 	CHECK(strstr(b, "IP: 3 packets dropped in") != NULL);
+	/* routes and neighbours */
+	CHECK(m.nr4 == 2 && m.nr6 == 1 && m.nn4 == 1 && m.nn6 == 1 && m.nr4_all == 2);
+	rp_st_routes_text(&m, b, sizeof(b), 12);
+	CHECK_STR(b, "Routes:\n"
+	             "192.168.1.0/24  eth0  on the cable\n"
+	             "default via 192.168.1.254  eth0.10  DHCP, metric 10, 1 h 01 min left\n"
+	             "default via fe80::1  eth0  router advertisement\n"
+	             "Neighbours:\n"
+	             "192.168.1.254  00:11:22:33:44:55  eth0  reachable\n"
+	             "fe80::1  aa:bb:cc:dd:ee:ff  eth0  stale, router");
+	/* fewer lines: the routes first, "and more" */
+	rp_st_routes_text(&m, b, sizeof(b), 3);
+	CHECK_STR(b, "Routes:\n192.168.1.0/24  eth0  on the cable\n(and 2 more)");
+	routes[0].flags |= RT_CTL_RTF_REJECT;
+	routes[0].linkdown = 1;
+	feed(&m, 101500, 1);
+	rp_st_routes_text(&m, b, sizeof(b), 12);
+	CHECK(strstr(b, "192.168.1.0/24  eth0  rejects, on the cable, link down\n") != NULL);
+	routes[0].flags &= ~RT_CTL_RTF_REJECT;
+	routes[0].linkdown = 0;
 	/* a connection goes away, an interface too: the model follows */
 	tcp[1] = tcp[2];
 	feed(&m, 102000, 1);
@@ -392,6 +452,8 @@ static void test_model(void)
 		CHECK(strstr(b, "sends no status") != NULL);
 		rp_st_counters_text(&m, b, sizeof(b));
 		CHECK(strstr(b, "No counters") != NULL);
+		rp_st_routes_text(&m, b, sizeof(b), 12);
+		CHECK_STR(b, "Routes: none");
 	}
 }
 

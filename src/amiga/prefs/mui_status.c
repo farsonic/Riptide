@@ -1032,7 +1032,7 @@ DISPATCHER(ifview_dispatch)
 /* ==================================================================
  * stext: lines of text that change
  * ================================================================== */
-#define ST_LINES 10
+#define ST_LINES 14
 struct stext_data {
 	const char *text;
 	int lines, shown;
@@ -1122,7 +1122,9 @@ DISPATCHER(stext_dispatch)
  * ================================================================== */
 static struct rp_status_model model;
 static Object *o_sum, *o_total, *o_cpu, *o_tabs, *o_tpages, *o_ifv, *o_table, *o_cgraph, *o_names, *o_counters, *o_upd;
-static char t_sum[200], t_names[1200], t_counters[1200];
+static Object *o_routes;
+static char t_sum[200], t_names[1200], t_counters[1200], t_routes[2000];
+static int routes_lines;
 static char rowbuf[RP_ST_NCONN][200];
 static const char *rows[RP_ST_NCONN];
 static char cg_title[64];
@@ -1130,7 +1132,7 @@ static int cur_conn;
 static struct { u16 lport, fport; u8 faddr[16]; int set; } cur_key;   /* the chosen connection */
 static const struct rp_hist empty_hist;
 
-static const char *const tab_labels[5] = { "Interfaces", "Connections", "Names and time", "Counters", NULL };
+static const char *const tab_labels[6] = { "Interfaces", "Connections", "Names", "Counters", "Routes", NULL };
 
 static struct MUI_CustomClass *mk(int size, APTR disp)
 {
@@ -1229,14 +1231,17 @@ static void tick(void)
 	if (model.running) {
 		rp_st_names_text(&model, t_names, sizeof(t_names));
 		rp_st_counters_text(&model, t_counters, sizeof(t_counters));
+		rp_st_routes_text(&model, t_routes, sizeof(t_routes), routes_lines);
 	} else {
-		t_names[0] = t_counters[0] = 0;
+		t_names[0] = t_counters[0] = t_routes[0] = 0;
 	}
 	mui_set(o_names, MUIA_SText_Text, (ULONG)t_names);
 	mui_set(o_counters, MUIA_SText_Text, (ULONG)t_counters);
-	rp_log("status: %s, %d interfaces, %d connections, in %lu out %lu B/s, cpu %lu",
+	mui_set(o_routes, MUIA_SText_Text, (ULONG)t_routes);
+	rp_log("status: %s, %d interfaces, %d connections, in %lu out %lu B/s, cpu %lu, routes %d neighbours %d",
 	       model.running ? "running" : "stopped", model.nif, model.nconn, (unsigned long)model.rx_bps,
-	       (unsigned long)model.tx_bps, (unsigned long)model.cpu_pm);
+	       (unsigned long)model.tx_bps, (unsigned long)model.cpu_pm, model.nr4_all + model.nr6_all,
+	       model.nn4_all + model.nn6_all);
 }
 
 void status_update_chosen(void)
@@ -1313,11 +1318,14 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 	                    (ULONG)cg_title, MUIA_Graph_Lines, compact ? 3 : 5, TAGEND);
 	o_names = mui_newc(stext_mcc, MUIA_SText_Text, (ULONG)"", MUIA_SText_Lines, compact ? 6 : 8, TAGEND);
 	o_counters = mui_newc(stext_mcc, MUIA_SText_Text, (ULONG)"", MUIA_SText_Lines, compact ? 6 : 8, TAGEND);
-	if (!o_sum || !o_total || !o_cpu || !o_tabs || !o_ifv || !o_table || !o_cgraph || !o_names || !o_counters)
+	routes_lines = compact ? 7 : 12;
+	o_routes = mui_newc(stext_mcc, MUIA_SText_Text, (ULONG)"", MUIA_SText_Lines, (ULONG)routes_lines, TAGEND);
+	if (!o_sum || !o_total || !o_cpu || !o_tabs || !o_ifv || !o_table || !o_cgraph || !o_names || !o_counters ||
+	    !o_routes)
 		return NULL;
 	rt_strlcpy(cg_title, "No connection", sizeof(cg_title));
 	{
-		static char h0[400], h1[400], h2[400], h3[400];
+		static char h0[400], h1[400], h2[400], h3[400], h4[400];
 		theme_bubble_to(h0, sizeof(h0), "Traffic", "What all interfaces but loopback received (columns) and "
 		                "sent (line) each second over the last minute.");
 		mui_set(o_total, MUIA_ShortHelp, (ULONG)h0);
@@ -1328,6 +1336,10 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 		                "Click one to see its graph below.");
 		theme_bubble_to(h3, sizeof(h3), "Connection graph", "The chosen connection over the last minute: "
 		                "the window in packets (columns) and the round trip time (line), each on its own scale.");
+		theme_bubble_to(h4, sizeof(h4), "Routes", "Where packets go now: every route with its gateway, "
+		                "interface and where it came from, then the neighbours Riptide knows the hardware "
+		                "address of.");
+		mui_set(o_routes, MUIA_ShortHelp, (ULONG)h4);
 		mui_set(o_cpu, MUIA_ShortHelp, (ULONG)h1);
 		mui_set(o_table, MUIA_ShortHelp, (ULONG)h2);
 		mui_set(o_cgraph, MUIA_ShortHelp, (ULONG)h3);
@@ -1339,7 +1351,7 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id)
 	/* every tab may grow, so the page takes the window's spare height */
 	o_tpages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, MUIA_Group_Child, (ULONG)o_ifv, MUIA_Group_Child,
 	                   (ULONG)conn, MUIA_Group_Child, (ULONG)vfill(o_names), MUIA_Group_Child,
-	                   (ULONG)vfill(o_counters), TAGEND);
+	                   (ULONG)vfill(o_counters), MUIA_Group_Child, (ULONG)vfill(o_routes), TAGEND);
 	if (!top || !conn || !o_tpages)
 		return NULL;
 	mui_do(o_tabs, MUIM_Notify, MUIA_Tabs_Active, MUIV_EveryTime, (ULONG)o_tpages, 3, MUIM_Set,
@@ -1371,4 +1383,5 @@ void status_page_free(void)
 	tick_fn = NULL;
 	rp_status_free();
 	o_sum = o_total = o_cpu = o_tabs = o_tpages = o_ifv = o_table = o_cgraph = o_names = o_counters = o_upd = NULL;
+	o_routes = NULL;
 }

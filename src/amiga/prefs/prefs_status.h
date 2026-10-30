@@ -80,6 +80,8 @@ const char *rp_tcp_state_words(int st);
 #define RP_ST_NIF   8           /* interfaces shown */
 #define RP_ST_NCONN 24          /* connections shown */
 #define RP_ST_NV6   2           /* IPv6 addresses shown per interface */
+#define RP_ST_NRT   12          /* routes kept, each family */
+#define RP_ST_NNB   12          /* neighbours kept, each family */
 
 struct rp_st_if {
 	char name[16];
@@ -131,6 +133,13 @@ struct rp_status_model {
 	struct rt_tcp_stats tcp;
 	struct rt_ip_stats ip;
 	u32  retrans_ps;            /* segments resent per second, last second */
+	/* the routing tables (without the path MTU cache) and the neighbour
+	 * caches: the first RP_ST_NRT / RP_ST_NNB of each, and how many there are */
+	int  nr4, nr6, nn4, nn6, nr4_all, nr6_all, nn4_all, nn6_all;
+	struct rt_ctl_route  r4[RP_ST_NRT];
+	struct rt_ctl_route6 r6[RP_ST_NRT];
+	struct rt_ctl_neigh  n4[RP_ST_NNB];
+	struct rt_ctl_neigh6 n6[RP_ST_NNB];
 };
 
 /* what one read of the tables gave (records of recsize bytes each) */
@@ -140,6 +149,9 @@ struct rp_st_input {
 	const u8 *ifaces; int nifaces; u32 ifrec;
 	const u8 *addrs6; int naddrs6; u32 a6rec;
 	const u8 *routes; int nroutes; u32 rrec;
+	const u8 *routes6; int nroutes6; u32 r6rec;
+	const u8 *neigh; int nneigh; u32 nrec;
+	const u8 *neigh6; int nneigh6; u32 n6rec;
 	const u8 *tcp; int ntcp; u32 trec;
 	const struct rt_ctl_dns *dns; u32 dns_len;
 	const struct rt_tcp_stats *tcpst; u32 tcpst_len;
@@ -177,6 +189,10 @@ const char *rp_st_conn_header(void);
 /* "Names and time" and "Counters" as lines separated by '\n' */
 void rp_st_names_text(const struct rp_status_model *m, char *buf, int len);
 void rp_st_counters_text(const struct rp_status_model *m, char *buf, int len);
+/* "Routes": the routing tables, then the neighbour caches, one entry a
+ * line ("default via 192.168.1.1  eth0  DHCP", "192.168.1.1  00:11:...
+ * eth0  reachable"), at most maxlines lines */
+void rp_st_routes_text(const struct rp_status_model *m, char *buf, int len, int maxlines);
 
 /* ---- AmigaOS only (status_amiga.c) ---- */
 /* Read the tables into m when Riptide runs: 1, else 0 (m then says

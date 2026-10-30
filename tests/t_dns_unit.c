@@ -482,6 +482,16 @@ static void test_local_resolve(void)
 	rt_unlock();
 	CHECK(rt_resolve_addr(ip4(192, 168, 1, 5), name, sizeof(name)) == 0 && !strcmp(name, "fileserver.lan"));
 	CHECK(rt_resolve_addr(RT_INADDR_LOOPBACK, name, sizeof(name)) == 0 && !strcmp(name, "localhost"));
+	/* "host del NAME": every entry of the name goes, the others stay */
+	rt_lock();
+	CHECK(rt_hosts_remove("Multi") == 0);
+	CHECK(rt_hosts_remove("multi") == -RT_ENOENT);
+	CHECK(rt_hosts_remove("nosuch") == -RT_ENOENT);
+	CHECK(rt_hosts_add("multi", ip4(192, 168, 1, 6)) == 0);
+	CHECK(rt_hosts_add("multi", ip4(192, 168, 1, 7)) == 0);
+	rt_unlock();
+	CHECK(rt_resolve_name("fileserver", a, 4, NULL, 0) == 1 && a[0] == ip4(192, 168, 1, 5));
+	CHECK(rt_resolve_name("multi", a, 4, NULL, 0) == 2 && a[1] == ip4(192, 168, 1, 7));
 
 	rt_lock();
 	{

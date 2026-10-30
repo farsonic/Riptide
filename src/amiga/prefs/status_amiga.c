@@ -20,14 +20,15 @@
  * call each; the size is asked again only when a table outgrew its
  * buffer). The routes, IPv6 addresses and name servers change seldom:
  * they are read every fifth time, their last read used in between. */
-enum { D_STATUS, D_IFACES, D_TCP, D_TCPST, D_IPST, D_ADDRS6, D_ROUTES, D_DNS,
+enum { D_STATUS, D_IFACES, D_TCP, D_TCPST, D_IPST, D_ADDRS6, D_ROUTES, D_DNS, D_ROUTES6, D_NEIGH, D_NEIGH6,
        /* the Counters page's too */
        D_ICMPST, D_UDPST, D_IP6ST, D_ICMP6ST, D_IGMPST, D_DRIVERS, D_QOS, D_N };
 #define D_SLOW D_ADDRS6         /* this one and those after it: every fifth read */
 #define D_NSTATUS D_ICMPST      /* the Status page's tables: those before this one */
 static const int what[D_N] = { RT_CTL_STATUS, RT_CTL_IFACES, RT_CTL_TCPINFO, RT_CTL_TCPSTAT, RT_CTL_IPSTAT,
-                               RT_CTL_ADDRS6, RT_CTL_ROUTES, RT_CTL_DNS, RT_CTL_ICMPSTAT, RT_CTL_UDPSTAT,
-                               RT_CTL_IP6STAT, RT_CTL_ICMP6STAT, RT_CTL_IGMPSTAT, RT_CTL_DRIVERS, RT_CTL_QOS };
+                               RT_CTL_ADDRS6, RT_CTL_ROUTES, RT_CTL_DNS, RT_CTL_ROUTES6, RT_CTL_NEIGH,
+                               RT_CTL_NEIGH6, RT_CTL_ICMPSTAT, RT_CTL_UDPSTAT, RT_CTL_IP6STAT, RT_CTL_ICMP6STAT,
+                               RT_CTL_IGMPSTAT, RT_CTL_DRIVERS, RT_CTL_QOS };
 /* the Counters page's tables */
 #define CNT_MASK ((1u << D_STATUS) | (1u << D_IFACES) | (1u << D_TCPST) | (1u << D_IPST) | (1u << D_ICMPST) | \
                   (1u << D_UDPST) | (1u << D_IP6ST) | (1u << D_ICMP6ST) | (1u << D_IGMPST) | (1u << D_DRIVERS) | \
@@ -260,6 +261,15 @@ int rp_status_read(struct rp_status_model *m)
 	in.routes = RECS(D_ROUTES);
 	in.nroutes = have[D_ROUTES] ? hdr[D_ROUTES].count : 0;
 	in.rrec = hdr[D_ROUTES].recsize;
+	in.routes6 = RECS(D_ROUTES6);
+	in.nroutes6 = have[D_ROUTES6] ? hdr[D_ROUTES6].count : 0;
+	in.r6rec = hdr[D_ROUTES6].recsize;
+	in.neigh = RECS(D_NEIGH);
+	in.nneigh = have[D_NEIGH] ? hdr[D_NEIGH].count : 0;
+	in.nrec = hdr[D_NEIGH].recsize;
+	in.neigh6 = RECS(D_NEIGH6);
+	in.nneigh6 = have[D_NEIGH6] ? hdr[D_NEIGH6].count : 0;
+	in.n6rec = hdr[D_NEIGH6].recsize;
 	in.tcp = RECS(D_TCP);
 	in.ntcp = have[D_TCP] ? hdr[D_TCP].count : 0;
 	in.trec = hdr[D_TCP].recsize;

@@ -307,8 +307,16 @@ static const char *const icons[IC_NICONS] = {
 	"cw F 2 7 9 12 ci P 4 1 7 6 1 11 7 1 7 R 2 7 9 12 ca F 10 12 14 12 F 12 10 12 14",
 	/* VLAN: one cable splitting into three coloured networks */
 	"ci L 1 8 6 8 ca L 6 8 14 3 cg L 6 8 14 8 co L 6 8 14 13 ci E 6 8 1",
+	/* ROUTE: a signpost: the post and two arms pointing left and right */
+	"ci L 7 4 7 14 L 5 14 9 14 ca P 5 2 6 7 4 7 8 2 8 2 6 ci P 5 8 9 12 9 14 11 12 13 8 13",
+	/* IP6: a "6" in a box, the box in the accent */
+	"ca R 1 1 14 14 ci P 5 10 4 6 4 5 8 5 11 7 12 L 7 12 10 12 L 10 12 11 11 L 11 11 11 9 L 11 9 10 8 L 10 8 6 8",
+	/* ADDR6: a smaller "6" and a plus */
+	"ci P 5 7 2 4 2 3 5 3 8 5 9 L 5 9 7 9 L 7 9 8 8 L 8 8 8 6 L 8 6 7 5 L 7 5 4 5 ca F 10 12 14 12 F 12 10 12 14",
 	/* NAMES: a name card: a head and lines of text */
 	"cw F 1 3 14 12 ci R 1 3 14 12 O 5 7 2 L 3 11 7 11 ca L 9 6 12 6 ci L 9 8 12 8 L 9 10 11 10",
+	/* HOST: a name tag on a string: the tag, its hole and a line of text */
+	"cw F 3 5 14 12 ci P 5 3 5 14 5 14 12 3 12 3 5 L 1 2 3 5 O 5 8 1 ca L 8 8 12 8",
 	/* TIME: a clock face with the minute hand in the accent */
 	"cw E 8 8 6 ci O 8 8 6 L 8 8 8 4 ca L 8 8 11 10",
 	/* TCP: data out and the acknowledgement back */
@@ -330,6 +338,8 @@ static const char *const icons[IC_NICONS] = {
 	"ca F 2 4 5 14 ci F 7 7 9 14 cd F 11 10 13 14",
 	/* QRULE: a list of rules */
 	"ca F 2 3 3 4 ci F 2 7 3 8 F 2 11 3 12 L 6 4 14 4 L 6 8 14 8 L 6 12 14 12",
+	/* NEIGH: two computers on one cable, the near one in the accent */
+	"ci L 1 13 14 13 L 4 10 4 13 L 11 10 11 13 R 1 4 7 10 cw F 2 5 6 9 ca R 8 6 14 10 cw F 9 7 13 9",
 	/* OTHER: a page of text with a folded corner */
 	"cw F 3 1 12 14 ci P 6 3 1 10 1 13 4 13 14 3 14 3 1 L 10 1 10 4 L 10 4 13 4 cd L 5 7 11 7 L 5 9 11 9 "
 	"L 5 11 9 11",

@@ -101,6 +101,7 @@ int  rt_dns_get_servers(u32 *out, int max);
 void rt_dns_set_search(const char *domain);
 const char *rt_dns_search_list(void);    /* "a.example b.example", "" = none */
 int  rt_hosts_add(const char *name, u32 addr);   /* static host table */
+int  rt_hosts_remove(const char *name);          /* every entry of that name; -ENOENT */
 void rt_hosts_clear(void);
 /* Forward lookup; numeric strings and the static table are handled
  * without network traffic. canon (may be NULL) gets the canonical name. */

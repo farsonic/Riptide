@@ -17,8 +17,17 @@ const struct rp_page rp_pages[RP_NPAGES] = {
 	  "More IPv4 addresses on a card or VLAN, for example to reach a second network on the same cable." },
 	{ "VLANs", "VLANs", "[CARD|]ID dhcp|A.B.C.D/BITS|up [pcp= mtu= ipv4= ipv6= qos=]",
 	  "Tagged networks (802.1Q) on a card. Each VLAN is an interface of its own." },
+	{ "Routes", "Routes", "DEST [via GW] [dev IF] [metric N] [reject] (up to 12)",
+	  "Where packets for other networks go: through which router or card. The cards' own routers are on "
+	  "the Address page." },
+	{ "IPv6", "IPv6", "Empty or Default: Riptide's built-in value",
+	  "How the cards get their IPv6 addresses by themselves, and which kind." },
+	{ "IPv6 addresses", "IPv6 addresses", "[IF|]ADDR/PLEN [nodad] (up to 8)",
+	  "IPv6 addresses typed in here, beside the ones the routers hand out." },
 	{ "Names", "Names", "Empty fields are left out of the file",
 	  "The Amiga's name, its domain and the name servers that turn names into addresses." },
+	{ "Hosts", "Hosts", "NAME ADDRESS (up to 16)",
+	  "Names and their addresses that need no name server: the hosts file." },
 	{ "Time", "Time", "Zone: auto or +10:00. No servers: from DHCP",
 	  "Setting the clock from the network, the time zone, and answering to amiga.local." },
 	{ "TCP", "TCP", "Empty or Default: Riptide's built-in value",
@@ -39,6 +48,8 @@ const struct rp_page rp_pages[RP_NPAGES] = {
 	  "Priority queues: interactive traffic goes out before bulk transfers." },
 	{ "Advanced: QoS rules", "QoS rules", "port=22,23 priority=interactive dscp=EF",
 	  "Rules that give connections a priority by port or program." },
+	{ "Advanced: Neighbours", "Neighbours", "ADDR MAC [dev IF] (up to 8)",
+	  "Hardware addresses of computers on the cable that Riptide should not have to ask for." },
 	{ "Other lines", "Other lines", "Lines RiptidePrefs does not edit itself",
 	  "Lines of riptide.conf that have no setting here. They are kept as they are." },
 	{ "Advanced: Counters", "Counters", "Counters: in the MUI editor, or netstat -s",
@@ -53,6 +64,10 @@ int rp_page_list(int page)
 	case P_ALIAS: return RP_LIST_ALIAS;
 	case P_QRULE: return RP_LIST_QRULE;
 	case P_VLAN:  return RP_LIST_VLAN;
+	case P_ROUTE: return RP_LIST_ROUTE;
+	case P_HOST:  return RP_LIST_HOST;
+	case P_NEIGH: return RP_LIST_NEIGH;
+	case P_ADDR6: return RP_LIST_ADDR6;
 	case P_OTHER: return RP_LIST_OTHER;
 	}
 	return -1;
@@ -90,6 +105,10 @@ static const char *const cy_bg[] = { "Default", "Off", "Receive", "Send", "Both"
 static const long cyv_bg[] = { RP_UNSET, 0, 1, 2, 3 };
 static const char *const cy_prefer[] = { "Default", "RFC 6724", "IPv6", "IPv4", NULL };
 static const long cyv_prefer[] = { RP_UNSET, 0, 6, 4 };
+static const char *const cy_temp[] = { "Default", "Off", "Create", "Prefer", NULL };
+static const long cyv_temp[] = { RP_UNSET, 0, 1, 2 };
+static const char *const cy_gen[] = { "Default", "Stable (RFC 7217)", "From the MAC (EUI-64)", NULL };
+static const long cyv_gen[] = { RP_UNSET, 1, 0 };
 
 const struct rp_field rp_fields[] = {
 	{ P_IFACE, F_STR,   FL_IF, MI(ifname), 0, 0,       "_Interface name", NULL, NULL,
@@ -119,6 +138,23 @@ const struct rp_field rp_fields[] = {
 	  "first card's is used first." },
 	{ P_ADDR,  F_CHECK, FL_IF | FL_DHCP, MI(linklocal), 0, 0, "_Link-local if no DHCP", NULL, NULL,
 	  "When no DHCP server answers, take a 169.254.x.y address so a direct cable still works." },
+	{ P_ADDR,  F_NUM,   FL_IF | FL_DHCP, MI(dhcp_wait), 1, 3600, "Link-local a_fter (s)", NULL, NULL,
+	  "How many seconds to wait for a DHCP server before taking the link-local address. Empty: 10." },
+	{ P_ADDR,  F_CYCLE, FL_IF, MI(ipv6), 0, 0,         "IPv_6 on this card", cy_tri, cyv_tri,
+	  "IPv6 on this card alone. Default: as the IPv6 check box on the Interface page says for all cards." },
+	{ P_IP6,   F_CYCLE, 0, SC(RP_SC_RTADV), 0, 0,      "Router ad_vertisements", cy_sw, cyv_sw,
+	  "Take addresses, routes and name servers from the routers' advertisements (SLAAC). Off: only "
+	  "addresses typed in." },
+	{ P_IP6,   F_CYCLE, 0, SC(RP_SC_TEMPADDR), 0, 0,   "_Temporary addresses", cy_temp, cyv_temp,
+	  "Privacy addresses that change every day (RFC 8981): make them, or make and prefer them for "
+	  "outgoing connections." },
+	{ P_IP6,   F_CYCLE, 0, SC(RP_SC_ADDRGEN), 0, 0,    "Address _identifiers", cy_gen, cyv_gen,
+	  "The second half of each address: stable but not derived from the card's MAC (RFC 7217), or "
+	  "the MAC itself (EUI-64)." },
+	{ P_IP6,   F_NUM,   FL_ZERO, SC(RP_SC_DAD), 1, 9,  "_Duplicate checks", NULL, NULL,
+	  "How often a new address is checked against the cable before use. 0 skips the check." },
+	{ P_IP6,   F_CYCLE, 0, SC(RP_SC_GNA), 0, 0,        "Announce _new addresses", cy_sw, cyv_sw,
+	  "Tell the routers about each new address at once (RFC 9131), so the first replies are not lost." },
 	{ P_NAMES, F_STR,   0, MS(hostname),  0, 0,        "_Host name", NULL, NULL,
 	  "The Amiga's name on the network, such as amy." },
 	{ P_NAMES, F_STR,   0, MS(domain),    0, 0,        "_Domain", NULL, NULL,
@@ -452,6 +488,37 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 			return -1;
 		}
 	}
+	for (i = 0; i < RP_NADDR6 && m->addr6[i][0]; i++) {
+		rp_entry_if(m, m->addr6[i], ifn, sizeof(ifn));
+		for (j = 0; j < nn && rt_strcasecmp(names[j], ifn); j++)
+			;
+		if (j == nn) {
+			*fi = 0;
+			rp_vpage = P_ADDR6;
+			rt_snprintf(err, (size_t)errlen, "IPv6 address %s: there is no card or VLAN %s",
+			            rp_entry_body(m->addr6[i]), ifn);
+			return -1;
+		}
+	}
+	for (k = 0; k < 2; k++) {
+		const char *base = k ? m->neigh[0] : m->route[0];
+		int cnt = k ? RP_NNEIGH : RP_NROUTE;
+		size_t len = k ? RP_NEIGHLEN : RP_ROUTELEN;
+		for (i = 0; i < cnt && base[(size_t)i * len]; i++) {
+			rp_entry_dev(base + (size_t)i * len, ifn, sizeof(ifn));
+			if (!ifn[0])
+				continue;
+			for (j = 0; j < nn && rt_strcasecmp(names[j], ifn); j++)
+				;
+			if (j == nn) {
+				*fi = 0;
+				rp_vpage = k ? P_NEIGH : P_ROUTE;
+				rt_snprintf(err, (size_t)errlen, "%s %s: there is no card or VLAN %s", k ? "Neighbour" : "Route",
+				            base + (size_t)i * len, ifn);
+				return -1;
+			}
+		}
+	}
 	if (m->hostname[0] && !rp_valid_name(m->hostname))
 		return bad(m, m->hostname, "letters, digits, '-' and '.' only", fi, err, errlen);
 	if (m->domain[0] && !rp_valid_name(m->domain))
@@ -487,7 +554,7 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 int rp_list_entry_valid(int page, const char *s, char *err, int errlen)
 {
 	/* an address or VLAN of another card: "IF|" first */
-	if (page == P_ALIAS || page == P_VLAN) {
+	if (page == P_ALIAS || page == P_VLAN || page == P_ADDR6) {
 		const char *sep = strchr(s, RP_IFSEP), *sp = strchr(s, ' ');
 		if (sep && (sep == s || (size_t)(sep - s) >= RP_IFNAMELEN || strchr(sep + 1, RP_IFSEP) || (sp && sp < sep))) {
 			rt_strlcpy(err, "The interface before '|' must be a name without spaces", (size_t)errlen);
@@ -511,13 +578,40 @@ int rp_list_entry_valid(int page, const char *s, char *err, int errlen)
 		           "or dscp=EF|CS1|AF41|0-63\n(proto=tcp|udp optional; at most 8 ports)", (size_t)errlen);
 		return 0;
 	}
+	if (page == P_ROUTE && !rp_valid_route(s)) {
+		rt_strlcpy(err, "Route: the destination (default, A.B.C.D/BITS or an IPv6\nprefix), then via GATEWAY, "
+		           "dev IF, metric N and reject,\nprohibit, unreachable or blackhole as needed;\ne.g. "
+		           "10.0.0.0/8 via 192.168.1.2", (size_t)errlen);
+		return 0;
+	}
+	if (page == P_HOST && !rp_valid_host(s)) {
+		rt_strlcpy(err, "Host: a name and its IPv4 or IPv6 address,\ne.g. printer 192.168.1.9", (size_t)errlen);
+		return 0;
+	}
+	if (page == P_NEIGH && !rp_valid_neigh(s)) {
+		rt_strlcpy(err, "Neighbour: an address, its hardware address and if needed\ndev IF, e.g. 192.168.1.9 "
+		           "00:11:22:33:44:55 dev eth0", (size_t)errlen);
+		return 0;
+	}
+	if (page == P_ADDR6 && !rp_valid_addr6(s)) {
+		rt_strlcpy(err, "IPv6 address: the address and the size of its network, and\nnodad to skip the "
+		           "duplicate check, e.g. 2001:db8::5/64", (size_t)errlen);
+		return 0;
+	}
 	return 1;
 }
 
 const char *rp_list_full_msg(int page)
 {
-	return page == P_ALIAS ? "At most 8 extra addresses" : page == P_VLAN ? "At most 8 VLANs" :
-	       "At most 16 QoS rules";
+	switch (page) {
+	case P_ALIAS: return "At most 8 extra addresses";
+	case P_VLAN:  return "At most 8 VLANs";
+	case P_ROUTE: return "At most 12 routes";
+	case P_HOST:  return "At most 16 hosts";
+	case P_NEIGH: return "At most 8 neighbours";
+	case P_ADDR6: return "At most 8 IPv6 addresses";
+	}
+	return "At most 16 QoS rules";
 }
 
 /* ======================================================================
@@ -534,6 +628,9 @@ static const char *const cy_prio[] = { "Not set", "Interactive", "Default", "Bul
 	"5", "6", "7", NULL };
 static const char *const qprio_word[] = { "", "interactive", "default", "bulk" };
 static const char *const vkeys[3] = { "ipv4", "ipv6", "qos" };
+static const char *const cy_rtype[] = { "Normal", "Reject", "Prohibit", "Unreachable", "Blackhole", NULL };
+static const char *const rtype_word[] = { "", "reject", "prohibit", "unreachable", "blackhole" };
+static const char *const cy_dad[] = { "On", "Off", NULL };
 
 const struct rp_lfield rp_lfields[] = {
 	{ P_ALIAS, LF_CYCLE, LF_NAMES, 0, 0, 0, "In_terface", NULL,
@@ -582,6 +679,42 @@ const struct rp_lfield rp_lfields[] = {
 	  "How urgent the matching connections are: interactive ones go out first, bulk ones last." },
 	{ P_QRULE, LF_STR, 0, 8, 0, 0, "DSCP _mark", NULL,
 	  "A DSCP value for the routers on the way, e.g. EF, CS1, AF41 or 0-63. Empty: none." },
+
+	{ P_ROUTE, LF_STR, 0, RP_ADDR, 0, 0, "Destinati_on", NULL,
+	  "The network the route is for: default (everything else), 10.0.0.0/8, 192.168.5.7/32 or an IPv6 "
+	  "prefix such as 2001:db8::/32." },
+	{ P_ROUTE, LF_STR, 0, RP_ADDR, 0, 0, "_Gateway", NULL,
+	  "The router that leads there, on a network the Amiga is on. Empty: the destination is on the "
+	  "interface's cable, or the route rejects." },
+	{ P_ROUTE, LF_CYCLE, LF_NAMES, 0, 0, 0, "_Interface", NULL,
+	  "The card or VLAN the route goes through. Any: Riptide works it out from the gateway." },
+	{ P_ROUTE, LF_NUM, 0, 0, 0, 2147483647L, "_Metric", NULL,
+	  "The cost of the route: the lower, the sooner it is tried against another route for the same "
+	  "network. Empty: 0." },
+	{ P_ROUTE, LF_CYCLE, 0, 0, 0, 0, "_Type", cy_rtype,
+	  "Normal sends the packets on. Reject, prohibit and unreachable answer that the network cannot be "
+	  "reached; blackhole drops the packets quietly." },
+
+	{ P_HOST, LF_STR, 0, RP_STR, 0, 0, "_Name", NULL,
+	  "The name, such as printer or nas.home.lan. For another name of the same address, add another "
+	  "entry." },
+	{ P_HOST, LF_STR, 0, RP_ADDR, 0, 0, "_IP address", NULL,
+	  "Its IPv4 or IPv6 address, such as 192.168.1.9 or 2001:db8::9." },
+
+	{ P_NEIGH, LF_STR, 0, RP_ADDR, 0, 0, "_IP address", NULL,
+	  "The IPv4 or IPv6 address of a computer on the cable." },
+	{ P_NEIGH, LF_STR, 0, 24, 0, 0, "_Hardware address", NULL,
+	  "Its Ethernet (MAC) address, six pairs of hex digits: 00:11:22:33:44:55." },
+	{ P_NEIGH, LF_CYCLE, LF_NAMES, 0, 0, 0, "In_terface", NULL,
+	  "The card or VLAN it is on. Any: Riptide finds the one with that network (an IPv6 address may "
+	  "need it named)." },
+
+	{ P_ADDR6, LF_CYCLE, LF_NAMES, 0, 0, 0, "In_terface", NULL,
+	  "The card or VLAN the address is on." },
+	{ P_ADDR6, LF_STR, 0, RP_ADDR, 0, 0, "_IPv6 address", NULL,
+	  "The address and the size of its network, e.g. 2001:db8::5/64. The network's route comes with it." },
+	{ P_ADDR6, LF_CYCLE, 0, 0, 0, 0, "Chec_k for duplicates", cy_dad,
+	  "Ask the cable whether another computer has the address before using it. Off: use it at once." },
 };
 const int rp_nlfields = (int)(sizeof(rp_lfields) / sizeof(rp_lfields[0]));
 
@@ -638,7 +771,24 @@ static void lf_set(struct rp_lvals *v, int fi, const char *t)
 
 void rp_lform_names(const struct rp_model *m, int page, struct rp_lnames *nm)
 {
-	nm->n = rp_iface_names(m, nm->name, RP_NIF + RP_NVLAN, page == P_ALIAS);
+	if (page == P_ROUTE || page == P_NEIGH) {
+		/* "Any" first: no "dev IF" */
+		rt_strlcpy(nm->name[0], RP_LNAME_ANY, RP_IFNAMELEN);
+		nm->n = 1 + rp_iface_names(m, nm->name + 1, RP_NIF + RP_NVLAN, 1);
+		return;
+	}
+	nm->n = rp_iface_names(m, nm->name, RP_NIF + RP_NVLAN, page == P_ALIAS || page == P_ADDR6);
+}
+
+/* the index of name in nm (0 when it is not there) */
+static int lf_name_index(const struct rp_lnames *nm, const char *name, size_t len)
+{
+	int ci;
+
+	for (ci = 0; ci < nm->n; ci++)
+		if (strlen(nm->name[ci]) == len && !rt_strncasecmp(nm->name[ci], name, len))
+			return ci;
+	return 0;
 }
 
 /* the name chosen in a LF_NAMES cycle */
@@ -666,18 +816,16 @@ void rp_lform_get(int page, const char *entry, const struct rp_lnames *nm, struc
 			v->tx[i][0] = 0;
 		}
 	/* "IF|...": the interface chosen */
-	if (sep && page != P_QRULE) {
-		for (ci = 0; ci < nm->n && (strlen(nm->name[ci]) != (size_t)(sep - s) ||
-		                            rt_strncasecmp(nm->name[ci], s, (size_t)(sep - s))); ci++)
-			;
-		if (ci == nm->n)
-			ci = 0;
+	if (sep && (page == P_ALIAS || page == P_VLAN || page == P_ADDR6)) {
+		ci = lf_name_index(nm, s, (size_t)(sep - s));
 		s = sep + 1;
 	}
 	if (page == P_ALIAS)
 		v->cy[LA_IF] = ci;
 	if (page == P_VLAN)
 		v->cy[LV_PARENT] = ci;
+	if (page == P_ADDR6)
+		v->cy[L6_IF] = ci;
 	while (lf_word(&s, w, sizeof(w))) {
 		if (page == P_ALIAS) {
 			if (first)
@@ -704,6 +852,33 @@ void rp_lform_get(int page, const char *entry, const struct rp_lnames *nm, struc
 				for (i = 0; i < 3; i++)
 					if ((x = lf_kv(w, vkeys[i])) != NULL)
 						v->cy[LV_IP4 + i] = lf_eq(x, "on") ? 1 : 2;
+		} else if (page == P_ROUTE) {
+			if (first)
+				lf_set(v, LR_DEST, w);
+			else if (lf_eq(w, "via") && lf_word(&s, w, sizeof(w)))
+				lf_set(v, LR_GW, w);
+			else if (lf_eq(w, "dev") && lf_word(&s, w, sizeof(w)))
+				v->cy[LR_IF] = lf_name_index(nm, w, strlen(w));
+			else if (lf_eq(w, "metric") && lf_word(&s, w, sizeof(w)))
+				lf_set(v, LR_METRIC, w);
+			else
+				for (i = 1; i < 5; i++)
+					if (lf_eq(w, rtype_word[i]))
+						v->cy[LR_TYPE] = i;
+		} else if (page == P_HOST) {
+			lf_set(v, first ? LH_NAME : LH_ADDR, w);
+		} else if (page == P_NEIGH) {
+			if (first)
+				lf_set(v, LN_ADDR, w);
+			else if (lf_eq(w, "dev") && lf_word(&s, w, sizeof(w)))
+				v->cy[LN_IF] = lf_name_index(nm, w, strlen(w));
+			else
+				lf_set(v, LN_MAC, w);
+		} else if (page == P_ADDR6) {
+			if (first)
+				lf_set(v, L6_ADDR, w);
+			else if (lf_eq(w, "nodad"))
+				v->cy[L6_DAD] = 1;
 		} else if (page == P_QRULE) {
 			if ((x = lf_kv(w, "proto")) != NULL)
 				v->cy[LQ_PROTO] = lf_eq(x, "tcp") ? 1 : 2;
@@ -791,9 +966,74 @@ int rp_lform_put(int page, const struct rp_lvals *v, const struct rp_lnames *nm,
 
 	*fi = -1;
 	entry[0] = 0;
+	if (page == P_ADDR6)
+		ci = v->cy[L6_IF];
 	/* not on the first card: "IF|" first */
-	if ((page == P_ALIAS || page == P_VLAN) && ci > 0 && ci < nm->n)
+	if ((page == P_ALIAS || page == P_VLAN || page == P_ADDR6) && ci > 0 && ci < nm->n)
 		lf_add(entry, len, &n, "%s%s", nm->name[ci], "|");   /* RP_IFSEP */
+	if (page == P_ROUTE) {
+		int t = v->cy[LR_TYPE] >= 0 && v->cy[LR_TYPE] < 5 ? v->cy[LR_TYPE] : 0;
+		lf_trim(v, LR_DEST, a, sizeof(a));
+		lf_trim(v, LR_GW, b, sizeof(b));
+		lf_trim(v, LR_METRIC, c, sizeof(c));
+		if (lf_eq(a, "0/0") || lf_eq(a, "0.0.0.0/0"))
+			rt_strlcpy(a, "default", sizeof(a));
+		if (!a[0] || !(lf_eq(a, "default") || rp_valid_ip4(a, 1) || (rp_valid_ip6(a, 1) && !strchr(a, '%'))))
+			return lf_bad(LR_DEST, "enter default, a network such as 10.0.0.0/8, or an IPv6 prefix", fi, err,
+			              errlen);
+		if (b[0] && !rp_valid_ip(b))
+			return lf_bad(LR_GW, "enter the router's IPv4 or IPv6 address, or leave it empty", fi, err, errlen);
+		if (b[0] && !lf_eq(a, "default") && (rp_valid_ip4(a, 1) != rp_valid_ip4(b, 0)))
+			return lf_bad(LR_GW, "the router must have an address of the destination's kind", fi, err, errlen);
+		if (lf_num(c, 0, 2147483647L, 1) < 0)
+			return lf_bad(LR_METRIC, "enter a number from 0 up, or leave it empty", fi, err, errlen);
+		if (!b[0] && (v->cy[LR_IF] <= 0 || v->cy[LR_IF] >= nm->n) && !t)
+			return lf_bad(LR_GW, "give a gateway, an interface or a type other than Normal", fi, err, errlen);
+		lf_add(entry, len, &n, "%s%s", a, "");
+		if (b[0])
+			lf_add(entry, len, &n, " via %s%s", b, "");
+		if (v->cy[LR_IF] > 0 && v->cy[LR_IF] < nm->n)
+			lf_add(entry, len, &n, " dev %s%s", nm->name[v->cy[LR_IF]], "");
+		if (c[0])
+			lf_add(entry, len, &n, " metric %s%s", c, "");
+		if (t)
+			lf_add(entry, len, &n, " %s%s", rtype_word[t], "");
+		return n + 1 < (size_t)len && rp_valid_route(entry) ? 0 :
+		       lf_bad(LR_DEST, "this route cannot be written", fi, err, errlen);
+	}
+	if (page == P_HOST) {
+		lf_trim(v, LH_NAME, a, sizeof(a));
+		lf_trim(v, LH_ADDR, b, sizeof(b));
+		if (!a[0] || !rp_valid_name(a) || rp_valid_ip4(a, 0) || strlen(a) >= RP_STR)
+			return lf_bad(LH_NAME, "enter a name: letters, digits, '-' and '.'", fi, err, errlen);
+		if (!rp_valid_ip(b) || strchr(b, '%'))
+			return lf_bad(LH_ADDR, "enter an IPv4 or IPv6 address, e.g. 192.168.1.9", fi, err, errlen);
+		lf_add(entry, len, &n, "%s %s", a, b);
+		return n + 1 < (size_t)len && rp_valid_host(entry) ? 0 :
+		       lf_bad(LH_NAME, "this host cannot be written", fi, err, errlen);
+	}
+	if (page == P_NEIGH) {
+		lf_trim(v, LN_ADDR, a, sizeof(a));
+		lf_trim(v, LN_MAC, b, sizeof(b));
+		if (!rp_valid_ip(a) || strchr(a, '%'))
+			return lf_bad(LN_ADDR, "enter an IPv4 or IPv6 address, e.g. 192.168.1.9", fi, err, errlen);
+		if (!rp_valid_mac(b))
+			return lf_bad(LN_MAC, "enter six pairs of hex digits, e.g. 00:11:22:33:44:55", fi, err, errlen);
+		lf_add(entry, len, &n, "%s %s", a, b);
+		if (v->cy[LN_IF] > 0 && v->cy[LN_IF] < nm->n)
+			lf_add(entry, len, &n, " dev %s%s", nm->name[v->cy[LN_IF]], "");
+		return n + 1 < (size_t)len && rp_valid_neigh(entry) ? 0 :
+		       lf_bad(LN_ADDR, "this neighbour cannot be written", fi, err, errlen);
+	}
+	if (page == P_ADDR6) {
+		lf_trim(v, L6_ADDR, a, sizeof(a));
+		if (!strchr(a, '/') || strchr(a, '%') || !rp_valid_ip6(a, 1))
+			return lf_bad(L6_ADDR, "enter the address and its network size, e.g. 2001:db8::5/64", fi, err,
+			              errlen);
+		lf_add(entry, len, &n, "%s%s", a, v->cy[L6_DAD] == 1 ? " nodad" : "");
+		return n + 1 < (size_t)len && rp_valid_addr6(rp_entry_body(entry)) ? 0 :
+		       lf_bad(L6_ADDR, "this address cannot be written", fi, err, errlen);
+	}
 	if (page == P_ALIAS) {
 		lf_trim(v, LA_ADDR, a, sizeof(a));
 		lf_trim(v, LA_MASK, b, sizeof(b));
@@ -932,6 +1172,27 @@ void rp_list_row(int page, const char *entry, const struct rp_lnames *nm, char *
 				lf_add(buf, len, &n, ", %s %s", what[i], onoff[v.cy[LV_IP4 + i]]);
 		if (v.tx[LV_TCPWIN][0])
 			lf_add(buf, len, &n, ", TCP window %s%s", v.tx[LV_TCPWIN], "");
+	} else if (page == P_ROUTE) {
+		static const char *const words[5] = { "", "reject", "prohibit", "unreachable", "blackhole" };
+		lf_add(buf, len, &n, "%s%s", v.tx[LR_DEST], "");
+		if (v.tx[LR_GW][0])
+			lf_add(buf, len, &n, " via %s%s", v.tx[LR_GW], "");
+		if (v.cy[LR_IF] > 0)
+			lf_add(buf, len, &n, " on %s%s", lf_name(nm, v.cy[LR_IF]), "");
+		if (v.tx[LR_METRIC][0])
+			lf_add(buf, len, &n, ", metric %s%s", v.tx[LR_METRIC], "");
+		if (v.cy[LR_TYPE] > 0 && v.cy[LR_TYPE] < 5)
+			lf_add(buf, len, &n, ", %s%s", words[v.cy[LR_TYPE]], "");
+	} else if (page == P_HOST) {
+		lf_add(buf, len, &n, "%s = %s", v.tx[LH_NAME], v.tx[LH_ADDR]);
+	} else if (page == P_NEIGH) {
+		lf_add(buf, len, &n, "%s is %s", v.tx[LN_ADDR], v.tx[LN_MAC]);
+		if (v.cy[LN_IF] > 0)
+			lf_add(buf, len, &n, " on %s%s", lf_name(nm, v.cy[LN_IF]), "");
+	} else if (page == P_ADDR6) {
+		lf_add(buf, len, &n, "%s: %s", lf_name(nm, v.cy[L6_IF]), v.tx[L6_ADDR]);
+		if (v.cy[L6_DAD] == 1)
+			lf_add(buf, len, &n, ", no duplicate check%s%s", "", "");
 	} else if (page == P_QRULE) {
 		static const char *const proto[3] = { "", "TCP ", "UDP " };
 		static const char *const side[3] = { "ports", "local ports", "remote ports" };
@@ -959,8 +1220,16 @@ void rp_list_row(int page, const char *entry, const struct rp_lnames *nm, char *
 
 const char *rp_lform_note(int page)
 {
-	return page == P_ALIAS ? "Up to 8 extra addresses" : page == P_VLAN ? "Up to 8 VLANs" :
-	       page == P_QRULE ? "Up to 16 rules" : rp_pages[page].note;
+	switch (page) {
+	case P_ALIAS: return "Up to 8 extra addresses";
+	case P_VLAN:  return "Up to 8 VLANs";
+	case P_QRULE: return "Up to 16 rules";
+	case P_ROUTE: return "Up to 12 routes; the cards' default routes: Address page";
+	case P_HOST:  return "Up to 16 hosts";
+	case P_NEIGH: return "Up to 8 neighbours";
+	case P_ADDR6: return "Up to 8 addresses; the routers' ones come by themselves";
+	}
+	return rp_pages[page].note;
 }
 
 void rp_iface_row(const struct rp_iface *f, char *buf, int len)
