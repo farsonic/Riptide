@@ -1132,7 +1132,7 @@ static int cur_conn;
 static struct { u16 lport, fport; u8 faddr[16]; int set; } cur_key;   /* the chosen connection */
 static const struct rp_hist empty_hist;
 
-static const char *const tab_labels[6] = { "Interfaces", "Connections", "Names and time", "Counters", "Routes", NULL };
+static const char *const tab_labels[6] = { "Interfaces", "Connections", "Names", "Counters", "Routes", NULL };
 
 static struct MUI_CustomClass *mk(int size, APTR disp)
 {

@@ -1326,7 +1326,7 @@ of speed.
   first (`192.168.1.2:1025  to  93.184.216.34:80`, a listener only its
   own), then its state, round trip time, window in packets and ECN,
   speed, and the program that opened it (from 0.23), moving ones first; click one to see its round trip time (line)
-  and window (columns) over the last minute below. *Names and time*: host
+  and window (columns) over the last minute below. *Names* (and time): host
   name, name servers, name cache hits, and NTP (server, when it last
   synced, the clock's offset then, round trip, next sync, why the last
   try failed). *Counters*: connections open and made, segments resent
