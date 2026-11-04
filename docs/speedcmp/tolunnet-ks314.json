@@ -1,0 +1,27 @@
+{
+ "stack": "tolunnet",
+ "id": "$VER: bsdsocket.library 1.2.0-rc6 (07.10.2026)",
+ "bytes": 2097152,
+ "repeat": 3,
+ "online_s": 32,
+ "download_kbs": null,
+ "download_runs": [],
+ "upload_kbs": null,
+ "upload_runs": [],
+ "idle_download_pct": null,
+ "idle_upload_pct": null,
+ "udp_dgram_s": null,
+ "udp_kbs": null,
+ "udp_sent": null,
+ "udp_errors": null,
+ "udp_received": null,
+ "udp_count": 3000,
+ "loopback_kbs": null,
+ "ping_ms": null,
+ "ping_min_ms": null,
+ "ping_loss_pct": null,
+ "notes": [
+  "0 of 3 downloads and 0 of 3 uploads completed",
+  "did not finish"
+ ]
+}

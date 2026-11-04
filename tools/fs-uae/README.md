@@ -77,8 +77,11 @@ uaenet pcap: uaenet.device unit 2 = en0, Amiga MAC 02:...
 ```
 
 The MAC is the host interface's address with the locally administered bit
-set; `uaenet_pcap_mac = 02:12:34:56:78:9a` picks another one. Start the
-patched binary with your configuration:
+set; `uaenet_pcap_mac = 02:12:34:56:78:9a` picks another one. With the
+environment variable `FSUAE_UAENET_PCAP_FIRST=1` there are no slirp units
+and the bridged interfaces are units 0, 1, ...: for a guest whose saved
+settings cannot name a unit (the speed comparison runs Miami that way,
+`docs/COMPARISON.md` 13). Start the patched binary with your configuration:
 
 ```
 ~/fs-uae-riptide/fs-uae-3.2.35/fs-uae ~/Documents/FS-UAE/Configurations/Amiga.fs-uae

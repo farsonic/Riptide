@@ -462,33 +462,10 @@ Amiga's.
   hangs the machine at the first transfer over uaenet.device. The cause
   is not yet known; it may be the emulator, the stack, or both.
 
-**Competitors.** We tried to run the same benchmark with other stacks on
-the same emulated machines:
-
-* **AmiTCP 3.0b2** (Aminet `comm/net/AmiTCP-bin-30b2.lha`, GPL-2.0) does not
-  run on the AROS ROM that FS-UAE includes. It needs `rexxsyslib.library`,
-  which the AROS ROM lacks (`netbench -R` adds a stub), and a few
-  configuration fixes. It then starts, but the emulated machine crashes and
-  reboots as soon as any program, AmiTCP's own `ifconfig` included, opens
-  its bsdsocket.library. AmiTCP needs a real Kickstart ROM. Kickstart is
-  copyrighted and not part of this repository; with one
-  (`KICKSTART=kick.rom AMITCP_DIR=... run_fsuae_netbench.sh`), the script
-  runs AmiTCP the same way. We have not run that combination. The script
-  never ships AmiTCP. It copies the files from `AMITCP_DIR` into the test
-  disk at run time.
-* **Roadshow**: the demo runs for 15 minutes ([RS-README]; long enough for a
-  run). It needs AmigaOS 3.x, which means a real Kickstart and Workbench
-  that we cannot use here. The official site returned HTTP 503 when we
-  checked, so we could not read the demo's licence terms. The script has
-  no Roadshow support yet.
-* **Miami** (the evaluation version, Aminet `comm/tcp/Miami21feval.lha`)
-  needs Kickstart 2.04 or later and MUI, and is set up through its GUI.
-  It is not suited to an unattended run without a real Kickstart and
-  Workbench, so we have not tried it.
-
-Until a stack runs under the same conditions, this section compares
-Riptide only with itself: the baseline exists to catch regressions and to
-measure the Phase 2 optimisations.
+**Competitors.** Section 13 runs the same kind of benchmark under seven
+other stacks on the same emulated machine, with a real Kickstart and
+Workbench; the paragraphs that used to be here (why AmiTCP 3.0b2 could not
+run on the AROS ROM, and so on) are superseded by it.
 
 ## 12. Measured features: stackprobe
 
@@ -655,3 +632,139 @@ Not in the table:
   (15/16, newlib), which is published only as a GitHub release asset that the
   proxy here blocks. The available gcc 6.5 (libnix) toolchain fails its
   toolchain check.
+
+## 13. Measured throughput: the same benchmark under eight stacks
+
+Section 11 measures Riptide against itself. This section puts the stacks
+of section 12 through the same transfers on the same emulated machine, so
+that "fast" is a number next to the others' numbers.
+`tests/amiga/run_fsuae_speedcmp.sh` does one boot per stack and writes a
+JSON report (`docs/speedcmp/`); `tools/speedcmp_table.py` makes the
+tables; `docs/speedcmp/RESULTS.md` is the generated one. The full
+reports hold every run, the CPU idle figures and the notes.
+
+**The machine and the measurements.** FS-UAE's A1200 preset (68020 at 14
+MHz, cycle exact, no JIT), 2 MB chip and 8 MB fast RAM, the user's
+Kickstart 3.1.4 and an installed Workbench 3.1.4 (both copyrighted, never
+committed), `uaenet.device` bridged with libpcap (`tools/fs-uae`) to a
+veth pair on the Linux host; no slirp, no NAT, offloads off. Each stack is
+installed on a fresh copy of that Workbench the way its own documentation
+says, with a static address and the host as its router, and started from
+`S:User-Startup`; the host pings it before the transfers. Then, with the
+same programs for every stack (bsdsocket.library version 3 calls only):
+
+* three 2 MB TCP downloads and three uploads with `tests/amiga/netbench.c`
+  against `netbench_host.py` (medians; 32 KB application buffers; the
+  idle task of `netbench -I` measures the CPU time nobody used);
+* 3000 UDP datagrams of 1400 bytes with `tests/amiga/udpblast.c`, blocking
+  `sendto()`, counted on the host by `udpsink.py`;
+* 2 MB through a TCP connection from the Amiga to itself over 127.0.0.1
+  (`netbench -L`: the stack's own path, no driver in it);
+* ten pings from the host while the Amiga is idle.
+
+Defaults everywhere: no stack was tuned, Riptide included (it ran with the
+`riptide.conf` the installer writes plus the static address). The Miamis
+are the evaluation versions. Their saved settings name `uaenet.device`
+unit 0 and we found no way to give them another unit from the command
+line, so they ran under an FS-UAE started with `FSUAE_UAENET_PCAP_FIRST=1`
+(`tools/fs-uae`): the same bridge as the others, numbered unit 0 instead
+of 2, with their saved addresses 10.0.2.15 and router 10.0.2.2 on the
+veth. Versions and sources are those of section 12 (AmiNetXDuo: the
+nightly release binary; AmiTCP_NG, PrismNet and tolunnet built from their
+sources; AmiTCP 3.0b2 from Aminet).
+
+| Stack | Download KB/s | Upload KB/s | UDP dgram/s | Loopback KB/s | Ping ms | CPU idle down/up | UDP received | Notes |
+|---|---|---|---|---|---|---|---|---|
+| Riptide 0.26 | 818.2 | 496.4 | 443 | **1008.4** | 15.4 | 0 % / 0 % | 3000 of 3000 |  |
+| AmiNetXDuo 1.0.0-rc2 | **1168.3** | **518.5** | **539** | 910.6 | 11.3 | 0 % / 0 % | 3000 of 3000 |  |
+| AmiTCP_NG 4.1.8 | 599.5 | 170.1 | 444 | 489.2 | 9.4 | 6 % / 0 % | 2999 of 3000 |  |
+| MiamiDx 1.0c (evaluation) | 226.1 | 132.8 | 153 | 450.7 | 16.4 | 2 % / 0 % | 3000 of 3000 |  |
+| Miami 3.2b (evaluation) | 232.6 | 164.7 | 161 | 455.1 | **7.3** | 0 % / 0 % | 3000 of 3000 |  |
+| PrismNet (lwIP 2.2.1) | 758.8 | 140.7 | 406 | 456.9 | 10.5 | 8 % / 0 % | 3000 of 3000 |  |
+| tolunnet 1.2.0-rc6 | n/a | n/a | n/a | n/a | n/a | n/a / n/a | n/a | 0 of 3 downloads and 0 of 3 uploads completed; did not finish |
+| AmiTCP 3.0b2 | 702.3 | 278.7 | 518 | 494.8 | 11.5 | 4 % / 1 % | 3000 of 3000 |  |
+
+Medians of 3 transfers of 2 MB each way, KB/s = 1024 bytes per second of
+emulated time; the three downloads of a stack agree within 1 % except
+PrismNet's (2.6 %); uploads spread more (Riptide 484-529, AmiNetXDuo
+424-532, AmiTCP 3.0b2 149-290, PrismNet 135-252, AmiTCP_NG 167-221).
+
+**What it says.**
+
+* **AmiNetXDuo is the fastest stack at TCP over the emulated card, not
+  Riptide.** Its downloads run 43 % faster than Riptide's (1168 against 818
+  KB/s) and its uploads 4 % faster (519 against 496); it also sends the
+  most UDP datagrams per second. Riptide is second on both TCP directions,
+  ahead of the next stack by 17 % (download, AmiTCP 3.0b2) and 78 %
+  (upload, AmiTCP 3.0b2). Riptide is the fastest on loopback (1008 KB/s,
+  11 % ahead of AmiNetXDuo, twice the others): its own receive and send
+  paths are the quickest; its driver side is not.
+* **Every stack is CPU bound** on this machine: the idle task got nothing
+  during Riptide's and AmiNetXDuo's transfers, and at most 8 % during the
+  others'. The 68020 is the limit, and what differs is how much work each
+  stack does per segment.
+* **Uploads are slower than downloads everywhere**, by 56 % for Riptide
+  and AmiNetXDuo and by 60-80 % for the rest. A sending stack copies and
+  checksums the application's data and then runs the driver's own copy;
+  section 11 and `docs/DESIGN.md` have Riptide's per-segment budget.
+* **UDP.** A blocking `sendto()` of 1400 bytes costs Riptide 2.26 ms on
+  this machine (443/s), AmiTCP 3.0b2 and AmiNetXDuo 1.9 ms, the Miamis
+  6.3 ms. Every stack delivered all 3000 datagrams (AmiTCP_NG 2999).
+* **Ping.** The round trip as the host sees it, idle Amiga: Miami 3.2b
+  7.3 ms, AmiTCP_NG 9.4, PrismNet 10.5, AmiNetXDuo 11.3, AmiTCP 3.0b2
+  11.5, Riptide 15.4, MiamiDx 16.4 (averages of 10; minima from 1.0 ms
+  for PrismNet to 12.8 ms for MiamiDx, Riptide 3.4). Riptide answers an
+  echo request more slowly than most: its receive path collects frames in
+  batches before it wakes the stack process, which pays off under load and
+  costs a few milliseconds on an idle machine. Not investigated further.
+* **tolunnet** came up and answered pings, but its 64 KB warm-up download
+  took 700 s (0.09 KB/s): the data arrives, one small piece at a time,
+  and the run was stopped after 900 s before any measured transfer. The
+  lwIP core says nothing in its log. Its loopback test did not run either
+  (the run never got that far). Reported as it happened; not diagnosed.
+* **The Miamis** are the slowest at TCP by a wide margin (about 230 KB/s
+  down, 130-165 up), with the old BSD stack's 16 KB windows and the
+  evaluation version's limits; the figures are what the evaluation
+  version does, not necessarily the registered one.
+
+**On the wire: Riptide and AmiNetXDuo.** A second run of each with
+`tcpdump` on the host end of the veth (the numbers of those runs: Riptide
+808/513 KB/s, AmiNetXDuo 1179/419; the uploads' spread again) shows what
+differs and what does not:
+
+* Both ask for an MSS of 1460 and SACK. Riptide also uses timestamps,
+  window scaling (factor 2, a 32 KB window) and ECN; AmiNetXDuo none of
+  the three, with a 54 KB window. On a download both receive about 1450
+  to 1480 full segments and acknowledge them about every 9 to 11
+  segments (Riptide 9.1-9.5, AmiNetXDuo 10.6-11.4), and both advertised a
+  zero window at some point: the application could not keep up. So the
+  download difference is not in the protocol exchange; it is what each
+  stack does with a received segment, where AmiNetXDuo spends about 30 %
+  less of the 68020's time.
+* On an upload Riptide sent 2.14-2.18 MB for 2 MB of data: 141 of its
+  4745 data segments (3 %) were retransmissions, while AmiNetXDuo
+  retransmitted nothing. The host's ACKs carried SACK blocks about 550
+  times for either stack, so the host saw the same holes from both; they
+  were reordering, not loss, since AmiNetXDuo never had to resend. Riptide
+  treated some of them as losses: its loss detection is quicker to resend
+  under reordering than it needs to be, and the resent 80 KB cost its
+  uploads a few per cent. Where the reordering comes from (the emulator's
+  bridge, the veth) is not known. AmiNetXDuo's uploads sent many
+  segments below the MSS (average 1290-1300 bytes, 17 % not full size);
+  Riptide's averaged 1370 bytes.
+* A ping is answered after 13.6 ms by Riptide and 10-11 ms by AmiNetXDuo
+  in these captures (the first one 35 ms): the emulator's card delivers
+  frames to the guest in batches, and most of the round trip is that.
+
+**Not run.** The same transfers under the FS-UAE with the SANA-II DMA
+callbacks (`tools/fs-uae` patch 0004; only Riptide offers the callbacks,
+section 11 has its numbers) and a second look at tolunnet were planned
+and stopped: one run per stack is what there is. Nothing was measured on
+a 68040 (the A1200 Kickstart cannot run that preset).
+
+**How far to trust it.** Emulator numbers, one machine, one card that
+costs the Amiga one copy per frame and almost no bus time; real cards
+cost more (section 11). The emulation is cycle exact, so the numbers
+repeat (the download spreads above), but a stack's own driver code can
+behave differently on real hardware. One run per stack; the host end was
+the same Linux kernel and the same Python helper every time.

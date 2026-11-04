@@ -1,0 +1,32 @@
+{
+ "stack": "amitcp_ng",
+ "id": "AmiTCP/IP release 3 bsdsocket.library 4.1 (AmiTCP_NG 4.1.8)",
+ "bytes": 2097152,
+ "repeat": 3,
+ "online_s": 28,
+ "download_kbs": 599.53,
+ "download_runs": [
+  599.53,
+  597.95,
+  599.53
+ ],
+ "upload_kbs": 170.11,
+ "upload_runs": [
+  221.19,
+  170.11,
+  166.84
+ ],
+ "idle_download_pct": 6.3,
+ "idle_upload_pct": 0.0,
+ "udp_dgram_s": 444,
+ "udp_kbs": 607.09,
+ "udp_sent": 3000,
+ "udp_errors": 0,
+ "udp_received": 2999,
+ "udp_count": 3000,
+ "loopback_kbs": 489.24,
+ "ping_ms": 9.4,
+ "ping_min_ms": 2.659,
+ "ping_loss_pct": 0,
+ "notes": []
+}

@@ -71,6 +71,9 @@ static int udpblast_main(int argc, char **argv)
 		usage();
 		return CL_ERROR;
 	}
+	/* version 3: AmiTCP 3.0's bsdsocket.library is 3.28; sendto() and
+	 * WaitSelect() are there from version 1 */
+	SocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 3);
 	if (cl_need_socket() < 0 || cl_need_timer() < 0)
 		return CL_FAIL;
 	if (batch) {

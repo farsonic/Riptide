@@ -3,6 +3,9 @@
  * (tests/amiga/run_fsuae_netbench.sh). Talks to tests/amiga/netbench_host.py.
  *
  *   netbench -d|-u [-n BYTES] [-b BUFSIZE] [-w RCVBUF] [-l LABEL] [-I] A.B.C.D PORT
+ *   netbench -L [-n BYTES] [-b BUFSIZE] [-l LABEL]
+ *                            loopback: BYTES through a TCP connection from
+ *                            127.0.0.1 to itself (one process, WaitSelect)
  *   netbench -W SECONDS      wait until a stack's bsdsocket.library opens
  *   netbench -s SECONDS      sleep (the AROS ROM has no Wait command)
  *   netbench -A NAME=PATH    assign NAME: to PATH (-a: add to NAME:), for
@@ -91,7 +94,101 @@ static u32 idle_calibrate(void)
 static void usage(void)
 {
 	cl_puts("Usage: netbench -d|-u [-n BYTES] [-b BUFSIZE] [-w RCVBUF] [-l LABEL] [-I] A.B.C.D PORT\n"
+	        "       netbench -L [-n BYTES] [-b BUFSIZE] [-l LABEL]\n"
 	        "       netbench -W SECONDS | -s SECONDS | -A NAME=PATH | -a NAME=PATH | -R\n");
+}
+
+/* KB/s with two decimals in 32-bit arithmetic */
+static void print_rate(const char *label, const char *what, u32 done, u32 us)
+{
+	u32 kbs100;
+
+	if (!us)
+		us = 1;
+	kbs100 = (u32)(((done / 1024u) * 100000u) / (us / 1000u ? us / 1000u : 1u));
+	cl_printf("netbench: %s %s %lu bytes %lu.%06lu s %lu.%02lu KB/s\n", label, what, (unsigned long)done,
+	          (unsigned long)(us / 1000000u), (unsigned long)(us % 1000000u),
+	          (unsigned long)(kbs100 / 100u), (unsigned long)(kbs100 % 100u));
+}
+
+/*
+ * -L: total bytes from a socket to another of the same process over
+ * 127.0.0.1: a listener, a connect (the stack completes the handshake by
+ * itself), accept, then both ends non-blocking and WaitSelect() whenever
+ * neither can go on. Measures the stack's own path with no driver in it.
+ */
+static int loopback(u32 total, u32 bufsize, const char *label)
+{
+	struct rt_sockaddr_in sa;
+	LONG len = sizeof(sa), on = 1;
+	int l, c, s, n;
+	u32 sent = 0, got = 0, t0, t1, idle = 0;
+	struct rt_timeval tmo;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_len = sizeof(sa);
+	sa.sin_family = RT_AF_INET;
+	sa.sin_addr = rt_htonl(0x7f000001u);
+	l = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
+	if (l < 0 || bind(l, (struct sockaddr *)&sa, sizeof(sa)) < 0 || listen(l, 1) < 0 ||
+	    getsockname(l, (struct sockaddr *)&sa, &len) < 0) {
+		cl_error("loopback: cannot listen on 127.0.0.1");
+		return CL_FAIL;
+	}
+	c = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
+	if (c < 0 || connect(c, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		cl_error("loopback: connect() failed");
+		CloseSocket(l);
+		return CL_FAIL;
+	}
+	s = accept(l, NULL, NULL);
+	if (s < 0) {
+		cl_error("loopback: accept() failed");
+		CloseSocket(c);
+		CloseSocket(l);
+		return CL_FAIL;
+	}
+	IoctlSocket(c, RT_FIONBIO, &on);
+	IoctlSocket(s, RT_FIONBIO, &on);
+	t0 = cl_now_us();
+	while (got < total) {
+		int progress = 0;
+		if (sent < total) {
+			u32 k = total - sent < bufsize ? total - sent : bufsize;
+			n = send(c, buf, (LONG)k, 0);
+			if (n > 0) {
+				sent += (u32)n;
+				progress = 1;
+			}
+		}
+		n = recv(s, buf, (LONG)bufsize, 0);
+		if (n > 0) {
+			got += (u32)n;
+			progress = 1;
+		} else if (n == 0) {
+			break;
+		}
+		if (!progress) {
+			ULONG rd[2] = { 0, 0 }, wr[2] = { 0, 0 };
+			int nfds = (c > s ? c : s) + 1;
+			rd[s / 32] |= 1UL << (s % 32);
+			if (sent < total)
+				wr[c / 32] |= 1UL << (c % 32);
+			tmo.tv_secs = 2;
+			tmo.tv_micro = 0;
+			n = WaitSelect(nfds, rd, sent < total ? wr : NULL, NULL, &tmo, NULL);
+			if (n < 0 || (n == 0 && ++idle >= 5))
+				break;      /* an error, or 10 s with nothing moving */
+		} else {
+			idle = 0;
+		}
+	}
+	t1 = cl_now_us();
+	CloseSocket(s);
+	CloseSocket(c);
+	CloseSocket(l);
+	print_rate(label, "loopback", got, t1 - t0);
+	return got == total ? CL_OK : CL_WARN;
 }
 
 /* -A / -a: Assign NAME: PATH [ADD] without the Assign command */
@@ -195,9 +292,10 @@ static int netbench_main(int argc, char **argv)
 	u32 idle_rate = 0, idle_c0 = 0;
 #endif
 
-	while ((c = cl_getopt(argc, argv, "dun:b:w:l:s:W:A:a:RI", &g)) != -1) {
+	while ((c = cl_getopt(argc, argv, "duLn:b:w:l:s:W:A:a:RI", &g)) != -1) {
 		switch (c) {
 		case 'I': idle = 1; break;
+		case 'L': dir = 'L'; break;
 		case 'R': return add_rexx_stub();
 		case 'A': return do_assign(g.arg, 0);
 		case 'a': return do_assign(g.arg, 1);
@@ -234,8 +332,10 @@ static int netbench_main(int argc, char **argv)
 		SocketBase = NULL;
 		return CL_OK;
 	}
-	if (!dir || argc - g.ind != 2 || cl_parse_ip(argv[g.ind], &addr) < 0 ||
-	    cl_parse_uint(argv[g.ind + 1], 65535, &port) < 0) {
+	addr = port = 0;
+	if (!dir || (dir == 'L' ? argc != g.ind :
+	             argc - g.ind != 2 || cl_parse_ip(argv[g.ind], &addr) < 0 ||
+	             cl_parse_uint(argv[g.ind + 1], 65535, &port) < 0)) {
 		usage();
 		return CL_ERROR;
 	}
@@ -254,6 +354,13 @@ static int netbench_main(int argc, char **argv)
 	}
 	for (n = 0; n < (int)bufsize; n++)
 		buf[n] = (char)('a' + n % 26);
+	if (dir == 'L') {
+		int r = loopback(total, bufsize, label);
+		FreeVec(buf);
+		CloseLibrary(SocketBase);
+		SocketBase = NULL;
+		return r;
+	}
 	s = socket(RT_AF_INET, RT_SOCK_STREAM, 0);
 	if (s < 0) {
 		cl_error("socket() failed");
@@ -335,16 +442,7 @@ static int netbench_main(int argc, char **argv)
 #endif
 	CloseSocket(s);
 	us = t1 - t0;
-	if (!us)
-		us = 1;
-	/* KB/s with two decimals in 32-bit arithmetic */
-	{
-		u32 kbs100 = (u32)(((done / 1024u) * 100000u) / (us / 1000u ? us / 1000u : 1u));
-		cl_printf("netbench: %s %s %lu bytes %lu.%06lu s %lu.%02lu KB/s\n", label,
-		          dir == 'd' ? "download" : "upload", (unsigned long)done,
-		          (unsigned long)(us / 1000000u), (unsigned long)(us % 1000000u),
-		          (unsigned long)(kbs100 / 100u), (unsigned long)(kbs100 % 100u));
-	}
+	print_rate(label, dir == 'd' ? "download" : "upload", done, us);
 	FreeVec(buf);
 	CloseLibrary(SocketBase);
 	SocketBase = NULL;

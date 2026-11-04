@@ -1,0 +1,32 @@
+{
+ "stack": "riptide",
+ "id": "bsdsocket.library 4.1 (30.10.2026) Riptide 0.26 (30.10.2026)",
+ "bytes": 2097152,
+ "repeat": 3,
+ "online_s": 28,
+ "download_kbs": 818.21,
+ "download_runs": [
+  816.26,
+  818.21,
+  825.14
+ ],
+ "upload_kbs": 496.36,
+ "upload_runs": [
+  496.36,
+  528.92,
+  484.5
+ ],
+ "idle_download_pct": 0.0,
+ "idle_upload_pct": 0.0,
+ "udp_dgram_s": 443,
+ "udp_kbs": 606.02,
+ "udp_sent": 3000,
+ "udp_errors": 0,
+ "udp_received": 3000,
+ "udp_count": 3000,
+ "loopback_kbs": 1008.37,
+ "ping_ms": 15.395,
+ "ping_min_ms": 3.402,
+ "ping_loss_pct": 0,
+ "notes": []
+}
