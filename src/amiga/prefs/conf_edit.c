@@ -986,8 +986,10 @@ void rp_conf_applied(struct rp_conf *c)
 
 static void count_line(const char *line, void *arg)
 {
-	(void)line;
-	(*(int *)arg)++;
+	int *n = arg;
+
+	if (line)
+		(*n)++;
 }
 
 int rp_live_pending(const struct rp_conf *c)
