@@ -903,10 +903,57 @@ static Object *list_page(int p)
 	               MUIA_Group_Child, (ULONG)row, MUIA_Group_Child, (ULONG)btns, TAGEND);
 }
 
+/* o at the left of its row (a group centres what is narrower than it) */
+static Object *left(Object *o)
+{
+	return o ? hgroup2(o, rect()) : NULL;
+}
+
+/* About Riptide: which Riptide this is, its licence and source, and the
+ * way to support its author (a button: AmigaOS 3.x has no standard way to
+ * open a web page, so it shows the address) */
+static char about_title[64];
+static char *about_help;
+
+static Object *about_page(void)
+{
+	Object *cup, *grp;
+	ULONG in = theme_compact() ? 4 : 10;
+
+	rt_snprintf(about_title, sizeof(about_title), "Riptide %s (%s)", RIPTIDE_VERSION_STRING, RIPTIDE_DATE);
+	cup = button("_Buy its author a coffee");
+	if (!cup)
+		return NULL;
+	about_help = bubble_dup("Buy its author a coffee",
+	                        "Shows the address of Riptide's page at Buy Me a Coffee: "
+	                        "https://buymeacoffee.com/farsonic");
+	mui_set(cup, MUIA_ShortHelp, (ULONG)about_help);
+	mui_do(cup, MUIM_Notify, MUIA_Pressed, FALSE, (ULONG)app, 2, MUIM_Application_ReturnID, ID_COFFEE);
+	grp = mui_new(MUIC_Group, MUIA_InnerLeft, 12, MUIA_InnerRight, 12, MUIA_InnerTop, in, MUIA_InnerBottom,
+	              in - 2, MUIA_Group_VertSpacing, theme_compact() ? 3 : 6,
+	              MUIA_Group_Child, (ULONG)left(label(about_title, QL_TITLE)),
+	              MUIA_Group_Child, (ULONG)left(label("A TCP/IP stack for AmigaOS 3.x on the 68020 to\n"
+	                                             "68060: modern TCP, IPv4 and IPv6, and the\n"
+	                                             "bsdsocket.library Amiga network programs use.", QL_TEXT)),
+	              MUIA_Group_Child, (ULONG)left(label("Licence and source", QL_TITLE)),
+	              MUIA_Group_Child, (ULONG)left(label("Free software under the GNU General Public\n"
+	                                             "License, version 2. Source code and releases:\n"
+	                                             "https://github.com/farsonic/riptide", QL_TEXT)),
+	              MUIA_Group_Child, (ULONG)left(label("Support Riptide", QL_TITLE)),
+	              MUIA_Group_Child, (ULONG)left(label("Riptide is free, and takes a lot of evenings.\n"
+	                                             "If it is useful to you, buy its author a coffee:\n"
+	                                             "https://buymeacoffee.com/farsonic", QL_TEXT)),
+	              MUIA_Group_Child, (ULONG)hgroup2(cup, rect()),
+	              MUIA_Group_Child, (ULONG)rect(), TAGEND);
+	return grp;
+}
+
 static Object *build_page(int p)
 {
 	Object *body, *filler, *note;
 
+	if (p == P_ABOUT)
+		return about_page();
 	if (p == P_STATUS) {
 		ULONG in = theme_compact() ? 4 : 10;
 		body = status_page_build(app, ID_STATUS_CONN, ID_STATUS_UPD);
@@ -983,7 +1030,7 @@ static int build_window(const char *pubscreen)
 	int i;
 
 	nav = mui_newc(nav_mcc, MUIA_Nav_Active, (ULONG)page, MUIA_ShortHelp, (ULONG)" ", TAGEND);
-	head = mui_newc(head_mcc, MUIA_Head_Page, (ULONG)page, MUIA_ShortHelp, (ULONG)" ", TAGEND);
+	head = mui_newc(head_mcc, MUIA_Head_Page, (ULONG)page, TAGEND);
 	pages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, TAGEND);
 	status = mui_newc(status_mcc, TAGEND);
 	bar = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_SameSize, TRUE, MUIA_Group_Spacing, 8,
@@ -1388,15 +1435,10 @@ static int command(ULONG id)
 		}
 		return 0;
 	case ID_ABOUT:
-		rt_snprintf(msg, sizeof(msg), "%s %s (%s)\n\n%s\n\n%s", "RiptidePrefs", RIPTIDE_VERSION_STRING,
-		            RIPTIDE_DATE,
-		            tr("Preferences for the Riptide TCP/IP stack.\nThis window uses MUI; without MUI, "
-		               "RiptidePrefs\nopens a GadTools window with the same settings."),
-		            tr("Riptide is free software (GPL-2.0).\nSource: https://github.com/farsonic/riptide\n"
-		               "Buy its author a coffee:\nhttps://buymeacoffee.com/farsonic"));
-		rp_message(msg);
-		return 0;
 	case ID_SUPPORT:
+		go_page(P_ABOUT);
+		return 0;
+	case ID_COFFEE:
 		rt_snprintf(msg, sizeof(msg), "%s", tr("Riptide is free, and takes a lot of evenings.\nIf it is useful "
 		                                       "to you, buy its author a coffee:\n\n    https://buymeacoffee.com/farsonic\n\n"
 		                                       "Thank you!"));
@@ -1476,6 +1518,8 @@ static void free_all(void)
 		bhelp[i] = NULL;
 		btn[i] = NULL;
 	}
+	rp_free(about_help);
+	about_help = NULL;
 	for (i = 0; i < 3; i++) {
 		rp_free(ifhelp[i]);
 		ifhelp[i] = NULL;

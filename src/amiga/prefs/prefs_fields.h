@@ -20,7 +20,8 @@ enum {
 	P_IFACE, P_ADDR, P_ALIAS, P_VLAN, P_ROUTE, P_IP6, P_ADDR6, P_NAMES, P_HOST, P_TIME, P_TCP,
 	P_CONN, P_PORTS, P_KA, P_BG, P_MEM, P_HE, P_QOS, P_QRULE, P_NEIGH, P_OTHER,
 	P_COUNTERS,                 /* Riptide's counts, no settings */
-	P_STATUS,                   /* live state, no settings (shown first) */
+	P_STATUS,                   /* live state, no settings (shown second) */
+	P_ABOUT,                    /* the program, its licence, support (shown first) */
 	RP_NPAGES
 };
 #define RP_FIRST_ADVANCED P_CONN    /* pages from here on are "Advanced" */

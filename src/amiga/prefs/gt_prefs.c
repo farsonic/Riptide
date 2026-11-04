@@ -11,6 +11,7 @@
 #include "prefs/prefs_io.h"
 #include "prefs/prefs_gui.h"
 #include "prefs/prefs_status.h"
+#include "rt/rt_version.h"
 
 #if defined(__VBCC__)
 #include <intuition/intuition.h>
@@ -321,6 +322,22 @@ static int build(void)
 		t[1].ti_Data = osel < 0;
 		g = mk(BUTTON_KIND, g, G_REPL, "_Replace", PLACETEXT_IN, x0 + bw + 8, y, bw, rowh, t);
 		g = mk(BUTTON_KIND, g, G_DEL, "D_elete", PLACETEXT_IN, x0 + 2 * (bw + 8), y, bw, rowh, t);
+	} else if (page == P_ABOUT) {
+		/* which Riptide, its licence and source, and support */
+		static char ver[64];
+		static const char *const about[6] = {
+			ver, "A TCP/IP stack for AmigaOS 3.x.", "Free software (GPL-2.0). Source:",
+			"https://github.com/farsonic/riptide", "Buy its author a coffee:",
+			"https://buymeacoffee.com/farsonic",
+		};
+		rt_snprintf(ver, sizeof(ver), "Riptide %s (%s)", RIPTIDE_VERSION_STRING, RIPTIDE_DATE);
+		for (i = 0; i < 6; i++) {
+			t[0].ti_Tag = GTTX_Text;
+			t[0].ti_Data = (ULONG)about[i];
+			t[1].ti_Tag = TAG_DONE;
+			g = mk(TEXT_KIND, g, G_STAT + ST_ROWS + i, NULL, 0, x0, y, lw + fw, rowh, t);
+			y += ystep;
+		}
 	} else if (page == P_STATUS) {
 		/* text gadgets, filled by st_refresh() */
 		memset(g_stat, 0, sizeof(g_stat));

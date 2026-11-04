@@ -148,25 +148,28 @@ static void nav_fit(Object *obj)
 	nav_is = compact || nav_rh - 2 < 12 ? 0 : nav_rh - 2 < 16 ? nav_rh - 2 : 16;
 }
 
-/* The list's order: Status first, then the settings in page order. pos
- * is a row of the list, page a P_* number. */
+/* The list's order: About Riptide and Status first (NAV_LEAD rows), then
+ * the settings in page order. pos is a row of the list, page a P_* number. */
+#define NAV_LEAD 2
+
 static int nav_page_at(int pos)
 {
-	return pos == 0 ? P_STATUS : pos - 1;
+	return pos == 0 ? P_ABOUT : pos == 1 ? P_STATUS : pos - NAV_LEAD;
 }
 
 static int nav_pos(int page)
 {
-	return page == P_STATUS ? 0 : page + 1;
+	return page == P_ABOUT ? 0 : page == P_STATUS ? 1 : page + NAV_LEAD;
 }
 
-/* the top of row pos below the object's top ("Settings" heads row 1,
- * "Advanced" the first advanced page; scrolled: no headings, from top) */
+/* the top of row pos below the object's top ("Settings" heads the first
+ * settings row, "Advanced" the first advanced page; scrolled: no headings,
+ * from top) */
 static LONG nav_rowy(const struct nav_data *d, int pos)
 {
 	if (d->scroll)
 		return (LONG)(pos - d->top) * nav_rowh();
-	return nav_headh() * ((pos >= 1) + (pos >= RP_FIRST_ADVANCED + 1)) + (LONG)pos * nav_rowh();
+	return nav_headh() * ((pos >= NAV_LEAD) + (pos >= RP_FIRST_ADVANCED + NAV_LEAD)) + (LONG)pos * nav_rowh();
 }
 
 /* whether the rows fit the height the object got, and which are shown
@@ -239,10 +242,10 @@ static void nav_draw(struct nav_data *d, Object *obj)
 	theme_fill(rp, x, _mtop(obj), r - 1, _mbottom(obj), tpen(T_PANEL));
 	theme_line(rp, r, _mtop(obj), r, _mbottom(obj), tpen(T_BORDER));
 	if (nav_headh() && !d->scroll) {
-		theme_text(rp, x + 10, _mtop(obj) + nav_rowy(d, 1) - nav_headh() + (nav_headh() - fh) / 2 + 1, "Settings",
-		           tpen(T_DIM), 1);
+		theme_text(rp, x + 10, _mtop(obj) + nav_rowy(d, NAV_LEAD) - nav_headh() + (nav_headh() - fh) / 2 + 1,
+		           "Settings", tpen(T_DIM), 1);
 		theme_text(rp, x + 10,
-		           _mtop(obj) + nav_rowy(d, RP_FIRST_ADVANCED + 1) - nav_headh() + (nav_headh() - fh) / 2 + 1,
+		           _mtop(obj) + nav_rowy(d, RP_FIRST_ADVANCED + NAV_LEAD) - nav_headh() + (nav_headh() - fh) / 2 + 1,
 		           "Advanced", tpen(T_DIM), 1);
 	}
 	/* scrolled: an accent line at an edge rows are hidden behind */
@@ -455,7 +458,6 @@ DISPATCHER(nav_dispatch)
  * head: the page's icon, name and description
  * ================================================================== */
 struct head_data {
-	struct MUI_EventHandlerNode ehn;
 	int page, shown;
 };
 
@@ -473,14 +475,6 @@ static LONG head_h(void)
 static LONG head_isz(void)
 {
 	return theme_fh() * 2 + 8 > 32 ? theme_fh() * 2 + 8 : 32;
-}
-
-/* the coffee cup at the head's right: the "support Riptide" badge */
-static LONG head_cup_x(Object *obj) { return _mright(obj) - 10 - head_isz(); }
-static int head_on_cup(Object *obj, LONG mx, LONG my)
-{
-	LONG isz = head_isz(), x = head_cup_x(obj), y = _mtop(obj) + 6;
-	return !theme_compact() && mx >= x - 2 && mx <= x + isz + 2 && my >= y - 2 && my <= y + isz + 2;
 }
 
 /* draw s in lines of at most w pixels from x,y; at most n lines */
@@ -527,7 +521,6 @@ static void head_draw(struct head_data *d, Object *obj)
 		return;
 	}
 	theme_icon(rp, d->page, x + 12, y + (_mheight(obj) - isz) / 2, isz, 0);
-	theme_icon(rp, IC_COFFEE, head_cup_x(obj), y + 6, isz, 0);
 	theme_text(rp, tx, y + 8, rp_pages[d->page].title, tpen(T_TEXT), 1);
 	if (theme_font())
 		SetFont(rp, theme_font());
@@ -565,12 +558,8 @@ DISPATCHER(head_dispatch)
 		if (!DoSuperMethodA(cl, obj, msg))
 			return FALSE;
 		theme_setup(obj);
-		d = INST_DATA(cl, obj);
-		mc_handler(obj, cl, &d->ehn, IDCMP_MOUSEBUTTONS, 1);
 		return TRUE;
 	case MUIM_Cleanup:
-		d = INST_DATA(cl, obj);
-		mc_handler(obj, cl, &d->ehn, 0, 0);
 		theme_cleanup(obj);
 		break;
 	case MUIM_Show:
@@ -583,26 +572,6 @@ DISPATCHER(head_dispatch)
 		DoSuperMethodA(cl, obj, msg);
 		if (((struct MUIP_Draw *)msg)->flags & (MADF_DRAWOBJECT | MADF_DRAWUPDATE))
 			head_draw(INST_DATA(cl, obj), obj);
-		return 0;
-	case MUIM_HandleEvent: {
-		struct IntuiMessage *im = ((struct MUIP_HandleEvent *)msg)->imsg;
-		d = INST_DATA(cl, obj);
-		if (im && d->shown && im->Class == IDCMP_MOUSEBUTTONS && im->Code == SELECTDOWN &&
-		    head_on_cup(obj, im->MouseX, im->MouseY)) {
-			mui_do(_app(obj), MUIM_Application_ReturnID, ID_SUPPORT);
-			return MUI_EventHandlerRC_Eat;
-		}
-		return 0;
-	}
-	case MUIM_CreateShortHelp: {
-		struct MUIP_CreateShortHelp *m = (struct MUIP_CreateShortHelp *)msg;
-		if (head_on_cup(obj, m->mx, m->my))
-			return (ULONG)theme_bubble(tr("Support Riptide"),
-			                           tr("Riptide is free. If it is useful to you, buy its author a coffee: "
-			                              "https://buymeacoffee.com/farsonic (click for the address)."));
-		return 0;
-	}
-	case MUIM_DeleteShortHelp:
 		return 0;
 	}
 	return DoSuperMethodA(cl, obj, msg);
