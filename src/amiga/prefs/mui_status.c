@@ -449,8 +449,9 @@ static void tabs_draw(struct tabs_data *d, Object *obj)
 	theme_line(rp, _mleft(obj), b, _mright(obj), b, tpen(T_BORDER));
 	for (i = 0; i < d->n; i++) {
 		LONG w = tab_w(rp, d->labels[i]);
-		if (i == d->hot && i != d->active)
-			theme_fill(rp, x, t, x + w - 1, b - 1, tpen(T_HOVER));
+		/* every tab paints its own background, so a hover change is
+		 * a MADF_DRAWUPDATE without clearing the strip first (flicker) */
+		theme_fill(rp, x, t, x + w - 1, b - 1, tpen(i == d->hot && i != d->active ? T_HOVER : T_WINDOW));
 		theme_text(rp, x + 10, t + (b - t - theme_fh()) / 2, d->labels[i], tpen(i == d->active ? T_TEXT : T_DIM),
 		           i == d->active);
 		if (i == d->active)
@@ -546,7 +547,7 @@ DISPATCHER(tabs_dispatch)
 			i = mc_inside(obj, im) ? tabs_hit(d, obj, im->MouseX) : -1;
 			if (i != d->hot) {
 				d->hot = i;
-				MUI_Redraw(obj, MADF_DRAWOBJECT);
+				MUI_Redraw(obj, MADF_DRAWUPDATE);
 			}
 			return 0;
 		}

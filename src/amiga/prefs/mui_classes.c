@@ -98,6 +98,9 @@ struct nav_data {
 	/* when the rows do not fit the height it got: the first row shown and
 	 * how many fit (the headings are left out then) */
 	int scroll, top, vis;
+	/* MADF_DRAWUPDATE: only these pages' rows (-1: none); a hover or a page
+	 * change repaints two rows, not the whole column (that flickered) */
+	int upd[2];
 };
 
 /* The rows: as tall as the theme likes (compact screens: just over the
@@ -224,11 +227,13 @@ static void nav_scroll(struct nav_data *d, Object *obj, int n)
 	}
 }
 
+static void nav_row(struct nav_data *d, Object *obj, int i, int fill);
+
 static void nav_draw(struct nav_data *d, Object *obj)
 {
 	struct RastPort *rp = _rp(obj);
 	LONG x = _mleft(obj), r = _mright(obj), fh = theme_fh();
-	int i, isz = nav_isz(), gap = isz ? isz + 8 : 0;
+	int i;
 
 	nav_geom(d, obj);
 	theme_fill(rp, x, _mtop(obj), r - 1, _mbottom(obj), tpen(T_PANEL));
@@ -245,22 +250,41 @@ static void nav_draw(struct nav_data *d, Object *obj)
 		theme_fill(rp, x, _mtop(obj), r - 1, _mtop(obj) + 1, tpen(T_ACCENT));
 	if (d->scroll && d->top + d->vis < RP_NPAGES)
 		theme_fill(rp, x, _mbottom(obj) - 1, r - 1, _mbottom(obj), tpen(T_ACCENT));
-	for (i = 0; i < RP_NPAGES; i++) {
-		int p = nav_page_at(i);
-		LONG t = _mtop(obj) + nav_rowy(d, i), b = t + nav_rowh() - 1;
-		if (!nav_shown(d, i))
-			continue;
-		if (p == d->active) {
-			theme_fill(rp, x, t, r - 1, b, tpen(T_PRESSED));
-			theme_fill(rp, x, t, x + 2, b, tpen(T_ACCENT));
-		} else if (p == d->hot) {
-			theme_fill(rp, x, t, r - 1, b, tpen(T_HOVER));
-		}
-		if (isz)
-			theme_icon(rp, p, x + 10, t + (nav_rowh() - isz) / 2, isz, 0);
-		theme_text(rp, x + 10 + gap, t + (nav_rowh() - fh) / 2, rp_pages[p].title, tpen(T_TEXT),
-		           p == d->active);
+	for (i = 0; i < RP_NPAGES; i++)
+		if (nav_shown(d, i))
+			nav_row(d, obj, i, 0);
+}
+
+/* one row: its background (the panel's when fill), icon and name */
+static void nav_row(struct nav_data *d, Object *obj, int i, int fill)
+{
+	struct RastPort *rp = _rp(obj);
+	LONG x = _mleft(obj), r = _mright(obj), fh = theme_fh();
+	LONG t = _mtop(obj) + nav_rowy(d, i), b = t + nav_rowh() - 1;
+	int p = nav_page_at(i), isz = nav_isz(), gap = isz ? isz + 8 : 0;
+
+	if (p == d->active) {
+		theme_fill(rp, x, t, r - 1, b, tpen(T_PRESSED));
+		theme_fill(rp, x, t, x + 2, b, tpen(T_ACCENT));
+	} else if (p == d->hot) {
+		theme_fill(rp, x, t, r - 1, b, tpen(T_HOVER));
+	} else if (fill) {
+		theme_fill(rp, x, t, r - 1, b, tpen(T_PANEL));
 	}
+	if (isz)
+		theme_icon(rp, p, x + 10, t + (nav_rowh() - isz) / 2, isz, 0);
+	theme_text(rp, x + 10 + gap, t + (nav_rowh() - fh) / 2, rp_pages[p].title, tpen(T_TEXT), p == d->active);
+}
+
+/* repaint the rows of pages a and b only (-1: none) */
+static void nav_update(struct nav_data *d, Object *obj, int a, int b)
+{
+	if (!d->shown)
+		return;
+	d->upd[0] = a;
+	d->upd[1] = b;
+	MUI_Redraw(obj, MADF_DRAWUPDATE);
+	d->upd[0] = d->upd[1] = -1;
 }
 
 /* change the page, through OM_SET so notifications go out */
@@ -287,15 +311,22 @@ DISPATCHER(nav_dispatch)
 		memset(d, 0, sizeof(*d));
 		d->active = (int)mc_tagval(msg, MUIA_Nav_Active, 0);
 		d->hot = -1;
+		d->upd[0] = d->upd[1] = -1;
 		return (ULONG)obj;
 	case OM_SET:
 		d = INST_DATA(cl, obj);
 		if (mc_has_tag(msg, MUIA_Nav_Active)) {
 			int p = (int)mc_tagval(msg, MUIA_Nav_Active, 0);
 			if (p >= 0 && p < RP_NPAGES && p != d->active) {
+				int old = d->active, top = d->top;
 				d->active = p;
-				if (d->shown)
-					MUI_Redraw(obj, MADF_DRAWOBJECT);   /* nav_geom() scrolls it into view */
+				if (d->shown) {
+					nav_geom(d, obj);            /* scrolls it into view */
+					if (d->top != top)
+						MUI_Redraw(obj, MADF_DRAWOBJECT);
+					else
+						nav_update(d, obj, old, p);
+				}
 			}
 		}
 		break;
@@ -340,11 +371,22 @@ DISPATCHER(nav_dispatch)
 	case MUIM_Hide:
 		((struct nav_data *)INST_DATA(cl, obj))->shown = 0;
 		break;
-	case MUIM_Draw:
+	case MUIM_Draw: {
+		ULONG fl;
+		d = INST_DATA(cl, obj);
+		/* the Area class fills in the flags (MUI_Redraw() leaves them to it) */
 		DoSuperMethodA(cl, obj, msg);
-		if (((struct MUIP_Draw *)msg)->flags & (MADF_DRAWOBJECT | MADF_DRAWUPDATE))
-			nav_draw(INST_DATA(cl, obj), obj);
+		fl = ((struct MUIP_Draw *)msg)->flags;
+		if (fl & MADF_DRAWOBJECT) {
+			nav_draw(d, obj);
+		} else if (fl & MADF_DRAWUPDATE) {
+			int k;
+			for (k = 0; k < 2; k++)
+				if (d->upd[k] >= 0 && nav_shown(d, nav_pos(d->upd[k])))
+					nav_row(d, obj, nav_pos(d->upd[k]), 1);
+		}
 		return 0;
+	}
 	case MUIM_HandleEvent: {
 		struct IntuiMessage *im = ((struct MUIP_HandleEvent *)msg)->imsg;
 		int i;
@@ -354,8 +396,9 @@ DISPATCHER(nav_dispatch)
 		if (im->Class == IDCMP_MOUSEMOVE) {
 			i = mc_inside(obj, im) ? nav_hit(d, obj, im->MouseY) : -1;
 			if (i != d->hot) {
+				int old = d->hot;
 				d->hot = i;
-				MUI_Redraw(obj, MADF_DRAWOBJECT);
+				nav_update(d, obj, old, i);
 			}
 			return 0;
 		}
