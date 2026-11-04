@@ -480,6 +480,30 @@ static void tcp_event_data_recv(struct tcp_sock *tp, const struct rt_buf *b)
 static int rx_batch_depth;
 static struct tcp_sock *batch_list;
 
+/*
+ * In-order runs. A bulk sender's segments arrive back to back with the
+ * same addresses, ports, ACK, window and options (timestamps change at
+ * most once a millisecond), each the next in sequence. When one of them
+ * has just gone through the established fast path into the receive
+ * queue, the run remembers its shape; the next frame of the same receive
+ * batch with that shape and the next sequence number goes straight to
+ * the receive queue (rt_tcp_run_input): no IP input, socket lookup or
+ * header prediction, both checksums still checked. Anything that does not
+ * match takes the usual way and ends the run. Only within a batch: the
+ * stack lock is held from its begin to its end, so the connection cannot
+ * go away under the run except through its own segments, which end it.
+ */
+struct tcp_run {
+	struct tcp_sock *tp;            /* NULL: no run */
+	struct rt_netif *nif;
+	u32 saddr, daddr;               /* network order */
+	u32 ports;                      /* source and destination port, as on the wire */
+	u32 ack, tsval, tsecr;          /* host order; ts*: when hdr is 32 */
+	u16 win;                        /* the window field, unscaled */
+	u8  tos, hdr;                   /* TCP header length: 20, or 32 with timestamps */
+};
+static struct tcp_run run, run_next;
+
 static void tcp_batch_add(struct tcp_sock *tp, u8 what)
 {
 	/* a FIN that ends an orphan (tcp_fin -> tcp_time_wait -> tcp_done)
@@ -512,6 +536,12 @@ void tcp_batch_forget(struct tcp_sock *tp)
  * full segments, in quickack mode, or when requested; otherwise delay. */
 static void __tcp_ack_snd_check(struct tcp_sock *tp, int ofo_possible)
 {
+	/* the batch's ACK is already due at its end: the rest of the batch
+	 * only has to stay within delack_batch (the window choice below costs
+	 * a division per segment on a 68020) */
+	if ((tp->batch & TCP_BATCH_ACK) && rx_batch_depth && !(tp->ack.pending & ICSK_ACK_NOW) &&
+	    tp->rcv_nxt - tp->rcv_wup < (u32)sysctl_tcp_delack_batch * tp->ack.rcv_mss)
+		return;
 	if (((tp->rcv_nxt - tp->rcv_wup) > (u32)(sysctl_tcp_delack_segs - 1) * tp->ack.rcv_mss &&
 	     __tcp_select_window(tp) >= tp->rcv_wnd) ||
 	    tcp_in_quickack_mode(tp) || (tp->ack.pending & ICSK_ACK_NOW) || sysctl_tcp_quickack) {
@@ -1139,7 +1169,10 @@ void rt_rx_batch_begin(void)
 
 void rt_rx_batch_end(void)
 {
-	if (--rx_batch_depth || !batch_list)
+	if (--rx_batch_depth)
+		return;
+	run.tp = NULL;
+	if (!batch_list)
 		return;
 	tcp_api_enter();
 	while (batch_list) {
@@ -1888,6 +1921,8 @@ void tcp_rcv_established(struct tcp_sock *tp, struct rt_buf *b)
 			rt_buf_pull(b, hdr);
 			tcp_event_data_recv(tp, b);
 			tp->rcv_nxt = cb->end_seq;
+			if (run_next.hdr)
+				run_next.tp = tp;       /* a run may follow (tcp_input_body) */
 			if (cb->ack_seq != tp->snd_una) {
 				tcp_ack(tp, b, FLAG_DATA);
 				tcp_queue_rcv(tp, b);
@@ -2255,7 +2290,32 @@ static void tcp_input_body(struct rt_buf *b, const struct rt_iphdr *ip)
 			goto bad;
 		}
 	}
+	/* the shape a run would continue (tcp_rcv_established sets run_next.tp
+	 * when this segment took the fast path into the receive queue) */
+	run.tp = NULL;
+	run_next.tp = NULL;
+	run_next.hdr = 0;
+	if (rx_batch_depth && ip->ver_ihl == 0x45 && b->len > doff && (th[13] & ~TCPHDR_PSH) == TCPHDR_ACK &&
+	    (doff == TCP_HDR_LEN || (doff == TCP_HDR_LEN + TCPOLEN_TSTAMP_ALIGNED && th[20] == TCPOPT_NOP &&
+	                             th[21] == TCPOPT_NOP && th[22] == TCPOPT_TIMESTAMP &&
+	                             th[23] == TCPOLEN_TIMESTAMP))) {
+		run_next.nif = b->netif;
+		run_next.saddr = saddr;
+		run_next.daddr = daddr;
+		memcpy(&run_next.ports, th, 4);
+		run_next.ack = rt_get_be32(th + 8);
+		run_next.win = rt_get_be16(th + 14);
+		run_next.tos = ip->tos;
+		if (doff != TCP_HDR_LEN) {
+			run_next.tsval = rt_get_be32(th + 24);
+			run_next.tsecr = rt_get_be32(th + 28);
+		}
+		run_next.hdr = (u8)doff;
+	}
 	tcp_rcv(b, &sa, &da, ip->tos, 0);
+	if (run_next.tp)
+		run = run_next;
+	run_next.hdr = 0;
 	tcp_api_exit();
 	return;
 bad:
@@ -2272,11 +2332,101 @@ void rt_tcp_input(struct rt_buf *b, const struct rt_iphdr *ip)
 	RT_PROF_EXIT(RT_PROF_TCP_IN);
 }
 
+int rt_tcp_run_input(struct rt_netif *nif, struct rt_buf *b)
+{
+	struct tcp_sock *tp = run.tp;
+	const struct rt_iphdr *ip;
+	struct tcp_skb_cb *cb;
+	const u8 *th;
+	u32 tot, hdr, seq, dlen, ports;
+
+	if (!tp || nif != run.nif || (b->flags & (RT_BUFF_BCAST | RT_BUFF_MCAST | RT_BUFF_LOOP)) ||
+	    !(b->flags & RT_BUFF_CSUM_PART) || ((uintptr_t)b->data & 1) || b->len < 40)
+		return 0;
+	ip = (const struct rt_iphdr *)b->data;
+	th = b->data + 20;
+	hdr = run.hdr;
+	tot = rt_ntohs(ip->tot_len);
+	memcpy(&ports, th, 4);
+	if (ip->ver_ihl != 0x45 || ip->protocol != RT_IPPROTO_TCP || ip->tos != run.tos ||
+	    (ip->frag_off & rt_htons(RT_IP_MF | RT_IP_OFFMASK)) || ip->saddr != run.saddr ||
+	    ip->daddr != run.daddr || tot != b->len || tot <= 20 + hdr || ports != run.ports ||
+	    th[12] != (u8)(hdr << 2) || (th[13] & ~TCPHDR_PSH) != TCPHDR_ACK ||
+	    rt_get_be32(th + 8) != run.ack || rt_get_be16(th + 14) != run.win)
+		return 0;
+	/* timestamps: the same echo; the sender's own clock may have moved on
+	 * (it ticks every millisecond), but not back (PAWS, as the fast path) */
+	if (hdr != TCP_HDR_LEN &&
+	    (th[20] != TCPOPT_NOP || th[21] != TCPOPT_NOP || th[22] != TCPOPT_TIMESTAMP ||
+	     th[23] != TCPOLEN_TIMESTAMP || rt_get_be32(th + 28) != run.tsecr ||
+	     (s32)(rt_get_be32(th + 24) - tp->ts_recent) < 0))
+		return 0;
+	seq = rt_get_be32(th + 4);
+	dlen = tot - 20 - hdr;
+	if (seq != tp->rcv_nxt || tp->state != RT_TCPS_ESTABLISHED || !tp->pred_flags || tp->destroyed ||
+	    run.ack != tp->snd_una || rt_raw_active() || dlen > tcp_space(tp) ||
+	    tp->rmem_alloc + tcp_buf_truesize(b) > tcp_rmem_limit(tp) || tcp_mem_rcv_blocked(tp, tcp_buf_truesize(b)))
+		return 0;
+	/* the IP header, then TCP: a valid IP header sums to zero, so the
+	 * driver's sum of the frame is TCP's once the header is pulled */
+	if (rt_csum_fold(rt_csum_hdr(ip, 20, 0)) != 0)
+		return 0;
+	rt_buf_pull(b, 20);
+	if (rt_csum_fold(rt_buf_csum(b, rt_csum_pseudo(ip->saddr, ip->daddr, RT_IPPROTO_TCP, (u16)b->len))) != 0) {
+		rt_buf_push(b, 20);
+		return 0;                       /* the usual way counts the error */
+	}
+	RT_PROF_ENTER(RT_PROF_TCP_IN);
+	/* TCP's clocks as the run's first segment refreshed them in this batch
+	 * (tcp_api_enter would read the clock again) */
+	tcp_nest++;
+	rt_ipstat.InReceives++;
+	rt_ipstat.InDelivers++;
+	rt_tcpstat.InSegs++;
+	rt_tcpstat.TCPHPHits++;
+	tp->segs_in++;
+	tp->data_segs_in++;
+	b->netif = nif;
+	/* the control block is as rt_buf_alloc() cleared it: nothing between
+	 * the driver and here writes it */
+	cb = TCP_SKB_CB(b);
+	cb->seq = seq;
+	cb->ack_seq = run.ack;
+	cb->tcp_flags = th[13];
+	cb->window = run.win;
+	cb->hdr_len = (u8)hdr;
+	cb->ip_tos = run.tos;
+	cb->end_seq = seq + dlen;
+	/* the same options as the run's first segment: as the fast path */
+	tp->rx_opt.sack_off = 0;
+	tp->rx_opt.saw_tstamp = hdr != TCP_HDR_LEN;
+	if (tp->rx_opt.saw_tstamp) {
+		run.tsval = rt_get_be32(th + 24);
+		tp->rx_opt.rcv_tsval = run.tsval;
+		tp->rx_opt.rcv_tsecr = run.tsecr ? run.tsecr - tp->ts_offset : 0;
+		if (tp->rcv_nxt == tp->rcv_wup)
+			tcp_store_ts_recent(tp);
+	}
+	tcp_rcv_rtt_measure_ts(tp, b);
+	rt_buf_pull(b, hdr);
+	tcp_event_data_recv(tp, b);
+	tp->rcv_nxt = cb->end_seq;
+	tp->snd_wl1 = seq;
+	tcp_queue_rcv(tp, b);
+	__tcp_ack_snd_check(tp, 0);
+	tcp_data_ready(tp);
+	tcp_nest--;
+	tcp_reap();
+	RT_PROF_EXIT(RT_PROF_TCP_IN);
+	return 1;
+}
+
 static void tcp_input6_body(struct rt_buf *b, const struct rt_ip6hdr *ip6)
 {
 	const u8 *th;
 	u32 doff, scope = 0;
 
+	run.tp = NULL;                  /* runs are IPv4 only */
 	tcp_api_enter();
 	rt_tcpstat.InSegs++;
 	if (b->len < TCP_HDR_LEN)

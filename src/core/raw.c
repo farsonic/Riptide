@@ -37,6 +37,11 @@ static struct raw_pcb *pcb_of(struct rt_socket *so)
 	return (struct raw_pcb *)so->pcb;
 }
 
+int rt_raw_active(void)
+{
+	return raw_pcbs != NULL;
+}
+
 int rt_raw_input(const struct rt_buf *b, const struct rt_iphdr *ip)
 {
 	struct raw_pcb *p;

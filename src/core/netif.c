@@ -470,6 +470,8 @@ void rt_netif_deliver(struct rt_netif *nif, struct rt_buf *b, u16 ethertype, con
 	case RT_ETH_P_IP:
 		if (nif->ip4_disabled)
 			break;
+		if (rt_tcp_run_input(nif, b))
+			return;
 		rt_ip_input(nif, b);
 		return;
 	case RT_ETH_P_ARP:
