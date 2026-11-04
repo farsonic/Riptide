@@ -1,0 +1,7 @@
+# Riptide - openurl.library (Aminet comm/www/OpenURL*): opens a URL in the
+# browser the user has set up in OpenURL's preferences. Only the first
+# call, the same in every version. Format: see tools/gen_lvos.py.
+# SPDX-License-Identifier: GPL-2.0-only
+
+@lib openurl OpenURLBase
+30  ULONG URL_OpenA(CONST_STRPTR url a0, const struct TagItem* tags a1)

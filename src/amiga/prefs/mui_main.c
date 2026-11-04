@@ -16,6 +16,7 @@
 #include "prefs/prefs_gui.h"
 #include "prefs/mui_theme.h"
 #include "prefs/mui_classes.h"
+#include "gen/openurl_calls.h"
 #include "prefs/mui_ids.h"
 #include "prefs/mui_status.h"
 #include "prefs/mui_counters.h"
@@ -1329,6 +1330,22 @@ static void card_cmd(ULONG id)
 	refresh_all();
 }
 
+struct Library *OpenURLBase;
+
+/* url in the user's browser through openurl.library; -1 without it */
+static int open_url(const char *url)
+{
+	ULONG ok;
+
+	OpenURLBase = OpenLibrary((CONST_STRPTR)"openurl.library", 1);
+	if (!OpenURLBase)
+		return -1;
+	ok = URL_OpenA((CONST_STRPTR)url, NULL);
+	CloseLibrary(OpenURLBase);
+	OpenURLBase = NULL;
+	return ok ? 0 : -1;
+}
+
 /* run a command; 1 when the editor should close */
 static int command(ULONG id)
 {
@@ -1439,9 +1456,13 @@ static int command(ULONG id)
 		go_page(P_ABOUT);
 		return 0;
 	case ID_COFFEE:
+		/* the browser set up in OpenURL's preferences; without
+		 * openurl.library, the address to type in */
+		if (open_url("https://buymeacoffee.com/farsonic") == 0)
+			return 0;
 		rt_snprintf(msg, sizeof(msg), "%s", tr("Riptide is free, and takes a lot of evenings.\nIf it is useful "
 		                                       "to you, buy its author a coffee:\n\n    https://buymeacoffee.com/farsonic\n\n"
-		                                       "Thank you!"));
+		                                       "(Install OpenURL from Aminet and this button opens\nyour web browser.)"));
 		rp_message(msg);
 		return 0;
 	case ID_DEFAULTS: {

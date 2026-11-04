@@ -63,7 +63,7 @@ CFLAGS  := -m68020 -mtune=68020-60 -DRT_ARCH_M68K_ASM -O2 -std=gnu99 -ffreestand
 LDFLAGS := -T src/amiga/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments
 GEN_H   := $(foreach l,exec dos timer locale battclock intuition gadtools graphics icon,$(BUILD)/gen/$(l)_calls.h) \
            $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h \
-           $(BUILD)/gen/muimaster_calls.h
+           $(BUILD)/gen/muimaster_calls.h $(BUILD)/gen/openurl_calls.h
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(BUILD)/startup.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC) src/amiga/libc.c) \
            $(BUILD)/gcc_thunks.o $(BUILD)/arch/rt_m68k.o $(GEN_OBJ)
@@ -81,6 +81,9 @@ $(BUILD)/gen/mni_calls.h: src/amiga/mni_lvos.txt tools/gen_lvos.py
 $(BUILD)/gen/muimaster_calls.h: src/amiga/prefs/mui_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/gen_lvos.py call gcc $< muimaster $@
+$(BUILD)/gen/openurl_calls.h: src/amiga/prefs/openurl_lvos.txt tools/gen_lvos.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/gen_lvos.py call gcc $< openurl $@
 $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_calls.h): $(BUILD)/gen/%_calls.h: src/amiga/lib_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/gen_lvos.py call gcc $< $* $@
@@ -140,7 +143,7 @@ BUILD   := build/amiga
 export VBCC
 VC      := PATH=$(VBCC)/bin:$$PATH VBCC=$(VBCC) $(VBCC)/bin/vc +aos68k
 CFLAGS  := -c99 -O2 -cpu=68020 -DRT_ARCH_M68K_ASM -I$(NDK)/Include_H -Isrc/amiga -I$(BUILD) -Iinclude -Iinclude/rt
-GEN_H   := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h $(BUILD)/gen/muimaster_calls.h
+GEN_H   := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_impl.h $(BUILD)/gen/$(l)_calls.h) $(BUILD)/gen/mni_calls.h $(BUILD)/gen/muimaster_calls.h $(BUILD)/gen/openurl_calls.h
 GEN_OBJ := $(foreach l,$(LIBS),$(BUILD)/gen/$(l)_vec.o)
 RT_OBJ  := $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(AMIGA_SRC)) $(BUILD)/arch/rt_m68k.o $(GEN_OBJ)
 RC_OBJ  := $(BUILD)/tests/rtcheck.o $(BUILD)/core/printf.o
@@ -154,6 +157,9 @@ $(BUILD)/gen/mni_calls.h: src/amiga/mni_lvos.txt tools/gen_lvos.py
 $(BUILD)/gen/muimaster_calls.h: src/amiga/prefs/mui_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/gen_lvos.py call vbcc $< muimaster $@
+$(BUILD)/gen/openurl_calls.h: src/amiga/prefs/openurl_lvos.txt tools/gen_lvos.py
+	@mkdir -p $(dir $@)
+	$(PYTHON) tools/gen_lvos.py call vbcc $< openurl $@
 $(BUILD)/gen/%_calls.h: src/amiga/lib_lvos.txt tools/gen_lvos.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) tools/gen_lvos.py call vbcc $< $* $@
