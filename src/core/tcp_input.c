@@ -536,6 +536,12 @@ void tcp_batch_forget(struct tcp_sock *tp)
  * full segments, in quickack mode, or when requested; otherwise delay. */
 static void __tcp_ack_snd_check(struct tcp_sock *tp, int ofo_possible)
 {
+	/* the batch's ACK is already due at its end: the rest of the batch
+	 * only has to stay within delack_batch (the window choice below costs
+	 * a division per segment on a 68020) */
+	if ((tp->batch & TCP_BATCH_ACK) && rx_batch_depth && !(tp->ack.pending & ICSK_ACK_NOW) &&
+	    tp->rcv_nxt - tp->rcv_wup < (u32)sysctl_tcp_delack_batch * tp->ack.rcv_mss)
+		return;
 	if (((tp->rcv_nxt - tp->rcv_wup) > (u32)(sysctl_tcp_delack_segs - 1) * tp->ack.rcv_mss &&
 	     __tcp_select_window(tp) >= tp->rcv_wnd) ||
 	    tcp_in_quickack_mode(tp) || (tp->ack.pending & ICSK_ACK_NOW) || sysctl_tcp_quickack) {

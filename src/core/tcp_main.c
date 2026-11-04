@@ -1491,6 +1491,12 @@ static int tcp_v4_recv(struct rt_socket *so, const struct rt_iov *iov, int iovcn
 		struct tcp_skb_cb *cb = TCP_SKB_CB(b);
 		u32 offset = seq - cb->seq, used;
 
+		/* another task wants the lock (the Riptide process with frames
+		 * the driver has handed back: until it re-queues their reads,
+		 * frames that arrive are lost): return what is copied, a short
+		 * read, rather than hold it for the rest of a large recv() */
+		if (copied && !peek && !(flags & RT_MSG_WAITALL) && rt_lock_wanted())
+			break;
 		if (offset >= b->len) {
 			struct rt_buf *nb = b->next;
 			if (!peek)
