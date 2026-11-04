@@ -696,15 +696,15 @@ int amiga_stack_start(const char *config, int selftest)
 		amiga_out("Riptide: initialisation failed: %s\n", rt_strerror(-r));
 		return -1;
 	}
-	/* Amiga defaults, before the config so it can override them: SANA-II
-	 * drivers drop frames that arrive while no read is queued, and the
-	 * receive window bounds how large a burst a sender may deliver, so
-	 * keep it near what the queued reads can absorb (48 x 1.5 KB). A
-	 * 64 KB window still allows ~200 KB/s at 300 ms RTT, more than a
-	 * 68020 processes. */
+	/* Amiga defaults, before the config so it can override them. A
+	 * connection starts with a 64 KB receive buffer (about what the 48
+	 * queued SANA-II reads absorb in one burst) and auto-tuning grows it
+	 * up to 256 KB only when the program drains that fast: a 68020 never
+	 * gets there, a 68040/060 or PiStorm on a 30-50 ms Internet path
+	 * needs it (a 32 KB/64 KB cap held them near 1 MB/s). */
 	rt_lock();
-	rt_sysctl_set_text("net.inet.tcp.recvspace", "32768");
-	rt_sysctl_set_text("net.inet.tcp.rmem_max", "65536");
+	rt_sysctl_set_text("net.inet.tcp.recvspace", "65536");
+	rt_sysctl_set_text("net.inet.tcp.rmem_max", "262144");
 	if (!selftest) {
 		char e[64];
 		rt_config_line("mdns on", e, sizeof(e), NULL);   /* "mdns off" overrides */

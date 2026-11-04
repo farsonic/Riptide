@@ -122,7 +122,8 @@ const struct rp_field rp_fields[] = {
 	{ P_IFACE, F_NUM,   FL_IF, MI(mtu), 68, 65535,     "_MTU", NULL, NULL,
 	  "The largest packet in bytes. Leave it empty to use the driver's value (1500 on Ethernet)." },
 	{ P_IFACE, F_NUM,   FL_IF | FL_ZERO, MI(tcpwindow), 536, 16777216, "TCP _window", NULL, NULL,
-	  "Limits how much data a connection on this card may have on the way. Empty or 0: no limit." },
+	  "Caps TCP's receive window on this card. Leave it empty: a limit such as 1440 makes every "
+	  "download crawl. Only for old FS-UAE builds that drop frames." },
 	{ P_IFACE, F_NUM,   FL_IF, MI(reads), 4, 128,      "_Reads", NULL, NULL,
 	  "How many receive requests Riptide keeps waiting at the driver. More can help fast cards." },
 	{ P_IFACE, F_CHECK, 0, MS(ipv4),      0, 0,        "IPv_4", NULL, NULL,

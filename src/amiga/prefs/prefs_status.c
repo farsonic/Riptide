@@ -364,6 +364,7 @@ static void update_ifs(struct rp_status_model *m, const struct rp_st_input *in, 
 		f->index = r.index;
 		f->flags = r.flags;
 		f->mtu = r.mtu;
+		f->tcp_window = r.tcp_window;
 		f->dhcp_state = r.dhcp_state;
 		f->vlan_id = r.vlan_parent ? r.vlan_id : 0;
 		f->addr = r.addr;
@@ -619,16 +620,20 @@ void rp_st_memory(const struct rp_status_model *m, char *buf, int len)
 
 void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int len)
 {
-	char a[24], gw[20], dhcp[64], left[24];
+	char a[24], gw[20], dhcp[64], left[24], win[32];
 	const char *state = !(f->flags & ST_IFF_UP) ? "down" : (f->flags & ST_IFF_RUNNING) ? "up" : "up, no link";
 	int i, k;
 
+	/* a tcpwindow limit caps every download on the card: say so first */
+	win[0] = 0;
+	if (f->tcp_window)
+		rt_snprintf(win, sizeof(win), "  TCP window %lu!", (unsigned long)f->tcp_window);
 	if (f->vlan_id)
-		rt_snprintf(l1, (size_t)len, "%s  %s  VLAN %u  MTU %u", f->name, state, (unsigned)f->vlan_id,
-		            (unsigned)f->mtu);
+		rt_snprintf(l1, (size_t)len, "%s  %s  VLAN %u  MTU %u%s", f->name, state, (unsigned)f->vlan_id,
+		            (unsigned)f->mtu, win);
 	else
 		/* the MTU before the driver: a narrow page cuts the driver's end */
-		rt_snprintf(l1, (size_t)len, "%s  %s  MTU %u  %s", f->name, state, (unsigned)f->mtu,
+		rt_snprintf(l1, (size_t)len, "%s  %s  MTU %u%s  %s", f->name, state, (unsigned)f->mtu, win,
 		            f->descr[0] ? f->descr : "");
 	if (f->ip4_off) {
 		rt_strlcpy(l2, "IPv4 off", (size_t)len);

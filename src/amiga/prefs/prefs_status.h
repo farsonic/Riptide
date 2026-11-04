@@ -88,6 +88,7 @@ struct rp_st_if {
 	char descr[32];
 	u32  index;
 	u16  flags, mtu;
+	u32  tcp_window;           /* tcpwindow limit, 0: none (shown: it caps downloads) */
 	u16  dhcp_state, vlan_id;
 	u32  addr, mask, router;    /* network order; router from DHCP or the default route */
 	u32  ll_addr, dhcp_left;
