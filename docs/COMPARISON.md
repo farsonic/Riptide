@@ -756,6 +756,12 @@ differs and what does not:
   in these captures (the first one 35 ms): the emulator's card delivers
   frames to the guest in batches, and most of the round trip is that.
 
+**Not run.** The same transfers under the FS-UAE with the SANA-II DMA
+callbacks (`tools/fs-uae` patch 0004; only Riptide offers the callbacks,
+section 11 has its numbers) and a second look at tolunnet were planned
+and stopped: one run per stack is what there is. Nothing was measured on
+a 68040 (the A1200 Kickstart cannot run that preset).
+
 **How far to trust it.** Emulator numbers, one machine, one card that
 costs the Amiga one copy per frame and almost no bus time; real cards
 cost more (section 11). The emulation is cycle exact, so the numbers

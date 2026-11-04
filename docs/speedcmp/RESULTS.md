@@ -5,7 +5,8 @@ drawer, one run of `tests/amiga/run_fsuae_speedcmp.sh` per stack; how they
 were made and what they mean: `docs/COMPARISON.md` section 13. Emulated
 (FS-UAE), A1200 68020, Kickstart 3.1.4 and Workbench 3.1.4, the same
 bridged `uaenet.device` for every stack. Best value of each column in
-bold; `n/a` is a measurement the stack did not complete.
+bold; `n/a` is a measurement the stack did not complete. One run per
+stack; a planned second table under the DMA-callback FS-UAE was not run.
 
 ## Kickstart 3.1.4, the bridged uaenet.device (`*-ks314.json`)
 
