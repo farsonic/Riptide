@@ -83,6 +83,7 @@ struct st {
 	u32 ids[ST_MAXIDS], excl[ST_MAXIDS];
 	int nids, nexcl;
 	const char *server_url, *mirror;
+	char url_buf[2][256];        /* --server-url and --mirror as tidied (tidy_url) */
 	u32 dl_sizes[ST_MAXSIZES], ul_sizes[ST_MAXSIZES];
 	int ndl, nul;
 	/* configuration */
@@ -758,6 +759,25 @@ static void server_tag(void *arg, const char *tag, int n, const struct st_xml_at
 	copy_attr(s->slon, sizeof(s->slon), n, a, "lon");
 }
 
+/* A URL as typed: without blanks, quotes or control characters around it
+ * (some shells pass the quotes on), and http:// in front when there is no
+ * scheme, so "192.168.0.10:8080" works too. */
+static const char *tidy_url(char *buf, size_t size, const char *s)
+{
+	size_t n;
+
+	while (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'')
+		s++;
+	n = strlen(s);
+	while (n && ((unsigned char)s[n - 1] <= ' ' || s[n - 1] == '"' || s[n - 1] == '\'' || s[n - 1] == 0x7f))
+		n--;
+	if (!rt_strncasecmp(s, "http://", 7) || !rt_strncasecmp(s, "https://", 8))
+		rt_snprintf(buf, size, "%.*s", (int)n, s);
+	else
+		rt_snprintf(buf, size, "http://%.*s", (int)n, s);
+	return buf;
+}
+
 static const char *mirror_url(struct st *st, const char *path)
 {
 	u32 n = (u32)strlen(st->mirror);
@@ -1397,8 +1417,8 @@ static int parse_args(struct st *st, int argc, char **argv)
 				return -1;
 			}
 			break;
-		case O_SERVERURL: st->server_url = val; break;
-		case O_MIRROR: st->mirror = val; break;
+		case O_SERVERURL: st->server_url = tidy_url(st->url_buf[0], sizeof(st->url_buf[0]), val); break;
+		case O_MIRROR: st->mirror = tidy_url(st->url_buf[1], sizeof(st->url_buf[1]), val); break;
 		case O_SECURE:
 			err(st, "--secure: HTTPS is not supported (Riptide has no TLS)");
 			return -1;
