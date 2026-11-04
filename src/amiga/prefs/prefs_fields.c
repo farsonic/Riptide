@@ -56,6 +56,8 @@ const struct rp_page rp_pages[RP_NPAGES] = {
 	  "Every count Riptide keeps: packets, errors and drops of each card and protocol, as they change." },
 	{ "Status", "Status", "Updated every second while shown",
 	  "What Riptide is doing now: its interfaces, connections, names, time and counters, with graphs." },
+	{ "About Riptide", "About Riptide", "Riptide is free software (GPL-2.0)",
+	  "Which Riptide this is, where its source lives, and how to support its author." },
 };
 
 int rp_page_list(int page)

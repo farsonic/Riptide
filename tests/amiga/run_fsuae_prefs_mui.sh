@@ -549,7 +549,7 @@ settle c12-compact-routes
 key Escape
 waitfor zz_3j
 # the page list scrolls (23 rows do not fit 256 lines): opened on the last
-# page it shows the last rows; P wraps to Status, the first ones again
+# page it shows the last rows; P wraps to About Riptide, the first ones again
 settle c13-compact-scrolled-end
 key p
 gone="$work/c13-compact-scrolled-end.png"    # a busy host: wait for the change
@@ -568,7 +568,7 @@ grep -q 'screen 640x256' "$dh0/out/log3" 2>/dev/null || fail "no screen line in 
 # read its settings, and its default leaves bubbles off), so check the
 # texts the editor gives MUI instead
 grep -q 'bubble field: .*Interface name' "$dh0/out/log3" 2>/dev/null || fail "no bubble text on the first setting"
-grep -q 'bubble page: .*Status' "$dh0/out/log3" 2>/dev/null || fail "no bubble text from the page list"
+grep -q 'bubble page: .*About Riptide' "$dh0/out/log3" 2>/dev/null || fail "no bubble text from the page list"
 fi
 
 cleanup

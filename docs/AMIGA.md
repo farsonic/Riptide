@@ -1254,11 +1254,16 @@ the guide that Easel, Quill, Ledger and Folio were built by:
   MUI's own bubble settings and can be turned off in the menu.
 * **Menus** (every command; Amiga key in brackets): *Project*: Open...
   (O, a riptide.conf to edit), Save As... (A), Save (S), Use (U), Apply
-  (Y), About... (?), Quit (Q). *Edit*: Reset to Defaults (D, every
+  (Y), About... (?) and Support Riptide... (B), both showing the About
+  Riptide page, Quit (Q). *Edit*: Reset to Defaults (D, every
   setting back to Riptide's default; lines the editor does not know stay),
   Last Saved (L, `ENVARC:`), Restore (R, what the editor started with).
   *Settings*: Dark Theme (T), Help Bubbles (H). Open and Save As need
   asl.library.
+* **About Riptide** (the first entry of the page list, above Status; the
+  editor still opens on Status): the version, the licence and source
+  address, and how to support the author: the "Buy its author a coffee"
+  button shows https://buymeacoffee.com/farsonic.
 * **Theme:** the colours are a light and a dark table of named colours,
   taken as pens with `ObtainBestPen()` on the window's screen, so on a
   palette screen (AGA, 256 colours or fewer, even the 4-colour Workbench)
