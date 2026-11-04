@@ -666,8 +666,7 @@ int gt_run(const struct rp_gui_args *a)
 	for (i = 0; i < RP_NPAGES; i++)
 		page_names[i] = rp_pages[i].name;
 	page_names[RP_NPAGES] = NULL;
-	if (a->page >= 0)
-		page = a->page;
+	page = a->page >= 0 ? a->page : P_ABOUT;
 	GadToolsBase = OpenLibrary((CONST_STRPTR)"gadtools.library", 37);
 	if (!GadToolsBase)
 		goto out;

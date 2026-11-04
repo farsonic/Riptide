@@ -1576,7 +1576,7 @@ int mui_run(const struct rp_gui_args *a)
 	}
 	theme_set_dark(a->theme >= 0 ? a->theme : rp_eprefs_get("dark", 0));
 	theme_set_tips(rp_eprefs_get("bubbles", 1));
-	page = a->page >= 0 ? a->page : P_STATUS;
+	page = a->page >= 0 ? a->page : P_ABOUT;
 	pubname = a->pubscreen;
 	if (rp_classes_make() < 0 || status_classes_make() < 0 || counters_classes_make() < 0) {
 		rp_log("cannot make the classes");
