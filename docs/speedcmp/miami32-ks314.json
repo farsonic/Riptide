@@ -1,0 +1,32 @@
+{
+ "stack": "miami32",
+ "id": "bsdsocket.library 4.1 (15.12.96)",
+ "bytes": 2097152,
+ "repeat": 3,
+ "online_s": 36,
+ "download_kbs": 232.64,
+ "download_runs": [
+  233.97,
+  232.64,
+  232.25
+ ],
+ "upload_kbs": 164.73,
+ "upload_runs": [
+  113.53,
+  165.22,
+  164.73
+ ],
+ "idle_download_pct": 0.0,
+ "idle_upload_pct": 0.0,
+ "udp_dgram_s": 161,
+ "udp_kbs": 220.36,
+ "udp_sent": 3000,
+ "udp_errors": 0,
+ "udp_received": 3000,
+ "udp_count": 3000,
+ "loopback_kbs": 455.11,
+ "ping_ms": 7.34,
+ "ping_min_ms": 3.594,
+ "ping_loss_pct": 0,
+ "notes": []
+}

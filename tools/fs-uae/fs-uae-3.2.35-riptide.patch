@@ -59,6 +59,21 @@ index 115aa5a..3edff26 100644
  #include "threaddep/thread.h"
  #include "options.h"
  #include "sana2.h"
+@@ -220,8 +223,12 @@ bool ethernet_enumerate (struct netdriverdata **nddp, const TCHAR *name)
+ 		return false;
+ 	}
+ 	j = 0;
+-	nddp[j++] = &slirpd;
+-	nddp[j++] = &slirpd2;
++	/* FSUAE_UAENET_PCAP_FIRST set: no slirp units; the pcap interfaces
++	 * are units 0, 1, ... (for guests whose settings cannot name a unit) */
++	if (!getenv("FSUAE_UAENET_PCAP_FIRST")) {
++		nddp[j++] = &slirpd;
++		nddp[j++] = &slirpd2;
++	}
+ #ifdef WITH_UAENET_PCAP
+ 	nd = uaenet_enumerate (NULL);
+ 	if (nd) {
 diff --git a/src/include/uaenet_pcap.h b/src/include/uaenet_pcap.h
 new file mode 100644
 index 0000000..662d3d6
@@ -384,7 +399,7 @@ index 0000000..d527916
 +		amiga_mac(d->name, pcapd[n].mac);
 +		pcapd[n].active = 1;
 +		write_log(_T("uaenet pcap: uaenet.device unit %d = %s, Amiga MAC %02x:%02x:%02x:%02x:%02x:%02x\n"),
-+		          n + 2, d->name, pcapd[n].mac[0], pcapd[n].mac[1], pcapd[n].mac[2],
++		          n + (getenv("FSUAE_UAENET_PCAP_FIRST") ? 0 : 2), d->name, pcapd[n].mac[0], pcapd[n].mac[1], pcapd[n].mac[2],
 +		          pcapd[n].mac[3], pcapd[n].mac[4], pcapd[n].mac[5]);
 +		n++;
 +	}
