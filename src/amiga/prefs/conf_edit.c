@@ -978,6 +978,25 @@ void rp_conf_commit(struct rp_conf *c)
 	c->orig = c->cur;
 }
 
+void rp_conf_applied(struct rp_conf *c)
+{
+	c->applied = c->cur;
+	c->have_applied = 1;
+}
+
+static void count_line(const char *line, void *arg)
+{
+	(void)line;
+	(*(int *)arg)++;
+}
+
+int rp_live_pending(const struct rp_conf *c)
+{
+	int n = 0, restart = rp_live_commands(c, count_line, &n);
+
+	return n > 0 || restart;
+}
+
 /* rewrite (keeping a trailing comment), insert after 'anchor', or with
  * text NULL remove the line of *slot */
 static int put(struct rp_conf *c, struct rp_line **slot, struct rp_line *anchor, const char *text)
@@ -2222,7 +2241,7 @@ int rp_valid_ip(const char *s)
 
 int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void *arg), void *arg)
 {
-	const struct rp_model *o = &c->orig, *n = &c->cur;
+	const struct rp_model *o = c->have_applied ? &c->applied : &c->orig, *n = &c->cur;
 	char buf[LINEMAX];
 	int i, restart = 0;
 

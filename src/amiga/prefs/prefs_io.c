@@ -134,8 +134,19 @@ int rp_load(void)
 		rp_message(msg);
 		return -1;
 	}
-	rp_conf_free(&rp_cfg);
-	r = rp_conf_load(&rp_cfg, text ? text : "", text ? (size_t)len : 0);
+	{
+		/* the stack still has what was last applied (Restore reloads) */
+		struct rp_model *keep = rp_cfg.have_applied ? rp_alloc(sizeof(*keep)) : NULL;
+		if (keep)
+			*keep = rp_cfg.applied;
+		rp_conf_free(&rp_cfg);
+		r = rp_conf_load(&rp_cfg, text ? text : "", text ? (size_t)len : 0);
+		if (keep) {
+			rp_cfg.applied = *keep;
+			rp_cfg.have_applied = 1;
+			rp_free(keep);
+		}
+	}
 	if (text)
 		FreeVec(text);
 	return r;
@@ -198,12 +209,14 @@ void rp_apply(int ask)
 			rp_message("Riptide is not running.\nThe settings take effect when it starts.");
 		return;
 	}
-	if (ask && !rp_conf_changed(&rp_cfg))
+	/* after an Apply: only what differs from what was applied */
+	if (ask && !(rp_cfg.have_applied ? rp_live_pending(&rp_cfg) : rp_conf_changed(&rp_cfg)))
 		return;
 	if (ask && !rp_request("Riptide is running.\nApply the changes to it now?", "Apply|Later"))
 		return;
 	memset(&st, 0, sizeof(st));
 	restart = rp_live_commands(&rp_cfg, apply_one, &st);
+	rp_conf_applied(&rp_cfg);
 	if (st.failed)
 		rt_snprintf(msg, sizeof(msg), "Applied %d of %d setting%s.\n%s", st.n - st.failed, st.n,
 		            rp_plural((unsigned long)st.n), st.report);

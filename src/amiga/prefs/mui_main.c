@@ -1179,6 +1179,9 @@ static int load_text(const char *path)
 			FreeVec(start);
 	}
 	FreeVec(text);
+	/* the stack still has what was last applied */
+	c.applied = rp_cfg.applied;
+	c.have_applied = rp_cfg.have_applied;
 	rp_conf_free(&rp_cfg);
 	rp_cfg = c;
 	return 0;

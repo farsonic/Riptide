@@ -158,6 +158,11 @@ struct rp_conf {
 	int eol_crlf;                         /* lines ended with \r\n */
 	int final_eol;                        /* the last line had a line end */
 	struct rp_model orig, cur;
+	/* what the running stack was last given by Apply (have_applied):
+	 * live commands are worked out against it, not against the file, so
+	 * an entry added, applied and deleted again is deleted there too */
+	struct rp_model applied;
+	int have_applied;
 	/* where each setting lives (NULL: not in the file) */
 	struct rp_line *l_iface[RP_NIF], *l_dhcp[RP_NIF], *l_ifconfig[RP_NIF], *l_route[RP_NIF];
 	struct rp_line *l_dns[RP_NDNS];
@@ -256,5 +261,9 @@ int  rp_valid_programs(const char *s);     /* name,name*,... without spaces */
  * (interface, address, IPv4/IPv6 on or off, a sysctl set back to its
  * default), else 0. */
 int  rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void *arg), void *arg);
+/* the stack now has c->cur (after rp_live_commands() was sent) */
+void rp_conf_applied(struct rp_conf *c);
+/* rp_live_commands() would send something or ask for a restart */
+int  rp_live_pending(const struct rp_conf *c);
 
 #endif

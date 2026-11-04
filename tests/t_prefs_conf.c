@@ -278,6 +278,36 @@ static void collect(const char *line, void *arg)
 	strcat(cmds, ";");
 }
 
+/* add, Apply, delete, Apply: the delete reaches the stack (0.30 said
+ * "Nothing to apply" because it compared with the file, not the stack) */
+static void test_live_applied(void)
+{
+	struct rp_conf c;
+	const char *conf = "interface eth0 device=uaenet.device unit=0\ndhcp eth0\n";
+
+	memset(&c, 0, sizeof(c));
+	CHECK(rp_conf_load(&c, conf, strlen(conf)) == 0);
+	CHECK(!rp_live_pending(&c));
+	CHECK(rp_list_add(&c, RP_LIST_ROUTE, "10.0.0.0/8 via 192.168.2.2") >= 0);
+	CHECK(rp_list_add(&c, RP_LIST_HOST, "10.1.2.3 nas") >= 0);
+	cmds[0] = 0;
+	rp_live_commands(&c, collect, NULL);
+	CHECK(strstr(cmds, "route add 10.0.0.0/8 via 192.168.2.2;") && strstr(cmds, "host 10.1.2.3 nas;"));
+	rp_conf_applied(&c);
+	CHECK(!rp_live_pending(&c));                         /* applied: nothing more */
+	CHECK(rp_list_set(&c, RP_LIST_ROUTE, 0, "") == 0);   /* deleted again */
+	CHECK(rp_list_set(&c, RP_LIST_HOST, 0, "") == 0);
+	CHECK(!rp_conf_changed(&c));                         /* the file is as it was ... */
+	CHECK(rp_live_pending(&c));                          /* ... but the stack is not */
+	cmds[0] = 0;
+	rp_live_commands(&c, collect, NULL);
+	CHECK((strstr(cmds, "route del 10.0.0.0/8 via 192.168.2.2;") && strstr(cmds, "host del 10.1.2.3;")) ||
+	      (printf("cmds: %s\n", cmds), 0));
+	rp_conf_applied(&c);
+	CHECK(!rp_live_pending(&c));
+	rp_conf_free(&c);
+}
+
 static void test_live(void)
 {
 	struct rp_conf c;
@@ -1426,6 +1456,7 @@ int main(void)
 	test_linklocal();
 	test_multi();
 	test_netpages();
+	test_live_applied();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }
