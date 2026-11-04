@@ -727,6 +727,35 @@ PrismNet's (2.6 %); uploads spread more (Riptide 484-529, AmiNetXDuo
   evaluation version's limits; the figures are what the evaluation
   version does, not necessarily the registered one.
 
+**On the wire: Riptide and AmiNetXDuo.** A second run of each with
+`tcpdump` on the host end of the veth (the numbers of those runs: Riptide
+808/513 KB/s, AmiNetXDuo 1179/419; the uploads' spread again) shows what
+differs and what does not:
+
+* Both ask for an MSS of 1460 and SACK. Riptide also uses timestamps,
+  window scaling (factor 2, a 32 KB window) and ECN; AmiNetXDuo none of
+  the three, with a 54 KB window. On a download both receive about 1450
+  to 1480 full segments and acknowledge them about every 9 to 11
+  segments (Riptide 9.1-9.5, AmiNetXDuo 10.6-11.4), and both advertised a
+  zero window at some point: the application could not keep up. So the
+  download difference is not in the protocol exchange; it is what each
+  stack does with a received segment, where AmiNetXDuo spends about 30 %
+  less of the 68020's time.
+* On an upload Riptide sent 2.14-2.18 MB for 2 MB of data: 141 of its
+  4745 data segments (3 %) were retransmissions, while AmiNetXDuo
+  retransmitted nothing. The host's ACKs carried SACK blocks about 550
+  times for either stack, so the host saw the same holes from both; they
+  were reordering, not loss, since AmiNetXDuo never had to resend. Riptide
+  treated some of them as losses: its loss detection is quicker to resend
+  under reordering than it needs to be, and the resent 80 KB cost its
+  uploads a few per cent. Where the reordering comes from (the emulator's
+  bridge, the veth) is not known. AmiNetXDuo's uploads sent many
+  segments below the MSS (average 1290-1300 bytes, 17 % not full size);
+  Riptide's averaged 1370 bytes.
+* A ping is answered after 13.6 ms by Riptide and 10-11 ms by AmiNetXDuo
+  in these captures (the first one 35 ms): the emulator's card delivers
+  frames to the guest in batches, and most of the round trip is that.
+
 **How far to trust it.** Emulator numbers, one machine, one card that
 costs the Amiga one copy per frame and almost no bus time; real cards
 cost more (section 11). The emulation is cycle exact, so the numbers
