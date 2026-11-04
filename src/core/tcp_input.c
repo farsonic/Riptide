@@ -2354,9 +2354,12 @@ int rt_tcp_run_input(struct rt_netif *nif, struct rt_buf *b)
 	    th[12] != (u8)(hdr << 2) || (th[13] & ~TCPHDR_PSH) != TCPHDR_ACK ||
 	    rt_get_be32(th + 8) != run.ack || rt_get_be16(th + 14) != run.win)
 		return 0;
+	/* timestamps: the same echo; the sender's own clock may have moved on
+	 * (it ticks every millisecond), but not back (PAWS, as the fast path) */
 	if (hdr != TCP_HDR_LEN &&
 	    (th[20] != TCPOPT_NOP || th[21] != TCPOPT_NOP || th[22] != TCPOPT_TIMESTAMP ||
-	     th[23] != TCPOLEN_TIMESTAMP || rt_get_be32(th + 24) != run.tsval || rt_get_be32(th + 28) != run.tsecr))
+	     th[23] != TCPOLEN_TIMESTAMP || rt_get_be32(th + 28) != run.tsecr ||
+	     (s32)(rt_get_be32(th + 24) - tp->ts_recent) < 0))
 		return 0;
 	seq = rt_get_be32(th + 4);
 	dlen = tot - 20 - hdr;
@@ -2398,6 +2401,7 @@ int rt_tcp_run_input(struct rt_netif *nif, struct rt_buf *b)
 	tp->rx_opt.sack_off = 0;
 	tp->rx_opt.saw_tstamp = hdr != TCP_HDR_LEN;
 	if (tp->rx_opt.saw_tstamp) {
+		run.tsval = rt_get_be32(th + 24);
 		tp->rx_opt.rcv_tsval = run.tsval;
 		tp->rx_opt.rcv_tsecr = run.tsecr ? run.tsecr - tp->ts_offset : 0;
 		if (tp->rcv_nxt == tp->rcv_wup)
