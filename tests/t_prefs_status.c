@@ -532,6 +532,19 @@ static void test_counters(void)
 	rp_cnt_text(&cm, row_of("TCP"), name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
 	CHECK_STR(name, "TCP");
 	CHECK_STR(val, "");
+	/* the longest heading leaves its rows' names whole (0.30 cut them to 11) */
+	{
+		struct rt_icmp6_stats i6;
+		memset(&i6, 0, sizeof(i6));
+		in.icmp6 = &i6; in.icmp6_len = sizeof(i6);
+		rp_cnt_update(&cm, &in);
+		r = row_of("ICMPv6, Neighbor Discovery, MLD\tMessages received");
+		CHECK(r > 0);
+		rp_cnt_text(&cm, r, name, sizeof(name), val, sizeof(val), rate, sizeof(rate));
+		CHECK_STR(name, "Messages received");
+		in.icmp6 = NULL; in.icmp6_len = 0;
+		rp_cnt_update(&cm, &in);
+	}
 	rp_cnt_summary(&cm, sum, sizeof(sum));
 	CHECK_STR(sum, "Counts since Riptide started.");
 

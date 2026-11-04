@@ -20,7 +20,7 @@
 #include "rt/rt_ip6.h"
 
 #define RP_CNT_MAX  640         /* rows at most (a group heading is a row too) */
-#define RP_CNT_NAME 44
+#define RP_CNT_NAME 96          /* "heading\tname": the longest heading is 31 */
 
 /* a row: a group heading ("TCP"), a count, or a value that is not a count
  * (a level such as the memory in use: no change per second, Zero leaves

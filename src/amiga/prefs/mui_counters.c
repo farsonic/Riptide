@@ -52,7 +52,7 @@ struct cview_data {
 	LONG drag_y, drag_top;      /* where it was taken */
 	/* what is on screen */
 	int valid, drawn_top, drawn_n, drawn_vis;
-	char cache[CV_LINES][96];
+	char cache[CV_LINES][RP_CNT_NAME + 64];
 };
 
 static struct MUI_CustomClass *cview_mcc;
@@ -165,7 +165,7 @@ static void cv_line(struct cview_data *d, Object *obj, int i, int r, const char 
 static void cv_draw(struct cview_data *d, Object *obj, int update)
 {
 	struct RastPort *rp = _rp(obj);
-	char key[96], name[RP_CNT_NAME], val[24], rate[24];
+	char key[RP_CNT_NAME + 64], name[RP_CNT_NAME], val[24], rate[24];
 	int vis = cv_clamp(d, obj), i, full;
 
 	if (!model.running) {
