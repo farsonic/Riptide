@@ -13,6 +13,8 @@
 #   Docs/(.info)             AMIGA.md, COMPARISON.md, README.md, LICENSE,
 #                            riptide-uaenet.conf (each with an icon)
 #   SDK/                     sdk/ (headers and FD file for riptide.library)
+#   Host/                    speedtest_mock.py: a test server for speedtest,
+#                            run on a PC or Mac (Python 3), and its ReadMe
 #
 # and from it
 #
@@ -86,6 +88,34 @@ fi
 cp "$top/docs/AMIGA.md" "$top/docs/COMPARISON.md" "$top/README.md" "$top/LICENSE" \
    "$top/examples/riptide-uaenet.conf" "$pkg/Docs/"
 cp -R "$top/sdk/." "$pkg/SDK/"
+
+# a speedtest server for the local network, to run on a PC or Mac
+mkdir -p "$pkg/Host"
+cp "$top/tools/speedtest_mock.py" "$pkg/Host/"
+cat > "$pkg/Host/ReadMe" <<'EOT'
+speedtest_mock.py - a speedtest server for your own network
+============================================================
+
+Runs on any computer with Python 3 (macOS, Linux, Windows) and answers
+Riptide's speedtest the way speedtest.net does, so you can measure what
+the Amiga, its network card and your LAN can do without the Internet in
+the way.
+
+On the PC or Mac:
+
+  python3 speedtest_mock.py              (listens on port 8080)
+
+Allow incoming connections if the system asks. Note the computer's
+address (macOS: ipconfig getifaddr en0; Windows: ipconfig).
+
+On the Amiga (Shell):
+
+  speedtest --mirror 192.168.0.20:8080
+
+with the computer's address. Keep RiptidePrefs open on the Status page
+during the test: its CPU figure shows whether the Amiga or the network
+is the limit. Options: python3 speedtest_mock.py --help
+EOT
 
 # icons (positions inside the drawer windows)
 $mkicon drawer  "$stage/Riptide.info" --image drawer --window 60,40,420,140

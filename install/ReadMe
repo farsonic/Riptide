@@ -69,3 +69,7 @@ If Riptide is useful to you, you can buy its author a coffee:
 https://buymeacoffee.com/farsonic (also in RiptidePrefs: the About
 Riptide page at the top of the page list, or Project > Support
 Riptide...).
+
+Host/speedtest_mock.py is a speedtest server for your own network: run it
+on a PC or Mac (Python 3) and "speedtest --mirror ADDRESS:8080" on the
+Amiga to measure the Amiga and your LAN without the Internet (Host/ReadMe).
