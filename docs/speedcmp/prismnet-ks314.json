@@ -1,0 +1,32 @@
+{
+ "stack": "prismnet",
+ "id": "PrismNet bsdsocket.library 4.4 (19.10.2026)",
+ "bytes": 2097152,
+ "repeat": 3,
+ "online_s": 32,
+ "download_kbs": 758.79,
+ "download_runs": [
+  759.64,
+  758.79,
+  739.88
+ ],
+ "upload_kbs": 140.67,
+ "upload_runs": [
+  140.67,
+  252.12,
+  134.72
+ ],
+ "idle_download_pct": 7.5,
+ "idle_upload_pct": 0.0,
+ "udp_dgram_s": 406,
+ "udp_kbs": 556.14,
+ "udp_sent": 3000,
+ "udp_errors": 0,
+ "udp_received": 3000,
+ "udp_count": 3000,
+ "loopback_kbs": 456.93,
+ "ping_ms": 10.453,
+ "ping_min_ms": 0.998,
+ "ping_loss_pct": 0,
+ "notes": []
+}

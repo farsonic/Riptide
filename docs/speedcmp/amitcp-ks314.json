@@ -1,0 +1,32 @@
+{
+ "stack": "amitcp",
+ "id": "AmiTCP/IP release 3 bsdsocket.library 3.28 (2.5.94)",
+ "bytes": 2097152,
+ "repeat": 3,
+ "online_s": 28,
+ "download_kbs": 702.33,
+ "download_runs": [
+  704.5,
+  702.33,
+  700.41
+ ],
+ "upload_kbs": 278.67,
+ "upload_runs": [
+  149.28,
+  278.67,
+  290.37
+ ],
+ "idle_download_pct": 3.7,
+ "idle_upload_pct": 1.45,
+ "udp_dgram_s": 518,
+ "udp_kbs": 709.24,
+ "udp_sent": 3000,
+ "udp_errors": 0,
+ "udp_received": 3000,
+ "udp_count": 3000,
+ "loopback_kbs": 494.8,
+ "ping_ms": 11.499,
+ "ping_min_ms": 1.656,
+ "ping_loss_pct": 0,
+ "notes": []
+}
