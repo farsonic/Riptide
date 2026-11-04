@@ -238,6 +238,7 @@ void rt_icmp_input(struct rt_buf *b, const struct rt_iphdr *ip);
 /* Raw sockets get a copy of every datagram for their protocol; b is NOT
  * consumed. Returns number of sockets that took a copy. */
 int  rt_raw_input(const struct rt_buf *b, const struct rt_iphdr *ip);
+int  rt_raw_active(void);                 /* any raw socket open? */
 
 /* ICMP errors delivered to transports. 'inner' points at the IP header
  * quoted in the ICMP message, 'inner_len' bytes are available (at least

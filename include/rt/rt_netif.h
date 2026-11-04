@@ -248,6 +248,11 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
  * for explicitly and everything else go out at once as usual. */
 void rt_rx_batch_begin(void);
 void rt_rx_batch_end(void);
+/* Within a receive batch: the next in-order segment of the TCP run the
+ * previous frame belonged to, taken straight to the connection's receive
+ * queue (IP input, the socket lookup and header prediction skipped, both
+ * checksums still checked). 1 when it took b; 0: input it as usual. */
+int  rt_tcp_run_input(struct rt_netif *nif, struct rt_buf *b);
 
 /* Stack -> link: send an IP packet to next hop 'nexthop' (network order)
  * on 'nif'. Resolves ARP on ethernet-like links (queueing while
