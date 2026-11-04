@@ -131,13 +131,21 @@ rt_csum_020:
 ; Copies len bytes and returns rt_csum_020(src, len, sum) in one pass. The
 ; source is aligned for the long reads; the destination may be misaligned
 ; (allowed on the 68020+, aligned in the common rt_buf to rt_buf case).
+;
+; The bulk moves 56 bytes per pass: movem.l loads seven longwords at a
+; time into d1-d7, and each is stored and folded into the sum by one
+; addx.l, the carry riding in X from one to the next. Two instructions and
+; a seventh of a movem per longword instead of three (load, store, addx):
+; a 68020 pays mostly for the instructions it fetches. Nothing between two
+; addx may change X: movem, move, lea, cmpa and the branches leave it be,
+; so the loops end on cmpa against precomputed end pointers.
 	cnop	0,4
 _rt_csum_copy_020:
 rt_csum_copy_020:
-	movem.l	d2-d5,-(sp)		; dst 20(sp), src 24(sp), len 28(sp), sum 32(sp)
-	move.l	20(sp),a1
-	move.l	24(sp),a0
-	move.l	28(sp),d1
+	movem.l	d2-d7/a2-a3,-(sp)	; dst 36(sp), src 40(sp), len 44(sp), sum 48(sp)
+	move.l	36(sp),a1
+	move.l	40(sp),a0
+	move.l	44(sp),d1
 	moveq	#0,d0
 	moveq	#0,d4
 	tst.l	d1
@@ -164,33 +172,49 @@ rt_csum_copy_020:
 	move.l	d1,d2
 	lsr.l	#2,d2
 	beq	.tail
-	moveq	#15,d3
-	and.l	d2,d3
-	lsr.l	#4,d2
-	sub.w	#16,d3
-	neg.w	d3
-	add.w	d3,d3			; 2 * (16 - partial)
-	move.w	d3,d5
-	add.w	d3,d3
-	add.w	d5,d3			; 6 * (16 - partial): 6 bytes per long
-	move	#0,ccr
-	jmp	.blk(pc,d3.w)
+	move.l	d1,-(sp)		; the length (its low bits: the tail) and
+	move.l	d4,-(sp)		; the odd start, while d1-d7 carry data
+	lsl.l	#2,d2			; bytes in whole longwords
+	lea	(a0,d2.l),a3		; end of the longwords
+	moveq	#56,d3
+	sub.l	d3,d2
+	lea	(a0,d2.l),a2		; the last place a 56 byte pass may start
+	move	#0,ccr			; X = 0
+	bra.s	.bchk
 .blk:
-	rept	16
-	move.l	(a0)+,d3
-	move.l	d3,(a1)+		; move leaves X alone
+	rept	2
+	movem.l	(a0)+,d1-d7
+	move.l	d1,(a1)+		; move leaves X alone
+	addx.l	d1,d0
+	move.l	d2,(a1)+
+	addx.l	d2,d0
+	move.l	d3,(a1)+
 	addx.l	d3,d0
+	move.l	d4,(a1)+
+	addx.l	d4,d0
+	move.l	d5,(a1)+
+	addx.l	d5,d0
+	move.l	d6,(a1)+
+	addx.l	d6,d0
+	move.l	d7,(a1)+
+	addx.l	d7,d0
 	endr
-	dbra	d2,.blk
-	swap	d2
-	dbra	d2,.more
-	bra.s	.lend
-.more:
-	swap	d2
-	bra.s	.blk
-.lend:
-	moveq	#0,d3
-	addx.l	d3,d0
+.bchk:
+	cmpa.l	a2,a0
+	bls.s	.blk			; a0 <= a2: another 56 bytes
+	bra.s	.lchk
+.lng:
+	move.l	(a0)+,d1		; the last 0-13 longwords
+	move.l	d1,(a1)+
+	addx.l	d1,d0
+.lchk:
+	cmpa.l	a3,a0
+	blo.s	.lng
+	moveq	#0,d1
+	addx.l	d1,d0			; the last carry; all ones + X carries
+	addx.l	d1,d0			; once more, and then no more
+	move.l	(sp)+,d4
+	move.l	(sp)+,d1
 .tail:
 	btst	#1,d1
 	beq.s	.nw
@@ -215,10 +239,10 @@ rt_csum_copy_020:
 	beq.s	.done
 	ror.l	#8,d0
 .done:
-	add.l	32(sp),d0
+	add.l	48(sp),d0
 	moveq	#0,d2
 	addx.l	d2,d0
-	movem.l	(sp)+,d2-d5
+	movem.l	(sp)+,d2-d7/a2-a3
 	rts
 
 ; ---------------------------------------------------------------------------
