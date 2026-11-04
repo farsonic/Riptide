@@ -1,0 +1,32 @@
+{
+ "stack": "miamidx",
+ "id": "bsdsocket.library 4.1 (15.12.96)",
+ "bytes": 2097152,
+ "repeat": 3,
+ "online_s": 36,
+ "download_kbs": 226.14,
+ "download_runs": [
+  226.22,
+  226.14,
+  225.89
+ ],
+ "upload_kbs": 132.77,
+ "upload_runs": [
+  142.13,
+  130.33,
+  132.77
+ ],
+ "idle_download_pct": 1.5,
+ "idle_upload_pct": 0.0,
+ "udp_dgram_s": 153,
+ "udp_kbs": 210.48,
+ "udp_sent": 3000,
+ "udp_errors": 0,
+ "udp_received": 3000,
+ "udp_count": 3000,
+ "loopback_kbs": 450.7,
+ "ping_ms": 16.444,
+ "ping_min_ms": 12.836,
+ "ping_loss_pct": 0,
+ "notes": []
+}
