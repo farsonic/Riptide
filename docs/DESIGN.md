@@ -355,9 +355,10 @@ moves the frame): 901.0 down and 698.3 up with the 0.25 stack, 918.8
 and 682.2 with 0.26 (the uploads of the two spread by 2 %). Tried and measured slower: stopping the application's push
 loop between segments when the Riptide process waits for the lock
 (uploads 499 → 447 KB/s: more lock hand-overs and task switches than
-ACKs processed sooner), and a `movem.l` copy-and-sum (3989 against 4123
-KB/s: the seven `addx.l` between the two `movem.l` cost what the moves
-saved). Not worth it on this CPU: cheaper clock reads elsewhere (ARP,
+ACKs processed sooner), and a `movem.l` copy-and-sum that loaded and
+stored with two `movem.l` and summed in between (3989 against 4123
+KB/s; 0.27's version, which stores each register as it adds it, is
+faster: see below). Not worth it on this CPU: cheaper clock reads elsewhere (ARP,
 routes: a few per segment), smaller `rt_buf` resets (two or three per
 segment, 60 µs together), fewer window-update ACKs (one per ten
 segments). What remains is the 68020 itself: two bus-bound copies of
@@ -367,6 +368,60 @@ and the exec and driver work per frame that no stack controls.
 The `a4000-040` preset cannot be measured with the A1200 Kickstart: the
 68040 needs `68040.library`, which the 3.1.4 install disks here do not
 have, and ran at 706 KB/s; the 68040 figures are from the AROS ROM.
+
+### The receive path against AmiNetXDuo (0.27)
+
+AmiNetXDuo downloads at 1168 KB/s in the same speed lab (68020,
+Kickstart 3.1.4, GCC build): 1.22 ms per 1460-byte segment, against
+Riptide 0.27's 1.75 ms (815.6 KB/s, one run). Reading its sources for
+what it does differently with each received frame (the estimates are
+what each would save Riptide per segment, from the profile and the
+`qemu-m68k` instruction counts above):
+
+| AmiNetXDuo, per received frame | Riptide before | Saving, µs |
+|---|---|---|
+| Holds a run of in-order segments of one connection (plain 20-byte header or one with only timestamps, ACK and at most PSH, same acknowledgement, window and addresses) and gives TCP the run as one segment | every frame goes through IP input, the socket lookup and header prediction | ~150 |
+| Copies and sums the frame with `movem.l` loads into seven registers and one `addx.l` per longword, the carry kept in X across the block, loops controlled by comparing addresses | a loop that moves and adds one longword at a time | ~115 |
+| The thread that reads the device runs TCP itself, with a budget of frames per pass | the device replies to the Riptide process, which runs IP and TCP under a lock the application's `recv()` also wants | ~100 (task switches and lock hand-overs) |
+| Re-posts each read before it delivers the frame, from a ring of 32 | re-posts after delivery, from 48 | ~30 |
+| Paces its ACKs by the data received, not by the frames | one per receive batch of up to 8 | ~20 |
+
+What 0.27 took from this, written for Riptide's structure (speed lab,
+download, 68020; single runs except where a median of 3 is given):
+
+1. **In-order runs** (`rt_tcp_run_input()`). After a data segment has
+   been taken by the fast path inside a receive batch, its addresses,
+   ports, acknowledgement, window and timestamps are remembered; the
+   next frame that matches them, starts at `rcv_nxt` and fits the
+   receive space is queued straight from `rt_netif_deliver()`: the IP
+   and TCP checksums are still checked, but IP input, the socket hash
+   and header prediction are skipped, and the clock is not reread. 815.6
+   → 836.2 KB/s.
+2. **Short reads when the stack wants the lock** and the batch's due
+   ACK skipping the window choice: `recv()` returns what it has copied
+   once the Riptide process is waiting, so that process re-queues its
+   reads sooner. Lock waits per download fell from 481 to 211 ms; the
+   throughput change (812.4) is within the noise of a single run.
+3. **Runs across a newer timestamp.** Linux's TSval ticks every
+   millisecond, so half the runs broke; a run now continues when TSval
+   is the same or newer (PAWS still holds) and the echoed value has not
+   changed. 851.5 KB/s, median of 3.
+4. **`rt_csum_copy_020` rewritten**: `movem.l` loads 28 bytes into
+   d1-d7, each register is stored and added with `addx.l` straight
+   away, two such loads per pass, address compares for the loop. The
+   driver's `CopyToBuff` fell from 479 to 364 µs per frame. **915.9
+   KB/s, median of 3** (936.9, 915.9, 892.4): 1.56 ms per segment.
+
+Tried and not kept: running the Riptide process at priority 0 instead
+of 2, so that a frame does not preempt the application in its copy:
+986.5 KB/s down (median of 3) but 434 KB/s up against 525, as the
+application's `send()` loop then holds the CPU while ACKs wait. The
+speed lab's `RT_CONF_EXTRA` adds lines such as `priority 0` to the
+stack's configuration for experiments like this one.
+
+The remaining 0.34 ms per segment to AmiNetXDuo is mostly the hand-over
+between the device task, the Riptide process and the application:
+AmiNetXDuo does the device read, TCP and the wake-up in one thread.
 
 ## TCP connection behaviour (Fast Open, connecting, keepalive, cork)
 

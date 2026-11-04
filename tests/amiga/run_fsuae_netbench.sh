@@ -31,6 +31,8 @@
 #              192.168.79), so several runs can share a host
 #   KICKSTART  a Kickstart ROM image instead of FS-UAE's AROS ROM
 #              (KICKSTART_EXT: its extension ROM, if any)
+#   RT_CONF_EXTRA  a line added to Riptide's configuration for
+#              experiments, e.g. "priority 0"
 # Needs root (veth, packet capture), python3, ethtool (optional).
 # Headless: starts Xvfb on :116 when DISPLAY is not set.
 # SPDX-License-Identifier: GPL-2.0-only
@@ -130,6 +132,7 @@ run_one() {
 			route add default $NET.1
 			mdns off
 			ntp off
+			${RT_CONF_EXTRA:-}
 			CONF
 			echo 'DH0:C/rtcheck START="DH0:C/Riptide >DH0:out/stack.log CONFIG=DH0:S/riptide.conf" NOCHECK >DH0:out/start'
 		else
