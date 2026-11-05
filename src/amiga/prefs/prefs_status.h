@@ -199,6 +199,9 @@ void rp_st_routes_text(const struct rp_status_model *m, char *buf, int len, int 
 /* Read the tables into m when Riptide runs: 1, else 0 (m then says
  * "not running"). Opens and closes the libraries each time. */
 int rp_status_read(struct rp_status_model *m);
+/* the kind of driver ("sana2", "netdev", "mni") Riptide uses for ifname;
+ * 0 when it does not run or has no such interface (status_amiga.c) */
+int rp_status_driver(const char *ifname, char *kind, int klen);
 /* the buffers it keeps between reads */
 void rp_status_free(void);
 

@@ -201,6 +201,8 @@ struct ndif {
 	struct rt_mc_ref mcref[ND_MC];
 	int    nmcref;
 	int    allmulti;
+	int    filter_due;            /* the filter changed: nd_poll sends it */
+	int    tx_keep;               /* STOP failed: the driver may still use its buffers */
 	int    want_online;
 	struct rt_timer linkt;        /* asks the driver for its link (nd_link_timer) */
 	int    rx_seen;               /* frames since the last link poll */
@@ -208,6 +210,7 @@ struct ndif {
 };
 
 static BYTE nd_sigbit = -1;
+static void nd_set_filter(struct ndif *ni);
 
 void netdev_cleanup(void)
 {
@@ -433,6 +436,10 @@ static void nd_poll(struct amiga_if *ai)
 		Permit();
 		nd_link_apply(ni);
 	}
+	if (ni->filter_due) {
+		ni->filter_due = 0;
+		nd_set_filter(ni);
+	}
 	if (ni->want_online >= 0) {
 		int want = ni->want_online;
 		ni->want_online = -1;
@@ -481,7 +488,10 @@ static int nd_mcast(struct rt_netif *nif, const u8 *hw, int join)
 	/* a full table: receive every group */
 	if (join && ni->nmcref >= ND_MC && !ni->allmulti)
 		ni->allmulti = 1;
-	nd_set_filter(ni);
+	/* any task may join a group (setsockopt), but the request's reply port
+	 * is the Riptide process's: the stack process sends it (nd_poll) */
+	ni->filter_due = 1;
+	Signal(amiga_stack_task, 1UL << nd_sigbit);
 	return 0;
 }
 
@@ -582,15 +592,22 @@ static void nd_close(struct amiga_if *ai)
 	if (ni->ai.nif.index)
 		rt_netif_remove(&ni->ai.nif);
 	rt_unlock();
-	if (ni->started)
-		nd_ctl(ni, NETDEV_CMD_STOP, NULL, 0);   /* completes every transmit */
+	/* STOP completes every transmit; a driver that cannot stop may still
+	 * read the transmit buffers, so they and the attachment stay */
+	if (ni->started && nd_ctl(ni, NETDEV_CMD_STOP, NULL, 0) != 0) {
+		/* the driver may still call us and use our buffers: everything it
+		 * can reach stays allocated (a leak, not a crash) */
+		rt_log(RT_LOG_WARN, "%s: netdev stop failed, the driver stays attached", ni->ai.nif.name);
+		ni->tx_keep = 1;
+		return;
+	}
 	ni->started = 0;
-	if (ni->tx) {
+	if (ni->tx && !ni->tx_keep) {
 		for (i = 0; i < ni->ntx; i++)
 			if (ni->tx[i].mem)
 				ni->ops->ndo_DmaFree(ni->drvctx, ni->tx[i].mem, ni->tx_size);
 	}
-	if (ni->attached)
+	if (ni->attached && !ni->tx_keep)
 		nd_ctl(ni, NETDEV_CMD_DETACH, NULL, 0);
 	ni->attached = 0;
 	if (ni->dev_open)

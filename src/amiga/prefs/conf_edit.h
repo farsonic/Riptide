@@ -109,6 +109,7 @@ struct rp_iface {
 	long unit, mtu, reads, tcpwindow;     /* RP_UNSET when absent */
 	int  raw;
 	int  disabled;                        /* "disabled": kept in the file, not used */
+	int  drvkey;                          /* the driver came as device= 0, netdev= 1, mni= 2 */
 	char ifextra[RP_LONG];                /* other options, verbatim */
 	/* IPv4 address */
 	int  dhcp;                            /* 1 dhcp, 0 static */

@@ -17,6 +17,7 @@
 #include "prefs/mui_theme.h"
 #include "prefs/mui_classes.h"
 #include "gen/openurl_calls.h"
+#include "prefs/prefs_driver.h"
 #include "prefs/mui_ids.h"
 #include "prefs/mui_status.h"
 #include "prefs/mui_counters.h"
@@ -42,7 +43,8 @@ static int page;
  * card cycle; the cycles of names (DYN_*) are made anew when the names
  * change, inside a group of their own (dynbox) */
 enum { DYN_ADDR, DYN_ALIAS, DYN_VLAN, DYN_ROUTE, DYN_NEIGH, DYN_ADDR6, DYN_N };
-static Object *iflist, *ifbtn[2], *dynbox[DYN_N], *dyncyc[DYN_N];
+static Object *iflist, *ifbtn[2], *dynbox[DYN_N], *dyncyc[DYN_N], *drvlbl;
+static char drvtext[200];                 /* the chosen card's driver (drvlbl) */
 static char *ifhelp[3], *dynhelp;
 static struct rp_lnames dynnm[DYN_N];
 static const char *dynlab[DYN_N][RP_NIF + RP_NVLAN + 2];
@@ -437,13 +439,27 @@ static void cards_show(void)
 	int k;
 
 	if (iflist) {
+		struct rp_drvinfo di;
+		const struct rp_iface *f;
 		mui_set(iflist, MUIA_List_Quiet, TRUE);
 		mui_do(iflist, MUIM_List_Clear);
 		for (k = 0; k < RP_NIF; k++)
 			if (rp_cfg.cur.ifc[k].ifname[0]) {
-				rp_iface_row(&rp_cfg.cur.ifc[k], row, sizeof(row));
+				size_t n;
+				f = &rp_cfg.cur.ifc[k];
+				rp_iface_row(f, row, sizeof(row));
+				/* the kind of driver, as the stack uses it or from its file */
+				rp_drv_probe(f->device, f->ifname, &di);
+				n = strlen(row);
+				if (f->device[0] && (di.found || di.loaded || di.from_stack))
+					rt_snprintf(row + n, sizeof(row) - n, ", %s", rp_drv_kind_name(di.kind));
 				mui_do(iflist, MUIM_List_InsertSingle, (ULONG)row, MUIV_List_Insert_Bottom);
 			}
+		f = &rp_cfg.cur.ifc[rp_ifcur(&rp_cfg.cur)];
+		rp_drv_probe(f->device, f->ifname, &di);
+		rp_drv_line(&di, f->device, drvtext, sizeof(drvtext));
+		if (drvlbl)
+			mui_set(drvlbl, MUIA_QLabel_Text, (ULONG)drvtext);
 		mui_set(iflist, MUIA_List_Quiet, FALSE);
 		mui_nnset(iflist, MUIA_List_Active, (ULONG)card_pos(rp_ifcur(&rp_cfg.cur)));
 	}
@@ -680,8 +696,12 @@ static Object *cards_build(void)
 	}
 	mui_do(col, OM_ADDMEMBER, (ULONG)rect());
 	mui_do(iflist, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID, ID_IFLIST);
-	return mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, MUIA_VertWeight, 0, MUIA_Group_Child,
-	               (ULONG)lvo, MUIA_Group_Child, (ULONG)col, TAGEND);
+	/* the list and its buttons, and under them the chosen card's driver */
+	drvlbl = label(drvtext, QL_NOTE);
+	return mui_new(MUIC_Group, MUIA_Group_Spacing, 4, MUIA_VertWeight, 0, MUIA_Group_Child,
+	               (ULONG)mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, MUIA_Group_Child,
+	                              (ULONG)lvo, MUIA_Group_Child, (ULONG)col, TAGEND),
+	               drvlbl ? MUIA_Group_Child : TAG_IGNORE, (ULONG)drvlbl, TAGEND);
 }
 
 /* the settings of a page: a label and a gadget per row */

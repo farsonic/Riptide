@@ -470,7 +470,7 @@ static void parse_interface(struct rp_conf *c, struct rp_line *l, struct toks *t
 	int i, k, have_dev = 0;
 
 	for (i = 2; i < tk->n; i++)
-		if (kv(tk->t[i], "device"))
+		if (kv(tk->t[i], "device") || kv(tk->t[i], "netdev") || kv(tk->t[i], "mni"))
 			have_dev = 1;
 	if (!have_dev || strlen(tk->t[1]) >= RP_IFNAME || strchr(tk->t[1], RP_IFSEP))
 		return;
@@ -485,7 +485,13 @@ static void parse_interface(struct rp_conf *c, struct rp_line *l, struct toks *t
 	for (i = 2; i < tk->n; i++) {
 		if ((v = kv(tk->t[i], "device")) != NULL)
 			copy(f->device, v, sizeof(f->device));
-		else if ((v = kv(tk->t[i], "unit")) != NULL)
+		else if ((v = kv(tk->t[i], "netdev")) != NULL) {
+			copy(f->device, v, sizeof(f->device));
+			f->drvkey = 1;
+		} else if ((v = kv(tk->t[i], "mni")) != NULL) {
+			copy(f->device, v, sizeof(f->device));
+			f->drvkey = 2;
+		} else if ((v = kv(tk->t[i], "unit")) != NULL)
 			f->unit = num(v);
 		else if ((v = kv(tk->t[i], "mtu")) != NULL)
 			f->mtu = num(v);
@@ -894,7 +900,7 @@ static int iface_changed(const struct rp_iface *o, const struct rp_iface *n)
 {
 	return str_changed(o->ifname, n->ifname) || str_changed(o->device, n->device) || o->unit != n->unit ||
 	       o->mtu != n->mtu || o->reads != n->reads || o->tcpwindow != n->tcpwindow || o->raw != n->raw ||
-	       o->disabled != n->disabled || str_changed(o->ifextra, n->ifextra);
+	       o->disabled != n->disabled || o->drvkey != n->drvkey || str_changed(o->ifextra, n->ifextra);
 }
 
 static int addr_changed(const struct rp_iface *o, const struct rp_iface *n)
@@ -1216,8 +1222,12 @@ static int sync_iface(struct rp_conf *c, int k)
 		return r;
 	}
 	if (fresh || iface_changed(o, n)) {
-		int x = rt_snprintf(buf, sizeof(buf), "interface %s device=%s unit=%ld", n->ifname,
-		                    quoted(n->device, q, sizeof(q)), n->unit < 0 ? 0L : n->unit);
+		/* an MNI driver by its name, else the keyword the line had */
+		size_t dl = strlen(n->device);
+		int mni = n->drvkey == 2 || (dl > 4 && !ncase(n->device + dl - 4, ".mni", 4));
+		int x = rt_snprintf(buf, sizeof(buf), "interface %s %s=%s unit=%ld", n->ifname,
+		                    mni ? "mni" : n->drvkey == 1 ? "netdev" : "device", quoted(n->device, q, sizeof(q)),
+		                    n->unit < 0 ? 0L : n->unit);
 		if (n->mtu > 0)
 			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " mtu=%ld", n->mtu);
 		if (n->reads > 0)

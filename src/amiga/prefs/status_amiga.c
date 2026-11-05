@@ -336,3 +336,24 @@ int rp_counters_read(struct rp_cnt_model *m)
 	rp_cnt_update(m, &in);
 	return 1;
 }
+
+/* The driver kind ("sana2", "netdev", "mni") Riptide uses for interface
+ * ifname, from net.riptide.drivers; 0 when Riptide does not run or has no
+ * such interface. */
+int rp_status_driver(const char *ifname, char *kind, int klen)
+{
+	int k;
+
+	if (read_tables(1u << D_DRIVERS, 0) < 0 || !have[D_DRIVERS])
+		return 0;
+	for (k = 0; k < (int)hdr[D_DRIVERS].count; k++) {
+		const struct rt_ctl_driver *dv =
+			(const struct rt_ctl_driver *)(buf[D_DRIVERS] + sizeof(struct rt_ctl_hdr) +
+			                               (u32)k * hdr[D_DRIVERS].recsize);
+		if (!strcmp(dv->name, ifname)) {
+			rt_strlcpy(kind, dv->kind, (u32)klen);
+			return 1;
+		}
+	}
+	return 0;
+}

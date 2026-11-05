@@ -1549,6 +1549,30 @@ static void test_netpages(void)
 	free(t);
 }
 
+/* netdev= and mni= cards: the driver goes into the Device field, a change
+ * keeps the keyword; a .mni name is written as mni= */
+static void test_drvkeys(void)
+{
+	static const char *in =
+		"interface eth0 netdev=DEVS:Networks/genet.device unit=0\n"
+		"dhcp eth0\n"
+		"interface eth1 mni=z2-am7990.mni unit=1 options=\"FT=2\"\n"
+		"dhcp eth1\n";
+	struct rp_conf c;
+	char *t;
+
+	CHECK(rp_conf_load(&c, in, strlen(in)) == 0);
+	CHECK(!strcmp(c.cur.ifc[0].device, "DEVS:Networks/genet.device") && c.cur.ifc[0].drvkey == 1);
+	CHECK(!strcmp(c.cur.ifc[1].device, "z2-am7990.mni") && c.cur.ifc[1].drvkey == 2);
+	c.cur.ifc[0].unit = 1;
+	c.cur.ifc[1].unit = 0;
+	t = text_of(&c);
+	CHECK((t && strstr(t, "interface eth0 netdev=DEVS:Networks/genet.device unit=1\n") &&
+	       strstr(t, "interface eth1 mni=z2-am7990.mni unit=0 options=\"FT=2\"\n")) || (fprintf(stderr, "%s", t), 0));
+	free(t);
+	rp_conf_free(&c);
+}
+
 int main(void)
 {
 	test_fields();
@@ -1572,6 +1596,7 @@ int main(void)
 	test_multi();
 	test_netpages();
 	test_live_applied();
+	test_drvkeys();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

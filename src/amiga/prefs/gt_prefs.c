@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include "cmd/cmdlib.h"
 #include "prefs/prefs_io.h"
+#include "prefs/prefs_driver.h"
 #include "prefs/prefs_gui.h"
 #include "prefs/prefs_status.h"
 #include "rt/rt_version.h"
@@ -361,6 +362,14 @@ static int build(void)
 	}
 	t[0].ti_Tag = GTTX_Text;
 	t[0].ti_Data = (ULONG)rp_pages[page].note;
+	/* the Interface page: the card's driver, its kind and version, instead */
+	if (page == P_IFACE) {
+		static char drv[160];
+		struct rp_drvinfo di;
+		rp_drv_probe(conf.cur.ifc[0].device, conf.cur.ifc[0].ifname, &di);
+		rp_drv_line(&di, conf.cur.ifc[0].device, drv, sizeof(drv));
+		t[0].ti_Data = (ULONG)drv;
+	}
 	t[1].ti_Tag = TAG_DONE;
 	g = mk(TEXT_KIND, g, G_NOTE, NULL, 0, x0, body_y + (NROWS - 1) * ystep, lw + fw, rowh, t);
 
