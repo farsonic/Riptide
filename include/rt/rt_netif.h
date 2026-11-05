@@ -126,6 +126,9 @@ struct rt_netif {
 	 * (rt_netif_tx_room()); rt_drv_tx_done() wakes them, the stall timer
 	 * when the driver stops completing frames (rt_netif_tx_wait()) */
 	u8    tx_waiters;
+	/* the driver reported the link (cable, wireless association) down:
+	 * RUNNING stays clear until rt_netif_link_change(nif, 1) */
+	u8    link_down;
 };
 
 /* ---- driver counters (src/core/drvstats.c) ----
@@ -236,6 +239,14 @@ extern int rt_ip4_auto_enable;
 int  rt_netif_set_addr(struct rt_netif *nif, u32 addr, u32 netmask, u32 peer);
 void rt_netif_up(struct rt_netif *nif);
 void rt_netif_down(struct rt_netif *nif);
+/* Driver -> stack, lock held: the link went down (cable out, wireless
+ * disassociated) or came up. Down clears RUNNING: routes through nif are
+ * then used only when no other interface has one. Up sets RUNNING (when
+ * the interface is UP) and detects the network attachment again: DHCP
+ * confirms its lease at once (RFC 4436 in spirit) and IPv6 solicits
+ * routers at once (RFC 6059 in spirit). Repeated calls with the same
+ * state do nothing. */
+void rt_netif_link_change(struct rt_netif *nif, int up);
 
 /* Driver -> stack. b->data points at the L3 header. srchw may be NULL.
  * flags: RT_BUFF_BCAST/MCAST. Must be called with the stack lock held. */

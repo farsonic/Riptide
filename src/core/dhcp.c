@@ -70,7 +70,11 @@
 #define OPT_CLIENTID   61
 #define OPT_END        255
 
-enum { ST_INIT, ST_SELECTING, ST_REQUESTING, ST_BOUND, ST_RENEWING, ST_REBINDING };
+/* REBOOTING: the link came back, the lease is being confirmed (RFC 2131
+ * INIT-REBOOT with the address still configured); counts as bound */
+enum { ST_INIT, ST_SELECTING, ST_REQUESTING, ST_BOUND, ST_RENEWING, ST_REBINDING, ST_REBOOTING };
+#define HAS_LEASE(st) ((st) >= ST_BOUND)
+#define REBOOT_TRIES 3
 
 #define DHCP_MAX_DNS 3
 #define DHCP_DAY_S   86400u
@@ -214,6 +218,10 @@ static struct rt_buf *dhcp_build(struct dhcp_client *c, u8 type, u32 ciaddr)
 		p = opt_put(p, OPT_REQIP, 4, &c->offered);
 		p = opt_put(p, OPT_SERVERID, 4, &c->server);
 	}
+	/* INIT-REBOOT: the address we have, no server identifier, ciaddr 0;
+	 * a server on another network answers with a NAK */
+	if (type == DHCPREQUEST && c->state == ST_REBOOTING)
+		p = opt_put(p, OPT_REQIP, 4, &c->addr);
 	if (type == DHCPRELEASE) {
 		p = opt_put(p, OPT_SERVERID, 4, &c->server);
 	} else {
@@ -586,6 +594,20 @@ static void dhcp_timeout(void *arg)
 		dhcp_send(c, DHCPREQUEST);
 		rt_timer_after(&c->timer, backoff_ms(c->tries++));
 		return;
+	case ST_REBOOTING:
+		if (lease_elapsed(c) >= c->lease_s) {
+			lost(c);
+			return;
+		}
+		if (c->tries >= REBOOT_TRIES) {
+			/* no server confirms the lease here: start over */
+			rt_log(RT_LOG_INFO, "dhcp: %s: lease not confirmed, discovering", c->nif->name);
+			lost(c);
+			return;
+		}
+		dhcp_send(c, DHCPREQUEST);
+		rt_timer_after(&c->timer, (1000u << c->tries++) + rt_random32() % 500u);
+		return;
 	case ST_BOUND:
 	case ST_RENEWING:
 	case ST_REBINDING:
@@ -720,14 +742,15 @@ static void dhcp_input(const u8 *m, u32 len, u32 from)
 		rt_timer_after(&c->timer, backoff_ms(c->tries++));
 		break;
 	case DHCPACK:
-		if (c->state != ST_REQUESTING && c->state != ST_RENEWING && c->state != ST_REBINDING)
+		if (c->state != ST_REQUESTING && c->state != ST_RENEWING && c->state != ST_REBINDING &&
+		    c->state != ST_REBOOTING)
 			break;
 		if (!yiaddr || yiaddr == RT_INADDR_BROADCAST)
 			break;
 		bind_lease(c, yiaddr, o);
 		break;
 	case DHCPNAK:
-		if (c->state == ST_REQUESTING || c->state == ST_RENEWING || c->state == ST_REBINDING) {
+		if (c->state == ST_REQUESTING || HAS_LEASE(c->state)) {
 			rt_log(RT_LOG_WARN, "dhcp: %s: NAK", c->nif->name);
 			lost(c);
 		}
@@ -862,8 +885,7 @@ void rt_dhcp_stop(struct rt_netif *nif)
 	rt_timer_del(&c->timer);
 	rt_timer_del(&c->ll_timer);
 	rt_ipv4ll_stop(nif);
-	if (c->addr && (c->state == ST_BOUND || c->state == ST_RENEWING ||
-	                c->state == ST_REBINDING)) {
+	if (c->addr && HAS_LEASE(c->state)) {
 		c->xid = rt_random32();
 		dhcp_send(c, DHCPRELEASE);
 	}
@@ -877,12 +899,12 @@ int rt_dhcp_bound(const struct rt_netif *nif)
 {
 	const struct dhcp_client *c = client_of(nif);
 
-	return c && (c->state == ST_BOUND || c->state == ST_RENEWING || c->state == ST_REBINDING);
+	return c && HAS_LEASE(c->state);
 }
 
 static const u8 state_map[] = {
 	RT_DHCPS_INIT, RT_DHCPS_SELECTING, RT_DHCPS_REQUESTING, RT_DHCPS_BOUND,
-	RT_DHCPS_RENEWING, RT_DHCPS_REBINDING
+	RT_DHCPS_RENEWING, RT_DHCPS_REBINDING, RT_DHCPS_RENEWING
 };
 
 int rt_dhcp_get_info(const struct rt_netif *nif, struct rt_dhcp_info *info)
@@ -895,7 +917,7 @@ int rt_dhcp_get_info(const struct rt_netif *nif, struct rt_dhcp_info *info)
 		return RT_DHCPS_NONE;
 	info->state = state_map[c->state];
 	info->nroutes = c->ncls;
-	if (c->state == ST_BOUND || c->state == ST_RENEWING || c->state == ST_REBINDING) {
+	if (HAS_LEASE(c->state)) {
 		u32 el = lease_elapsed(c);
 		info->server = c->server;
 		info->router = c->router;
@@ -913,7 +935,7 @@ int rt_dhcp_renew(struct rt_netif *nif)
 
 	if (!c)
 		return -RT_ENOENT;
-	if (c->state == ST_BOUND || c->state == ST_RENEWING || c->state == ST_REBINDING) {
+	if (HAS_LEASE(c->state)) {
 		/* RENEWING now: unicast DHCPREQUEST to the server. The lease
 		 * timer keeps running; without an answer the normal T1/T2
 		 * schedule takes over. */
@@ -925,6 +947,29 @@ int rt_dhcp_renew(struct rt_netif *nif)
 		start_init(c, 0);
 	}
 	return 0;
+}
+
+void rt_dhcp_link_up(struct rt_netif *nif)
+{
+	struct dhcp_client *c = client_of(nif);
+
+	if (!c)
+		return;
+	if (!HAS_LEASE(c->state) || !c->addr) {
+		/* no lease yet: a DISCOVER now rather than at the next backoff */
+		start_init(c, rt_random32() % 256u);
+		return;
+	}
+	if (c->lease_s != 0xffffffffu && lease_elapsed(c) >= c->lease_s) {
+		lost(c);
+		return;
+	}
+	RT_DBG(RT_DBG_DHCP, "%s: state REBOOTING", c->nif->name);
+	c->state = ST_REBOOTING;
+	c->xid = rt_random32();
+	c->tries = 0;
+	c->start_ms = rt_now_ms();
+	rt_timer_after(&c->timer, rt_random32() % 100u);
 }
 
 int rt_dhcp_set_linklocal(struct rt_netif *nif, int on, int wait_s)

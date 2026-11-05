@@ -46,6 +46,8 @@ int  rt_netif_mon_out(struct rt_netif *nif, struct rt_buf *b);
 /* ---- ip6_if.c: link state changes (netif.c) ---- */
 void rt_ip6_if_up(struct rt_netif *nif);
 void rt_ip6_if_down(struct rt_netif *nif);
+/* the link came back (rt_netif_link_change): solicit routers at once */
+void rt_ip6_link_up(struct rt_netif *nif);
 void rt_route6_flush_learned(struct rt_netif *nif);
 /* ---- inet.c ---- */
 void rt_inet_init(void);

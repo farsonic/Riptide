@@ -318,14 +318,18 @@ static void nd_link_apply(struct ndif *ni)
 	if (up == ni->ai.online)
 		return;
 	ni->ai.online = up;
-	if (up) {
-		nif->flags |= RT_IFF_RUNNING;
+	if (!nif->index) {
+		/* while opening: the state rt_netif_up() starts from */
+		nif->link_down = (u8)!up;
+		return;
+	}
+	if (up)
 		rt_log(RT_LOG_INFO, "%s: link up, %u Mb/s%s", nif->name, (unsigned)ni->link.ndls_SpeedMbps,
 		       (ni->link.ndls_Flags & NDLF_FULL_DUPLEX) ? " full duplex" : "");
-	} else {
-		nif->flags &= ~RT_IFF_RUNNING;
+	else
 		rt_log(RT_LOG_INFO, "%s: link down", nif->name);
-	}
+	/* RUNNING, and on the way up DHCP and IPv6 look at the network again */
+	rt_netif_link_change(nif, up);
 }
 
 /* The link from NETDEV_CMD_GET_LINK. A PHY is rarely up the moment the
@@ -448,7 +452,7 @@ static void nd_poll(struct amiga_if *ai)
 		} else if (!want && ni->started && nd_ctl(ni, NETDEV_CMD_STOP, NULL, 0) == 0) {
 			ni->started = 0;
 			ai->online = 0;
-			nif->flags &= ~RT_IFF_RUNNING;
+			rt_netif_link_change(nif, 0);
 		}
 	}
 }

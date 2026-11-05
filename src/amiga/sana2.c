@@ -37,7 +37,12 @@
 #define S2_RX_HEADROOM 64
 #define ETH_HLEN 14
 
-enum { REQ_READ = 1, REQ_WRITE = 2 };
+enum { REQ_READ = 1, REQ_WRITE = 2, REQ_EVENT = 3 };
+
+/* S2_ONEVENT: what changes the link. CONNECT/DISCONNECT are the wireless
+ * association (SANA-II wireless extensions); a driver that rejects them
+ * (S2WERR_BAD_EVENT) is asked for ONLINE/OFFLINE alone. */
+#define S2_EV_WIFI (S2EVENT_CONNECT | S2EVENT_DISCONNECT)
 
 struct s2req {
 	struct IOSana2Req io;        /* must be first: replies are cast back */
@@ -87,7 +92,18 @@ struct s2if {
 	u32    nss;
 	u32    gs_ms;                /* rt_now_ms() of the last query */
 	UBYTE  gs_want, gs_ok, ss_ok, gs_unsupported, ss_unsupported;
+	/* link events: one S2_ONEVENT kept pending (s2_ev_submit) */
+	struct s2req *evreq;
+	struct rt_timer evretry;
+	UBYTE  ev_off;               /* the driver has no S2_ONEVENT: not asked again */
+	UBYTE  ev_wifi;              /* ask for CONNECT/DISCONNECT too */
+	UBYTE  ev_rearm;             /* evreq aborted to ask for other events */
+	UBYTE  ev_fails, ev_same;    /* errors / replies without news in a row */
+	BYTE   assoc;                /* associated with a wireless network: 1, 0, -1 unknown */
+	UBYTE  wl_cmds;              /* the driver answers the wireless commands */
 };
+
+static void s2_ev_submit(struct s2if *si);
 
 /* ---- buffer management callbacks (may be called from interrupts) ---- */
 
@@ -197,6 +213,20 @@ static struct s2req *s2_newreq(struct s2if *si, int kind)
 	return r;
 }
 
+/* The link as the driver tells it: online and, for wireless, associated
+ * (unknown counts as associated). Lock held. */
+static void s2_link_update(struct s2if *si)
+{
+	struct rt_netif *nif = &si->ai.nif;
+	int up = si->ai.online && si->assoc != 0;
+
+	if (up == !nif->link_down)
+		return;
+	rt_log(RT_LOG_INFO, "%s: link %s%s", nif->name, up ? "up" : "down",
+	       !si->ai.online ? " (driver offline)" : si->assoc == 0 ? " (WiFi not associated)" : "");
+	rt_netif_link_change(nif, up);
+}
+
 static u32 rx_size(struct s2if *si)
 {
 	return (u32)si->ai.nif.mtu + (si->raw ? ETH_HLEN : 0) + 4;
@@ -265,7 +295,7 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 		r->idle = 1;
 		if (r->io.ios2_Req.io_Error == S2ERR_OUTOFSERVICE || r->io.ios2_Req.io_Error == IOERR_ABORTED) {
 			si->ai.online = 0;
-			nif->flags &= ~RT_IFF_RUNNING;
+			s2_link_update(si);
 		}
 		if (!rt_timer_pending(&si->retry))
 			rt_timer_after(&si->retry, 1000);
@@ -292,9 +322,17 @@ static void s2_read_done(struct s2if *si, struct s2req *r)
 		flags |= RT_BUFF_BCAST;
 	if (r->io.ios2_Req.io_Flags & SANA2IOF_MCAST)
 		flags |= RT_BUFF_MCAST;
-	if (!si->ai.online) {
+	if (!si->ai.online || si->assoc == 0) {
+		/* a frame came: the link is there whatever we were told; the
+		 * pending S2_ONEVENT waits for the wrong events now */
 		si->ai.online = 1;
-		nif->flags |= RT_IFF_RUNNING;
+		if (si->assoc == 0)
+			si->assoc = 1;
+		s2_link_update(si);
+		if (si->evreq && si->evreq->busy && !si->ev_rearm) {
+			si->ev_rearm = 1;
+			AbortIO((struct IORequest *)&si->evreq->io);
+		}
 	}
 	/* Give the driver a fresh buffer before processing this frame:
 	 * protocol input can take a while on a slow CPU, and frames that
@@ -325,6 +363,92 @@ static void s2_write_done(struct s2if *si, struct s2req *r)
 	si->wfree = r;
 	/* last: it may send the next queued frame (QoS) with this request */
 	rt_drv_tx_done(nif, (s32)r->io.ios2_Req.io_Error);
+}
+
+/* ---- link events (S2_ONEVENT) ----
+ * One request stays with the driver. Many drivers answer ONLINE or
+ * OFFLINE at once when the unit already is in that state (and some do
+ * the same for CONNECT/DISCONNECT), so only the change from what we know
+ * is asked for; a reply that brings no news several times in a row makes
+ * us wait a second before asking again. Lock held. */
+static void s2_ev_submit(struct s2if *si)
+{
+	struct s2req *r = si->evreq;
+	ULONG mask;
+
+	if (!r || r->busy || si->ev_off || !si->dev_open)
+		return;
+	mask = si->ai.online ? S2EVENT_OFFLINE : S2EVENT_ONLINE;
+	if (si->ev_wifi)
+		mask |= si->assoc < 0 ? S2_EV_WIFI : si->assoc ? S2EVENT_DISCONNECT : S2EVENT_CONNECT;
+	r->io.ios2_Req.io_Command = S2_ONEVENT;
+	r->io.ios2_Req.io_Flags = 0;
+	r->io.ios2_Req.io_Error = 0;
+	r->io.ios2_WireError = mask;
+	r->busy = 1;
+	SendIO((struct IORequest *)&r->io);
+}
+
+static void s2_ev_retry(void *arg)
+{
+	s2_ev_submit(arg);
+}
+
+static void s2_ev_done(struct s2if *si, struct s2req *r)
+{
+	LONG e = r->io.ios2_Req.io_Error;
+	ULONG ev = r->io.ios2_WireError;
+	int online = si->ai.online, assoc = si->assoc;
+
+	r->busy = 0;
+	if (e) {
+		if (e == IOERR_ABORTED && si->ev_rearm) {
+			si->ev_rearm = 0;
+			s2_ev_submit(si);
+		} else if (si->ev_wifi && (ev == S2WERR_BAD_EVENT || e == S2ERR_NOT_SUPPORTED ||
+		                           e == S2ERR_BAD_ARGUMENT)) {
+			/* no wireless events: online/offline is all there is */
+			RT_DBG(RT_DBG_DRIVER, "%s: no CONNECT/DISCONNECT events", si->ai.nif.name);
+			si->ev_wifi = 0;
+			si->assoc = -1;
+			s2_link_update(si);
+			s2_ev_submit(si);
+		} else if (e == IOERR_NOCMD || e == S2ERR_NOT_SUPPORTED || ev == S2WERR_BAD_EVENT ||
+		           e == IOERR_ABORTED || ++si->ev_fails >= 8) {
+			RT_DBG(RT_DBG_DRIVER, "%s: no link events (S2_ONEVENT: %ld/%lu)", si->ai.nif.name, (long)e,
+			       (unsigned long)ev);
+			si->ev_off = 1;
+		} else {
+			rt_timer_after(&si->evretry, 2000);
+		}
+		return;
+	}
+	si->ev_fails = 0;
+	si->ev_rearm = 0;
+	/* both of a pair at once: the one we asked for is the news */
+	if ((ev & (S2EVENT_ONLINE | S2EVENT_OFFLINE)) == (S2EVENT_ONLINE | S2EVENT_OFFLINE))
+		si->ai.online = !online;
+	else if (ev & S2EVENT_OFFLINE)
+		si->ai.online = 0;
+	else if (ev & S2EVENT_ONLINE)
+		si->ai.online = 1;
+	if ((ev & S2_EV_WIFI) == S2_EV_WIFI)
+		si->assoc = assoc == 1 ? 0 : 1;
+	else if (ev & S2EVENT_DISCONNECT)
+		si->assoc = 0;
+	else if (ev & S2EVENT_CONNECT)
+		si->assoc = 1;
+	if (si->ai.online != online || si->assoc != assoc) {
+		RT_DBG(RT_DBG_DRIVER, "%s: event %08lx: %s, %s", si->ai.nif.name, (unsigned long)ev,
+		       si->ai.online ? "online" : "offline",
+		       si->assoc < 0 ? "-" : si->assoc ? "associated" : "not associated");
+		si->ev_same = 0;
+		s2_link_update(si);
+	} else if (++si->ev_same > 3) {
+		rt_timer_after(&si->evretry, 1000);
+		return;
+	}
+	s2_ev_submit(si);
 }
 
 /* rt_netif mcast hook: lock held, any task. Queue for sana2_poll. */
@@ -506,8 +630,10 @@ static void sana2_poll(struct amiga_if *ai)
 		if (r->kind == REQ_READ) {
 			s2_read_done(si, r);
 			nrx++;
-		} else {
+		} else if (r->kind == REQ_WRITE) {
 			s2_write_done(si, r);
+		} else if (r->kind == REQ_EVENT) {
+			s2_ev_done(si, r);
 		}
 	}
 	rt_drv_batch(&ai->nif, nrx);
@@ -524,12 +650,9 @@ static void sana2_poll(struct amiga_if *ai)
 		rt_lock();
 		if (e == 0 || (want && si->ctl->ios2_WireError == S2WERR_UNIT_ONLINE)) {
 			si->ai.online = want;
-			if (want) {
-				si->ai.nif.flags |= RT_IFF_RUNNING;
+			s2_link_update(si);
+			if (want)
 				s2_retry_timer(si);
-			} else {
-				si->ai.nif.flags &= ~RT_IFF_RUNNING;
-			}
 		} else {
 			rt_log(RT_LOG_WARN, "%s: %s failed: %s", si->ai.nif.name, want ? "S2_ONLINE" : "S2_OFFLINE",
 			       amiga_s2err_str(e));
@@ -634,6 +757,7 @@ static void sana2_close(struct amiga_if *ai)
 
 	rt_lock();
 	rt_timer_del(&si->retry);
+	rt_timer_del(&si->evretry);
 	if (si->ai.nif.index)
 		rt_netif_remove(&si->ai.nif);
 	rt_unlock();
@@ -832,10 +956,16 @@ LONG amiga_open_device(const char *ifname, const char *device, ULONG unit, struc
 	return OpenDevice((CONST_STRPTR)(loaded ? base : device), unit, io, 0);
 }
 
-/* Does a driver answer netdev (lwip-amiga's NIC interface, NETDEV_CMD_ATTACH
- * 0x8900) in its NSCMD_DEVICEQUERY list, but not SANA-II? Such a driver
- * cannot be used through SANA-II at all. */
-static int netdev_only(struct s2if *si)
+/* NSCMD_DEVICEQUERY: which commands of interest the driver lists. 0
+ * when it does not answer (then nothing is known). */
+#define NS_NETDEV  0x01          /* netdev NETDEV_CMD_ATTACH (0x8900) */
+#define NS_S2      0x02          /* S2_DEVICEQUERY or CMD_READ */
+#define NS_ONEVENT 0x04
+#define NS_SIGQ    0x08          /* S2_GETSIGNALQUALITY */
+#define NS_NETINFO 0x10          /* S2_GETNETWORKINFO */
+#define NS_ANSWERED 0x80
+
+static u32 s2_nsquery(struct s2if *si)
 {
 	struct {
 		ULONG format, size;
@@ -843,7 +973,7 @@ static int netdev_only(struct s2if *si)
 		UWORD *cmds;
 	} nsq;
 	struct IOStdReq *io = (struct IOStdReq *)si->ctl;
-	int netdev = 0, s2 = 0;
+	u32 have = 0;
 	UWORD *c;
 
 	memset(&nsq, 0, sizeof(nsq));
@@ -852,16 +982,66 @@ static int netdev_only(struct s2if *si)
 	io->io_Length = sizeof(nsq);
 	io->io_Data = &nsq;
 	io->io_Actual = 0;
-	if (DoIO((struct IORequest *)io) == 0 && nsq.cmds)
+	if (DoIO((struct IORequest *)io) == 0 && nsq.cmds) {
+		have = NS_ANSWERED;
 		for (c = nsq.cmds; *c; c++) {
 			if (*c == 0x8900)
-				netdev = 1;
-			if (*c == S2_DEVICEQUERY || *c == CMD_READ)
-				s2 = 1;
+				have |= NS_NETDEV;
+			else if (*c == S2_DEVICEQUERY || *c == CMD_READ)
+				have |= NS_S2;
+			else if (*c == S2_ONEVENT)
+				have |= NS_ONEVENT;
+			else if (*c == S2_GETSIGNALQUALITY)
+				have |= NS_SIGQ;
+			else if (*c == S2_GETNETWORKINFO)
+				have |= NS_NETINFO;
 		}
+	}
+	/* the IOStdReq fields overlay these */
 	memset(si->ctl->ios2_SrcAddr, 0, sizeof(si->ctl->ios2_SrcAddr));
 	si->ctl->ios2_PacketType = 0;
-	return netdev && !s2;
+	si->ctl->ios2_WireError = 0;
+	si->ctl->ios2_Data = NULL;
+	return have;
+}
+
+/* Does a driver answer netdev (lwip-amiga's NIC interface, NETDEV_CMD_ATTACH
+ * 0x8900) in its NSCMD_DEVICEQUERY list, but not SANA-II? Such a driver
+ * cannot be used through SANA-II at all. */
+static int netdev_only(struct s2if *si)
+{
+	u32 have = s2_nsquery(si);
+
+	return (have & NS_NETDEV) && !(have & NS_S2);
+}
+
+/* Is the driver wireless, and associated? S2_GETSIGNALQUALITY answers
+ * while associated, S2WERR_NOT_CONFIGURED while not (WiFiPi.device,
+ * Prism2.device). Asked once while the interface is opened, in the
+ * Riptide process like the other set-up commands: the driver answers
+ * from its own state (WiFiPi asks the chip, a few milliseconds). */
+static void s2_wifi_probe(struct s2if *si, u32 ns)
+{
+	struct Sana2SignalQuality sq;
+	LONG e;
+
+	si->assoc = -1;
+	if ((ns & NS_ANSWERED) && !(ns & NS_SIGQ))
+		return;
+	memset(&sq, 0, sizeof(sq));
+	si->ctl->ios2_StatData = &sq;
+	e = s2_ctl(si, S2_GETSIGNALQUALITY);
+	si->ctl->ios2_StatData = NULL;
+	if (e == 0) {
+		si->wl_cmds = 1;
+		si->assoc = 1;
+	} else if (e != IOERR_NOCMD && e != S2ERR_NOT_SUPPORTED &&
+	           (si->ctl->ios2_WireError == S2WERR_NOT_CONFIGURED ||
+	            si->ctl->ios2_WireError == S2WERR_UNIT_OFFLINE)) {
+		si->wl_cmds = 1;
+		if (si->ctl->ios2_WireError == S2WERR_NOT_CONFIGURED)
+			si->assoc = 0;
+	}
 }
 
 int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw, int reads,
@@ -873,6 +1053,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	struct rt_netif *nif;
 	struct s2req *r;
 	int i, nreads;
+	u32 ns;
 	LONG e;
 
 	si = rt_zalloc(sizeof(*si));
@@ -892,6 +1073,8 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	si->ai.status = sana2_status;
 	si->ai.drv = si;
 	rt_timer_init(&si->retry, s2_retry_timer, si);
+	rt_timer_init(&si->evretry, s2_ev_retry, si);
+	si->assoc = -1;
 
 	si->port = CreateMsgPort();
 	si->ctlport = CreateMsgPort();
@@ -960,6 +1143,14 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	}
 	e = s2_ctl(si, S2_ONLINE);
 	si->ai.online = e == 0 || si->ctl->ios2_WireError == S2WERR_UNIT_ONLINE;
+	ns = s2_nsquery(si);
+	s2_wifi_probe(si, ns);
+	/* link events unless the driver's command list says it has none */
+	si->ev_off = (ns & NS_ANSWERED) && !(ns & NS_ONEVENT);
+	si->ev_wifi = si->wl_cmds;
+	if (si->ev_off)
+		si->assoc = -1;              /* nobody would tell us it changed */
+	nif->link_down = !si->ai.online || si->assoc == 0;
 
 	if (si->ether) {
 		nif->type = RT_IFT_ETHER;
@@ -986,7 +1177,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		sana2_close(&si->ai);
 		return i;
 	}
-	if (si->ai.online)
+	if (!nif->link_down)
 		nif->flags |= RT_IFF_RUNNING;
 	if (reads <= 0)
 		reads = S2_READS_IP_DEF;
@@ -1018,9 +1209,14 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		si->drv.rxq[r->q].cfg++;
 		s2_submit_read(si, r);
 	}
+	if (!si->ev_off) {
+		si->evreq = s2_newreq(si, REQ_EVENT);
+		s2_ev_submit(si);
+	}
 	rt_unlock();
-	rt_log(RT_LOG_INFO, "%s: %s unit %lu, %s, mtu %u, %d reads", name, device, (unsigned long)unit,
-	       si->ether ? "Ethernet" : "point-to-point", (unsigned)nif->mtu, reads);
+	rt_log(RT_LOG_INFO, "%s: %s unit %lu, %s, mtu %u, %d reads%s", name, device, (unsigned long)unit,
+	       si->ether ? "Ethernet" : "point-to-point", (unsigned)nif->mtu, reads,
+	       si->wl_cmds ? (si->assoc == 0 ? ", WiFi not associated" : ", WiFi") : "");
 	return 0;
 
 nomem:

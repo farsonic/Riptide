@@ -120,6 +120,7 @@ struct Sana2SpecialStatHeader {
 #define S2WERR_NOT_CONFIGURED  1
 #define S2WERR_UNIT_ONLINE     2
 #define S2WERR_UNIT_OFFLINE    3
+#define S2WERR_BAD_EVENT       12   /* S2_ONEVENT: an event bit the driver does not know */
 #define S2WERR_IS_CONFIGURED   15
 
 #define S2EVENT_ERROR    (1UL << 0)
@@ -130,5 +131,43 @@ struct Sana2SpecialStatHeader {
 #define S2EVENT_BUFF     (1UL << 5)
 #define S2EVENT_HARDWARE (1UL << 6)
 #define S2EVENT_SOFTWARE (1UL << 7)
+/* SANA-II wireless extensions (Neil Cafferkey; Prism2.device, AROS,
+ * WiFiPi.device): association with a network gained / lost */
+#define S2EVENT_CONNECT    (1UL << 9)
+#define S2EVENT_DISCONNECT (1UL << 10)
+
+/* ---- SANA-II wireless extensions (the same public definitions) ----
+ * Association (SSID, keys) is the business of a tool like WirelessManager;
+ * Riptide only reads the state. */
+#define S2_GETSIGNALQUALITY 0xc010   /* ios2_StatData: struct Sana2SignalQuality */
+#define S2_GETNETWORKS      0xc011
+#define S2_SETOPTIONS       0xc012
+#define S2_SETKEY           0xc013
+#define S2_GETNETWORKINFO   0xc014   /* ios2_Data: an exec memory pool; reply:
+                                      * ios2_StatData a tag list allocated in it */
+#define S2_GETRADIOBANDS    0xc017
+#define S2_GETCRYPTTYPES    0xc018
+
+/* tags of S2_GETNETWORKINFO / S2_GETNETWORKS (TAG_USER based) */
+#define S2INFO_SSID           (TAG_USER + 0)    /* NUL-terminated name */
+#define S2INFO_BSSID          (TAG_USER + 1)    /* 6 bytes */
+#define S2INFO_AuthTypes      (TAG_USER + 2)
+#define S2INFO_AssocID        (TAG_USER + 3)
+#define S2INFO_Encryption     (TAG_USER + 4)
+#define S2INFO_PortType       (TAG_USER + 5)
+#define S2INFO_BeaconInterval (TAG_USER + 6)
+#define S2INFO_Channel        (TAG_USER + 7)
+#define S2INFO_Signal         (TAG_USER + 8)
+#define S2INFO_Noise          (TAG_USER + 9)
+#define S2INFO_Capabilities   (TAG_USER + 10)
+#define S2INFO_InfoElements   (TAG_USER + 11)
+#define S2INFO_WPAInfo        (TAG_USER + 12)
+#define S2INFO_Band           (TAG_USER + 13)
+#define S2INFO_DefaultKeyNo   (TAG_USER + 14)
+
+struct Sana2SignalQuality {
+	LONG SignalLevel;          /* dBm */
+	LONG NoiseLevel;           /* dBm */
+};
 
 #endif

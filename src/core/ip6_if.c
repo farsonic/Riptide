@@ -1053,6 +1053,24 @@ void rt_ip6_if_up(struct rt_netif *nif)
 	if_start(ifp);
 }
 
+/* The link came back (rt_netif_link_change). Addresses stay (the network
+ * is most likely the same one, and connections keep working); routers
+ * are solicited at once, so an RA confirms the prefixes or brings the new
+ * network's, and the MLD reports go out again for the switches. */
+void rt_ip6_link_up(struct rt_netif *nif);
+void rt_ip6_link_up(struct rt_netif *nif)
+{
+	struct ip6_if *ifp = ip6_ifp(nif);
+
+	if (!ifp)
+		return;
+	if_start(ifp);
+	if (ifp->rs_left) {
+		ifp->rs_next_ms = rt_now_ms() | 1u;
+		ifp_rearm(ifp);
+	}
+}
+
 void rt_ip6_if_down(struct rt_netif *nif);
 void rt_ip6_if_down(struct rt_netif *nif)
 {
