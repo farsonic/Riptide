@@ -4,6 +4,7 @@
  * library call on the 68020 and this runs once a second.
  * SPDX-License-Identifier: GPL-2.0-only
  */
+#include <stddef.h>
 #include <stdarg.h>
 #include <string.h>
 #include "rt/rt_ip6.h"
@@ -330,6 +331,37 @@ static struct rp_st_if *find_if(struct rp_status_model *m, const char *name)
 	return NULL;
 }
 
+/* a wireless driver's network and signal from net.riptide.drivers (the
+ * fields at the end of a record of Riptide 0.37 and later) */
+static void update_wifi(struct rp_status_model *m, const struct rp_st_input *in)
+{
+	const u32 need = (u32)(offsetof(struct rt_ctl_driver, wl_age_ms) + sizeof(u32));
+	int i;
+
+	m->wifi = 0;
+	if (!in->drivers || in->drvrec < need)
+		return;
+	for (i = 0; i < in->ndrivers; i++) {
+		const struct rt_ctl_driver *d = (const struct rt_ctl_driver *)(in->drivers + (u32)i * in->drvrec);
+		char name[sizeof(d->name) + 1];
+		struct rp_st_if *f;
+		if (!(d->flags & RT_CTL_DRVF_WIFI))
+			continue;
+		memcpy(name, d->name, sizeof(d->name));
+		name[sizeof(d->name)] = 0;
+		if (!(f = find_if(m, name)))
+			continue;
+		f->wifi = 1;
+		f->wl_flags = (u8)d->wl_flags;
+		memcpy(f->wl_bssid, d->wl_bssid, sizeof(f->wl_bssid));
+		memcpy(f->wl_ssid, d->wl_ssid, sizeof(f->wl_ssid));
+		f->wl_ssid[sizeof(f->wl_ssid) - 1] = 0;
+		f->wl_signal = d->wl_signal;
+		f->wl_noise = d->wl_noise;
+		m->wifi = 1;
+	}
+}
+
 static void update_ifs(struct rp_status_model *m, const struct rp_st_input *in, u32 ms)
 {
 	struct rp_st_if old[RP_ST_NIF];
@@ -395,6 +427,7 @@ static void update_ifs(struct rp_status_model *m, const struct rp_st_input *in, 
 		f->ipk = r.ipackets;
 		f->opk = r.opackets;
 		f->nv6 = 0;
+		f->wifi = 0;
 		/* loopback is not network traffic */
 		if (r.type != ST_IFT_LOOP) {
 			m->rx_bps += f->rx_bps;
@@ -402,6 +435,7 @@ static void update_ifs(struct rp_status_model *m, const struct rp_st_input *in, 
 		}
 		m->nif++;
 	}
+	update_wifi(m, in);
 	/* IPv6 addresses: global ones first, then link-local */
 	for (k = 0; k < 2; k++)
 		for (i = 0; in->addrs6 && i < in->naddrs6; i++) {
@@ -676,6 +710,28 @@ void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int 
 	l3[0] = 0;
 	for (i = 0; i < f->nv6; i++)
 		k += rt_snprintf(l3 + k, (size_t)(len - k > 0 ? len - k : 0), "%s%s", i ? ", " : "", f->v6[i]);
+}
+
+int rp_st_if_wifi(const struct rp_st_if *f, char *buf, int len)
+{
+	const u8 *b = f->wl_bssid;
+	int k = 0;
+
+	buf[0] = 0;
+	if (!f->wifi)
+		return 0;
+	if (!(f->wl_flags & (RT_CTL_WLF_ASSOC | RT_CTL_WLF_SIGNAL))) {
+		rt_strlcpy(buf, "WiFi: not connected to a network", (size_t)len);
+		return 1;
+	}
+	k = addf(buf, len, k, "WiFi");
+	if (f->wl_flags & RT_CTL_WLF_ASSOC)
+		k = addf(buf, len, k, " \"%s\" %02x:%02x:%02x:%02x:%02x:%02x", f->wl_ssid, b[0], b[1], b[2], b[3],
+		         b[4], b[5]);
+	if (f->wl_flags & RT_CTL_WLF_SIGNAL)
+		addf(buf, len, k, "%s signal %ld dBm, noise %ld dBm", (f->wl_flags & RT_CTL_WLF_ASSOC) ? "," : "",
+		     (long)f->wl_signal, (long)f->wl_noise);
+	return 1;
 }
 
 void rp_st_if_rates(const struct rp_st_if *f, char *buf, int len)

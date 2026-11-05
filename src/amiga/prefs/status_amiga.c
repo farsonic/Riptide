@@ -238,6 +238,10 @@ int rp_status_read(struct rp_status_model *m)
 	for (k = 0; k < D_NSTATUS; k++)
 		if (k < D_SLOW || reads % 5 == 0 || !have[k])
 			mask |= 1u << k;
+	/* the drivers for a wireless line: Riptide asks the driver for its
+	 * signal when this is read (at most every 3 s), so seldom too */
+	if (reads % 5 == 0)
+		mask |= 1u << D_DRIVERS;
 	if (read_tables(mask, 1) < 0) {
 		if (m->running)
 			rp_status_stopped(m);
@@ -285,6 +289,9 @@ int rp_status_read(struct rp_status_model *m)
 		in.ipst = (const struct rt_ip_stats *)RECS(D_IPST);
 		in.ipst_len = hdr[D_IPST].recsize;
 	}
+	in.drivers = RECS(D_DRIVERS);
+	in.ndrivers = have[D_DRIVERS] ? (int)hdr[D_DRIVERS].count : 0;
+	in.drvrec = hdr[D_DRIVERS].recsize;
 #undef RECS
 #undef ONE
 	rp_status_update(m, &in);

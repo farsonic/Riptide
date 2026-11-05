@@ -97,6 +97,11 @@ struct rp_st_if {
 	u32  ibytes, obytes, ipk, opk, ierr, oerr, drops;
 	u32  rx_bps, tx_bps, rx_peak, tx_peak;
 	struct rp_hist hist;        /* receive, send bytes per second */
+	/* a wireless SANA-II driver (net.riptide.drivers, after Riptide 0.36) */
+	u8   wifi, wl_flags;        /* RT_CTL_WLF_* */
+	u8   wl_bssid[6];
+	char wl_ssid[36];
+	s32  wl_signal, wl_noise;   /* dBm */
 };
 
 struct rp_st_conn {
@@ -120,6 +125,7 @@ struct rp_status_model {
 	u32  cpu_pm;                /* busy, per mille */
 	struct rp_hist cpu_hist;    /* busy per mille, 0 */
 	int  nif;
+	int  wifi;                  /* an interface has a wireless driver (one line more each) */
 	struct rp_st_if ifs[RP_ST_NIF];
 	int  nconn, nconn_all;      /* shown; all TCP connections (listeners too) */
 	struct rp_st_conn conns[RP_ST_NCONN];
@@ -157,6 +163,7 @@ struct rp_st_input {
 	const struct rt_ctl_dns *dns; u32 dns_len;
 	const struct rt_tcp_stats *tcpst; u32 tcpst_len;
 	const struct rt_ip_stats *ipst; u32 ipst_len;
+	const u8 *drivers; int ndrivers; u32 drvrec;   /* for the wireless line */
 };
 
 void rp_status_init(struct rp_status_model *m);
@@ -177,6 +184,10 @@ void rp_st_memory(const struct rp_status_model *m, char *buf, int len);
  * l2 "192.168.1.2/24 via 192.168.1.1, DHCP: bound, 3 h 05 min left"
  * l3 "2001:db8::2, fe80::1" (or "IPv6 off") */
 void rp_st_if_lines(const struct rp_st_if *f, char *l1, char *l2, char *l3, int len);
+/* a wireless interface: 'WiFi "HomeNet" 12:34:56:78:9a:bc, signal -55 dBm,
+ * noise -90 dBm' (or "WiFi: not connected to a network") and 1; else ""
+ * and 0 */
+int  rp_st_if_wifi(const struct rp_st_if *f, char *buf, int len);
 /* "↓ 12.3 KB/s  ↑ 1.20 KB/s" as "In 12.3 KB/s  Out 1.20 KB/s" */
 void rp_st_if_rates(const struct rp_st_if *f, char *buf, int len);
 /* "Received 12.3 MB in 9 123 packets, sent 1.20 MB in 4 000, 0 errors" */
