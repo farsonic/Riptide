@@ -696,8 +696,10 @@ static Object *cards_build(void)
 	}
 	mui_do(col, OM_ADDMEMBER, (ULONG)rect());
 	mui_do(iflist, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID, ID_IFLIST);
-	/* the list and its buttons, and under them the chosen card's driver */
-	drvlbl = label(drvtext, QL_NOTE);
+	/* the list and its buttons, and under them the chosen card's driver
+	 * (not in the compact layout: on a 256-line screen the window would no
+	 * longer fit; the list still names each card's kind) */
+	drvlbl = theme_compact() ? NULL : label(drvtext, QL_NOTE);
 	return mui_new(MUIC_Group, MUIA_Group_Spacing, 4, MUIA_VertWeight, 0, MUIA_Group_Child,
 	               (ULONG)mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, MUIA_Group_Child,
 	                              (ULONG)lvo, MUIA_Group_Child, (ULONG)col, TAGEND),
