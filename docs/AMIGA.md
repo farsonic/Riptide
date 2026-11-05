@@ -1250,8 +1250,10 @@ the guide that Easel, Quill, Ledger and Folio were built by:
   (`s`, `u`, `a`, `c`; Esc cancels) and a status line (whether Riptide is
   running, and when there are changes not saved yet).
 * **Help bubbles:** every setting, button and page explains itself when
-  the pointer rests on it (its name in bold and what it does). They follow
-  MUI's own bubble settings and can be turned off in the menu.
+  the pointer rests on it (its name in bold and what it does); a setting's
+  bubble ends with its default, such as "Default: 200 ms" or "Default:
+  from DHCP" (what Riptide uses when the field is empty or at Default).
+  They follow MUI's own bubble settings and can be turned off in the menu.
 * **Menus** (every command; Amiga key in brackets): *Project*: Open...
   (O, a riptide.conf to edit), Save As... (A), Save (S), Use (U), Apply
   (Y), About... (?) and Support Riptide... (B), both showing the About

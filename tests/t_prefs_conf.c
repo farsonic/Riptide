@@ -5,7 +5,8 @@
  * (keeping trailing comments), DHCP <-> static, the "other lines" list,
  * validation and the commands for the running stack; the Phase 3 settings
  * (ipv4, qos, sysctl table, extra addresses, QoS rules) and VLANs; the
- * editors' settings table (src/amiga/prefs/prefs_fields.c).
+ * editors' settings table (src/amiga/prefs/prefs_fields.c) and the defaults
+ * its help shows, against the core's values (src/amiga/amiga_defaults.h).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stdio.h>
@@ -14,6 +15,10 @@
 
 #include "../src/amiga/prefs/conf_edit.c"
 #include "../src/amiga/prefs/prefs_fields.c"
+#include "../src/amiga/amiga_defaults.h"
+#include "rt/riptide.h"
+#include "rt/rt_sysctl.h"
+#include "rt/rt_qos.h"
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; \
@@ -903,6 +908,84 @@ static void test_dns(void)
 	free(t);
 }
 
+/* the core's value of a sysctl as text ("" when there is none) */
+static char *sysctl_now(const char *name, char *buf, u32 len)
+{
+	const struct rt_sysctl *e = rt_sysctl_find(name);
+
+	buf[0] = 0;
+	CHECK(e != NULL);
+	if (e)
+		rt_sysctl_get_text(e, buf, len);
+	return buf;
+}
+
+static int field_labelled(const char *label)
+{
+	int i;
+
+	for (i = 0; i < rp_nfields; i++)
+		if (!strcmp(rp_fields[i].label, label))
+			return i;
+	CHECK(!"field label");
+	return 0;
+}
+
+/* The defaults the help shows: those of the core, after the Amiga's own
+ * lines (amiga_defaults.h) as the stack applies them. */
+static void test_defaults(void)
+{
+	static const char *const amiga[] = RT_AMIGA_DEFAULTS;
+	char b[64], v[96], e[96];
+	const char *d;
+	int i, mdns = 0;
+
+	CHECK(rt_init() == 0);
+	for (i = 0; amiga[i]; i++) {
+		if (!strncmp(amiga[i], "sysctl ", 7))
+			CHECK(rt_config_line(amiga[i], e, sizeof(e), NULL) == 0);
+		else
+			mdns |= !strcmp(amiga[i], "mdns on");
+	}
+	for (i = 0; i < RP_NSC; i++) {
+		sysctl_now(rp_sc_names[i], v, sizeof(v));
+		if (i == RP_SC_MEM_LOW || i == RP_SC_MEM_PRESSURE || i == RP_SC_MEM_HIGH)
+			CHECK(rp_sc_def[i] == RP_UNSET);    /* follows the free memory */
+		else if (i == RP_SC_CC)
+			CHECK(!strcmp(rp_cc_names[rp_sc_def[i]], v));
+		else if (strtol(v, NULL, 10) != rp_sc_def[i]) {
+			fprintf(stderr, "default of %s: %ld, the core has %s\n", rp_sc_names[i], rp_sc_def[i], v);
+			CHECK(0);
+		}
+	}
+	for (i = 0; i < RP_NSS; i++)
+		CHECK(!strcmp(sysctl_now(rp_ss_names[i], v, sizeof(v)), ""));
+	/* every setting says its default; a cycle names one of its values */
+	for (i = 0; i < rp_nfields; i++) {
+		d = rp_fdefault(i, b, sizeof(b));
+		CHECK(d && d[0] && strcmp(d, "Default"));
+		if (!d)
+			fprintf(stderr, "no default for %s\n", rp_fields[i].label);
+	}
+	CHECK(!strcmp(rp_fdefault(field_labelled("Default _TCP algorithm"), b, sizeof(b)), "CUBIC"));
+	CHECK(!strcmp(rp_fdefault(field_labelled("SYN first _RTO (ms)"), b, sizeof(b)), "1000 ms"));
+	CHECK(!strcmp(rp_fdefault(field_labelled("_EDNS size (0 = off)"), b, sizeof(b)), "1232"));
+	/* the settings outside sc[] the core has a value for */
+	CHECK(!strcmp(sysctl_now("net.inet.tcp.quickack", v, sizeof(v)), "0"));
+	CHECK(!strcmp(rp_fdefault(field_labelled("_Quick ACK"), b, sizeof(b)), "Off"));
+	sysctl_now("net.inet.tcp.delack_segs", v, sizeof(v));
+	CHECK(!strcmp(rp_fdefault(field_labelled("Delayed ACK se_gments"), b, sizeof(b)), v));
+	strcat(sysctl_now("net.inet.tcp.delack_ms", v, sizeof(v)), " ms");
+	CHECK(!strcmp(rp_fdefault(field_labelled("Delayed ACK _limit (ms)"), b, sizeof(b)), v));
+	strcat(sysctl_now("net.inet.ip.linklocal_wait", v, sizeof(v)), " s");
+	CHECK(!strcmp(rp_fdefault(field_labelled("Link-local a_fter (s)"), b, sizeof(b)), v));
+	CHECK(!strcmp(rp_fdefault(field_labelled("_QoS bands"), b, sizeof(b)), rt_qos_default ? "On" : "Off"));
+	CHECK(!strcmp(rp_fdefault(field_labelled("_mDNS responder"), b, sizeof(b)), mdns ? "On" : "Off"));
+	rt_snprintf(v, sizeof(v), "%d", RT_AMIGA_READS_DEF);
+	CHECK(!strcmp(rp_fdefault(field_labelled("_Reads"), b, sizeof(b)), v));
+	CHECK(rp_lfdefault(LV_ID) == NULL && !strcmp(rp_lfdefault(LV_MTU), "the card's less 4 bytes (1496)"));
+}
+
 /* the settings table both editors build their pages from */
 static void test_fields(void)
 {
@@ -1438,6 +1521,7 @@ static void test_netpages(void)
 int main(void)
 {
 	test_fields();
+	test_defaults();
 	test_roundtrips();
 	test_parse();
 	test_edits();

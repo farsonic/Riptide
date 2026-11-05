@@ -78,6 +78,15 @@ int  rp_fdisabled(const struct rp_model *m, int fi);
 /* the label without '_', and its shortcut key in lower case (0: none) */
 void rp_flabel(int fi, char *buf, int len);
 char rp_fkey(int fi);
+/* What setting fi is when it is left empty or at Default, in words
+ * ("200 ms", "On", "CUBIC", "from DHCP"); a number and its unit are put
+ * together in buf. NULL: no default (a value that must be typed in).
+ * Sysctls: the core's initial values (rp_sc_def[]) with the Amiga ones of
+ * amiga_defaults.h; tests/t_prefs_conf.c checks them against the core. */
+const char *rp_fdefault(int fi, char *buf, int len);
+extern const long rp_sc_def[RP_NSC];    /* RP_UNSET: follows the free memory */
+/* the same for list field k (rp_lfields[]) */
+const char *rp_lfdefault(int k);
 /* the field of a model address, -1 when none */
 int  rp_find(const struct rp_model *m, const void *addr);
 /* the card rp_ifsel stands for (0 when its slot is not used) */

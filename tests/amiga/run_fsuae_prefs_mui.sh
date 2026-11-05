@@ -568,6 +568,7 @@ grep -q 'screen 640x256' "$dh0/out/log3" 2>/dev/null || fail "no screen line in 
 # read its settings, and its default leaves bubbles off), so check the
 # texts the editor gives MUI instead
 grep -q 'bubble field: .*Interface name' "$dh0/out/log3" 2>/dev/null || fail "no bubble text on the first setting"
+grep -q 'Default: eth0 (the first card)' "$dh0/out/log3" 2>/dev/null || fail "no default in the bubble of the first setting"
 grep -q 'bubble page: .*About Riptide' "$dh0/out/log3" 2>/dev/null || fail "no bubble text from the page list"
 fi
 
