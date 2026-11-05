@@ -36,6 +36,7 @@ struct rp_drvinfo {
  * name, for .mni); ver gets "" without one */
 int  rp_drv_classify(const u8 *d, u32 len, const char *name, char *ver, int vlen);
 const char *rp_drv_kind_name(int kind);
+int  rp_drv_is_mni(const char *name);       /* a name ending in .mni */
 /* the kind as net.riptide.drivers names it ("sana2", "netdev", "mni") */
 int  rp_drv_kind_of(const char *stack_kind);
 /* one line for the Interface page */

@@ -58,6 +58,9 @@ static void find_file(const char *device, struct rp_drvinfo *i)
 		return;
 	}
 	for (k = 0; k < RT_ARRAY_SIZE(dirs) && !i->found; k++) {
+		/* Miami's drawer only for MNI drivers */
+		if (!strcmp(dirs[k], RT_COMPAT_MNI_DIR) && i->kind != RP_DRV_MNI && !rp_drv_is_mni(device))
+			continue;
 		rt_snprintf(path, sizeof(path), "%s%s", dirs[k], device);
 		read_file(path, base, i);
 	}
@@ -109,7 +112,15 @@ void rp_drv_probe(const char *device, const char *ifname, struct rp_drvinfo *i)
 		cache_next = (cache_next + 1) % NCACHE;
 		memset(&cache[c], 0, sizeof(cache[c]));
 		cache[c].kind = RP_DRV_SANA2;
-		find_file(device, &cache[c]);
+		{
+			/* no "Please insert volume ..." requester for a path that is not
+			 * there (Miami:, an unmounted disk): it would block the editor */
+			struct Process *me = (struct Process *)FindTask(NULL);
+			APTR win = me->pr_WindowPtr;
+			me->pr_WindowPtr = (APTR)-1;
+			find_file(device, &cache[c]);
+			me->pr_WindowPtr = win;
+		}
 		rt_strlcpy(cache_dev[c], device, sizeof(cache_dev[c]));
 	}
 	*i = cache[c];

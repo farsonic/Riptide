@@ -73,6 +73,11 @@ int rp_drv_classify(const u8 *d, u32 len, const char *name, char *ver, int vlen)
 	return kind;
 }
 
+int rp_drv_is_mni(const char *name)
+{
+	return name && ends_with(name, ".mni");
+}
+
 const char *rp_drv_kind_name(int kind)
 {
 	switch (kind) {
