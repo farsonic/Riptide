@@ -105,6 +105,13 @@ struct mniif {
 
 static BYTE mni_sigbit = -1;
 
+void mni_cleanup(void)
+{
+	if (mni_sigbit >= 0)
+		FreeSignal(mni_sigbit);
+	mni_sigbit = -1;
+}
+
 static struct MinNode *remhead_min(struct MinList *l)
 {
 	struct MinNode *n = l->mlh_Head;

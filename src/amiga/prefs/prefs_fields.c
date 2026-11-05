@@ -120,7 +120,8 @@ const struct rp_field rp_fields[] = {
 	{ P_IFACE, F_STR,   FL_IF, MI(ifname), 0, 0,       "_Interface name", NULL, NULL,
 	  "The name Riptide gives the card, such as eth0. Commands and the other pages use it." },
 	{ P_IFACE, F_STR,   FL_IF, MI(device), 0, 0,       "_Device", NULL, NULL,
-	  "The SANA-II driver of the network card, such as a2065.device or uaenet.device." },
+	  "The network card's driver: SANA-II, such as a2065.device or uaenet.device, or netdev, such as "
+	  "Emu68's genet.device 4.x." },
 	{ P_IFACE, F_NUM,   FL_IF, MI(unit), 0, 255,       "U_nit", NULL, NULL,
 	  "Which card the driver should use when it handles several. Usually 0." },
 	{ P_IFACE, F_NUM,   FL_IF, MI(mtu), 68, 65535,     "_MTU", NULL, NULL,

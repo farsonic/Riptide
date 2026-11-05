@@ -20,7 +20,7 @@ VAMOS ?= vamos
 
 CORE_SRC  := $(wildcard src/core/*.c)
 AMIGA_SRC := src/amiga/os_amiga.c src/amiga/libs.c src/amiga/bsdsocket.c src/amiga/roadshow.c src/amiga/riptidelib.c \
-             src/amiga/usergroup.c src/amiga/sana2.c src/amiga/mni.c src/amiga/stackproc.c \
+             src/amiga/usergroup.c src/amiga/sana2.c src/amiga/mni.c src/amiga/netdev.c src/amiga/stackproc.c \
              src/amiga/main.c src/amiga/selftest.c src/amiga/bench.c
 LIBS      := bsdsocket riptide usergroup
 HDRS      := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/core/*.h src/amiga/cmd/*.h src/amiga/prefs/*.h \

@@ -800,6 +800,38 @@ static int file_version(const char *path, UWORD *ver, UWORD *rev)
 	return found;
 }
 
+/* OpenDevice() for a network driver. A driver that is already loaded is
+ * opened by its name: before AmigaOS 3.2, OpenDevice() with a path
+ * ("DEVS:Networks/x.device") does not find the loaded copy and loads a
+ * second one, and two copies then drive the same hardware (a diagnostic
+ * tool or a stats program that opened the driver first leaves it loaded).
+ * The same name may be another driver, though (Emu68's genet.device 4.x
+ * netdev and 3.x SANA-II): only the same version is the same driver. */
+LONG amiga_open_device(const char *ifname, const char *device, ULONG unit, struct IORequest *io)
+{
+	const char *base = amiga_basename(device);
+	int loaded = 0;
+
+	if (base != device) {
+		struct Library *ld;
+		UWORD lv = 0, lr = 0, fv, fr;
+		Forbid();
+		ld = (struct Library *)FindName(exec_devlist(SysBase), (CONST_STRPTR)base);
+		if (ld) {
+			lv = ld->lib_Version;
+			lr = ld->lib_Revision;
+		}
+		Permit();
+		loaded = ld != NULL;
+		if (loaded && file_version(device, &fv, &fr) && (fv != lv || fr != lr)) {
+			rt_log(RT_LOG_INFO, "%s: %s %u.%u is loaded, %s is %u.%u: opening the file", ifname, base,
+			       (unsigned)lv, (unsigned)lr, device, (unsigned)fv, (unsigned)fr);
+			loaded = 0;
+		}
+	}
+	return OpenDevice((CONST_STRPTR)(loaded ? base : device), unit, io, 0);
+}
+
 /* Does a driver answer netdev (lwip-amiga's NIC interface, NETDEV_CMD_ATTACH
  * 0x8900) in its NSCMD_DEVICEQUERY list, but not SANA-II? Such a driver
  * cannot be used through SANA-II at all. */
@@ -880,38 +912,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	bm[4].ti_Tag = TAG_DONE;
 	bm[4].ti_Data = 0;
 	si->ctl->ios2_BufferManagement = bm;
-	/* A driver that is already loaded is opened by its name: before
-	 * AmigaOS 3.2, OpenDevice() with a path ("DEVS:Networks/x.device")
-	 * does not find the loaded copy and loads a second one, and two
-	 * copies then drive the same hardware (a diagnostic tool or a stats
-	 * program that opened the driver first leaves it loaded). */
-	{
-		const char *base = amiga_basename(device);
-		int loaded = 0;
-
-		if (base != device) {
-			struct Library *ld;
-			UWORD lv = 0, lr = 0, fv, fr;
-			Forbid();
-			ld = (struct Library *)FindName(exec_devlist(SysBase), (CONST_STRPTR)base);
-			if (ld) {
-				lv = ld->lib_Version;
-				lr = ld->lib_Revision;
-			}
-			Permit();
-			loaded = ld != NULL;
-			/* the same name may be another driver: Emu68's genet.device 4.x
-			 * (netdev) and 3.x (SANA-II) are both "genet.device". Only the
-			 * same version is the same driver. */
-			if (loaded && file_version(device, &fv, &fr) && (fv != lv || fr != lr)) {
-				rt_log(RT_LOG_INFO, "%s: %s %u.%u is loaded, %s is %u.%u: opening the file", name, base,
-				       (unsigned)lv, (unsigned)lr, device, (unsigned)fv, (unsigned)fr);
-				loaded = 0;
-			}
-		}
-		e = OpenDevice((CONST_STRPTR)(loaded ? base : device), unit,
-		               (struct IORequest *)si->ctl, 0);
-	}
+	e = amiga_open_device(name, device, unit, (struct IORequest *)si->ctl);
 	if (e) {
 		rt_snprintf(err, errlen, "cannot open %s unit %lu (error %ld)", device, (unsigned long)unit, (long)e);
 		sana2_close(&si->ai);
@@ -925,11 +926,9 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	si->ctl->ios2_StatData = &q;
 	if (s2_ctl(si, S2_DEVICEQUERY) != 0) {
 		if (netdev_only(si)) {
-			rt_snprintf(err, errlen, "%s is a netdev driver for lwip-amiga, not SANA-II (for genet.device: "
-			            "use the SANA-II 3.x driver, Storage/DEVS/Networks/genet.device in the Emu68 archive)",
-			            device);
+			/* not SANA-II: the caller opens it with netdev_open_if() */
 			sana2_close(&si->ai);
-			return -RT_ENXIO;
+			return -RT_EPROTOTYPE;
 		}
 		/* very old drivers: assume Ethernet */
 		q.HardwareType = S2WireType_Ethernet;

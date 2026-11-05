@@ -656,6 +656,7 @@ off the cost is one test per packet.
 ```
 interface NAME device=DEVICE [unit=N] [mtu=N] [reads=N] [tcpwindow=N] [raw]
       [ipv4=on|off] [ipv6=on|off] [qos=on|off] [disabled]
+interface NAME netdev=DEVICE [unit=N] [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off]
 interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off]
 interface NAME reads=N             # at run time: change a SANA-II interface's IPv4 reads
 interface NAME delete              # at run time: close the driver, drop the interface
@@ -705,6 +706,36 @@ VLANs, routes, addresses and DHCP lease go with it).
   with a broken cooked mode.
 * If a read fails because the device is offline, Riptide retries every
   second.
+
+**netdev drivers.** netdev is the network driver interface of lwip-amiga
+and the Emu68 driver stack (`devices/netdev.h`): the stack attaches to the
+driver once and the two then call each other directly, with no
+IORequest per packet. Emu68's `genet.device` 4.x (the Raspberry Pi 4's
+and CM4's Ethernet on a PiStorm32-lite) speaks only netdev; its 3.x
+version, in the archive's `Storage` drawer, is the SANA-II one. Riptide
+uses either:
+
+* `device=genet.device` works for both. A driver that does not answer
+  SANA-II but lists netdev's commands is opened as netdev by itself
+  (`netdev=` forces it), so the line does not change when you switch
+  versions.
+* Received frames are copied into Riptide's buffers and summed in the
+  same pass, and the driver's buffer goes straight back; sent frames go
+  out from transmit buffers in the driver's DMA memory, as many as the
+  driver can have in flight.
+* Link changes come from the driver (`RUNNING` follows the cable), and
+  `Riptide STATUS` shows `netdev genet.device unit 0 (ABI 1), link 1000
+  Mb/s full duplex, ...`.
+* The driver serves one stack at a time: while lwip-amiga (or a SANA-II
+  program on the 3.x/4.x dual driver) has the unit, the attach fails
+  with "the unit is in use".
+* With the same name in memory as another version (4.x loaded, the 3.x
+  file named in `device=`), Riptide opens the file: only the same
+  version is taken as the same driver.
+
+`ip link add NAME type netdev device DEV` adds one at run time.
+`tests/amiga/run_fsuae_netdev.sh` tests the backend without a Pi:
+`tests/amiga/fakenetdev.c` is a netdev driver on top of uaenet.device.
 
 **MNI drivers.** `mni=` loads an MNI network driver (`.mni`, the driver
 format of the historical stack) directly, for example `mni=z2-am7990.mni`.

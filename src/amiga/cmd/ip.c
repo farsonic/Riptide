@@ -26,6 +26,7 @@ static void usage(void)
 	        "  ip link set [dev] IF { up | down | mtu N | promisc on|off | arp on|off | reads N |\n"
 	        "                         tcpwindow N }\n"
 	        "  ip link add NAME type sana2 device DEV [unit N] [mtu N] [reads N]\n"
+	        "  ip link add NAME type netdev device DEV [unit N] [mtu N]   (sana2 finds netdev itself)\n"
 	        "  ip link add NAME type mni driver FILE [unit N] [options TEXT]\n"
 	        "  ip link add link IF name NAME type vlan id ID [pcp N|priority] [mtu N]\n"
 	        "  ip link del [dev] NAME\n"
@@ -673,16 +674,18 @@ static int do_link(int argc, char **argv, int i)
 			return run(line);
 		}
 		if (!name || !type || !dev) {
-			cl_puts("Error: ip link add NAME type { sana2 device DEV | mni driver FILE } [unit N]\n"
+			cl_puts("Error: ip link add NAME type { sana2 | netdev } device DEV | mni driver FILE [unit N]\n"
 			        "       ip link add link IF name NAME type vlan id ID\n");
 			return CL_ERROR;
 		}
 		if (!strcmp(type, "sana2") || !strcmp(type, "sana"))
 			o = (u32)rt_snprintf(line, sizeof(line), "interface %s device=\"%s\" unit=%s", name, dev, unit);
+		else if (!strcmp(type, "netdev"))
+			o = (u32)rt_snprintf(line, sizeof(line), "interface %s netdev=\"%s\" unit=%s", name, dev, unit);
 		else if (!strcmp(type, "mni"))
 			o = (u32)rt_snprintf(line, sizeof(line), "interface %s mni=\"%s\" unit=%s", name, dev, unit);
 		else {
-			cl_printf("Error: unknown link type \"%s\" (sana2 or mni).\n", type);
+			cl_printf("Error: unknown link type \"%s\" (sana2, netdev or mni).\n", type);
 			return CL_ERROR;
 		}
 		if (mtu)

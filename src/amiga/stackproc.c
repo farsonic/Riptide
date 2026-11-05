@@ -122,7 +122,7 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 	int i;
 
 	if (!rt_strcasecmp(argv[0], "interface")) {
-		const char *dev = NULL, *mni = NULL, *opts = NULL, *v;
+		const char *dev = NULL, *mni = NULL, *nd = NULL, *opts = NULL, *v;
 		unsigned long unit = 0;
 		int mtu = 0, raw = 0, reads = 0, r, ip4 = -1, ip6 = -1, qos = -1;
 		long tcpwin = -1;
@@ -132,7 +132,7 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 			return amiga_if_delete(argv[1], err, errlen);
 
 		if (argc < 3) {
-			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] "
+			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|netdev=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] "
 			            "[tcpwindow=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [raw] [options=TEXT] [disabled]");
 			return -RT_EINVAL;
 		}
@@ -168,6 +168,8 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 				dev = v;
 			else if ((v = kv(argv[i], "mni")) != NULL)
 				mni = v;
+			else if ((v = kv(argv[i], "netdev")) != NULL)
+				nd = v;
 			else if ((v = kv(argv[i], "unit")) != NULL)
 				unit = rt_strtoul(v, NULL, 0);
 			else if ((v = kv(argv[i], "mtu")) != NULL)
@@ -204,15 +206,20 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 				return -RT_EINVAL;
 			}
 		}
-		if (!dev == !mni) {
-			rt_snprintf(err, errlen, "interface: give either device= or mni=");
+		if ((dev != NULL) + (mni != NULL) + (nd != NULL) != 1) {
+			rt_snprintf(err, errlen, "interface: give one of device=, netdev= or mni=");
 			return -RT_EINVAL;
 		}
 		/* The drivers take the lock themselves and may wait for the
 		 * device; drop the configuration lock meanwhile. */
 		rt_unlock();
-		if (dev)
+		if (dev) {
 			r = sana2_open_if(argv[1], dev, (ULONG)unit, mtu, raw, reads, err, errlen);
+			/* not SANA-II but netdev (Emu68's genet.device 4.x) */
+			if (r == -RT_EPROTOTYPE)
+				r = netdev_open_if(argv[1], dev, (ULONG)unit, mtu, err, errlen);
+		} else if (nd)
+			r = netdev_open_if(argv[1], nd, (ULONG)unit, mtu, err, errlen);
 		else
 			r = mni_open_if(argv[1], mni, (ULONG)unit, opts, mtu, err, errlen);
 		rt_lock();
@@ -969,6 +976,8 @@ void amiga_stack_stop(void)
 		ai->close(ai);
 	}
 	amiga_ifs = NULL;
+	netdev_cleanup();          /* the signals the backends allocated */
+	mni_cleanup();
 	if (ireq) {
 		if (idle_pending) {
 			AbortIO(&ireq->tr_node);

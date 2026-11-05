@@ -228,6 +228,16 @@ int  amiga_config_unknown(int argc, char **argv, char *err, u32 errlen);
 int  sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw, int reads,
                    char *err, u32 errlen);
 int  sana2_set_reads(struct amiga_if *ai, int reads, char *err, u32 errlen);
+/* sana2_open_if() returns -RT_EPROTOTYPE for a driver that answers netdev
+ * (lwip-amiga's NIC interface, devices/netdev.h) and not SANA-II:
+ * netdev_open_if() opens it. */
+int  netdev_open_if(const char *name, const char *device, ULONG unit, int mtu, char *err, u32 errlen);
+/* at exit, after every interface is closed: free the backends' signals */
+void netdev_cleanup(void);
+void mni_cleanup(void);
+/* OpenDevice() for network drivers: an already loaded driver of the same
+ * name and version by its name, else the path (sana2.c) */
+LONG amiga_open_device(const char *ifname, const char *device, ULONG unit, struct IORequest *io);
 int  mni_open_if(const char *name, const char *driver, ULONG unit, const char *options,
                  int mtu, char *err, u32 errlen);
 struct amiga_if *amiga_if_find(const char *name);
