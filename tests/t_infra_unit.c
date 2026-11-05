@@ -778,6 +778,29 @@ static void test_fuzz(void)
 	rt_arp_flush(NULL, 0);
 }
 
+/* IPv4 IDs: one keyed counter per (source, destination, protocol) */
+static void test_ip_id(void)
+{
+	u32 s = ip4(192, 168, 1, 10), d = ip4(192, 168, 1, 20), i, seq = 0, same = 0;
+	u16 a, b, prev;
+
+	rt_lock();
+	a = rt_ip_select_id(s, d, RT_IPPROTO_UDP);
+	b = rt_ip_select_id(s, d, RT_IPPROTO_UDP);
+	/* the same flow counts up (plus a random step after a pause) */
+	CHECK((u16)(b - a) >= 1 && (u16)(b - a) < 1000);
+	/* other destinations: other buckets, not one global sequence */
+	prev = rt_ip_select_id(s, ip4(10, 0, 0, 1), RT_IPPROTO_UDP);
+	for (i = 2; i < 200; i++) {
+		u16 x = rt_ip_select_id(s, ip4(10, 0, 0, i), RT_IPPROTO_UDP);
+		seq += x == (u16)(prev + 1);
+		same += x == prev;
+		prev = x;
+	}
+	CHECK(seq < 10 && same < 10);
+	rt_unlock();
+}
+
 int main(void)
 {
 	struct rt_buf_stats st;
@@ -801,6 +824,7 @@ int main(void)
 	test_route();
 	test_arp();
 	test_frag();
+	test_ip_id();
 	test_icmp_udp_input();
 	test_fuzz();
 

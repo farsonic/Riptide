@@ -749,6 +749,12 @@ after 32 events; the interfaces' MAC addresses go into the pool when they
 are added. The very first start without a seed file depends on timing
 alone. DNS queries sent as a pair (A and AAAA) get independent IDs.
 
+IPv4 IDs (`rt_ip_select_id()`, as Linux's `ip_idents`): SipHash with a
+random key over source, destination and protocol picks one of 2048
+counters (8 KB with their time stamps); a counter used again after a
+pause of n ms also jumps by a random amount below n, so neither the
+bucket nor the sequence of another flow can be predicted.
+
 ## Sending UDP: pacing, batches, no checksum (0.17)
 
 **Pacing.** A UDP socket remembers the interface its last datagram left

@@ -214,12 +214,12 @@ static void igmp_send(struct igmp_if *ifp, struct rt_buf *b, u32 dst)
 	ip->ver_ihl = 0x46;
 	ip->tos = 0xc0;
 	ip->tot_len = rt_htons((u16)b->len);
-	ip->id = rt_htons(rt_ip_select_id(dst));
+	ip->saddr = rt_netif_src(nif, dst, 0);
+	ip->id = rt_htons(rt_ip_select_id(ip->saddr, dst, RT_IPPROTO_IGMP));
 	ip->frag_off = rt_htons(RT_IP_DF);
 	ip->ttl = 1;
 	ip->protocol = RT_IPPROTO_IGMP;
 	ip->check = 0;
-	ip->saddr = rt_netif_src(nif, dst, 0);
 	ip->daddr = dst;
 	ip->check = rt_inet_csum(ip, 24);
 	rt_ipstat.OutRequests++;

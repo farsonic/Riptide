@@ -84,8 +84,9 @@ void rt_route_redirect(u32 dst, u32 gw, u32 from);
 /* Transmit an IP datagram whose header is complete (data at IP header,
  * checksum valid) towards nh: fragments if needed and permitted. */
 int  rt_ip_send_routed(struct rt_buf *b, const struct rt_nexthop *nh);
-/* Per destination randomised IP id (RFC 6864 / Linux ip_idents). */
-u16  rt_ip_select_id(u32 daddr);
+/* IP id from a keyed per (source, destination, protocol) counter
+ * (RFC 6864, RFC 7739; Linux ip_idents). Addresses in network order. */
+u16  rt_ip_select_id(u32 saddr, u32 daddr, u8 proto);
 
 /* ---- ip_frag.c ---- */
 void rt_ipfrag_init(void);

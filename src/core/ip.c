@@ -30,18 +30,34 @@ static const struct rt_sysctl ip_sysctl[] = {
 };
 
 /* ---- IP identification ----
- * RFC 6864 / Linux ip_idents: per destination bucket counters starting at
- * random values, so the ID sequence seen by one host reveals nothing about
- * traffic to others (no idle scans) while staying unique per destination. */
-#define ID_BUCKETS 64
+ * RFC 6864 / RFC 7739 / Linux ip_idents: counters in 2048 buckets chosen
+ * by SipHash with a random key over (source, destination, protocol), so
+ * the ID sequence seen by one host reveals nothing about traffic to
+ * others (no idle scans) and the bucket cannot be predicted. Each use
+ * after a pause also adds a random amount below the milliseconds since
+ * the bucket's last use, as Linux does, so counting IDs over time tells
+ * an observer little. One SipHash per datagram, no 64-bit multiplies. */
+#define ID_BUCKETS 2048
 static u16 id_bucket[ID_BUCKETS];
-static u32 id_secret;
+static u16 id_stamp[ID_BUCKETS];      /* rt_now_ms() of the last use, low 16 bits */
+static u8  id_key[16];
 static u16 id_global;
 
-u16 rt_ip_select_id(u32 daddr)
+u16 rt_ip_select_id(u32 saddr, u32 daddr, u8 proto)
 {
-	u32 h = (daddr ^ id_secret) * 2654435761u;
-	return id_bucket[h >> 26]++;
+	u8 msg[9];
+	u32 i;
+	u16 now = (u16)rt_now_ms(), gap;
+
+	memcpy(msg, &saddr, 4);
+	memcpy(msg + 4, &daddr, 4);
+	msg[8] = proto;
+	i = (u32)rt_siphash(msg, sizeof(msg), id_key) & (ID_BUCKETS - 1);
+	gap = (u16)(now - id_stamp[i]);
+	id_stamp[i] = now;
+	if (gap)
+		id_bucket[i] = (u16)(id_bucket[i] + rt_random32() % gap);
+	return id_bucket[i]++;
 }
 
 u16 rt_ip_next_id(void)
@@ -218,7 +234,7 @@ routed:
 	ip->ver_ihl = 0x45;
 	ip->tos = o->tos;
 	ip->tot_len = rt_htons((u16)b->len);
-	ip->id = rt_htons(rt_ip_select_id(o->daddr));
+	ip->id = rt_htons(rt_ip_select_id(saddr, o->daddr, o->proto));
 	ip->frag_off = o->df ? rt_htons(RT_IP_DF) : 0;
 	ip->ttl = o->ttl ? o->ttl : rt_ip_is_multicast(o->daddr) ? 1 : (u8)rt_ip_defttl;
 	ip->protocol = o->proto;
@@ -273,10 +289,10 @@ int rt_ip_output_raw(struct rt_buf *b, int dontroute)
 	/* Like Linux raw_send_hdrinc(): the stack owns length and checksum,
 	 * and fills in id and source when left zero. */
 	ip->tot_len = rt_htons((u16)b->len);
-	if (!ip->id)
-		ip->id = rt_htons(rt_ip_select_id(ip->daddr));
 	if (!ip->saddr)
 		ip->saddr = nh.src;
+	if (!ip->id)
+		ip->id = rt_htons(rt_ip_select_id(ip->saddr, ip->daddr, ip->protocol));
 	ip->check = 0;
 	ip->check = rt_csum_fold(rt_csum_hdr(ip, hlen, 0));
 	if (rt_ip_is_multicast(ip->daddr))
@@ -464,11 +480,8 @@ void rt_ip_input(struct rt_netif *nif, struct rt_buf *b)
 
 void rt_ip_init(void)
 {
-	unsigned i;
-
-	id_secret = rt_random32();
-	for (i = 0; i < ID_BUCKETS; i++)
-		id_bucket[i] = (u16)rt_random32();
+	rt_random_bytes(id_key, sizeof(id_key));
+	rt_random_bytes(id_bucket, sizeof(id_bucket));
 	id_global = (u16)rt_random32();
 	rt_ipfrag_init();
 	rt_sysctl_register(ip_sysctl, (int)RT_ARRAY_SIZE(ip_sysctl));
