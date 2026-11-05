@@ -97,17 +97,24 @@ static Object *button(const char *text)
 	                MUIA_ControlChar, (ULONG)key, MUIA_CycleChain, 1, TAGEND);
 }
 
-/* a bubble text kept with its object */
-static char *bubble_dup(const char *name, const char *body)
+/* a bubble text kept with its object; def (unless NULL) adds the line
+ * "Default: def" */
+static char *bubble_def(const char *name, const char *body, const char *def)
 {
-	char buf[400], *p;
+	char buf[480], *p;
+	int o;
 
-	theme_bubble_to(buf, sizeof(buf), name, body);
+	theme_bubble_to(buf, sizeof(buf) - 80, name, body);
+	if (def) {
+		o = (int)strlen(buf);
+		rt_snprintf(buf + o, sizeof(buf) - (size_t)o, "\n%s %s", tr("Default:"), tr(def));
+	}
 	p = rp_alloc(strlen(buf) + 1);
 	if (p)
 		strcpy(p, buf);
 	return p;
 }
+#define bubble_dup(name, body) bubble_def(name, body, NULL)
 
 /* the main window again after something covered it (MUI does not always
  * repair custom-drawn areas uncovered by a closing window) */
@@ -700,7 +707,7 @@ static Object *field_page(int p)
 	for (i = 0; i < rp_nfields; i++) {
 		const struct rp_field *f = &rp_fields[i];
 		Object *g, *cell;
-		char name[48];
+		char name[48], dbuf[32];
 		if (f->page != p)
 			continue;
 		g = field_gadget(i);
@@ -709,7 +716,7 @@ static Object *field_page(int p)
 			return NULL;
 		fobj[i] = g;
 		rp_flabel(i, name, sizeof(name));
-		fhelp[i] = bubble_dup(name, f->help);
+		fhelp[i] = bubble_def(name, f->help, rp_fdefault(i, dbuf, sizeof(dbuf)));
 		mui_set(g, MUIA_ShortHelp, (ULONG)fhelp[i]);
 		mui_set(flab[i], MUIA_ShortHelp, (ULONG)fhelp[i]);
 		/* strings fill the column; check boxes and cycles keep their size */
@@ -805,7 +812,7 @@ static Object *lform_build(int p)
 			if (!g || !lflab[k])
 				return NULL;
 			rp_lflabel(k, name, sizeof(name));
-			lfhelp[k] = bubble_dup(name, rp_lfields[k].help);
+			lfhelp[k] = bubble_def(name, rp_lfields[k].help, rp_lfdefault(k));
 			mui_set(lflab[k], MUIA_ShortHelp, (ULONG)lfhelp[k]);
 			if (rp_lfields[k].flags & LF_NAMES) {
 				/* the cycle of names comes in dyn_set() */

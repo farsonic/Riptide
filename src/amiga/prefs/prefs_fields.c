@@ -7,6 +7,10 @@
 #include <string.h>
 #include "rt/rt_types.h"
 #include "prefs_fields.h"
+#include "../amiga_defaults.h"
+
+#define RP_STR_(x) #x
+#define RP_XSTR(x) RP_STR_(x)
 
 const struct rp_page rp_pages[RP_NPAGES] = {
 	{ "Interface", "Interface", "Interface changes need a restart of Riptide",
@@ -120,7 +124,7 @@ const struct rp_field rp_fields[] = {
 	{ P_IFACE, F_NUM,   FL_IF, MI(unit), 0, 255,       "U_nit", NULL, NULL,
 	  "Which card the driver should use when it handles several. Usually 0." },
 	{ P_IFACE, F_NUM,   FL_IF, MI(mtu), 68, 65535,     "_MTU", NULL, NULL,
-	  "The largest packet in bytes. Leave it empty to use the driver's value (1500 on Ethernet)." },
+	  "The largest packet in bytes." },
 	{ P_IFACE, F_NUM,   FL_IF | FL_ZERO, MI(tcpwindow), 536, 16777216, "TCP _window", NULL, NULL,
 	  "Caps TCP's receive window on this card. Leave it empty: a limit such as 1440 makes every "
 	  "download crawl. Only for old FS-UAE builds that drop frames." },
@@ -142,9 +146,9 @@ const struct rp_field rp_fields[] = {
 	{ P_ADDR,  F_CHECK, FL_IF | FL_DHCP, MI(linklocal), 0, 0, "_Link-local if no DHCP", NULL, NULL,
 	  "When no DHCP server answers, take a 169.254.x.y address so a direct cable still works." },
 	{ P_ADDR,  F_NUM,   FL_IF | FL_DHCP, MI(dhcp_wait), 1, 3600, "Link-local a_fter (s)", NULL, NULL,
-	  "How many seconds to wait for a DHCP server before taking the link-local address. Empty: 10." },
+	  "How many seconds to wait for a DHCP server before taking the link-local address." },
 	{ P_ADDR,  F_CYCLE, FL_IF, MI(ipv6), 0, 0,         "IPv_6 on this card", cy_tri, cyv_tri,
-	  "IPv6 on this card alone. Default: as the IPv6 check box on the Interface page says for all cards." },
+	  "IPv6 on this card alone, or as for all cards." },
 	{ P_IP6,   F_CYCLE, 0, SC(RP_SC_RTADV), 0, 0,      "Router ad_vertisements", cy_sw, cyv_sw,
 	  "Take addresses, routes and name servers from the routers' advertisements (SLAAC). Off: only "
 	  "addresses typed in." },
@@ -163,7 +167,7 @@ const struct rp_field rp_fields[] = {
 	{ P_NAMES, F_STR,   0, MS(domain),    0, 0,        "_Domain", NULL, NULL,
 	  "Added to short names when looking them up, such as home.lan." },
 	{ P_NAMES, F_STR,   0, M(dns), RP_ADDR, 0, 0,      "DNS server _1", NULL, NULL,
-	  "A name server's IPv4 or IPv6 address. Empty: the ones DHCP gives are used." },
+	  "A name server's IPv4 or IPv6 address." },
 	{ P_NAMES, F_STR,   0, M(dns) + RP_ADDR, RP_ADDR, 0, 0, "DNS server _2", NULL, NULL,
 	  "A second name server, asked when the first one does not answer." },
 	{ P_NAMES, F_STR,   0, M(dns) + 2 * RP_ADDR, RP_ADDR, 0, 0, "DNS server _3", NULL, NULL,
@@ -175,7 +179,7 @@ const struct rp_field rp_fields[] = {
 	{ P_TIME,  F_CHECK, 0, MS(ntp),       0, 0,        "_NTP time sync", NULL, NULL,
 	  "Set the Amiga's clock from time servers on the network." },
 	{ P_TIME,  F_STR,   FL_NTP, MS(ntp_servers), 0, 0, "NTP ser_vers", NULL, NULL,
-	  "Time servers separated by spaces. Empty: the ones DHCP gives, else pool.ntp.org." },
+	  "Time servers separated by spaces, such as pool.ntp.org." },
 	{ P_TIME,  F_STR,   0, MS(timezone),  0, 0,        "_Time zone", NULL, NULL,
 	  "auto takes it from the Locale preferences. Or the offset from UTC, such as +10:00." },
 	{ P_TIME,  F_CYCLE, 0, MS(mdns),      0, 0,        "_mDNS responder", cy_tri, cyv_tri,
@@ -264,6 +268,103 @@ const struct rp_field rp_fields[] = {
 	  "Mark packets for routers according to their priority." },
 };
 const int rp_nfields = (int)(sizeof(rp_fields) / sizeof(rp_fields[0]));
+
+/* The defaults the editors show in the help of each setting. */
+const long rp_sc_def[RP_NSC] = {
+	1, 0, 3600,             /* fastopen, fastopen_all, fastopen_blackhole */
+	1000, 4000, 1,          /* syn_rto_initial_ms, syn_rto_max_ms, syn_backoff */
+	20, 1, 1,               /* connect_timeout, syn_icmp_abort, tw_reuse */
+	1024, 49152, 65535,     /* max_tw_buckets, portrange.first, portrange.last */
+	0, 7200, 75, 9,         /* keepalive_all, keepidle, keepintvl, keepcnt */
+	0, 60, 1, 3,            /* cc (rp_cc_names: cubic), ledbat_target, ledbat_slowdown, bg_mode */
+	RP_UNSET, RP_UNSET, RP_UNSET,   /* mem_low, mem_pressure, mem_high: from the free memory */
+	1, 250, 50, 0, 1,       /* he.enable, attempt_delay, resolution_delay, prefer, aaaa_filter */
+	4, 128, 1,              /* qos_inflight, qos_limit, qos_prio_dscp */
+	1232, 1, 1, 3600, 1,    /* edns_size, tcp_fallback, mtu_probing, neg_maxttl, ecn */
+	1, 0, 1, 1, 1           /* accept_rtadv, use_tempaddr, addr_gen_mode, dad_count, gratuitous_na */
+};
+
+/* the settings that are not in sc[] or ss[], by where they are in the
+ * model or the card (FL_IF); the host test checks the ones the core has
+ * a value for (Quick ACK, Delayed ACK, link-local wait, mDNS, QoS ...) */
+#define D(f) offsetof(struct rp_model, f), 0
+#define DI(f) offsetof(struct rp_iface, f), FL_IF
+static const struct mdef { unsigned short off; unsigned char ifc; const char *text; } mdefs[] = {
+	{ DI(ifname), "eth0 (the first card)" },
+	{ DI(device), "uaenet.device (a new file)" },
+	{ DI(unit), "0" },
+	{ DI(mtu), "the driver's (1500 on Ethernet)" },
+	{ DI(tcpwindow), "none (no limit)" },
+	{ DI(reads), RP_XSTR(RT_AMIGA_READS_DEF) },
+	{ DI(dhcp), "DHCP" },
+	{ DI(addr), "none" },
+	{ DI(netmask), "from the address" },
+	{ DI(gateway), "none" },
+	{ DI(linklocal), "On" },
+	{ DI(dhcp_wait), "10 s" },
+	{ DI(ipv6), "as the IPv6 check box on the Interface page" },
+	{ D(ipv4), "On" },
+	{ D(ipv6), "On" },
+	{ D(hostname), "from DHCP, if it gives one" },
+	{ D(domain), "from DHCP, if it gives one" },
+	{ D(dns), "from DHCP" },
+	{ offsetof(struct rp_model, dns) + RP_ADDR, 0, "none" },
+	{ offsetof(struct rp_model, dns) + 2 * RP_ADDR, 0, "none" },
+	{ D(ntp), "Off" },
+	{ D(ntp_servers), "from DHCP, else pool.ntp.org" },
+	{ D(timezone), "auto (the Locale preferences)" },
+	{ D(mdns), "On" },
+	{ D(quickack), "Off" },
+	{ D(delack_segs), "2" },
+	{ D(delack_ms), "200 ms" },
+	{ D(qos), "Off" },
+};
+#undef D
+#undef DI
+
+const char *rp_fdefault(int fi, char *buf, int len)
+{
+	const struct rp_field *f = &rp_fields[fi];
+	const char *u;
+	char unit[10];
+	long v;
+	int i, n;
+
+	if (!(f->flags & FL_IF) && f->off >= offsetof(struct rp_model, ss))
+		return "none";
+	if ((f->flags & FL_IF) || f->off < offsetof(struct rp_model, sc) || f->off >= offsetof(struct rp_model, ss)) {
+		for (i = 0; i < (int)(sizeof(mdefs) / sizeof(mdefs[0])); i++)
+			if (mdefs[i].off == f->off && mdefs[i].ifc == (f->flags & FL_IF))
+				return mdefs[i].text;
+		return NULL;
+	}
+	i = (int)((f->off - offsetof(struct rp_model, sc)) / sizeof(long));
+	v = rp_sc_def[i];
+	switch (i) {
+	case RP_SC_MEM_LOW:      return "an eighth of the free memory at start";
+	case RP_SC_MEM_PRESSURE: return "a sixth of the free memory at start";
+	case RP_SC_MEM_HIGH:     return "a quarter of the free memory at start";
+	case RP_SC_KA_ALL:       return "0 (only when a program asks)";
+	}
+	if (f->type == F_CYCLE) {
+		for (n = 1; f->cy[n]; n++)
+			if (f->cyv[n] == v)
+				return f->cy[n];
+		return NULL;
+	}
+	/* a number, with the unit of its label: "Delayed ACK _limit (ms)" */
+	u = strchr(f->label, '(');
+	unit[0] = 0;
+	for (n = 0; u && u[n + 1] && u[n + 1] != ')' && u[n + 1] != '=' && n < (int)sizeof(unit) - 2; n++) {
+		unit[n + 1] = u[n + 1];
+		unit[0] = ' ';
+		unit[n + 2] = 0;
+	}
+	if (u && u[n + 1] != ')')
+		unit[0] = 0;        /* "(0 = off)" is no unit */
+	rt_snprintf(buf, (size_t)len, "%ld%s", v, unit);
+	return buf;
+}
 
 int rp_ifcur(const struct rp_model *m)
 {
@@ -641,9 +742,9 @@ const struct rp_lfield rp_lfields[] = {
 	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_IPv4 address", NULL,
 	  "The extra address, with the size of its network: 10.0.1.2/24, or 10.0.1.2 and a netmask below." },
 	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_Netmask", NULL,
-	  "The network's mask, e.g. 255.255.255.0, when the address has no /BITS. Empty: from the address." },
+	  "The network's mask, e.g. 255.255.255.0, when the address has no /BITS." },
 	{ P_ALIAS, LF_STR, 0, RP_ADDR, 0, 0, "_Broadcast", NULL,
-	  "The broadcast address of that network. Empty: worked out from the address and mask." },
+	  "The broadcast address of that network, when it is not the usual one." },
 
 	{ P_VLAN, LF_CYCLE, LF_NAMES, 0, 0, 0, "_Network card", NULL,
 	  "The network card the VLAN runs on. Its switch port must carry the VLAN's tag." },
@@ -660,28 +761,28 @@ const struct rp_lfield rp_lfields[] = {
 	  "The priority in the VLAN tag of every frame sent (802.1p). From traffic priority uses each "
 	  "connection's priority (QoS)." },
 	{ P_VLAN, LF_NUM, 0, 0, 68, 65535, "M_TU", NULL,
-	  "The largest packet on this VLAN. Empty: 4 bytes less than the card's (1496)." },
+	  "The largest packet on this VLAN, in bytes." },
 	{ P_VLAN, LF_NUM, LF_SAMEROW, 0, 0, 16777216, "TCP _window", NULL,
-	  "A limit for TCP's receive window on this VLAN, like the card's. Empty: no limit." },
+	  "A limit for TCP's receive window on this VLAN, like the card's." },
 	{ P_VLAN, LF_CYCLE, 0, 0, 0, 0, "IPv_4", cy_onoff,
-	  "IPv4 on this VLAN. Default: as for the whole stack." },
+	  "Whether this VLAN uses IPv4." },
 	{ P_VLAN, LF_CYCLE, LF_SAMEROW, 0, 0, 0, "IPv_6", cy_onoff,
-	  "IPv6 on this VLAN. Default: as for the whole stack." },
+	  "Whether this VLAN uses IPv6." },
 	{ P_VLAN, LF_CYCLE, 0, 0, 0, 0, "_QoS", cy_onoff,
-	  "Priority queues on this VLAN. Default: as the QoS page says." },
+	  "Priority queues (QoS) on this VLAN." },
 
 	{ P_QRULE, LF_CYCLE, 0, 0, 0, 0, "Pro_tocol", cy_proto,
 	  "Which connections the rule is for: TCP, UDP or both." },
 	{ P_QRULE, LF_STR, 0, 48, 0, 0, "P_orts", NULL,
-	  "Up to 8 port numbers separated by commas, e.g. 22,23. Empty: by program only." },
+	  "Up to 8 port numbers separated by commas, e.g. 22,23." },
 	{ P_QRULE, LF_CYCLE, 0, 0, 0, 0, "_Which end", cy_side,
 	  "Whose port it is: either end of the connection, this Amiga's, or the other computer's." },
 	{ P_QRULE, LF_STR, 0, 32, 0, 0, "Pro_gram", NULL,
-	  "The name of a program, e.g. AmiFTP or wget* (* matches the rest). Empty: by port only." },
+	  "The name of a program, e.g. AmiFTP or wget* (* matches the rest)." },
 	{ P_QRULE, LF_CYCLE, 0, 0, 0, 0, "Priorit_y", cy_prio,
 	  "How urgent the matching connections are: interactive ones go out first, bulk ones last." },
 	{ P_QRULE, LF_STR, 0, 8, 0, 0, "DSCP _mark", NULL,
-	  "A DSCP value for the routers on the way, e.g. EF, CS1, AF41 or 0-63. Empty: none." },
+	  "A DSCP value for the routers on the way, e.g. EF, CS1, AF41 or 0-63." },
 
 	{ P_ROUTE, LF_STR, 0, RP_ADDR, 0, 0, "Destinati_on", NULL,
 	  "The network the route is for: default (everything else), 10.0.0.0/8, 192.168.5.7/32 or an IPv6 "
@@ -693,7 +794,7 @@ const struct rp_lfield rp_lfields[] = {
 	  "The card or VLAN the route goes through. Any: Riptide works it out from the gateway." },
 	{ P_ROUTE, LF_NUM, 0, 0, 0, 2147483647L, "_Metric", NULL,
 	  "The cost of the route: the lower, the sooner it is tried against another route for the same "
-	  "network. Empty: 0." },
+	  "network." },
 	{ P_ROUTE, LF_CYCLE, 0, 0, 0, 0, "_Type", cy_rtype,
 	  "Normal sends the packets on. Reject, prohibit and unreachable answer that the network cannot be "
 	  "reached; blackhole drops the packets quietly." },
@@ -720,6 +821,33 @@ const struct rp_lfield rp_lfields[] = {
 	  "Ask the cable whether another computer has the address before using it. Off: use it at once." },
 };
 const int rp_nlfields = (int)(sizeof(rp_lfields) / sizeof(rp_lfields[0]));
+
+const char *rp_lfdefault(int k)
+{
+	switch (k) {
+	case LA_MASK:   return "from the address";
+	case LA_BCAST:  return "from the address and the netmask";
+	case LV_MODE:   return "DHCP";
+	case LV_PCP:    return "0 Best effort";
+	case LV_MTU:    return "the card's less 4 bytes (1496)";
+	case LV_TCPWIN: return "none (no limit)";
+	case LV_IP4:
+	case LV_IP6:    return "as for the whole stack";
+	case LV_QOS:    return "as the QoS page says";
+	case LQ_PROTO:  return "TCP and UDP";
+	case LQ_PORTS:  return "none (by program only)";
+	case LQ_SIDE:   return "Either end";
+	case LQ_PROG:   return "none (by port only)";
+	case LQ_DSCP:   return "none";
+	case LR_GW:     return "none";
+	case LR_IF:
+	case LN_IF:     return RP_LNAME_ANY;
+	case LR_METRIC: return "0";
+	case LR_TYPE:   return "Normal";
+	case L6_DAD:    return "On";
+	}
+	return NULL;
+}
 
 void rp_lflabel(int fi, char *buf, int len)
 {

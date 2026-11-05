@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
+#include "amiga_defaults.h"
 #include "rt/rt_capture.h"
 #include "rt/rt_sysctl.h"
 
@@ -683,7 +684,8 @@ static void handle_port(void)
 
 int amiga_stack_start(const char *config, int selftest)
 {
-	int r;
+	static const char *const amiga_defaults[] = RT_AMIGA_DEFAULTS;
+	int r, i;
 
 	rt_sock_async_hook = amiga_async_hook;
 	amiga_rs_init();
@@ -696,18 +698,13 @@ int amiga_stack_start(const char *config, int selftest)
 		amiga_out("Riptide: initialisation failed: %s\n", rt_strerror(-r));
 		return -1;
 	}
-	/* Amiga defaults, before the config so it can override them. A
-	 * connection starts with a 64 KB receive buffer (about what the 48
-	 * queued SANA-II reads absorb in one burst) and auto-tuning grows it
-	 * up to 256 KB only when the program drains that fast: a 68020 never
-	 * gets there, a 68040/060 or PiStorm on a 30-50 ms Internet path
-	 * needs it (a 32 KB/64 KB cap held them near 1 MB/s). */
+	/* Amiga defaults (amiga_defaults.h), before the config so it can
+	 * override them */
 	rt_lock();
-	rt_sysctl_set_text("net.inet.tcp.recvspace", "65536");
-	rt_sysctl_set_text("net.inet.tcp.rmem_max", "262144");
-	if (!selftest) {
+	for (i = 0; amiga_defaults[i]; i++) {
 		char e[64];
-		rt_config_line("mdns on", e, sizeof(e), NULL);   /* "mdns off" overrides */
+		if (!selftest || !strncmp(amiga_defaults[i], "sysctl ", 7))
+			rt_config_line(amiga_defaults[i], e, sizeof(e), NULL);
 	}
 	rt_unlock();
 	if (amiga_load_config(config) < 0 && config)

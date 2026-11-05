@@ -19,12 +19,13 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
+#include "amiga_defaults.h"
 
 /* Read requests queued per interface. A TCP sender (e.g. slirp in an
  * emulator, or a fast host on the LAN) delivers a whole window as one
  * burst; any frame that arrives while no read is queued is dropped by the
  * driver, so this must cover a typical burst. 'reads=N' overrides. */
-#define S2_READS_IP_DEF 48
+#define S2_READS_IP_DEF RT_AMIGA_READS_DEF
 #define S2_READS_IP_MIN 4
 #define S2_READS_IP_MAX 128
 #define S2_READS_ARP  4
