@@ -21,8 +21,11 @@ The installer
   * writes ENVARC:Riptide/riptide.conf (and copies it to ENV:Riptide/)
     for the emulator's uaenet.device with DHCP, or for another SANA-II
     device and a static address,
-  * adds a ";BEGIN Riptide" block to S:User-Startup that starts Riptide
-    at boot, and can start it right away.
+  * adds a ";BEGIN Riptide" block at the end of S:User-Startup that
+    starts Riptide at boot after a "Wait 5", and can start it right away.
+
+Running it again updates Riptide: your configuration is kept and the
+block moves to the end of S:User-Startup.
 
 It warns about another running TCP/IP stack or the emulator's
 bsdsocket.library emulation, and offers to rename another stack's

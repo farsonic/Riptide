@@ -43,8 +43,9 @@ Installing
 ----------
 Double-click Install_Riptide (the standard Amiga Installer). It copies
 the programs to C:, writes ENVARC:Riptide/riptide.conf for your network
-card (DHCP or a static address) and adds Riptide to S:User-Startup; run
-it again to update or uninstall. The manual is Riptide/Docs/AMIGA.md.
+card (DHCP or a static address) and adds Riptide at the end of
+S:User-Startup; run it again to update (your configuration is kept) or
+uninstall. The manual is Riptide/Docs/AMIGA.md.
 
 Under FS-UAE or WinUAE use uaenet.device (uae_sana2 = 1,
 network_card = a2065) and turn the emulator's bsdsocket.library

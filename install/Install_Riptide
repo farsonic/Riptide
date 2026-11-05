@@ -155,8 +155,8 @@
                      "Install (update) or remove it?")
                 "Install Riptide, or remove an earlier installation?"))
       (help (cat "Install copies Riptide and writes its configuration. An "
-                 "existing configuration is kept unless you choose to "
-                 "replace it.\n\nUninstall removes the programs, the "
+                 "existing configuration is kept (an update); only the "
+                 "Expert level offers to replace it.\n\nUninstall removes the programs, the "
                  "documentation and the SDK and empties the Riptide block "
                  "in S:User-Startup. Your configuration in ENVARC:Riptide is "
                  "only removed when you say so."))
@@ -243,12 +243,24 @@
       (delete (pathonly #old-doc) (infos) (optional "nofail"))))
   (complete 70)
 
-  ; Installer can only replace a ;BEGIN/;END block, so the block is left
-  ; empty. Other programs' blocks are not touched.
-  (startup "Riptide"
-    (prompt "Remove the Riptide commands from S:User-Startup?")
-    (help @startup-help)
-    (command ""))
+  ; rtcheck USERSTARTUP= without BLOCK= takes the block out; Installer
+  ; itself can only empty it. Other programs' blocks are not touched.
+  (set #rc 1)
+  (set #done-file (tackon #envarc-dir "startup-done"))
+  (if (AND (NOT @pretend) (= (exists (tackon #pkg "C/rtcheck") (noreq)) 1)
+           (= (exists #envarc-dir (noreq)) 2))
+  (
+    (textfile (prompt "") (help "") (dest #done-file) (append "rtcheck deletes this file\n"))
+    (run (cat (P_QUOTE (tackon #pkg "C/rtcheck")) " >NIL: USERSTARTUP=S:User-Startup DONE="
+              (P_QUOTE #done-file)))
+    (set #rc (exists #done-file (noreq)))
+    (P_DEL #done-file)
+  ))
+  (if (NOT (= #rc 0))
+    (startup "Riptide"
+      (prompt "Remove the Riptide commands from S:User-Startup?")
+      (help @startup-help)
+      (command "")))
 
   (set #rm-conf 0)
   (if (> @user-level 0)
@@ -556,8 +568,9 @@
 (set #uae 1)
 (set #dhcp 1)
 (set #gw "10.0.2.2")
+; an update keeps the configuration: only the Expert level is asked
 (if #conf-exists
-  (if (= @user-level 0)
+  (if (< @user-level 2)
     (set #write-conf 0)
     (set #write-conf
       (askbool
@@ -764,18 +777,37 @@
   (set #boot
     (askbool
       (prompt "Start Riptide automatically when the Amiga boots?")
-      (help (cat "Adds \"Run >NIL: " #rt-cmd "\" to S:User-Startup, between "
-                 "the lines ;BEGIN Riptide and ;END Riptide.\n\n"
+      (help (cat "Adds \"Wait 5\" and \"Run >NIL: " #rt-cmd "\" at the end of "
+                 "S:User-Startup, between the lines ;BEGIN Riptide and ;END Riptide.\n\n"
                  "Do not start another TCP/IP stack at boot as well."))
       (default 1))))
-(if #boot
-  (startup "Riptide"
-    (prompt (cat "Add these lines to S:User-Startup so Riptide starts at boot:\n\n"
+; The block goes at the very end of S:User-Startup (after the drivers and
+; whatever else starts there), with Wait 5 first so that late devices such
+; as USB network adapters are ready. Installer's own startup command keeps
+; an existing block where it is, so rtcheck USERSTARTUP= moves it; startup
+; is only the fallback.
+(set #block (cat "Wait 5\n"
                  (if (P_IS_C #bindir) "" ("Path %s ADD\n" (P_QUOTE #bindir)))
-                 "Run >NIL: " #rt-cmd))
-    (help @startup-help)
-    (command (if (P_IS_C #bindir) "" ("Path %s ADD\n" (P_QUOTE #bindir))))
-    (command (cat "Run >NIL: " #rt-cmd "\n"))))
+                 "Run >NIL: " #rt-cmd "\n"))
+(set #block-file (tackon (if #have-env "ENV:Riptide" #envarc-dir) "startup-block"))
+(set #done-file (tackon (if #have-env "ENV:Riptide" #envarc-dir) "startup-done"))
+(if (AND #boot (NOT @pretend))
+(
+  (P_DEL #block-file)
+  (textfile (prompt "") (help "") (dest #block-file) (append #block))
+  (textfile (prompt "") (help "") (dest #done-file) (append "rtcheck deletes this file\n"))
+  ; rtcheck deletes #done-file when S:User-Startup was written
+  (run (cat (P_QUOTE (tackon #bindir "rtcheck")) " >NIL: USERSTARTUP=S:User-Startup BLOCK="
+            (P_QUOTE #block-file) " DONE=" (P_QUOTE #done-file)))
+  (set #rc (exists #done-file (noreq)))
+  (P_DEL #block-file)
+  (P_DEL #done-file)
+  (if (NOT (= #rc 0))
+    (startup "Riptide"
+      (prompt (cat "Add these lines to S:User-Startup so Riptide starts at boot:\n\n" #block))
+      (help @startup-help)
+      (command #block)))
+))
 (complete 90)
 
 ; ---- start now ------------------------------------------------------------
@@ -797,7 +829,7 @@
 ; ---- done -----------------------------------------------------------------
 
 (message
-  (cat (if #uae
+  (cat (if (AND #uae #write-conf)
          (cat "Using uaenet.device under emulation:\n\n"
               "FS-UAE: uae_sana2 = 1 and\nnetwork_card = a2065\n"
               "WinUAE: add uaenet.device\n(Hardware > Expansions)\n\n"

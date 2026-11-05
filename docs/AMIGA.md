@@ -69,27 +69,34 @@ The script does what the manual steps below describe:
    block is there, commented out). At Average level you can enter the host
    name, another SANA-II device (for example
    `DEVS:Networks/a2065.device`) and unit, and a static address, netmask,
-   gateway and DNS server. An existing configuration is kept at Novice
-   level; otherwise you are asked, and the old file is saved as
-   `riptide.conf.bak`. `ENVARC:Riptide/hosts` gets a `localhost` entry if it
+   gateway and DNS server. An existing configuration is kept: running the
+   installer again is an update. Only the Expert level offers to replace
+   it, and the old file is then saved as `riptide.conf.bak`. `ENVARC:Riptide/hosts` gets a `localhost` entry if it
    does not exist.
-5. **Starts Riptide at boot** with a block in `S:User-Startup`:
+5. **Starts Riptide at boot** with a block at the end of `S:User-Startup`:
 
    ```
    ;BEGIN Riptide
+   Wait 5
    Run >NIL: C:Riptide
    ;END Riptide
    ```
+
+   The block is always the last one, after the drivers and anything else
+   started there, and `Wait 5` gives late devices (USB network adapters)
+   time to appear. An update moves an existing block to the end
+   (`rtcheck USERSTARTUP=S:User-Startup BLOCK=FILE` does that; when it
+   cannot, the Installer's own `startup` command replaces the block where
+   it is).
 
    and, if you agree, starts it at once (through `rtcheck START=...
    NOCHECK`, which waits until the libraries are there).
 
 The install locations are kept in `ENVARC:Riptide/BinDir`, `DocDir`,
 `SDKDir` and `PrefsDir`. Run the installer again to update Riptide (your configuration is
-kept unless you replace it) or to uninstall it: uninstalling deletes the
-programs, the documentation and the SDK, empties the `;BEGIN Riptide`
-block (the Installer cannot delete a block, only replace it) and deletes
-the configuration only when you ask for it.
+kept) or to uninstall it: uninstalling deletes the programs, the
+documentation and the SDK, takes the `;BEGIN Riptide` block out of
+`S:User-Startup` and deletes the configuration only when you ask for it.
 
 Under FS-UAE, `uaenet.device` needs `uae_sana2 = 1` and `network_card =
 a2065`; in WinUAE add uaenet.device under Hardware > Expansions. Turn the

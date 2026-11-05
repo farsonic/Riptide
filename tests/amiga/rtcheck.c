@@ -5,6 +5,12 @@
  * through the real library vectors, using blocking calls where possible.
  * Exit code 0 when every check passed, 10 otherwise, 20 if bsdsocket.library
  * cannot be opened.
+ *
+ * USERSTARTUP=FILE [BLOCK=FILE] is for the installer and opens no library:
+ * it takes every ";BEGIN Riptide" ... ";END Riptide" block out of FILE
+ * (S:User-Startup) and, with BLOCK, puts a new one with BLOCK's lines at
+ * the end, so Riptide starts after everything else. Exit code 0 or 20;
+ * DONE=FILE is deleted when it worked (the installer checks for it).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_os.h"
@@ -92,7 +98,141 @@ static LONG run(const char *cmd, int async)
 	return SystemTagList((CONST_STRPTR)cmd, t);
 }
 
-#define TEMPLATE "START/K,STOP/K,CONNECT/K,NOCHECK/S,VERBOSE=-V/S"
+#define TEMPLATE "START/K,STOP/K,CONNECT/K,NOCHECK/S,VERBOSE=-V/S,USERSTARTUP/K,BLOCK/K,DONE/K"
+
+/* a whole file into memory (NUL-terminated); NULL when it cannot be read,
+ * an empty buffer when it is not there and missing_ok */
+static char *rtc_slurp(const char *path, LONG *len, int missing_ok)
+{
+	BPTR fh = Open((CONST_STRPTR)path, MODE_OLDFILE);
+	char *buf;
+	LONG size, got = 0, r;
+
+	*len = 0;
+	if (!fh) {
+		if (!missing_ok)
+			return NULL;
+		buf = AllocVec(1, MEMF_CLEAR);
+		return buf;
+	}
+	Seek(fh, 0, OFFSET_END);
+	size = Seek(fh, 0, OFFSET_BEGINNING);
+	buf = size >= 0 ? AllocVec((ULONG)size + 1, MEMF_CLEAR) : NULL;
+	while (buf && got < size && (r = Read(fh, buf + got, size - got)) > 0)
+		got += r;
+	Close(fh);
+	if (buf && got != size) {
+		FreeVec(buf);
+		return NULL;
+	}
+	*len = got;
+	return buf;
+}
+
+/* is line [l, e) the marker (case and surrounding blanks do not matter)? */
+static int rtc_marker(const char *l, const char *e, const char *mark)
+{
+	while (l < e && (*l == ' ' || *l == '\t'))
+		l++;
+	while (e > l && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r'))
+		e--;
+	for (; l < e && *mark; l++, mark++) {
+		char a = *l, b = *mark;
+		if (a >= 'A' && a <= 'Z')
+			a += 32;
+		if (b >= 'A' && b <= 'Z')
+			b += 32;
+		if (a != b)
+			return 0;
+	}
+	return l == e && !*mark;
+}
+
+static int rtc_write(BPTR fh, const char *p, LONG n)
+{
+	return n <= 0 || Write(fh, (APTR)p, n) == n;
+}
+
+static int rtc_userstartup(const char *path, const char *blockpath)
+{
+	char tmp[256], *us, *blk = NULL;
+	const char *p, *e, *end;
+	LONG uslen, blen = 0, blank = 0;
+	BPTR fh;
+	int in = 0, ok = 1, i;
+
+	us = rtc_slurp(path, &uslen, 1);
+	if (blockpath)
+		blk = rtc_slurp(blockpath, &blen, 0);
+	if (!us || (blockpath && !blk)) {
+		rtc_logf("rtcheck: cannot read %s", !us ? path : blockpath);
+		if (us)
+			FreeVec(us);
+		return 20;
+	}
+	for (i = 0; path[i] && i < (int)sizeof(tmp) - 14; i++)
+		tmp[i] = path[i];
+	for (p = ".riptide-new"; *p; p++)
+		tmp[i++] = *p;
+	tmp[i] = 0;
+	fh = Open((CONST_STRPTR)tmp, MODE_NEWFILE);
+	if (!fh) {
+		rtc_logf("rtcheck: cannot write %s", tmp);
+		FreeVec(us);
+		if (blk)
+			FreeVec(blk);
+		return 20;
+	}
+	/* the file without its Riptide blocks; blank lines are written only
+	 * when another line follows, so none pile up at the end */
+	end = us + uslen;
+	for (p = us; p < end; p = e < end ? e + 1 : end) {
+		const char *q;
+		for (e = p; e < end && *e != '\n'; e++)
+			;
+		if (!in && rtc_marker(p, e, ";BEGIN Riptide")) {
+			in = 1;
+			blank = 0;        /* the blank lines before it go with it */
+			continue;
+		}
+		if (in) {
+			if (rtc_marker(p, e, ";END Riptide"))
+				in = 0;
+			continue;
+		}
+		for (q = p; q < e && (*q == ' ' || *q == '\t' || *q == '\r'); q++)
+			;
+		if (q == e) {
+			blank++;
+			continue;
+		}
+		for (; blank > 0; blank--)
+			ok &= rtc_write(fh, "\n", 1);
+		ok &= rtc_write(fh, p, (LONG)(e - p)) && rtc_write(fh, "\n", 1);
+	}
+	if (blk) {
+		/* a blank line, then ours at the end */
+		ok &= rtc_write(fh, "\n;BEGIN Riptide\n", 16) && rtc_write(fh, blk, blen);
+		if (blen && blk[blen - 1] != '\n')
+			ok &= rtc_write(fh, "\n", 1);
+		ok &= rtc_write(fh, ";END Riptide\n", 13);
+	}
+	Close(fh);
+	FreeVec(us);
+	if (blk)
+		FreeVec(blk);
+	if (!ok) {
+		DeleteFile((CONST_STRPTR)tmp);
+		rtc_logf("rtcheck: cannot write %s", tmp);
+		return 20;
+	}
+	DeleteFile((CONST_STRPTR)path);
+	if (!Rename((CONST_STRPTR)tmp, (CONST_STRPTR)path)) {
+		rtc_logf("rtcheck: cannot rename %s to %s", tmp, path);
+		return 20;
+	}
+	return 0;
+}
 
 /* CONNECT=a.b.c.d:port - TCP echo test through a real interface: send a
  * line and expect it back (the host side runs an echo server). */
@@ -130,7 +270,7 @@ static void rtc_connect(const char *spec)
 
 static int rtcheck_main(void)
 {
-	LONG args[5] = { 0, 0, 0, 0, 0 };
+	LONG args[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 	APTR rda;
 	int fails, i;
 
@@ -138,6 +278,13 @@ static int rtcheck_main(void)
 	if (!rda) {
 		PrintFault(IoErr(), (CONST_STRPTR)"rtcheck");
 		return 20;
+	}
+	if (args[5]) {
+		i = rtc_userstartup((const char *)args[5], (const char *)args[6]);
+		if (i == 0 && args[7])
+			DeleteFile((CONST_STRPTR)args[7]);
+		FreeArgs(rda);
+		return i;
 	}
 	rtc_verbose = args[4] != 0;
 	if (args[0]) {
