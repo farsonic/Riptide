@@ -5,7 +5,8 @@
  * 10.78.1.5 is a "dead" server (Linux drops it): tests server failover.
  * The server truncates UDP answers at 512 bytes, or at the EDNS0 size the
  * query advertises, and also answers over TCP: EDNS0, FORMERR fallback and
- * the TCP fallback for A, AAAA, PTR and res_query.
+ * the TCP fallback for A, AAAA, PTR and res_query; the EDNS0 size against
+ * the MTU and fragmented answers (Linux link MTU 576) not used (RFC 9715).
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stdio.h>
@@ -32,6 +33,7 @@ static int failures, checks;
 static int sfd, tfd;
 static volatile int queries, stop, tcp_queries, last_edns, last_edns_size;
 static volatile u16 ports[64];
+extern u32 rt_dns_stat_frag;   /* resolv.c: fragmented answers not used */
 
 /* ---- responder ---- */
 static int qname(const u8 *q, u32 len, char *out)
@@ -149,6 +151,11 @@ static u32 answer(const u8 *q, u32 len, u8 *r, u32 *limit, int tcp)
 			p = put_a(p, 12, 60, 0x0a020000u + (u32)i + 1);
 		an = 40;
 		opt = strcmp(name, "noopt.test.lan") != 0;
+	} else if (!strcmp(name, "frag.test.lan") && type == 1) {
+		/* 60 A records: about 1000 bytes, fragmented at MTU 576 */
+		for (i = 0; i < 60; i++)
+			p = put_a(p, 12, 60, 0x0a040000u + (u32)i + 1);
+		an = 60;
 	} else if (!strcmp(name, "huge.test.lan") && type == 1) {
 		/* 100 A records: about 1650 bytes, more than 1232: TCP */
 		for (i = 0; i < 100; i++)
@@ -319,6 +326,7 @@ int main(void)
 	static rt_in6_addr a6[16];
 	int t;
 	int n, q0, i, distinct;
+	u32 mtu;
 
 	if (access("/dev/net/tun", R_OK | W_OK) != 0 || geteuid() != 0 ||
 	    system("ip -V >/dev/null 2>&1") != 0) {
@@ -343,6 +351,9 @@ int main(void)
 	sa.sin_family = AF_INET;
 	sa.sin_addr.s_addr = rt_htonl(LINUX_IP);
 	sa.sin_port = rt_htons(53);
+	i = IP_PMTUDISC_DONT;      /* Linux fragments what exceeds the link MTU */
+	if (sfd >= 0)
+		setsockopt(sfd, IPPROTO_IP, IP_MTU_DISCOVER, &i, sizeof(i));
 	if (sfd < 0 || bind(sfd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
 		printf("t_dns_tun: SKIP (cannot bind port 53)\n");
 		return 77;
@@ -446,6 +457,46 @@ int main(void)
 	CHECK(rt_config_line("dns reset", NULL, 0, NULL) == 0);
 	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
 	rt_unlock();
+
+	/* RFC 9715: the EDNS size is at most 1400 and what the MTU carries */
+	rt_lock();
+	CHECK(rt_config_line("dns edns_size 4096", NULL, 0, NULL) == 0);
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
+	rt_unlock();
+	CHECK(rt_resolve_name("short.test.lan", addrs, 8, NULL, 0) == 1 && last_edns && last_edns_size == 1400);
+	rt_lock();
+	mtu = tun->mtu;
+	tun->mtu = 1000;
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
+	rt_unlock();
+	CHECK(rt_resolve_name("short.test.lan", addrs, 8, NULL, 0) == 1 && last_edns && last_edns_size == 1000 - 28);
+	rt_lock();
+	tun->mtu = mtu;
+	CHECK(rt_config_line("dns edns_size 1232", NULL, 0, NULL) == 0);
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
+	rt_unlock();
+	/* a fragmented UDP answer is not used: TCP instead, or none */
+	t = tcp_queries;
+	CHECK(rt_resolve_name("frag.test.lan", addrs, 16, NULL, 0) == 16 && tcp_queries == t);
+	snprintf(cmd, sizeof(cmd), "ip link set dev %s mtu 576", name);
+	CHECK(system(cmd) == 0);
+	rt_lock();
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
+	rt_unlock();
+	n = (int)rt_dns_stat_frag;
+	CHECK(rt_resolve_name("frag.test.lan", addrs, 16, NULL, 0) == 16 && addrs[15] == rt_htonl(0x0a040010u) &&
+	      tcp_queries == t + 1 && rt_dns_stat_frag == (u32)n + 1);
+	rt_lock();
+	CHECK(rt_config_line("dns tcp off", NULL, 0, NULL) == 0);
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
+	rt_unlock();
+	CHECK(rt_resolve_name("frag.test.lan", addrs, 16, NULL, 0) == -RT_TRY_AGAIN && tcp_queries == t + 1);
+	rt_lock();
+	CHECK(rt_config_line("dns tcp on", NULL, 0, NULL) == 0);
+	CHECK(rt_sysctl_set_text("dns.cache.flush", "1") == 0);
+	rt_unlock();
+	snprintf(cmd, sizeof(cmd), "ip link set dev %s mtu 1500", name);
+	CHECK(system(cmd) == 0);
 
 	/* raw interface */
 	n = rt_res_query("www.test.lan", 1, 1, ans, sizeof(ans));

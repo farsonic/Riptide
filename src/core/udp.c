@@ -431,6 +431,8 @@ int rt_dgram_recv(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 		n = rt_buf_to_iov(iov, iovcnt, 0, b->data, n);
 	if (b->len > want && msgflags)
 		*msgflags |= RT_MSG_TRUNC;
+	if ((flags & RT_MSG_FRAGMENTED) && (b->flags & RT_BUFF_FRAG) && msgflags)
+		*msgflags |= RT_MSG_FRAGMENTED;
 	if (from)
 		*from = cb->from;
 	if (!(flags & RT_MSG_PEEK)) {

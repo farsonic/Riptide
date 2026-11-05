@@ -26,7 +26,10 @@
  *
  * EDNS0 (RFC 6891): our own queries carry an OPT record advertising
  * dns.edns_size (1232, the DNS Flag Day 2020 value) so answers up to that
- * size come over UDP. A server that answers FORMERR/NOTIMP to it is asked
+ * size come over UDP; never more than 1400 or what the route to the
+ * server carries without fragments (RFC 9715 3.1). An answer that came in
+ * fragments anyway is not used (its later fragments are easy to forge,
+ * RFC 9715 3.2): it is asked again over TCP like a truncated one. A server that answers FORMERR/NOTIMP to it is asked
  * again without (once) and remembered as one without EDNS for 10 minutes;
  * so is one whose answers carry no OPT record. Answers with TC set are
  * asked again over TCP (RFC 7766, dns.tcp_fallback), from the same server;
@@ -36,6 +39,7 @@
  */
 #include "sock_internal.h"
 #include "resolv_internal.h"
+#include "infra.h"
 
 #define DNS_MAX_SERVERS  6
 #define DNS_MAX_STATIC   4
@@ -45,6 +49,7 @@
 #define DNS_QBUF         300      /* header + 255 byte name + question */
 #define DNS_UDP_MIN      512      /* UDP answers without EDNS (RFC 1035) */
 #define DNS_EDNS_MAX     4096     /* largest dns.edns_size */
+#define DNS_EDNS_CAP     1400     /* largest size we advertise (RFC 9715 3.1) */
 #define DNS_OPT_LEN      11       /* our OPT record: root, type, class, ttl, rdlen */
 #define DNS_TCP_TIMEOUT_MS 5000   /* connect + query + answer over TCP */
 #define DNS_TCP_MAX      16384    /* largest TCP answer we parse */
@@ -57,7 +62,7 @@
 int rt_dns_disallowed;
 s32 rt_dns_edns_size = 1232;   /* 0: no EDNS */
 s32 rt_dns_tcp = 1;            /* truncated answers again over TCP */
-u32 rt_dns_stat_tcp, rt_dns_stat_tcp_fail, rt_dns_stat_noedns;
+u32 rt_dns_stat_tcp, rt_dns_stat_tcp_fail, rt_dns_stat_noedns, rt_dns_stat_frag;
 
 struct dns_server {
 	rt_in6_addr addr;         /* IPv4-mapped for IPv4 */
@@ -838,6 +843,7 @@ struct dns_work {
 	u32 alen;
 	u16 edns;                 /* our UDP payload size, 0 = no EDNS */
 	u8 tcp;                   /* dns.tcp_fallback */
+	u8 afrag;                 /* the answer in a came in IP fragments */
 	u8 *ans;                  /* raw mode: the answer (a or tcpbuf) */
 	u8 *tcpbuf;               /* answer read over TCP */
 	u32 rawcap;               /* raw mode: the caller's buffer size */
@@ -863,6 +869,8 @@ static struct dns_work *work_alloc(u32 *addrs, int max)
 	rt_unlock();
 	if (w->edns && w->edns < DNS_UDP_MIN)
 		w->edns = DNS_UDP_MIN;
+	if (w->edns > DNS_EDNS_CAP)
+		w->edns = DNS_EDNS_CAP;
 	/* answers are as large as we advertise (at least the classic 512);
 	 * short of memory: no EDNS rather than no lookup */
 	w->alen = w->edns > DNS_UDP_MIN ? w->edns : DNS_UDP_MIN;
@@ -921,12 +929,42 @@ static void server_noedns(struct dns_work *w, int s)
 	RT_DBG(RT_DBG_DNS, "server %d: no EDNS for %lu s", s + 1, (unsigned long)(DNS_NOEDNS_MS / 1000u));
 }
 
-/* A query built without OPT (length len) followed by our OPT record:
- * the length to send with or without EDNS (ARCOUNT set to match). */
-static u32 q_edns(u8 *q, u32 len, int on)
+/* The UDP size to advertise to server sv (EDNS on): w->edns, but no more
+ * than a datagram the route to the server carries without fragments
+ * (RFC 9715 3.1: the MTU, smaller for a known path MTU, minus the IP and
+ * UDP headers), and never below 512. */
+static u16 edns_for(struct dns_work *w, const struct dns_server *sv)
 {
-	rt_put_be16(q + 10, on ? 1 : 0);
-	return on ? len + DNS_OPT_LEN : len;
+	u32 size = w->edns, mtu = 0, hdr;
+
+	rt_lock();
+	if (rt_in6_is_v4mapped(&sv->addr)) {
+		struct rt_nexthop nh;
+		hdr = 20 + 8;
+		if (rt_ip_route(rt_in6_v4(&sv->addr), &nh) == 0)
+			mtu = nh.mtu;
+	} else {
+		struct rt_nexthop6 nh;
+		hdr = 40 + 8;
+		if (rt_ip6_route(&sv->addr, sv->ifindex ? rt_netif_by_index(sv->ifindex) : NULL, &nh) == 0)
+			mtu = nh.mtu;
+	}
+	rt_unlock();
+	if (mtu > hdr && mtu - hdr < size)
+		size = mtu - hdr;
+	return (u16)(size < DNS_UDP_MIN ? DNS_UDP_MIN : size);
+}
+
+/* A query built without OPT (length len) followed by our OPT record:
+ * the length to send with EDNS (our UDP size 'size') or without (size 0);
+ * ARCOUNT set to match. */
+static u32 q_edns(u8 *q, u32 len, u16 size)
+{
+	rt_put_be16(q + 10, size ? 1 : 0);
+	if (!size)
+		return len;
+	rt_put_be16(q + len + 3, size);
+	return len + DNS_OPT_LEN;
 }
 
 /* Build our query for name into q (DNS_QBUF): the plain length, with the
@@ -1128,15 +1166,16 @@ static int send_q(struct dns_work *w, int fd, const struct dns_server *sv, const
 }
 
 /* Wait (until start + limit ms) for a datagram from server sv's port 53
- * carrying a response with our ID: its length in w->a, 0 on timeout,
- * -RT_EINTR on a break. */
+ * carrying a response with our ID: its length in w->a (w->afrag set when
+ * it came in fragments), 0 on timeout, -RT_EINTR on a break. */
 static int recv_reply(struct dns_work *w, int fd, const struct dns_server *sv, u32 start, u32 limit,
                       u16 id, u16 id2)
 {
-	int v6 = !rt_in6_is_v4mapped(&sv->addr), r, ok;
+	int v6 = !rt_in6_is_v4mapped(&sv->addr), r, ok, mf;
 
 	for (;;) {
 		struct rt_sockaddr_in6 from;
+		struct rt_iov v;
 		u32 el = rt_now_ms() - start, fl = sizeof(from), set;
 		if (el >= limit)
 			return 0;
@@ -1147,9 +1186,12 @@ static int recv_reply(struct dns_work *w, int fd, const struct dns_server *sv, u
 		if (r <= 0)
 			return 0;
 		memset(&from, 0, sizeof(from));
-		r = rt_api_recvfrom(&w->ctx, fd, w->a, w->alen, RT_MSG_DONTWAIT, &from, &fl);
+		v.base = w->a;
+		v.len = w->alen;
+		r = rt_api_recvmsg(&w->ctx, fd, &v, 1, RT_MSG_DONTWAIT | RT_MSG_FRAGMENTED, &from, &fl, &mf);
 		if (r < 12)
 			continue;
+		w->afrag = (mf & RT_MSG_FRAGMENTED) != 0;
 		if (v6) {
 			ok = rt_in6_eq(&from.sin6_addr, &sv->addr) && from.sin6_port == rt_htons(DNS_PORT);
 		} else {
@@ -1161,6 +1203,15 @@ static int recv_reply(struct dns_work *w, int fd, const struct dns_server *sv, u
 	}
 }
 
+/* RFC 9715 3.2: an answer from server s came in fragments */
+static void frag_note(int s)
+{
+	rt_lock();
+	rt_dns_stat_frag++;
+	rt_unlock();
+	RT_DBG(RT_DBG_DNS, "server %d: fragmented answer not used", s + 1);
+}
+
 /* rcode of a response */
 #define RCODE(m) ((m)[3] & 0x0f)
 #define TC(m)    (((m)[2] & 0x02) != 0)
@@ -1168,6 +1219,8 @@ static int recv_reply(struct dns_work *w, int fd, const struct dns_server *sv, u
 /* Parse mode: the answer in w->a (length n) to our query, EDNS used or
  * not, from server s: remember a server without EDNS; a truncated one is
  * asked again over TCP (the plain query q, qlen bytes) when allowed.
+ * One that came in fragments is not used: asked over TCP, or
+ * -RT_TRY_AGAIN (the next server) when that is off or fails.
  * Returns as dns_parse_response() into *res. */
 static int take_answer(struct dns_work *w, int s, u32 n, int edns, u8 *q, u32 qlen, u16 id,
                        const char *qname, u16 qtype, struct dns_result *res)
@@ -1176,6 +1229,21 @@ static int take_answer(struct dns_work *w, int s, u32 n, int edns, u8 *q, u32 ql
 
 	if (r == DNS_IGNORE)
 		return r;
+	if (w->afrag) {
+		frag_note(s);
+		if (w->tcp) {
+			int t;
+			q_edns(q, qlen, 0);
+			t = dns_tcp(w, &w->servers[s], q, qlen, DNS_TCP_MAX);
+			if (t > 0) {
+				r = dns_parse_response(w->tcpbuf, (u32)t, id, qname, qtype, res);
+				if (r != DNS_IGNORE)
+					return r;
+			}
+		}
+		res->naddr = 0;
+		return -RT_TRY_AGAIN;
+	}
 	if (edns && (RCODE(w->a) == 0 || RCODE(w->a) == 3) && dns_find_opt(w->a, n, NULL) == 0)
 		server_noedns(w, s);
 	if (TC(w->a) && w->tcp) {
@@ -1241,11 +1309,11 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 			fd = dns_socket(w, v6, v6 ? &fd6 : &fd4);
 			if (fd < 0)
 				continue;
-			edns = qname && w->edns && !sv->noedns;
+			edns = qname && w->edns && !sv->noedns ? edns_for(w, sv) : 0;
 		resend:
 			start = rt_now_ms();
 			if (qname)
-				r = send_q(w, fd, sv, w->q, q_edns(w->q, qlen, edns));
+				r = send_q(w, fd, sv, w->q, q_edns(w->q, qlen, (u16)edns));
 			else
 				r = send_q(w, fd, sv, w->rawq, qlen);
 			if (r < 0)
@@ -1270,13 +1338,20 @@ static int dns_exchange(struct dns_work *w, u32 qlen, u16 id, const char *qname,
 						break;      /* SERVFAIL/NOTIMP/REFUSED: next server */
 					w->ans = w->a;
 					result = r;
-					if (TC(w->a) && w->tcp) {
+					if (w->afrag) {
+						/* not used: over TCP or the next server */
+						frag_note(s);
+						result = -RT_TRY_AGAIN;
+					}
+					if ((TC(w->a) || w->afrag) && w->tcp) {
 						t = dns_tcp(w, sv, w->rawq, qlen, w->rawcap);
 						if (t > 0 && raw_ok(w->tcpbuf, t, id)) {
 							w->ans = w->tcpbuf;
 							result = t;
 						}
 					}
+					if (result < 0)
+						break;
 					goto out;
 				}
 				if (edns && (RCODE(w->a) == 1 || RCODE(w->a) == 4)) {
@@ -1851,7 +1926,7 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 			int fd = dns_socket(w, v6, v6 ? &fd6 : &fd4);
 			if (fd < 0)
 				continue;
-			edns = w->edns && !sv->noedns;
+			edns = w->edns && !sv->noedns ? edns_for(w, sv) : 0;
 		resend:
 			start = rt_now_ms();
 			/* AAAA first, as RFC 8305 3 asks */
@@ -1862,7 +1937,7 @@ static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 				if (k ? DONE4 : DONE6)
 					continue;
 				*rr = R_PENDING;
-				if (send_q(w, fd, sv, q, q_edns(q, ql, edns)) >= 0)
+				if (send_q(w, fd, sv, q, q_edns(q, ql, (u16)edns)) >= 0)
 					w->sent++;
 			}
 			RT_DBG(RT_DBG_DNS, "query %s A+AAAA to server %d, attempt %d%s", w->qname, s + 1, att + 1,
@@ -2507,6 +2582,8 @@ static const struct rt_sysctl resolv_sysctls[] = {
 	  &dns_stat_neg_hits, 0, 0, NULL, "queries answered by a cached NXDOMAIN / NODATA" },
 	{ "dns.stats.fail_hits", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 5 },
 	  &dns_stat_fail_hits, 0, 0, NULL, "queries not repeated after a recent failure" },
+	{ "dns.stats.fragmented", RT_SYSCTL_INT, RT_SYSCTL_RO, 3, { 9, 2, 6 },
+	  &rt_dns_stat_frag, 0, 0, NULL, "UDP answers not used because they came in fragments" },
 };
 
 void rt_resolv_init(void)

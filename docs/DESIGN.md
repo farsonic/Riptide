@@ -708,7 +708,11 @@ the UDP answer buffer at the advertised size (at least 512; when that
 allocation fails it falls back to 512 bytes without EDNS0, so a small
 machine still resolves). `build_q()` writes the plain query and our 11
 byte OPT record after it; `q_edns()` sets ARCOUNT and gives the length
-to send with or without it, so one buffer serves both. Per server,
+to send with or without it and writes the UDP size, so one buffer
+serves both. That size is `edns_for()`: `w->edns` (capped at 1400),
+limited by the MTU of the route to the server (`rt_ip_route()` /
+`rt_ip6_route()`, so a known path MTU counts) minus the IP and UDP
+headers (RFC 9715 3.1). Per server,
 `dns_server.noedns` (with a 10 minute deadline, copied into the work
 copy and set in the global table by `server_noedns()`) says to leave the
 OPT record out: set on FORMERR/NOTIMP to an EDNS0 query (which is then
@@ -719,7 +723,10 @@ socket in the work context (connect, then the two byte length prefix and
 the query without OPT, then the answer into a buffer allocated at the
 announced length, capped; one deadline of 5 s for all of it) and parses
 that instead; if TCP fails or its answer does not match, the UDP reply is
-parsed again and used. `dns_exchange46()` does the same for whichever of
+parsed again and used. Reassembly marks a datagram `RT_BUFF_FRAG`;
+`recv_reply()` asks for it with the internal recv flag
+`RT_MSG_FRAGMENTED` and sets `w->afrag`, and such an answer is never
+used (RFC 9715 3.2): TCP as for TC, else the next server. `dns_exchange46()` does the same for whichever of
 the A and AAAA answers is truncated, synchronously, while the other one
 waits in the socket. Raw mode (`res_send()`) sends the caller's message
 unchanged and goes to TCP on TC or for a message over 512 bytes, as BIND

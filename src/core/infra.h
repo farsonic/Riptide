@@ -135,6 +135,10 @@ int  rt_inet_getopt(const struct rt_inet_opts *o, int name, void *val, u32 *len,
 int  rt_inet6_setopt(struct rt_socket *so, struct rt_inet_opts *o, int name, const void *val, u32 len);
 int  rt_inet6_getopt(const struct rt_inet_opts *o, int name, void *val, u32 *len);
 /* recv() for datagram sockets (rcvq of rt_dgram_cb tagged buffers). */
+/* Stack internal recv flag (resolver): in 'flags' it asks for, in
+ * *msgflags it reports, a datagram put together from IP fragments
+ * (RT_BUFF_FRAG). Not one of the BSD MSG_* values. */
+#define RT_MSG_FRAGMENTED 0x40000000
 int  rt_dgram_recv(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
                    int flags, struct rt_sockaddr_in6 *from, int *msgflags);
 u32  rt_dgram_poll(struct rt_socket *so);

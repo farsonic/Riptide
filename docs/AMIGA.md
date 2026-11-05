@@ -1086,7 +1086,11 @@ ways:
 
 * **EDNS0** (RFC 6891): every query carries an OPT record that offers
   answers of up to **1232 bytes** over UDP (the DNS Flag Day 2020 value,
-  which fits any path MTU of 1280 or more without fragments). The answer
+  which fits any path MTU of 1280 or more without fragments). Following
+  RFC 9715 the size offered is never more than 1400 bytes (a larger
+  `edns_size` counts as 1400) nor more than a datagram the route to the
+  server carries unfragmented (its MTU, or a smaller known path MTU,
+  minus 28 bytes of IPv4 and UDP header, 48 for IPv6). The answer
   buffer is that size and taken only for the lookup. A name server that
   answers FORMERR or NOTIMP is asked once more without the OPT record; it
   and a server whose answers carry no OPT record are then asked without
@@ -1096,6 +1100,10 @@ ways:
   and answer; answers up to 16 KB are read). If TCP fails, what came over
   UDP is used, as before. This works for A, AAAA (also the parallel A and
   AAAA queries of `getaddrinfo()`), PTR and the raw `res_*` calls.
+* **No fragmented answers** (RFC 9715): a UDP answer that arrived in IP
+  fragments is not used, since its later fragments can be forged without
+  knowing the query ID. It is asked again over TCP like a truncated one;
+  with TCP off, or if TCP fails, the next server is tried.
 
 ```
 dns edns_size 1232     # EDNS0 UDP size: 0 = no EDNS0, 512..4096 (default 1232)
@@ -1107,9 +1115,9 @@ dns [status]           # e.g. "EDNS0 1232 bytes, TCP fallback on; 0 server(s)
 sysctl dns.edns_size=N   sysctl dns.tcp_fallback=0|1    # the same settings
 ```
 
-`sysctl dns.stats.tcp`, `dns.stats.tcp_failed` and `dns.stats.noedns`
-count the TCP queries, the failed ones and the servers found without
-EDNS0. Run time: `Riptide DNS EDNS_SIZE 0`, `Riptide DNS TCP OFF`,
+`sysctl dns.stats.tcp`, `dns.stats.tcp_failed`, `dns.stats.noedns` and
+`dns.stats.fragmented` count the TCP queries, the failed ones, the
+servers found without EDNS0 and the fragmented answers not used. Run time: `Riptide DNS EDNS_SIZE 0`, `Riptide DNS TCP OFF`,
 `Riptide DNS` for the status; RiptidePrefs has both on the Names page.
 
 The raw BIND calls behave as BIND's without `RES_USE_EDNS0`: `res_send()`
