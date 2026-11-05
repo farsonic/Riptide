@@ -247,19 +247,43 @@ static void print_driver(const struct rt_ctl_driver *r)
 	}
 }
 
-/* net.riptide.drivers for ip -s. The driver's own statistics are fetched
- * by Riptide when someone reads them: ask again shortly for fresh ones. */
+/* a wireless driver's network and signal (after Riptide 0.36): ip -d, ip -s */
+static int has_wifi(const struct rt_ctl_driver *r, const struct rt_ctl_hdr *h)
+{
+	return (r->flags & RT_CTL_DRVF_WIFI) &&
+	       h->recsize >= offsetof(struct rt_ctl_driver, wl_age_ms) + sizeof(r->wl_age_ms);
+}
+
+static void print_wifi(const struct rt_ctl_driver *r)
+{
+	char mac[24];
+
+	cl_puts("    wifi");
+	if (r->wl_flags & RT_CTL_WLF_ASSOC)
+		cl_printf(" ssid \"%s\" bssid %s", r->wl_ssid, cl_mac(r->wl_bssid, 6, mac));
+	if (r->wl_flags & RT_CTL_WLF_SIGNAL)
+		cl_printf(" signal %lddBm noise %lddBm", (long)r->wl_signal, (long)r->wl_noise);
+	if (!(r->wl_flags & (RT_CTL_WLF_ASSOC | RT_CTL_WLF_SIGNAL)))
+		cl_puts(" not associated");
+	cl_puts("\n");
+}
+
+/* net.riptide.drivers for ip -s and ip -d. The driver's own statistics
+ * (and a wireless driver's signal) are fetched by Riptide when someone
+ * reads them: ask again shortly for fresh ones. */
 static void *get_drivers(struct rt_ctl_hdr *h)
 {
-	void *d = cl_dump(RT_CTL_DRIVERS, h);
+	/* ip -d works without the table (older Riptide) */
+	void *d = opt_stats ? cl_dump(RT_CTL_DRIVERS, h) : cl_dump_quiet(RT_CTL_DRIVERS, h);
 	u32 k;
 
 	for (k = 0; d && k < h->count; k++) {
 		struct rt_ctl_driver *r = cl_rec(d, h, k);
-		if (!strcmp(r->kind, "sana2") && r->gs_age_ms >= 500) {
+		if (!strcmp(r->kind, "sana2") &&
+		    ((opt_stats && r->gs_age_ms >= 500) || (has_wifi(r, h) && r->wl_age_ms >= 3000))) {
 			FreeVec(d);
 			Delay(10);
-			return cl_dump(RT_CTL_DRIVERS, h);
+			return opt_stats ? cl_dump(RT_CTL_DRIVERS, h) : cl_dump_quiet(RT_CTL_DRIVERS, h);
 		}
 	}
 	return d;
@@ -272,7 +296,10 @@ static void print_driver_of(const struct rt_ctl_iface *f, void *dd, const struct
 	for (k = 0; dd && k < dh->count; k++) {
 		struct rt_ctl_driver *r = cl_rec(dd, dh, k);
 		if (r->index == f->index) {
-			print_driver(r);
+			if (opt_stats)
+				print_driver(r);
+			if (has_wifi(r, dh))
+				print_wifi(r);
 			return;
 		}
 	}
@@ -501,10 +528,10 @@ static int do_show_ifs(int argc, char **argv, int i, int addrs)
 		d6 = cl_dump(RT_CTL_ADDRS6, &h6);
 	if (addrs && opt_family != 6)
 		d4 = cl_dump_quiet(RT_CTL_ADDRS4, &h4);     /* none before 0.15 */
-	if (opt_stats && !opt_brief) {
+	if ((opt_stats || opt_details) && !opt_brief)
 		dd = get_drivers(&dh);
+	if (opt_stats && !opt_brief)
 		dq = cl_dump_quiet(RT_CTL_QOS, &hq);
-	}
 	for (k = 0; k < h.count; k++) {
 		struct rt_ctl_iface *f = cl_rec(d, &h, k);
 		if (only && strcmp(f->name, only))
