@@ -230,6 +230,7 @@ struct IOStdReq {
 
 /* ---- ExecBase: only what we use, by offset ---- */
 struct ExecBase;
+#define EXECBASE_DEVLIST_OFS   350   /* struct List DeviceList */
 #define EXECBASE_LIBLIST_OFS   378   /* struct List LibList */
 #define EXECBASE_PORTLIST_OFS  392   /* struct List PortList */
 #define EXECBASE_THISTASK_OFS  276   /* struct Task *ThisTask */
@@ -239,6 +240,10 @@ struct ExecBase;
 static inline struct List *exec_liblist(struct ExecBase *eb)
 {
 	return (struct List *)((UBYTE *)eb + EXECBASE_LIBLIST_OFS);
+}
+static inline struct List *exec_devlist(struct ExecBase *eb)
+{
+	return (struct List *)((UBYTE *)eb + EXECBASE_DEVLIST_OFS);
 }
 
 /* ---- tag items (utility/tagitem.h) ---- */

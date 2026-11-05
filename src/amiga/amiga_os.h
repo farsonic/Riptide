@@ -49,6 +49,7 @@
 
 #define RTREG(r) __reg(#r)
 #define exec_liblist(eb) (&(eb)->LibList)
+#define exec_devlist(eb) (&(eb)->DeviceList)
 #ifndef NewList
 static inline void rt_newlist(struct List *l)
 {

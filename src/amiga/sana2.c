@@ -799,7 +799,23 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	bm[4].ti_Tag = TAG_DONE;
 	bm[4].ti_Data = 0;
 	si->ctl->ios2_BufferManagement = bm;
-	e = OpenDevice((CONST_STRPTR)device, unit, (struct IORequest *)si->ctl, 0);
+	/* A driver that is already loaded is opened by its name: before
+	 * AmigaOS 3.2, OpenDevice() with a path ("DEVS:Networks/x.device")
+	 * does not find the loaded copy and loads a second one, and two
+	 * copies then drive the same hardware (a diagnostic tool or a stats
+	 * program that opened the driver first leaves it loaded). */
+	{
+		const char *base = amiga_basename(device);
+		int loaded = 0;
+
+		if (base != device) {
+			Forbid();
+			loaded = FindName(exec_devlist(SysBase), (CONST_STRPTR)base) != NULL;
+			Permit();
+		}
+		e = OpenDevice((CONST_STRPTR)(loaded ? base : device), unit,
+		               (struct IORequest *)si->ctl, 0);
+	}
 	if (e) {
 		rt_snprintf(err, errlen, "cannot open %s unit %lu (error %ld)", device, (unsigned long)unit, (long)e);
 		sana2_close(&si->ai);
