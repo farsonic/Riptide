@@ -52,6 +52,10 @@ struct rt_buf {
  * whose own sum is zero (a valid IPv4 header); every other change to the
  * covered bytes must adjust it or clear the flag (rt_buf_trim() does). */
 #define RT_BUFF_CSUM_PART 0x0010
+/* Put together from fragments by IPv4 or IPv6 reassembly (or an IPv6
+ * atomic fragment): neighbor discovery (RFC 6980) and DNS answers
+ * (RFC 9715) are not accepted in that form. */
+#define RT_BUFF_FRAG    0x0020
 
 /* Allocate a buffer with 'headroom' bytes in front and room for 'size'
  * bytes of data; data == head + headroom, len == 0. NULL if out of memory.

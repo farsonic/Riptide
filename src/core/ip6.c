@@ -424,6 +424,7 @@ static void ip6_deliver(struct rt_buf *b, int tentative)
 				goto truncated;
 			if ((rt_get_be16(p + 2) & 0xfff9) == 0) {
 				hl = 8;             /* atomic fragment (RFC 6946) */
+				b->flags |= RT_BUFF_FRAG;
 				break;
 			}
 			b->flags &= (u16)~RT_BUFF_CSUM_PART;

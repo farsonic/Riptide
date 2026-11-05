@@ -147,7 +147,7 @@ static struct rt_buf *fq_assemble(struct frag_q *q)
 	}
 	b->len = hlen + q->total;
 	b->netif = q->frags.head->netif;
-	b->flags = q->frags.head->flags;
+	b->flags = q->frags.head->flags | RT_BUFF_FRAG;
 	ip = (struct rt_iphdr *)b->data;
 	ip->tot_len = rt_htons((u16)b->len);
 	ip->frag_off = 0;

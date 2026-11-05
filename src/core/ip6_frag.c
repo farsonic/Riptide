@@ -133,7 +133,7 @@ static struct rt_buf *fq6_assemble(struct f6q *q)
 	}
 	b->len = len;
 	b->netif = first->netif;
-	b->flags = first->flags;
+	b->flags = first->flags | RT_BUFF_FRAG;
 	b->l3_proto = first->l3_proto;
 	b->data[q->prev_nxt] = q->nxt;
 	ip6 = (struct rt_ip6hdr *)b->data;

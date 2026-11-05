@@ -2508,7 +2508,10 @@ sent to it is not held up or lost while the router resolves it; `netstat
 Against floods of forged advertisements, router advertisements can give
 an interface at most 16 autoconfigured addresses (public and temporary),
 8 default routers and 32 prefixes and routes; more are ignored and
-counted ("Router adverts over limits" on the Counters page).
+counted ("Router adverts over limits" on the Counters page). Neighbor
+discovery messages (RS, RA, NS, NA, Redirect) that arrive in fragments,
+reassembled or as an atomic fragment, are dropped (RFC 6980) and counted
+("Fragmented ND dropped").
 
 **Configuration** (riptide.conf or `ip`/`ifconfig`/`route` at run time):
 

@@ -293,6 +293,12 @@ void icmp6_input(struct rt_buf *b, const struct rt_ip6hdr *ip6)
 	case RT_ND_NEIGHBOR_SOLICIT:
 	case RT_ND_NEIGHBOR_ADVERT:
 	case RT_ND_REDIRECT:
+		/* RFC 6980 5: neighbor discovery never uses fragments; such
+		 * messages could hide options from RA guard */
+		if (b->flags & RT_BUFF_FRAG) {
+			rt_icmp6stat.InNdFragmented++;
+			break;
+		}
 		if (nif && len >= 8)
 			nd6_input(nif, b, ip6, m, len, ip6->hlim == 255);
 		break;

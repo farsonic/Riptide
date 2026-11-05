@@ -1292,6 +1292,46 @@ static void test_reassembly(void)
 	}
 }
 
+/* RFC 6980: neighbor discovery that came in fragments (reassembled or an
+ * atomic fragment) is dropped; the same NS whole is answered */
+static void test_nd_fragmented(void)
+{
+	u8 ns[32], q[8 + 32];
+	rt_in6_addr sol;
+	u32 before = rt_icmp6stat.InNdFragmented;
+	u16 ck;
+
+	memset(ns, 0, sizeof(ns));
+	ns[0] = RT_ND_NEIGHBOR_SOLICIT;
+	memcpy(ns + 8, gl0.b, 16);
+	ns[24] = 1; ns[25] = 1; memcpy(ns + 26, peer_mac, 6);
+	rt_in6_solnode(&sol, &gl0);
+	ck = rt_csum_fold(rt_csum_partial(ns, sizeof(ns), rt_csum_pseudo6(&peer_ll, &sol, RT_IPPROTO_ICMPV6, sizeof(ns))));
+	memcpy(ns + 2, &ck, 2);
+	flush(&eth0_cap);
+	/* two fragments of 16 bytes */
+	q[0] = RT_IPPROTO_ICMPV6;
+	q[1] = 0;
+	rt_put_be32(q + 4, 77);
+	rt_put_be16(q + 2, 1);
+	memcpy(q + 8, ns, 16);
+	deliver(&eth0, mkpkt(&peer_ll, &sol, RT_IPPROTO_FRAGMENT, 255, q, 8 + 16), peer_mac);
+	rt_put_be16(q + 2, 16);
+	memcpy(q + 8, ns + 16, 16);
+	deliver(&eth0, mkpkt(&peer_ll, &sol, RT_IPPROTO_FRAGMENT, 255, q, 8 + 16), peer_mac);
+	CHECK(rt_icmp6stat.InNdFragmented == before + 1 && count_type(&eth0_cap, RT_ND_NEIGHBOR_ADVERT) == 0);
+	/* an atomic fragment */
+	rt_put_be16(q + 2, 0);
+	rt_put_be32(q + 4, 78);
+	memcpy(q + 8, ns, 32);
+	deliver(&eth0, mkpkt(&peer_ll, &sol, RT_IPPROTO_FRAGMENT, 255, q, sizeof(q)), peer_mac);
+	CHECK(rt_icmp6stat.InNdFragmented == before + 2 && count_type(&eth0_cap, RT_ND_NEIGHBOR_ADVERT) == 0);
+	/* whole: answered */
+	deliver(&eth0, mkpkt(&peer_ll, &sol, RT_IPPROTO_ICMPV6, 255, ns, sizeof(ns)), peer_mac);
+	CHECK(rt_icmp6stat.InNdFragmented == before + 2 && count_type(&eth0_cap, RT_ND_NEIGHBOR_ADVERT) == 1);
+	flush(&eth0_cap);
+}
+
 static void test_fragmentation_pmtu(void)
 {
 	struct rt_ip6_out o;
@@ -1494,6 +1534,7 @@ int main(void)
 	test_gratuitous_na();
 	test_exthdr();
 	test_reassembly();
+	test_nd_fragmented();
 	test_fragmentation_pmtu();
 	test_select_route();
 	test_dest_sort();
