@@ -202,6 +202,8 @@ struct ndif {
 	int    nmcref;
 	int    allmulti;
 	int    want_online;
+	struct rt_timer linkt;        /* asks the driver for its link (nd_link_timer) */
+	int    rx_seen;               /* frames since the last link poll */
 	struct rt_drv_stats drv;
 };
 
@@ -313,11 +315,39 @@ static void nd_link_apply(struct ndif *ni)
 	if (up == ni->ai.online)
 		return;
 	ni->ai.online = up;
-	if (up)
+	if (up) {
 		nif->flags |= RT_IFF_RUNNING;
-	else
+		rt_log(RT_LOG_INFO, "%s: link up, %u Mb/s%s", nif->name, (unsigned)ni->link.ndls_SpeedMbps,
+		       (ni->link.ndls_Flags & NDLF_FULL_DUPLEX) ? " full duplex" : "");
+	} else {
 		nif->flags &= ~RT_IFF_RUNNING;
-	rt_log(RT_LOG_INFO, "%s: link %s", nif->name, up ? "up" : "down");
+		rt_log(RT_LOG_INFO, "%s: link down", nif->name);
+	}
+}
+
+/* The link from NETDEV_CMD_GET_LINK. A PHY is rarely up the moment the
+ * driver starts (autonegotiation takes a few seconds), and not every
+ * driver reports changes (NDCF_LINK_EVENTS): ask every second while the
+ * link is down, every 5 s while it is up. Lock held. */
+static void nd_link_timer(void *arg)
+{
+	struct ndif *ni = arg;
+	struct NetDevLinkState ls;
+
+	if (!ni->started)
+		return;
+	memset(&ls, 0, sizeof(ls));
+	if (nd_ctl(ni, NETDEV_CMD_GET_LINK, &ls, sizeof(ls)) == 0) {
+		/* frames came in meanwhile: the link is there */
+		if (ni->rx_seen)
+			ls.ndls_Flags |= NDLF_UP;
+		Forbid();
+		ni->link = ls;
+		Permit();
+		nd_link_apply(ni);
+	}
+	ni->rx_seen = 0;
+	rt_timer_after(&ni->linkt, ni->ai.online ? 5000 : 1000);
 }
 
 /* refill the receive pool to ND_RX_POOL buffers */
@@ -380,6 +410,14 @@ static void nd_poll(struct amiga_if *ai)
 	if (nrx) {
 		rt_rx_batch_end();
 		rt_drv_batch(nif, nrx);
+		/* frames arrive: the link is there, whatever the driver said */
+		ni->rx_seen = 1;
+		if (!ai->online) {
+			Forbid();
+			ni->link.ndls_Flags |= NDLF_UP;
+			Permit();
+			nd_link_apply(ni);
+		}
 	}
 	nd_refill(ni);
 	while ((t = done) != NULL) {
@@ -540,6 +578,7 @@ static void nd_close(struct amiga_if *ai)
 	ULONG i;
 
 	rt_lock();
+	rt_timer_del(&ni->linkt);
 	if (ni->ai.nif.index)
 		rt_netif_remove(&ni->ai.nif);
 	rt_unlock();
@@ -606,6 +645,7 @@ int netdev_open_if(const char *name, const char *device, ULONG unit, int mtu, ch
 	ni->sops.nso_RxInput = nd_rx_input;
 	ni->sops.nso_TxDone = nd_tx_done;
 	ni->sops.nso_LinkChange = nd_link_change;
+	rt_timer_init(&ni->linkt, nd_link_timer, ni);
 
 	ni->port = CreateMsgPort();
 	ni->io = ni->port ? (struct IOStdReq *)CreateIORequest(ni->port, sizeof(struct IOStdReq)) : NULL;
@@ -707,6 +747,7 @@ int netdev_open_if(const char *name, const char *device, ULONG unit, int mtu, ch
 
 	rt_lock();
 	nd_link_apply(ni);
+	rt_timer_after(&ni->linkt, ni->ai.online ? 5000 : 1000);
 	i = (ULONG)rt_netif_add(nif);
 	if ((LONG)i >= 0) {
 		ni->ai.next = amiga_ifs;
