@@ -1184,6 +1184,22 @@ static void test_multi(void)
 	CHECK((t && !strstr(t, "lan1") && strstr(t, "interface eth2") && strstr(t, "ifconfig eth0 alias 10.0.1.2/24\n")) ||
 	      (fprintf(stderr, "%s", t), 0));
 	free(t);
+	rp_conf_commit(&c);
+
+	/* removing the first card: the next one (eth2) takes its place */
+	CHECK(rp_iface_count(&c.cur) == 2 && rp_iface_users(&c.cur, 0) == 1);   /* its alias */
+	rp_iface_delete(&c.cur, 0);
+	CHECK(!strcmp(c.cur.ifc[0].ifname, "eth2") && rp_iface_count(&c.cur) == 1);
+	CHECK(rp_list_count(&c, RP_LIST_ALIAS) == 1 && !strcmp(rp_list_get(&c, RP_LIST_ALIAS, 0), "172.17.0.9/16"));
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);
+	t = text_of(&c);
+	CHECK((t && !strstr(t, "eth0") && strstr(t, "interface eth2") && strstr(t, "ifconfig eth2 alias 172.17.0.9/16\n")) ||
+	      (fprintf(stderr, "%s", t), 0));
+	free(t);
+	/* the only card stays */
+	rp_iface_delete(&c.cur, 0);
+	CHECK(!strcmp(c.cur.ifc[0].ifname, "eth2"));
 	rp_conf_free(&c);
 
 	/* a VLAN or address on a card that is not there: kept as other lines;

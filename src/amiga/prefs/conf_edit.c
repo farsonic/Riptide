@@ -1653,8 +1653,22 @@ int rp_iface_users(const struct rp_model *m, int k)
 {
 	int i, n = 0;
 
-	if (k <= 0 || k >= RP_NIF || !m->ifc[k].ifname[0])
+	if (k < 0 || k >= RP_NIF || !m->ifc[k].ifname[0])
 		return 0;
+	if (k == 0) {
+		/* the first card's entries: no prefix, or its own name */
+		for (i = 0; i < RP_NALIAS && m->alias[i][0]; i++)
+			n += !strchr(m->alias[i], RP_IFSEP) || on_iface(m->alias[i], m->ifc[0].ifname, 1);
+		for (i = 0; i < RP_NVLAN && m->vlan[i][0]; i++)
+			n += !strchr(m->vlan[i], RP_IFSEP) || on_iface(m->vlan[i], m->ifc[0].ifname, 0);
+		for (i = 0; i < RP_NADDR6 && m->addr6[i][0]; i++)
+			n += !strchr(m->addr6[i], RP_IFSEP) || on_iface(m->addr6[i], m->ifc[0].ifname, 1);
+		for (i = 0; i < RP_NROUTE && m->route[i][0]; i++)
+			n += dev_on_iface(m->route[i], m->ifc[0].ifname);
+		for (i = 0; i < RP_NNEIGH && m->neigh[i][0]; i++)
+			n += dev_on_iface(m->neigh[i], m->ifc[0].ifname);
+		return n;
+	}
 	for (i = 0; i < RP_NALIAS && m->alias[i][0]; i++)
 		n += on_iface(m->alias[i], m->ifc[k].ifname, 1);
 	for (i = 0; i < RP_NVLAN && m->vlan[i][0]; i++)
@@ -1706,13 +1720,15 @@ static void dev_rename(char *base, int n, size_t len, const char *old, const cha
 	}
 }
 
-/* drop the entries of a list on card 'name'; the rest move up */
-static void list_drop(char *base, int n, size_t len, const char *name, int vlans)
+/* drop the entries of a list on card 'name' (with bare, also those without
+ * a prefix: the first card's); the rest move up */
+static void list_drop_on(char *base, int n, size_t len, const char *name, int vlans, int bare)
 {
 	int i = 0, j;
 
 	while (i < n && base[(size_t)i * len]) {
-		if (!on_iface(base + (size_t)i * len, name, vlans)) {
+		const char *e = base + (size_t)i * len;
+		if (!on_iface(e, name, vlans) && !(bare && !strchr(e, RP_IFSEP))) {
 			i++;
 			continue;
 		}
@@ -1722,8 +1738,60 @@ static void list_drop(char *base, int n, size_t len, const char *name, int vlans
 	}
 }
 
+#define list_drop(base, n, len, name, vlans) list_drop_on(base, n, len, name, vlans, 0)
+
+/* entries prefixed "name|" lose the prefix (they are on the first card now) */
+static void list_unprefix(char *base, int n, size_t len, const char *name)
+{
+	size_t l = strlen(name);
+	int i;
+
+	for (i = 0; i < n && base[(size_t)i * len]; i++) {
+		char *e = base + (size_t)i * len;
+		if (!ncase(e, name, l) && e[l] == RP_IFSEP)
+			memmove(e, e + l + 1, strlen(e + l + 1) + 1);
+	}
+}
+
+/* Removing the first card: the next card takes its place (slot 0), so
+ * there is always a first card. The only card cannot go. */
+static void iface_delete_first(struct rp_model *m)
+{
+	char name[RP_IFNAME];
+	int j;
+
+	for (j = 1; j < RP_NIF && !m->ifc[j].ifname[0]; j++)
+		;
+	if (j == RP_NIF)
+		return;
+	copy(name, m->ifc[0].ifname, sizeof(name));
+	list_drop_on(m->alias[0], RP_NALIAS, RP_ALIASLEN, name, 1, 1);
+	list_drop_on(m->vlan[0], RP_NVLAN, RP_VLANLEN, name, 0, 1);
+	list_drop_on(m->addr6[0], RP_NADDR6, RP_ADDR6LEN, name, 1, 1);
+	dev_drop(m->route[0], RP_NROUTE, RP_ROUTELEN, name);
+	dev_drop(m->neigh[0], RP_NNEIGH, RP_NEIGHLEN, name);
+	list_unprefix(m->alias[0], RP_NALIAS, RP_ALIASLEN, m->ifc[j].ifname);
+	list_unprefix(m->vlan[0], RP_NVLAN, RP_VLANLEN, m->ifc[j].ifname);
+	list_unprefix(m->addr6[0], RP_NADDR6, RP_ADDR6LEN, m->ifc[j].ifname);
+	m->ifc[0] = m->ifc[j];
+	memset(&m->ifc[j], 0, sizeof(m->ifc[j]));
+}
+
+int rp_iface_count(const struct rp_model *m)
+{
+	int k, n = 0;
+
+	for (k = 0; k < RP_NIF; k++)
+		n += m->ifc[k].ifname[0] != 0;
+	return n;
+}
+
 void rp_iface_delete(struct rp_model *m, int k)
 {
+	if (k == 0 && m->ifc[0].ifname[0]) {
+		iface_delete_first(m);
+		return;
+	}
 	if (k <= 0 || k >= RP_NIF || !m->ifc[k].ifname[0])
 		return;
 	list_drop(m->alias[0], RP_NALIAS, RP_ALIASLEN, m->ifc[k].ifname, 1);

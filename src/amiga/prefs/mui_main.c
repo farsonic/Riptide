@@ -647,7 +647,7 @@ static Object *cards_build(void)
 		"The network cards Riptide uses. Click one to see and change its settings below and on the "
 		"Address page.",
 		"Adds a network card: enter its SANA-II device and unit below.",
-		"Removes the card chosen, with its VLANs and their addresses. The first card stays.",
+		"Removes the card chosen, with its VLANs and their addresses. When it is the first card, the next one takes its place.",
 	};
 	Object *lvo, *col;
 	int k;
@@ -1324,8 +1324,10 @@ static void card_cmd(ULONG id)
 				mui_set(win, MUIA_Window_ActiveObject, (ULONG)fobj[n]);
 		return;
 	}
-	if (k == 0)
+	if (rp_iface_count(&rp_cfg.cur) < 2) {
+		rp_message(tr("Riptide needs one card: change this one's device instead, or add another card first."));
 		return;
+	}
 	n = rp_iface_users(&rp_cfg.cur, k);
 	if (n) {
 		if (n == 1)
@@ -1337,6 +1339,8 @@ static void card_cmd(ULONG id)
 			return;
 	}
 	rp_iface_delete(&rp_cfg.cur, k);
+	if (k == 0)
+		card_choose(0);       /* the next card is the first one now */
 	refresh_all();
 }
 

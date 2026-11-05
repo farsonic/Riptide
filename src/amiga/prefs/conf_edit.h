@@ -217,11 +217,14 @@ int  rp_list_add(struct rp_conf *c, int which, const char *text);
 
 /* Interfaces of a model. rp_iface_add(): a new card in a free slot (a
  * free name ethN, DHCP), its index or -1 when all RP_NIF are used.
- * rp_iface_delete(): removes card k (not the first) with its VLANs and the
- * addresses on it and on its VLANs. rp_iface_rename(): card k gets a new
+ * rp_iface_delete(): removes card k with its VLANs, the addresses on it
+ * and on its VLANs and the routes and neighbours through them; when k is
+ * the first card the next one takes its place (the only card stays). rp_iface_rename(): card k gets a new
  * name; the address and VLAN entries that name it follow. */
 int  rp_iface_add(struct rp_model *m);
 void rp_iface_delete(struct rp_model *m, int k);
+/* how many cards the model has */
+int  rp_iface_count(const struct rp_model *m);
 void rp_iface_rename(struct rp_model *m, int k, const char *name);
 /* the card named name (case does not matter), -1 if none */
 int  rp_iface_find(const struct rp_model *m, const char *name);
