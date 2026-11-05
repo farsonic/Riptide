@@ -751,6 +751,87 @@ static int sana2_vlan_rx(struct rt_netif *nif, int on)
 	return 0;
 }
 
+/* The version of a driver file: "V.R" from its "$VER: name V.R (date)"
+ * string; 0 when the file cannot be read or has none. */
+static int file_version(const char *path, UWORD *ver, UWORD *rev)
+{
+	BPTR fh = Open((CONST_STRPTR)path, MODE_OLDFILE);
+	char *buf;
+	const char *p, *end;
+	LONG size, got = 0, r;
+	int found = 0;
+
+	if (!fh)
+		return 0;
+	Seek(fh, 0, OFFSET_END);
+	size = Seek(fh, 0, OFFSET_BEGINNING);
+	/* drivers are small; a huge file is not one worth reading */
+	buf = size > 0 && size <= 1024L * 1024 ? rt_malloc((u32)size + 1) : NULL;
+	while (buf && got < size && (r = Read(fh, buf + got, size - got)) > 0)
+		got += r;
+	Close(fh);
+	if (!buf)
+		return 0;
+	buf[got] = 0;
+	end = buf + got;
+	for (p = buf; p + 5 <= end && !found; p++) {
+		if (memcmp(p, "$VER:", 5))
+			continue;
+		/* "$VER: name V.R (date)": the first word that starts with a digit */
+		for (p += 5; p < end && *p && *p != '\n' && *p != '\r';) {
+			while (p < end && *p == ' ')
+				p++;
+			if (p < end && *p >= '0' && *p <= '9') {
+				const char *q;
+				unsigned long v = rt_strtoul(p, &q, 10);
+				if (q < end && *q == '.') {
+					*ver = (UWORD)v;
+					*rev = (UWORD)rt_strtoul(q + 1, NULL, 10);
+					found = 1;
+				}
+				break;
+			}
+			while (p < end && *p && *p != ' ' && *p != '\n' && *p != '\r')
+				p++;
+		}
+		break;
+	}
+	rt_free(buf);
+	return found;
+}
+
+/* Does a driver answer netdev (lwip-amiga's NIC interface, NETDEV_CMD_ATTACH
+ * 0x8900) in its NSCMD_DEVICEQUERY list, but not SANA-II? Such a driver
+ * cannot be used through SANA-II at all. */
+static int netdev_only(struct s2if *si)
+{
+	struct {
+		ULONG format, size;
+		UWORD type, subtype;
+		UWORD *cmds;
+	} nsq;
+	struct IOStdReq *io = (struct IOStdReq *)si->ctl;
+	int netdev = 0, s2 = 0;
+	UWORD *c;
+
+	memset(&nsq, 0, sizeof(nsq));
+	io->io_Command = 0x4000;               /* NSCMD_DEVICEQUERY */
+	io->io_Flags = 0;
+	io->io_Length = sizeof(nsq);
+	io->io_Data = &nsq;
+	io->io_Actual = 0;
+	if (DoIO((struct IORequest *)io) == 0 && nsq.cmds)
+		for (c = nsq.cmds; *c; c++) {
+			if (*c == 0x8900)
+				netdev = 1;
+			if (*c == S2_DEVICEQUERY || *c == CMD_READ)
+				s2 = 1;
+		}
+	memset(si->ctl->ios2_SrcAddr, 0, sizeof(si->ctl->ios2_SrcAddr));
+	si->ctl->ios2_PacketType = 0;
+	return netdev && !s2;
+}
+
 int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int raw, int reads,
                   char *err, u32 errlen)
 {
@@ -809,9 +890,24 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		int loaded = 0;
 
 		if (base != device) {
+			struct Library *ld;
+			UWORD lv = 0, lr = 0, fv, fr;
 			Forbid();
-			loaded = FindName(exec_devlist(SysBase), (CONST_STRPTR)base) != NULL;
+			ld = (struct Library *)FindName(exec_devlist(SysBase), (CONST_STRPTR)base);
+			if (ld) {
+				lv = ld->lib_Version;
+				lr = ld->lib_Revision;
+			}
 			Permit();
+			loaded = ld != NULL;
+			/* the same name may be another driver: Emu68's genet.device 4.x
+			 * (netdev) and 3.x (SANA-II) are both "genet.device". Only the
+			 * same version is the same driver. */
+			if (loaded && file_version(device, &fv, &fr) && (fv != lv || fr != lr)) {
+				rt_log(RT_LOG_INFO, "%s: %s %u.%u is loaded, %s is %u.%u: opening the file", name, base,
+				       (unsigned)lv, (unsigned)lr, device, (unsigned)fv, (unsigned)fr);
+				loaded = 0;
+			}
 		}
 		e = OpenDevice((CONST_STRPTR)(loaded ? base : device), unit,
 		               (struct IORequest *)si->ctl, 0);
@@ -828,6 +924,13 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 	q.SizeAvailable = sizeof(q);
 	si->ctl->ios2_StatData = &q;
 	if (s2_ctl(si, S2_DEVICEQUERY) != 0) {
+		if (netdev_only(si)) {
+			rt_snprintf(err, errlen, "%s is a netdev driver for lwip-amiga, not SANA-II (for genet.device: "
+			            "use the SANA-II 3.x driver, Storage/DEVS/Networks/genet.device in the Emu68 archive)",
+			            device);
+			sana2_close(&si->ai);
+			return -RT_ENXIO;
+		}
 		/* very old drivers: assume Ethernet */
 		q.HardwareType = S2WireType_Ethernet;
 		q.MTU = 1500;
