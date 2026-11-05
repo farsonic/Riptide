@@ -16,6 +16,7 @@
 #include "sock_internal.h"
 #include "infra.h"
 #include "resolv_internal.h"
+#include "ip6_internal.h"
 
 #define MDNS_PORT     5353
 #define MDNS_TTL      120              /* RFC 6762 10: records with host names */
@@ -43,6 +44,7 @@ static struct {
 	char fqdn[72];            /* name + ".local" */
 	u32 sig;                  /* interfaces and addresses last announced */
 	u32 answered, conflicts_total;
+	u32 offlink;              /* packets from off-link sources ignored */
 } md;
 
 /* an interface we listen on, and the records it answers with */
@@ -713,11 +715,24 @@ static void check_probe(struct mdns_if *f, const u8 *m, u32 len)
 	rt_free(r);
 }
 
-static int on_link(const struct mdns_if *f, const rt_in6_addr *a)
+/* RFC 6762 11: only packets from the local link count. The socket is
+ * bound to the wildcard address, so unicast queries from anywhere reach
+ * it; and the hop limit of a query need not be 255. IPv4: a source on one
+ * of the interface's subnets, or IPv4 link-local. IPv6: a link-local
+ * source or one on an on-link prefix of this interface. */
+int mdns_on_link(const struct rt_netif *nif, const rt_in6_addr *a)
 {
-	if (!rt_in6_is_v4mapped(a))
-		return 1;       /* IPv6: hop limit / link-local scope is the check */
-	return f->n4 && rt_netif_on_link(f->nif, rt_in6_v4(a));
+	u32 v4;
+
+	if (!rt_in6_is_v4mapped(a)) {
+		if (rt_in6_is_linklocal(a))
+			return 1;
+		return route6_onlink(a) == nif;
+	}
+	v4 = rt_in6_v4(a);
+	if ((rt_ntohl(v4) & 0xffff0000u) == 0xa9fe0000u)
+		return 1;       /* 169.254/16 (RFC 3927) */
+	return rt_netif_on_link(nif, v4);
 }
 
 static void answer_query(struct mdns_if *f, const u8 *m, u32 len, const struct rt_dgram_cb *cb)
@@ -728,7 +743,7 @@ static void answer_query(struct mdns_if *f, const u8 *m, u32 len, const struct r
 	struct rr *r;
 	rt_in6_addr dst;
 
-	if (!on_link(f, &cb->from.sin6_addr) || qd == 0)
+	if (qd == 0)
 		return;
 	r = rt_malloc(sizeof(*r));
 	if (!r)
@@ -795,6 +810,10 @@ static void mdns_input(const u8 *m, u32 len, const struct rt_dgram_cb *cb)
 
 	if (!f || len < 12 || md.state < MS_PROBE)
 		return;
+	if (!mdns_on_link(f->nif, &cb->from.sin6_addr)) {
+		md.offlink++;
+		return;
+	}
 	flags = rt_get_be16(m + 2);
 	if (flags & 0x7800)
 		return;                              /* opcode not QUERY: ignore */
@@ -917,10 +936,13 @@ void rt_mdns_status(char *buf, u32 len)
 			o += (u32)rt_snprintf(ifs + o, sizeof(ifs) - o, "%s%s", o ? "," : "", mif[i].nif->name);
 	if (!md.enabled)
 		rt_strlcpy(buf, "mDNS: off", len);
-	else
-		rt_snprintf(buf, len, "mDNS: %s.local, %s%s%s, %lu answers, %lu conflicts",
-		            md.name[0] ? md.name : "?", st[md.state], ifs[0] ? " on " : "", ifs,
-		            (unsigned long)md.answered, (unsigned long)md.conflicts_total);
+	else {
+		o = (u32)rt_snprintf(buf, len, "mDNS: %s.local, %s%s%s, %lu answers, %lu conflicts",
+		                     md.name[0] ? md.name : "?", st[md.state], ifs[0] ? " on " : "", ifs,
+		                     (unsigned long)md.answered, (unsigned long)md.conflicts_total);
+		if (md.offlink && o < len)
+			rt_snprintf(buf + o, len - o, ", %lu off-link ignored", (unsigned long)md.offlink);
+	}
 }
 
 int rt_mdns_command(int argc, char **argv, char *out, u32 outlen)

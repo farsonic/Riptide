@@ -21,6 +21,7 @@
 #include "rt/riptide.h"
 #include "rt/rt_host.h"
 #include "../src/core/ip6_internal.h"
+#include "../src/core/resolv_internal.h"
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; \
@@ -1327,6 +1328,25 @@ static void test_select_route(void)
 	CHECK(rt_ip6_route(P("2001:dbb::1"), NULL, &nh) == -RT_EHOSTUNREACH);
 	CHECK(rt_ip6_route(P("fe80::5"), &eth1, &nh) == 0 && nh.netif == &eth1);
 	CHECK(rt_ip6_route(&gl0, NULL, &nh) == 0 && nh.netif == rt_loopback_if);
+	/* mDNS answers the local link only (RFC 6762 11): link-local, an
+	 * on-link prefix of this interface; not a routed or foreign source */
+	{
+		rt_in6_addr m4;
+		CHECK(mdns_on_link(&eth0, P("fe80::99")));
+		CHECK(mdns_on_link(&eth0, P("2001:db8:2::77")));
+		CHECK(!mdns_on_link(&eth1, P("2001:db8:2::77")));
+		CHECK(!mdns_on_link(&eth0, P("2001:db9:5::1")));
+		CHECK(!mdns_on_link(&eth0, P("2600::1")));
+		rt_in6_set_v4mapped(&m4, rt_htonl(0xa9fe0102u));     /* 169.254.1.2 */
+		CHECK(mdns_on_link(&eth0, &m4));
+		rt_in6_set_v4mapped(&m4, rt_htonl(0xcb007105u));     /* 203.0.113.5 */
+		CHECK(!mdns_on_link(&eth0, &m4));
+		CHECK(rt_netif_set_addr(&eth0, rt_htonl(0xcb007101u), rt_htonl(0xffffff00u), 0) == 0);
+		CHECK(mdns_on_link(&eth0, &m4));
+		rt_in6_set_v4mapped(&m4, rt_htonl(0xc6336405u));     /* 198.51.100.5 */
+		CHECK(!mdns_on_link(&eth0, &m4));
+		rt_netif_set_addr(&eth0, 0, 0, 0);
+	}
 	CHECK(rt_route6_delete(P("2001:db9::"), 32, NULL, NULL, 0) == 1);
 	CHECK(rt_route6_delete(P("2001:db9::"), 32, NULL, NULL, 0) == -RT_ESRCH);
 	rt_in6_addr_del(&eth0, &ula);

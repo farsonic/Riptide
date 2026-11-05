@@ -489,7 +489,11 @@ apart; if another host already uses it Riptide picks `NAME-2.local`,
 name in use). Questions with the unicast-response bit are answered by
 unicast, others by multicast at most once a second per interface, known
 answers are suppressed, and queries from other ports than 5353 get the
-"legacy unicast" answer of RFC 6762 6.7. On by default; `mdns off` in the
+"legacy unicast" answer of RFC 6762 6.7. Only packets from the local link
+count (RFC 6762 11): an IPv4 source on one of the interface's subnets or in
+169.254/16, an IPv6 link-local source or one on an on-link prefix of that
+interface; others are ignored (counted as "off-link ignored" in the status
+line). On by default; `mdns off` in the
 configuration (or `Riptide MDNS OFF`) turns it off and says goodbye (TTL 0).
 DNS-SD service records are not published.
 

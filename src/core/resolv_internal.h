@@ -47,6 +47,9 @@ int dns_expand_ex(const u8 *msg, u32 len, u32 off, char *out, u32 outlen, u32 *n
  * (count, *ttl the smallest TTL; DNS_IGNORE when it is not one) */
 int mdns_parse_answer(const u8 *m, u32 len, u16 id, const char *name, u16 qtype, u32 *a4,
                       rt_in6_addr *a6, int max, u32 *ttl);
+struct rt_netif;
+/* mdns.c: is a (v4-mapped or IPv6) source on nif's link? (RFC 6762 11) */
+int mdns_on_link(const struct rt_netif *nif, const rt_in6_addr *a);
 int dns_parse_response(const u8 *msg, u32 len, u16 id, const char *qname, u16 qtype,
                        struct dns_result *res);
 
