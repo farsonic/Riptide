@@ -392,40 +392,154 @@ void rt_free(void *p)
 		FreeVec(p);
 }
 
-/* ---- entropy ---- */
+/* ---- entropy ----
+ *
+ * AmigaOS has no random number source, so the ChaCha20 generator in
+ * src/core/random.c is fed here: at start with the seed saved by the last
+ * run (ENVARC:Riptide/random-seed), the EClock, the date, exec's task
+ * switch counters and the video beam position; then with the beam
+ * position at every received frame (rt_os_jitter()) and the EClock at
+ * every wakeup of the stack process. The seed file is rewritten at once
+ * (a crash must not replay it), every hour and at shutdown.
+ */
 
-static u32 rnd_state = 0x2545f491u;
+#define SEED_FILE "ENVARC:Riptide/random-seed"
+#define SEED_DIR  "ENVARC:Riptide"
+#define SEED_LEN  32
+/* public ExecBase fields: IdleCount, DispCount (ULONG), Quantum and
+ * Elapsed (UWORD) */
+#define EXECBASE_IDLECOUNT_OFS 280
+#define EXECBASE_DISPCOUNT_OFS 284
+#define EXECBASE_QUANTUM_OFS   288
+#define CUSTOM_VHPOSR ((volatile UWORD *)0xdff006)
+
+static u32 jitter_count;
+
+static u32 exec_long(int ofs)
+{
+	return *(volatile ULONG *)((UBYTE *)SysBase + ofs);
+}
+
+u32 rt_os_jitter(void)
+{
+	/* the vamos self test has no custom chips */
+	if (amiga_virtual_clock)
+		return ++jitter_count;
+	return ((u32)*CUSTOM_VHPOSR << 16) ^ exec_long(EXECBASE_DISPCOUNT_OFS) ^ ++jitter_count;
+}
 
 u32 rt_random32(void)
 {
-	u32 x = rnd_state;
+	u32 x;
 
-	if (TimerBase && !amiga_virtual_clock) {
-		struct EClockVal ev;
-		ReadEClock(&ev);
-		x ^= ev.ev_lo * 0x9e3779b9u;
-	}
-	/* xorshift32 */
-	x ^= x << 13;
-	x ^= x >> 17;
-	x ^= x << 5;
-	if (x == 0)
-		x = 0x6d2b79f5u;
-	rnd_state = x;
-	return x * 0x2c1b3c6du;
+	rt_random_bytes(&x, sizeof(x));
+	return x;
 }
 
 void rt_random_bytes(void *buf, size_t n)
 {
-	u8 *p = buf;
+	/* any task may ask; the generator state is shared */
+	Forbid();
+	rt_rng_bytes(buf, (u32)n);
+	Permit();
+}
 
-	while (n) {
-		u32 r = rt_random32();
-		size_t k = n < 4 ? n : 4;
-		memcpy(p, &r, k);
-		p += k;
-		n -= k;
+/* the EClock at a wakeup of the stack process (one read per loop) */
+void amiga_random_event(u32 sigs)
+{
+	rt_rng_add(rt_prof_ticks() ^ sigs);
+}
+
+static APTR seed_quiet(APTR win)
+{
+	struct Process *me = (struct Process *)FindTask(NULL);
+	APTR old = me->pr_WindowPtr;
+
+	me->pr_WindowPtr = win;     /* (APTR)-1: no "insert volume" requester */
+	return old;
+}
+
+/* Save fresh generator output for the next start (stack process only). */
+void amiga_random_save(void)
+{
+	u8 seed[SEED_LEN];
+	APTR win;
+	BPTR fh, l;
+
+	rt_random_bytes(seed, sizeof(seed));
+	win = seed_quiet((APTR)-1);
+	l = Lock((CONST_STRPTR)SEED_DIR, SHARED_LOCK);
+	if (!l) {
+		l = Lock((CONST_STRPTR)"ENVARC:", SHARED_LOCK);
+		if (l) {
+			UnLock(l);
+			l = CreateDir((CONST_STRPTR)SEED_DIR);
+		}
 	}
+	if (l) {
+		UnLock(l);
+		fh = Open((CONST_STRPTR)SEED_FILE, MODE_NEWFILE);
+		if (fh) {
+			Write(fh, seed, sizeof(seed));
+			Close(fh);
+		}
+	}
+	seed_quiet(win);
+	memset(seed, 0, sizeof(seed));
+}
+
+/* Seed the generator; with use_file, from (and then renewing) the seed
+ * file. Called by the stack process before rt_init() makes its keys. */
+void amiga_random_init(int use_file)
+{
+	struct {
+		struct EClockVal ev[4];
+		struct DateStamp ds;
+		struct timeval tv;
+		u32 idle, disp, quantum, mem;
+		APTR task, sp;
+		u32 beam[8];
+		u8 seed[SEED_LEN];
+	} s;
+	APTR win;
+	BPTR fh;
+	int i;
+
+	memset(&s, 0, sizeof(s));
+	if (use_file) {
+		win = seed_quiet((APTR)-1);
+		fh = Open((CONST_STRPTR)SEED_FILE, MODE_OLDFILE);
+		if (fh) {
+			Read(fh, s.seed, sizeof(s.seed));
+			Close(fh);
+		}
+		seed_quiet(win);
+	}
+	if (TimerBase && !amiga_virtual_clock) {
+		ReadEClock(&s.ev[0]);
+		GetSysTime(&s.tv);
+	}
+	DateStamp(&s.ds);
+	s.idle = exec_long(EXECBASE_IDLECOUNT_OFS);
+	s.disp = exec_long(EXECBASE_DISPCOUNT_OFS);
+	s.quantum = exec_long(EXECBASE_QUANTUM_OFS);
+	s.mem = AvailMem(0);
+	s.task = FindTask(NULL);
+	s.sp = &s;
+	/* the beam position, sampled between slow calls of varying cost */
+	for (i = 0; i < 8; i++) {
+		s.beam[i] = rt_os_jitter();
+		if (TimerBase && !amiga_virtual_clock && i < 3)
+			ReadEClock(&s.ev[i + 1]);
+		else
+			s.beam[i] ^= AvailMem(i & 1 ? MEMF_CHIP : MEMF_FAST);
+	}
+	Forbid();
+	rt_rng_stir(&s, sizeof(s));
+	Permit();
+	memset(&s, 0, sizeof(s));
+	if (use_file)
+		amiga_random_save();
 }
 
 /* ---- logging: ring buffer, flushed by the stack process ---- */

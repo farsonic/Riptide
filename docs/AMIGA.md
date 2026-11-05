@@ -130,6 +130,12 @@ when a program opens it.
 You do not need SetPatch tricks or `LIBS:` files: the libraries exist only
 while Riptide runs.
 
+Riptide keeps 32 random bytes in `ENVARC:Riptide/random-seed` (it creates
+the drawer if needed) and renews them at every start, every hour and when
+it quits: the seed for its random number generator, which makes TCP
+sequence numbers, DNS IDs and similar values unpredictable. Do not copy
+this file to other machines; delete it if a disk image with it is cloned.
+
 ## Command line
 
 ```

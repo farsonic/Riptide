@@ -46,6 +46,12 @@ extern u32 amiga_virtual_ms;
 /* Format with the core's rt_vsnprintf and log. */
 void amiga_out(const char *fmt, ...);     /* stack process only: Write(Output()) */
 int  amiga_dbg_dump(const char *path, char *err, u32 errlen);  /* "debug dump FILE" */
+/* Seeding the random generator (os_amiga.c): init before rt_init(), with
+ * the seed file when use_file; save the seed file (stack process); one
+ * EClock reading per wakeup of the stack process. */
+void amiga_random_init(int use_file);
+void amiga_random_save(void);
+void amiga_random_event(u32 sigs);
 
 /* ---- libs.c: library construction ---------------------------------- */
 

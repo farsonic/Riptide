@@ -1813,12 +1813,24 @@ static int final(int r)
  * A answer as usual (the IPv4 fallback needs it). The caller sets *r4
  * and *r6 to R_PENDING, or to the answer from the negative cache: that
  * query is then not sent. */
+/* An ID for the second query of a pair: independent of the first (one
+ * must not give the other away), but not equal to it. */
+static u16 dns_other_id(u16 id)
+{
+	u16 o;
+
+	do
+		o = (u16)rt_random32();
+	while (o == id);
+	return o;
+}
+
 static void dns_exchange46(struct dns_work *w, int *r4, int *r6)
 {
 	int fd4 = -1, fd6 = -1, att, s, r, pre4 = *r4 != R_PENDING, pre6 = *r6 != R_PENDING;
 #define DONE4 (pre4 || final(*r4))
 #define DONE6 (pre6 || final(*r6))
-	u16 id4 = (u16)rt_random32(), id6 = (u16)(id4 ^ 0x5a5a);
+	u16 id4 = (u16)rt_random32(), id6 = dns_other_id(id4);
 	int l4 = build_q(w, w->q, id4, w->qname, DNS_TYPE_A);
 	int l6 = build_q(w, w->q6, id6, w->qname, DNS_TYPE_AAAA);
 

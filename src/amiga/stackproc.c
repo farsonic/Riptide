@@ -22,6 +22,9 @@ static u32 timer_deadline;
 static struct timerequest *ireq;    /* the idle tick, apart from treq */
 static int idle_pending;
 static int quit_requested;
+static u32 seed_saved_ms;          /* when the random seed was last saved */
+
+#define SEED_SAVE_MS (3600u * 1000u)
 
 struct amiga_if *amiga_if_find(const char *name)
 {
@@ -768,6 +771,8 @@ int amiga_stack_start(const char *config, int selftest)
 	 * driver promptly; 'priority N' in the config changes it. */
 	if (!selftest)
 		SetTaskPri(FindTask(NULL), AMIGA_STACK_PRI);
+	/* before rt_init() draws the TCP and IP hash keys */
+	amiga_random_init(!selftest);
 	r = rt_init();
 	if (r < 0) {
 		amiga_out("Riptide: initialisation failed: %s\n", rt_strerror(-r));
@@ -858,6 +863,7 @@ void amiga_stack_loop(void)
 	char msg[128];
 
 	quit_requested = 0;
+	seed_saved_ms = rt_now_ms();
 	for (;;) {
 		struct amiga_if *ai;
 		ULONG wait = amiga_kick_mask | SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_F, sigs;
@@ -899,6 +905,11 @@ void amiga_stack_loop(void)
 			t0 = RT_PROF_T0();
 			sigs = Wait(wait);
 			RT_PROF_ADD(RT_PROF_IDLE, t0);
+		}
+		amiga_random_event(sigs);
+		if ((u32)(rt_now_ms() - seed_saved_ms) >= SEED_SAVE_MS) {
+			seed_saved_ms = rt_now_ms();
+			amiga_random_save();
 		}
 		if (timer_pending && CheckIO(&treq->tr_node)) {
 			WaitIO(&treq->tr_node);
@@ -977,6 +988,7 @@ void amiga_stack_stop(void)
 	}
 	amiga_ifs = NULL;
 	netdev_cleanup();          /* the signals the backends allocated */
+	amiga_random_save();       /* the next start begins from here */
 	mni_cleanup();
 	if (ireq) {
 		if (idle_pending) {

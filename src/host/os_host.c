@@ -285,6 +285,15 @@ void rt_random_bytes(void *buf, size_t n)
 	}
 }
 
+/* the kernel generator needs no feeding; this is just a fast clock */
+u32 rt_os_jitter(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (u32)ts.tv_nsec;
+}
+
 /* ---- logging ---- */
 
 int rt_log_level = RT_LOG_WARN;

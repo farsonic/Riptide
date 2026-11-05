@@ -50,10 +50,23 @@ u32   rt_os_mem_avail(int *chip_only);
  * called in the program's context. */
 void  rt_os_program_name(char *buf, u32 len);
 
-/* Entropy: should mix in a high resolution clock. Used for ISNs,
- * ephemeral ports, DNS ids, DHCP xids, hash secrets. */
+/* Cryptographically strong random numbers (the host's kernel generator,
+ * on AmigaOS the ChaCha20 generator of random.c). Used for ISNs,
+ * ephemeral ports, DNS ids, DHCP xids, hash secrets. Any task. */
 u32  rt_random32(void);
 void rt_random_bytes(void *buf, size_t n);
+/* A cheap, fast-changing machine reading (beam position, cycle counter)
+ * for the entropy pool; called for every received frame. */
+u32  rt_os_jitter(void);
+
+/* The generator of src/core/random.c, for OS layers without one.
+ * rt_rng_add() mixes one event word into the pool (cheap); rt_rng_stir()
+ * absorbs seed material at once; rt_rng_bytes() hands out output. The
+ * OS layer serialises stir/bytes. */
+void rt_rng_add(u32 v);
+void rt_rng_stir(const void *data, u32 len);
+void rt_rng_bytes(void *buf, u32 len);
+void rt_chacha20_block(const u32 key[8], u32 counter, const u32 nonce[3], u8 out[64]);
 
 /* Files, for debug output (packet captures). Called from the stack
  * thread (on AmigaOS a process), without the lock. NULL or -1 on error. */

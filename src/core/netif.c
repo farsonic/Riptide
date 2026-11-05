@@ -135,6 +135,12 @@ int rt_netif_add(struct rt_netif *nif)
 	if (nif->mtu < 68)
 		return -RT_EINVAL;
 	nif->index = netif_next_index++;
+	/* the hardware address tells otherwise identical machines apart */
+	{
+		u32 i;
+		for (i = 0; i < nif->hwlen && i < RT_MAX_HWADDR; i += 2)
+			rt_rng_add(((u32)nif->hwaddr[i] << 8 | nif->hwaddr[i + 1]) ^ (i << 16));
+	}
 	if (!rt_ip4_auto_enable && nif->type != RT_IFT_LOOP)
 		nif->ip4_disabled = 1;
 	nif->flags &= (u16)~(RT_IFF_UP | RT_IFF_RUNNING);
@@ -439,6 +445,8 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
                     const u8 *srchw, u16 flags)
 {
 	RT_PROF_EV(RT_EV_DRV_RX);
+	/* frame arrival times feed the entropy pool (one cheap read) */
+	rt_rng_add(rt_os_jitter() ^ ((u32)b->len << 16));
 	nif->stats.ipackets++;
 	nif->stats.ibytes += b->len;
 	if (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST))

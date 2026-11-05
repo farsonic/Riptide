@@ -729,6 +729,26 @@ bsdsocket.library and riptide.library. 0x20 case randomisation is not
 done: `dns_name_eq()` ignores case already, and the gain is small next to
 random IDs and ports.
 
+## Random numbers (random.c)
+
+Every secret the stack keeps comes from `rt_random32()`/`rt_random_bytes()`:
+the SipHash keys for TCP ISNs, timestamp offsets, SYN cookies and port
+offsets, the IPv4 ID key, DNS IDs and source ports, DHCP xids, temporary
+IPv6 addresses, fragment IDs. The host build uses the kernel's generator.
+AmigaOS has none, so `src/core/random.c` provides one: ChaCha20 (RFC 8439)
+in "fast key erasure" form (each block's first 32 bytes become the next
+key, the other 32 are output), so outputs reveal nothing about the state
+and a state read later does not reveal earlier outputs. `os_amiga.c` seeds
+it before `rt_init()` draws the keys, from `ENVARC:Riptide/random-seed`
+(32 bytes from the last run; rewritten at once after reading, every hour
+and at shutdown), the EClock, the date, exec's task switch counters and
+the video beam position. Then every received frame mixes the beam
+position (one chip register read, `rt_os_jitter()`) and every wakeup of
+the stack process the EClock into a pool that is folded into the key
+after 32 events; the interfaces' MAC addresses go into the pool when they
+are added. The very first start without a seed file depends on timing
+alone. DNS queries sent as a pair (A and AAAA) get independent IDs.
+
 ## Sending UDP: pacing, batches, no checksum (0.17)
 
 **Pacing.** A UDP socket remembers the interface its last datagram left
