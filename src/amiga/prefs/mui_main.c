@@ -696,14 +696,39 @@ static Object *cards_build(void)
 	}
 	mui_do(col, OM_ADDMEMBER, (ULONG)rect());
 	mui_do(iflist, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime, (ULONG)app, 2, MUIM_Application_ReturnID, ID_IFLIST);
-	/* the list and its buttons, and under them the chosen card's driver
-	 * (not in the compact layout: on a 256-line screen the window would no
-	 * longer fit; the list still names each card's kind) */
-	drvlbl = theme_compact() ? NULL : label(drvtext, QL_NOTE);
+	/* the list and its buttons, and under them the chosen card's driver */
+	drvlbl = label(drvtext, QL_NOTE);
 	return mui_new(MUIC_Group, MUIA_Group_Spacing, 4, MUIA_VertWeight, 0, MUIA_Group_Child,
 	               (ULONG)mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, MUIA_Group_Child,
 	                              (ULONG)lvo, MUIA_Group_Child, (ULONG)col, TAGEND),
 	               drvlbl ? MUIA_Group_Child : TAG_IGNORE, (ULONG)drvlbl, TAGEND);
+}
+
+/* the gadget and label of field i, with its help, notification and value */
+static Object *field_build(int i)
+{
+	const struct rp_field *f = &rp_fields[i];
+	Object *g;
+	char name[48], dbuf[32];
+
+	g = field_gadget(i);
+	flab[i] = label(f->label, QL_LABEL);
+	if (!g || !flab[i])
+		return NULL;
+	fobj[i] = g;
+	rp_flabel(i, name, sizeof(name));
+	fhelp[i] = bubble_def(name, f->help, rp_fdefault(i, dbuf, sizeof(dbuf)));
+	mui_set(g, MUIA_ShortHelp, (ULONG)fhelp[i]);
+	mui_set(flab[i], MUIA_ShortHelp, (ULONG)fhelp[i]);
+	if (f->type == F_CHECK || f->type == F_CYCLE)
+		mui_do(g, MUIM_Notify, f->type == F_CHECK ? MUIA_Selected : MUIA_Cycle_Active, MUIV_EveryTime,
+		       (ULONG)app, 2, MUIM_Application_ReturnID, ID_FIELD + i);
+	else if ((f->flags & FL_IF) && f->page == P_IFACE)
+		/* Return in a card's field: the list of cards shows it */
+		mui_do(g, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime, (ULONG)app, 2,
+		       MUIM_Application_ReturnID, ID_IFEDIT);
+	field_to_gadget(i);
+	return g;
 }
 
 /* the settings of a page: a label and a gadget per row */
@@ -729,30 +754,30 @@ static Object *field_page(int p)
 	for (i = 0; i < rp_nfields; i++) {
 		const struct rp_field *f = &rp_fields[i];
 		Object *g, *cell;
-		char name[48], dbuf[32];
+		int j;
 		if (f->page != p)
 			continue;
-		g = field_gadget(i);
-		flab[i] = label(f->label, QL_LABEL);
-		if (!g || !flab[i])
+		g = field_build(i);
+		if (!g)
 			return NULL;
-		fobj[i] = g;
-		rp_flabel(i, name, sizeof(name));
-		fhelp[i] = bubble_def(name, f->help, rp_fdefault(i, dbuf, sizeof(dbuf)));
-		mui_set(g, MUIA_ShortHelp, (ULONG)fhelp[i]);
-		mui_set(flab[i], MUIA_ShortHelp, (ULONG)fhelp[i]);
 		/* strings fill the column; check boxes and cycles keep their size */
 		cell = f->type == F_STR || f->type == F_NUM ? g : hgroup2(g, rect());
-		mui_do(cols, OM_ADDMEMBER, (ULONG)flab[i]);
+		/* compact layout: a check box marked FL_RIGHT goes on this row, at
+		 * its right (as in the GadTools editor), so the page fits 256 lines */
+		j = i + 1;
+		if (theme_compact() && j < rp_nfields && rp_fields[j].page == p && (rp_fields[j].flags & FL_RIGHT) &&
+		    rp_fields[j].type == F_CHECK) {
+			Object *g2 = field_build(j);
+			if (!g2)
+				return NULL;
+			cell = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 8, MUIA_Group_Child, (ULONG)cell,
+			               MUIA_Group_Child, (ULONG)flab[j], MUIA_Group_Child, (ULONG)g2, TAGEND);
+			if (!cell)
+				return NULL;
+			i = j;
+		}
+		mui_do(cols, OM_ADDMEMBER, (ULONG)flab[f - rp_fields]);
 		mui_do(cols, OM_ADDMEMBER, (ULONG)cell);
-		if (f->type == F_CHECK || f->type == F_CYCLE)
-			mui_do(g, MUIM_Notify, f->type == F_CHECK ? MUIA_Selected : MUIA_Cycle_Active, MUIV_EveryTime,
-			       (ULONG)app, 2, MUIM_Application_ReturnID, ID_FIELD + i);
-		else if ((f->flags & FL_IF) && p == P_IFACE)
-			/* Return in a card's field: the list of cards shows it */
-			mui_do(g, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime, (ULONG)app, 2,
-			       MUIM_Application_ReturnID, ID_IFEDIT);
-		field_to_gadget(i);
 	}
 	if (p == P_IFACE) {
 		Object *cards = cards_build();
