@@ -42,6 +42,8 @@ static u16 id_bucket[ID_BUCKETS];
 static u16 id_stamp[ID_BUCKETS];      /* rt_now_ms() of the last use, low 16 bits */
 static u8  id_key[16];
 static u16 id_global;
+static u32 id_last_s, id_last_d, id_last_i;    /* the last flow's bucket */
+static u8  id_last_p, id_last_ok;
 
 u16 rt_ip_select_id(u32 saddr, u32 daddr, u8 proto)
 {
@@ -49,10 +51,22 @@ u16 rt_ip_select_id(u32 saddr, u32 daddr, u8 proto)
 	u32 i;
 	u16 now = (u16)rt_now_ms(), gap;
 
-	memcpy(msg, &saddr, 4);
-	memcpy(msg + 4, &daddr, 4);
-	msg[8] = proto;
-	i = (u32)rt_siphash(msg, sizeof(msg), id_key) & (ID_BUCKETS - 1);
+	/* a bulk transfer sends to one destination: the bucket of the last
+	 * (source, destination, protocol) is kept, so SipHash (64-bit work,
+	 * slow on a 68020) runs only when the flow changes */
+	if (saddr == id_last_s && daddr == id_last_d && proto == id_last_p && id_last_ok) {
+		i = id_last_i;
+	} else {
+		memcpy(msg, &saddr, 4);
+		memcpy(msg + 4, &daddr, 4);
+		msg[8] = proto;
+		i = (u32)rt_siphash(msg, sizeof(msg), id_key) & (ID_BUCKETS - 1);
+		id_last_s = saddr;
+		id_last_d = daddr;
+		id_last_p = proto;
+		id_last_i = i;
+		id_last_ok = 1;
+	}
 	gap = (u16)(now - id_stamp[i]);
 	id_stamp[i] = now;
 	if (gap)

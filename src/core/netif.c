@@ -499,8 +499,14 @@ void rt_netif_input(struct rt_netif *nif, struct rt_buf *b, u16 ethertype,
                     const u8 *srchw, u16 flags)
 {
 	RT_PROF_EV(RT_EV_DRV_RX);
-	/* frame arrival times feed the entropy pool (one cheap read) */
-	rt_rng_add(rt_os_jitter() ^ ((u32)b->len << 16));
+	/* frame arrival times feed the entropy pool: every 16th frame (the
+	 * timing read goes over the chip bus on a PiStorm, which is slow per
+	 * frame; a few hundred samples a second are plenty) */
+	{
+		static u8 rng_n;
+		if (!(rng_n++ & 15))
+			rt_rng_add(rt_os_jitter() ^ ((u32)b->len << 16));
+	}
 	nif->stats.ipackets++;
 	nif->stats.ibytes += b->len;
 	if (flags & (RT_BUFF_BCAST | RT_BUFF_MCAST))
