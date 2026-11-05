@@ -134,6 +134,8 @@ static struct rt_ctl_tcpinfo tcp[3];
 static struct rt_ctl_dns dns;
 static struct rt_tcp_stats tcpst;
 static struct rt_ip_stats ipst;
+static struct rt_ctl_driver wdrv[2];
+static u32 drvrec;
 
 static void setup(void)
 {
@@ -264,6 +266,19 @@ static void setup(void)
 	tcpst.TCPECNNegotiated = 1;
 	memset(&ipst, 0, sizeof(ipst));
 	ipst.InDiscards = 3;
+	/* eth0 a wireless driver, associated; eth0.10 (as if) not associated */
+	memset(wdrv, 0, sizeof(wdrv));
+	drvrec = sizeof(wdrv[0]);
+	strcpy(wdrv[0].name, "eth0");
+	strcpy(wdrv[0].kind, "sana2");
+	wdrv[0].flags = RT_CTL_DRVF_WIFI;
+	wdrv[0].wl_flags = RT_CTL_WLF_ASSOC | RT_CTL_WLF_SIGNAL;
+	strcpy(wdrv[0].wl_ssid, "HomeNet");
+	memcpy(wdrv[0].wl_bssid, "\x12\x34\x56\x78\x9a\xbc", 6);
+	wdrv[0].wl_signal = -55;
+	wdrv[0].wl_noise = -90;
+	strcpy(wdrv[1].name, "eth0.10");
+	wdrv[1].flags = RT_CTL_DRVF_WIFI;
 }
 
 static void feed(struct rp_status_model *m, u32 now, int full)
@@ -310,6 +325,9 @@ static void feed(struct rp_status_model *m, u32 now, int full)
 	in.tcpst_len = sizeof(tcpst);
 	in.ipst = &ipst;
 	in.ipst_len = sizeof(ipst);
+	in.drivers = (const u8 *)wdrv;
+	in.ndrivers = 2;
+	in.drvrec = drvrec;
 	rp_status_update(m, &in);
 }
 
@@ -364,6 +382,35 @@ static void test_model(void)
 	CHECK_STR(l3, "IPv6 off");
 	rp_st_if_rates(&m.ifs[1], b, sizeof(b));
 	CHECK_STR(b, "In 8.00 KB/s  Out 2.00 KB/s");
+	/* the wireless line */
+	CHECK(m.wifi);
+	CHECK(rp_st_if_wifi(&m.ifs[1], b, sizeof(b)) == 1);
+	CHECK_STR(b, "WiFi \"HomeNet\" 12:34:56:78:9a:bc, signal -55 dBm, noise -90 dBm");
+	CHECK(rp_st_if_wifi(&m.ifs[2], b, sizeof(b)) == 1);
+	CHECK_STR(b, "WiFi: not connected to a network");
+	CHECK(rp_st_if_wifi(&m.ifs[0], b, sizeof(b)) == 0 && !b[0]);
+	m.ifs[1].wl_flags = RT_CTL_WLF_SIGNAL;       /* the network's name not known yet */
+	rp_st_if_wifi(&m.ifs[1], b, sizeof(b));
+	CHECK_STR(b, "WiFi signal -55 dBm, noise -90 dBm");
+	rp_st_if_wifi(&m.ifs[1], b, 12);
+	CHECK_STR(b, "WiFi signal");                 /* cut, still ended */
+	/* an older Riptide: records without the wireless fields */
+	{
+		static struct rp_status_model m2;
+		rp_status_init(&m2);
+		drvrec = (u32)offsetof(struct rt_ctl_driver, wl_flags);
+		feed(&m2, 100000, 1);
+		CHECK(!m2.wifi && !m2.ifs[1].wifi);
+		drvrec = sizeof(wdrv[0]);
+		/* and the driver no longer wireless: the line goes */
+		feed(&m2, 101000, 1);
+		CHECK(m2.wifi && m2.ifs[1].wifi);
+		wdrv[0].flags = 0;
+		wdrv[1].flags = 0;
+		feed(&m2, 102000, 1);
+		CHECK(!m2.wifi && !m2.ifs[1].wifi);
+		wdrv[0].flags = wdrv[1].flags = RT_CTL_DRVF_WIFI;
+	}
 	rp_st_if_totals(&m.ifs[1], b, sizeof(b));
 	CHECK(strstr(b, "1 234 567 packets") != NULL);
 	/* connections: the one moving data first, the listener last */

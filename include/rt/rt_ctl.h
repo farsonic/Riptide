@@ -510,6 +510,12 @@ static inline int rt_ctl_prefixlen(u32 mask_n)
 #define RT_CTL_DRVF_DROPS   0x08  /* drv_drops valid (MNI: frames refused, no free buffer) */
 #define RT_CTL_DRVF_SHARED  0x10  /* rxq[0] is one buffer pool for every packet type (MNI) */
 #define RT_CTL_DRVF_NOQ     0x20  /* no receive queue to report (host TAP) */
+#define RT_CTL_DRVF_WIFI    0x40  /* wl_* valid: a wireless SANA-II driver (after Riptide 0.36) */
+#define RT_CTL_DRVF_LINKEV  0x80  /* the driver reports link changes (S2_ONEVENT, netdev events) */
+
+/* rt_ctl_driver.wl_flags */
+#define RT_CTL_WLF_ASSOC    0x01  /* associated with a network (wl_ssid, wl_bssid valid) */
+#define RT_CTL_WLF_SIGNAL   0x02  /* wl_signal, wl_noise valid */
 
 struct rt_ctl_drv_rxq {
 	u32  cfg;                 /* reads (receive buffers) configured */
@@ -558,6 +564,15 @@ struct rt_ctl_driver {
 	u32  gs_age_ms;           /* age of gs_* and special[] */
 	u32  nspecial;
 	struct rt_ctl_drv_special special[RT_CTL_DRV_NSPECIAL];
+	/* after Riptide 0.36, RT_CTL_DRVF_WIFI: S2_GETNETWORKINFO and
+	 * S2_GETSIGNALQUALITY of a wireless driver, as last read. Older
+	 * versions send shorter records: check rt_ctl_hdr.recsize. */
+	u32  wl_flags;            /* RT_CTL_WLF_* */
+	char wl_ssid[36];         /* network name (up to 32 bytes, NUL-terminated) */
+	u8   wl_bssid[6];         /* the access point */
+	u16  wl_pad;
+	s32  wl_signal, wl_noise; /* dBm */
+	u32  wl_age_ms;           /* age of the wl_* values */
 };
 
 /* State names shared by the core and the tools (never NULL). */

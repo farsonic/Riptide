@@ -294,7 +294,7 @@ static struct rt_route *pmtu_find(u32 dst, u32 now)
 
 int rt_ip_route(u32 dst, struct rt_nexthop *nh)
 {
-	struct rt_route *r, *best = NULL, *pm;
+	struct rt_route *r, *best = NULL, *pm, *nolink = NULL;
 	struct rt_netif *nif;
 	u32 now = rt_now_ms();
 
@@ -327,9 +327,19 @@ lookup:
 		}
 		if (!r->netif || !(r->netif->flags & RT_IFF_UP))
 			continue;
+		/* the interface is up but its link is not (cable out, WiFi
+		 * not associated): another interface's route wins, even a
+		 * less specific one; this one only when there is none */
+		if (!(r->netif->flags & RT_IFF_RUNNING)) {
+			if (!nolink)
+				nolink = r;
+			continue;
+		}
 		best = r;
 		break;
 	}
+	if (nolink && (!best || (best->flags & RT_RTF_REJECT)))
+		best = nolink;   /* it came before (is more specific than) the reject */
 	if (!best) {
 		int llmc = (rt_ntohl(dst) & 0xffffff00u) == 0xe0000000u;
 		if (dst == RT_INADDR_BROADCAST || llmc) {

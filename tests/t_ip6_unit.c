@@ -4,6 +4,7 @@
  * moved forward with rt_host_advance_clock()):
  *   - address text forms (RFC 4291 / RFC 5952) and helpers
  *   - interface bring-up: link-local address, DAD (nonce), MLDv2, RS
+ *   - RFC 7559 RS backoff, stopped by an RA, restarted on link up
  *   - router advertisements: default route, prefix/SLAAC, MTU, hop limit,
  *     RDNSS/DNSSL; SLAAC lifetimes and the two-hour rule; temporaries
  *   - the neighbour cache state machine and NS/NA handling
@@ -411,12 +412,12 @@ static void test_bringup(void)
 		      len == 16 && m[8] == 1 && !memcmp(m + 10, eth0_mac, 6));
 		rt_buf_free(b);
 	}
-	/* three solicitations, 4 s apart, then silence */
+	/* RFC 7559: no answer, so again after 4 s, then 8 s (each +-10 %) */
 	advance(9000);
-	CHECK(count_type(&eth0_cap, RT_ND_ROUTER_SOLICIT) == 2);
+	CHECK(count_type(&eth0_cap, RT_ND_ROUTER_SOLICIT) == 1);
 	flush(&eth0_cap);
 	advance(10000);
-	CHECK(count_type(&eth0_cap, RT_ND_ROUTER_SOLICIT) == 0);
+	CHECK(count_type(&eth0_cap, RT_ND_ROUTER_SOLICIT) == 1);
 	flush(&eth0_cap);
 	/* the identifier is stable across down/up */
 	rt_lock();
@@ -1122,6 +1123,69 @@ static void test_ratelimit(void)
 	rt_unlock();
 }
 
+/* RFC 7559 router solicitation retransmissions */
+static struct rt_netif eth2;
+static struct cap eth2_cap;
+static const u8 eth2_mac[6] = { 0x02, 0, 0, 0, 0, 0x12 };
+
+static void test_rs_backoff(void)
+{
+	u32 rt, i, n;
+	u8 m[200];
+
+	/* the arithmetic: RAND -0.1 (rnd 0), 0 (1000), +0.1 (2000) */
+	CHECK(ip6_rs_backoff_ms(0, 0) == 3600 && ip6_rs_backoff_ms(0, 1000) == 4000 &&
+	      ip6_rs_backoff_ms(0, 2000) == 4400);
+	CHECK(ip6_rs_backoff_ms(4000, 1000) == 8000 && ip6_rs_backoff_ms(4000, 0) == 7600 &&
+	      ip6_rs_backoff_ms(4000, 2000) == 8400);
+	for (rt = 0, i = 0; i < 20; i++)
+		rt = ip6_rs_backoff_ms(rt, 1000);
+	CHECK(rt == 3600000);                         /* MRT */
+	CHECK(ip6_rs_backoff_ms(3600000, 2000) == 3960000 && ip6_rs_backoff_ms(2000000, 0) == 3240000);
+	for (rt = 0, i = 0; i < 2000; i++) {
+		u32 prev = rt;
+		rt = ip6_rs_backoff_ms(rt, rt_random32());
+		if (!prev)
+			CHECK(rt >= 3600 && rt <= 4400);
+		else
+			CHECK(rt >= 3240000 ? rt <= 3960000 : rt >= prev * 19 / 10 && rt <= prev * 21 / 10 + 1);
+	}
+
+	make_if(&eth2, &eth2_cap, "eth2", eth2_mac, RT_IFT_ETHER);
+	rt_lock();
+	rt_netif_up(&eth2);
+	rt_unlock();
+	advance(3500);                                /* DAD, then the first RS within 1 s */
+	CHECK(count_type(&eth2_cap, RT_ND_ROUTER_SOLICIT) == 1);
+	flush(&eth2_cap);
+	advance(4500);
+	CHECK(count_type(&eth2_cap, RT_ND_ROUTER_SOLICIT) == 1);
+	flush(&eth2_cap);
+	/* a router answers: no more solicitations */
+	n = build_ra(m, 0, 0, 0, NULL, 0, 0, 0, 0);
+	deliver(&eth2, mkicmp(&rtr_ll, P("ff02::1"), 255, m, n), rtr_mac);
+	advance(40000);
+	CHECK(count_type(&eth2_cap, RT_ND_ROUTER_SOLICIT) == 0);
+	flush(&eth2_cap);
+	/* the link comes back: one at once, the backoff starts over */
+	rt_lock();
+	rt_netif_link_change(&eth2, 0);
+	CHECK(!(eth2.flags & RT_IFF_RUNNING));
+	rt_netif_link_change(&eth2, 1);
+	CHECK(eth2.flags & RT_IFF_RUNNING);
+	rt_unlock();
+	advance(10);
+	CHECK(count_type(&eth2_cap, RT_ND_ROUTER_SOLICIT) == 1);
+	flush(&eth2_cap);
+	advance(4500);
+	CHECK(count_type(&eth2_cap, RT_ND_ROUTER_SOLICIT) == 1);
+	flush(&eth2_cap);
+	rt_lock();
+	rt_netif_remove(&eth2);
+	rt_unlock();
+	flush(&eth2_cap);
+}
+
 static void test_fuzz(void)
 {
 	static const u8 echo[16] = { 128, 0, 0, 0, 0x12, 0x34, 0, 1, 'f', 'u', 'z', 'z', 1, 2, 3, 4 };
@@ -1543,6 +1607,7 @@ int main(void)
 	test_ra_flood();
 	test_stable_key();
 	test_fuzz();
+	test_rs_backoff();
 	rt_lock();
 	rt_netif_remove(&eth0);
 	rt_netif_remove(&eth1);

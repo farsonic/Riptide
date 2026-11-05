@@ -308,7 +308,7 @@ static int better_default(const struct rt_route6 *a, const struct rt_route6 *b)
 
 int rt_ip6_route(const rt_in6_addr *dst, const struct rt_netif *oif, struct rt_nexthop6 *nh)
 {
-	struct rt_route6 *r, *best = NULL, *pm;
+	struct rt_route6 *r, *best = NULL, *pm, *nolink = NULL;
 	struct rt_netif *nif;
 	u32 now = rt_ip6_seconds();
 
@@ -351,9 +351,18 @@ int rt_ip6_route(const rt_in6_addr *dst, const struct rt_netif *oif, struct rt_n
 		}
 		if (!nif_usable(r->netif) || (oif && r->netif != oif))
 			continue;
+		/* no link (cable out, WiFi not associated): only when no
+		 * interface with a link has a route */
+		if (!(r->netif->flags & RT_IFF_RUNNING)) {
+			if (!nolink || (r->plen == nolink->plen && better_default(r, nolink)))
+				nolink = r;
+			continue;
+		}
 		if (!best || (best->flags & RT_RTF_REJECT) || better_default(r, best))
 			best = r;
 	}
+	if (nolink && (!best || ((best->flags & RT_RTF_REJECT) && nolink->plen >= best->plen)))
+		best = nolink;
 	if (!best)
 		return -RT_ENETUNREACH;
 	if (best->flags & RT_RTF_REJECT)

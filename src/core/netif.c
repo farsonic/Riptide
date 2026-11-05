@@ -393,6 +393,9 @@ void rt_netif_up(struct rt_netif *nif)
 {
 	u16 nf = nif->flags | RT_IFF_UP | RT_IFF_RUNNING;
 
+	/* the driver said there is no link: up, but not running yet */
+	if (nif->link_down)
+		nf &= (u16)~RT_IFF_RUNNING;
 	/* a VLAN interface receives through its parent: that comes up too,
 	 * and the VLAN runs only while the parent does */
 	if (nif->vlan_parent) {
@@ -415,6 +418,57 @@ void rt_netif_up(struct rt_netif *nif)
 	rt_igmp_if_up(nif);
 	rt_ip6_if_up(nif);
 	rt_vlan_parent_changed(nif);
+	rt_kick();
+}
+
+/* The link is back: find out whether this is the network we were on
+ * (DHCP confirms the lease, IPv6 solicits routers) and tell the routers
+ * and switches about us again (ARP announcements, IGMP reports). */
+static void link_attach(struct rt_netif *nif)
+{
+	int i;
+
+	if (!(nif->flags & RT_IFF_UP))
+		return;
+	if (nif->type == RT_IFT_ETHER && !nif->ip4_disabled) {
+		if (nif->addr)
+			rt_arp_announce(nif, nif->addr);
+		for (i = 0; i < nif->nalias; i++)
+			rt_arp_announce(nif, nif->alias[i].addr);
+	}
+	rt_igmp_if_up(nif);
+	rt_dhcp_link_up(nif);
+	rt_ip6_link_up(nif);
+}
+
+void rt_netif_link_change(struct rt_netif *nif, int up)
+{
+	struct rt_netif *v;
+
+	up = up != 0;
+	if (up == !nif->link_down)
+		return;
+	nif->link_down = (u8)!up;
+	if (up && (nif->flags & RT_IFF_UP) &&
+	    (!nif->vlan_parent || (nif->vlan_parent->flags & RT_IFF_RUNNING)))
+		nif->flags |= RT_IFF_RUNNING;
+	else if (!up)
+		nif->flags &= (u16)~RT_IFF_RUNNING;
+	rt_route_changed();
+	rt_vlan_parent_changed(nif);
+	if (up) {
+		link_attach(nif);
+		for (v = netif_list; v; v = v->next)
+			if (v->vlan_parent == nif && (v->flags & RT_IFF_RUNNING))
+				link_attach(v);
+	} else {
+		/* the neighbours may be on another network when it is back */
+		rt_arp_flush(nif, 1);
+		if (nif->tx_waiters) {
+			nif->tx_waiters = 0;
+			rt_udp_tx_wake(nif);
+		}
+	}
 	rt_kick();
 }
 

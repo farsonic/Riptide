@@ -862,32 +862,40 @@ DISPATCHER(table_dispatch)
 /* ==================================================================
  * ifview: every interface
  * ================================================================== */
-#define IFV_LINES 4
+#define IFV_LINES 5             /* the last one for a wireless interface */
 struct ifview_data {
 	struct MUI_EventHandlerNode ehn;
 	const struct rp_status_model *m;
 	int shown, first;           /* the first interface shown */
 	int fit;                    /* how many fit (as last drawn) */
 	/* what is on screen, for updates */
-	int valid, drawn_nif, drawn_first;
+	int valid, drawn_nif, drawn_first, drawn_wifi;
 	const char *drawn_msg;      /* the message shown instead of interfaces */
 	LONG drawn_w, drawn_h;
 	char cache[RP_ST_NIF][IFV_LINES][120];
 	struct gstate gs[RP_ST_NIF];
 };
 
-static LONG ifv_blockh(void)
+/* the lines of an interface: one more for every interface when one has
+ * a wireless driver (the blocks stay the same height) */
+static int ifv_lines(int wifi)
 {
-	return (LONG)(theme_compact() ? 3 : 4) * (theme_fh() + 1) + (theme_compact() ? 3 : 7);
+	return (theme_compact() ? 3 : 4) + (wifi ? 1 : 0);
+}
+
+static LONG ifv_blockh(int wifi)
+{
+	return (LONG)ifv_lines(wifi) * (theme_fh() + 1) + (theme_compact() ? 3 : 7);
 }
 
 static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 {
 	struct RastPort *rp = _rp(obj);
-	LONG y = _mtop(obj), bh = ifv_blockh(), fh = theme_fh(), l = _mleft(obj), r = _mright(obj);
+	int wifi = d->m && d->m->wifi;
+	LONG y = _mtop(obj), bh = ifv_blockh(wifi), fh = theme_fh(), l = _mleft(obj), r = _mright(obj);
 	LONG gw = (r - l) / 3, tw;
 	char ln[IFV_LINES][120];
-	int i, k, fit, nl = theme_compact() ? 3 : 4;
+	int i, k, fit, nl = ifv_lines(wifi);
 
 	if (gw < 90)
 		gw = 90;
@@ -917,7 +925,7 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 		d->first = 0;
 	d->fit = fit;
 	/* everything again when the interfaces or the size changed */
-	if (update && (!d->valid || d->drawn_nif != d->m->nif || d->drawn_w != _mwidth(obj) ||
+	if (update && (!d->valid || d->drawn_nif != d->m->nif || d->drawn_wifi != wifi || d->drawn_w != _mwidth(obj) ||
 	               d->drawn_h != _mheight(obj) || d->drawn_first != d->first)) {
 		theme_fill(rp, l, _mtop(obj), r, _mbottom(obj), tpen(T_WINDOW));
 		update = 0;
@@ -940,8 +948,10 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 		LONG yy = y + 2;
 		rp_st_if_lines(f, ln[0], ln[1], ln[2], sizeof(ln[0]));
 		rp_st_if_rates(f, ln[3], sizeof(ln[3]));
-		if (nl == 3)
+		if (theme_compact())
 			rt_strlcpy(ln[2], ln[3], sizeof(ln[2]));
+		if (wifi)
+			rp_st_if_wifi(f, ln[nl - 1], sizeof(ln[0]));
 		for (k = 0; k < nl; k++) {
 			text_line(rp, l, yy, tw, ln[k], tpen(k == 0 || k == 1 ? T_TEXT : T_DIM), k == 0, d->cache[i][k], !update);
 			yy += fh + 1;
@@ -957,6 +967,7 @@ static void ifv_draw(struct ifview_data *d, Object *obj, int update)
 	d->valid = 1;
 	d->drawn_first = d->first;
 	d->drawn_nif = d->m->nif;
+	d->drawn_wifi = wifi;
 	d->drawn_w = _mwidth(obj);
 	d->drawn_h = _mheight(obj);
 }
@@ -980,7 +991,8 @@ DISPATCHER(ifview_dispatch)
 		break;
 	case MUIM_AskMinMax:
 		DoSuperMethodA(cl, obj, msg);
-		mc_minmax(msg, 160, 400, MUI_MAXMAX, ifv_blockh(), ifv_blockh() * 3, MUI_MAXMAX);
+		/* room for the wireless line: the model may get one later */
+		mc_minmax(msg, 160, 400, MUI_MAXMAX, ifv_blockh(1), ifv_blockh(0) * 3, MUI_MAXMAX);
 		return 0;
 	case MUIM_Setup:
 		if (!DoSuperMethodA(cl, obj, msg))

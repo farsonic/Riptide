@@ -205,6 +205,11 @@ struct rt_dhcp_info {
 int  rt_dhcp_get_info(const struct rt_netif *nif, struct rt_dhcp_info *info);
 /* Restart the lease (DHCPREQUEST now when bound, else rediscover). */
 int  rt_dhcp_renew(struct rt_netif *nif);
+/* The link came back (rt_netif_link_change): a bound client confirms its
+ * lease at once with a broadcast DHCPREQUEST (INIT-REBOOT, RFC 2131 3.2;
+ * RFC 4436 in spirit) and starts over with DHCPDISCOVER on a NAK or no
+ * answer; a client without a lease sends its DISCOVER at once. */
+void rt_dhcp_link_up(struct rt_netif *nif);
 /* Option decoding, exported for tests. Classless routes (121/249, RFC
  * 3442): count (at most max stored), -1 if malformed. Domain search (119,
  * RFC 3397): space-separated list, count or -1 if malformed. */

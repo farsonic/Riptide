@@ -919,6 +919,51 @@ eth0: SELECTING
     link-local 169.254.200.17/16
 ```
 
+### Link changes and WiFi
+
+Riptide follows the link of a card whose driver reports it: a SANA-II
+driver through `S2_ONEVENT` (online / offline, and for a wireless driver
+the association with a network: `S2EVENT_CONNECT` / `S2EVENT_DISCONNECT`
+of the SANA-II wireless extensions), a netdev driver through its link
+events. A driver that does not answer `S2_ONEVENT` keeps working as
+before; Riptide just does not learn about the cable.
+
+* **Link lost** (cable out, the access point gone): the interface stays
+  up but loses `RUNNING` (`ip link` shows `NO-CARRIER`, the Status page
+  "up, no link"), its ARP cache is flushed and routes through another
+  interface that has a link are preferred. Addresses and leases are
+  kept: a short drop costs nothing.
+* **Link back**: Riptide announces its IPv4 addresses again (gratuitous
+  ARP) and sends its multicast reports again (IGMP, MLD), DHCP confirms the lease at once with an
+  INIT-REBOOT request (a NAK or no answer starts a new discovery, so a
+  different network gives a new address within seconds) and IPv6
+  solicits routers at once. Without a router advertisement the router
+  solicitations continue with a growing interval, 4 s up to an hour
+  (RFC 7559).
+
+For a wireless SANA-II driver (WiFiPi.device on the Raspberry Pi,
+Prism2.device) Riptide also reads, from its own process and without
+waiting for the driver, the network's name and access point
+(`S2_GETNETWORKINFO`) and the signal and noise level
+(`S2_GETSIGNALQUALITY`): after the driver associates and when someone
+looks, at most every 3 seconds. A driver without these commands is
+asked once. `Riptide STATUS` shows it under the interface:
+
+```
+       SANA-II wifipi.device unit 0, Ethernet, 54000000 bit/s, online
+       WiFi "HomeNet" 12:34:56:78:9a:bc, signal -55 dBm, noise -90 dBm
+```
+
+`ip -d link` and `ip -s link` show the same as `wifi ssid "HomeNet"
+bssid 12:34:56:78:9a:bc signal -55dBm noise -90dBm`, the Status page of
+RiptidePrefs as a line under the interface, and tools find it in
+`net.riptide.drivers` (`wl_*`, flag `RT_CTL_DRVF_WIFI`).
+
+Riptide does not choose or join networks: scanning, the network name and
+the key stay with WirelessManager (or the driver's own tool). Whatever
+network it joins, Riptide notices the association and takes the
+addresses that network gives.
+
 ### TCP window per interface
 
 `tcpwindow=N` on the `interface` line, `ifconfig IF tcpwindow N` or `ip
@@ -1366,8 +1411,8 @@ seconds, or Paused, which keeps what is shown; it is kept in
 `ENVARC:Riptide/RiptidePrefs.prefs`); on other pages, or with the window
 closed, nothing is read. It changes nothing. Each second RiptidePrefs asks Riptide for its tables
 (`net.riptide.status`, `ifaces`, `tcpinfo`, `tcpstat`, `ipstat`; every
-fifth second also `addrs6`, `routes`, `dns`, `routes6`, `neigh` and
-`neigh6`) with one `RTCMD_TABLES`
+fifth second also `addrs6`, `routes`, `dns`, `routes6`, `neigh`, `neigh6`
+and `drivers`) with one `RTCMD_TABLES`
 message on the [RIPTIDE port](#the-riptide-port), so it opens no library
 and never keeps Riptide from quitting (with Riptide 0.22 or older it
 opens `riptide.library` for each read and closes it again). When Riptide
@@ -1400,7 +1445,9 @@ of speed.
   *Interfaces*: each interface (VLANs too) in three lines (state, driver
   or VLAN, MTU; IPv4 address, gateway, DHCP state and lease left or
   link-local; IPv6 addresses), its speeds in and out, and its own graph;
-  when not all fit, a line says which are shown and a click on the list
+  with a wireless driver a line more: the network, access point, signal
+  and noise (`net.riptide.drivers`, read every fifth second; see
+  [Link changes and WiFi](#link-changes-and-wifi)); when not all fit, a line says which are shown and a click on the list
   shows the next ones.
   *Connections*: every TCP connection in two lines, both ends in full
   first (`192.168.1.2:1025  to  93.184.216.34:80`, a listener only its
