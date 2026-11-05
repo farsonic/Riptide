@@ -56,9 +56,10 @@ struct ip6_if {
 	u32 base_reachable_ms, reachable_ms, retrans_ms;
 	u32 reachable_set_ms;       /* when reachable_ms was last randomised */
 	u32 rs_next_ms, mld_next_ms, mld_resp_ms;
+	u32 rs_rt_ms;               /* RFC 7559 retransmission time of the last RS, 0: none sent */
 	u32 mldv1_until_s;          /* MLDv1 querier present (RFC 3810 8.2.1) */
 	u8  cur_hlim;               /* RA Cur Hop Limit, 0 = net.inet6.ip6.hlim */
-	u8  rs_left;                /* solicitations still to send */
+	u8  rs_left;                /* 1: soliciting routers (until an RA comes) */
 	u8  mld_pending;            /* state change report retransmissions */
 	u8  ra_managed, ra_other;   /* M / O flags of the last RA */
 	u8  dhcp6_started;
@@ -85,6 +86,12 @@ void in6_slaac_prefix(struct rt_netif *nif, const rt_in6_addr *prefix, int plen,
                       u32 valid_s, u32 pref_s);
 /* MLD input (query / reports of others). */
 void mld6_input(struct rt_netif *nif, const struct rt_ip6hdr *ip6, const u8 *m, u32 len);
+/* RFC 7559 router solicitation backoff: the time to wait after an RS
+ * when the previous one waited prev_ms (0: the first RS); rnd is a random
+ * number. IRT 4 s doubling up to MRT 3600 s, each +-10 %. */
+u32  ip6_rs_backoff_ms(u32 prev_ms, u32 rnd);
+/* A router advertisement arrived on nif: stop soliciting. */
+void ip6_rs_stop(struct rt_netif *nif);
 /* Randomised ReachableTime (RFC 4861 6.3.2). */
 u32  ip6_reachable_ms(struct ip6_if *ifp);
 /* Effective hop limit for unicast. */

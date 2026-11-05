@@ -17,9 +17,13 @@
  */
 #include "ip6_internal.h"
 
-#define MAX_RTR_SOLICITATIONS     3
-#define RTR_SOLICITATION_INTERVAL 4000u
-#define MAX_RTR_SOLICIT_DELAY     1000u
+/* Router solicitations (RFC 4861 6.3.7, RFC 7559): retransmitted until an
+ * RA comes, the interval doubling from RTR_SOLICITATION_INTERVAL up to
+ * MAX_RTR_SOLICITATION_INTERVAL, so a host on a link whose router was
+ * down (or lost the first RSs) still finds it */
+#define RTR_SOLICITATION_INTERVAL     4000u
+#define MAX_RTR_SOLICITATION_INTERVAL 3600000u
+#define MAX_RTR_SOLICIT_DELAY         1000u
 #define REACHABLE_TIME            30000u
 #define RETRANS_TIMER             1000u
 #define MAX_NEIGHBOR_ADVERTISEMENT 3
@@ -440,6 +444,44 @@ void mld6_input(struct rt_netif *nif, const struct rt_ip6hdr *ip6, const u8 *m, 
 	ifp_rearm(ifp);
 }
 
+/* RFC 7559 section 2, the RFC 3315 retransmission algorithm with IRT
+ * RTR_SOLICITATION_INTERVAL, MRT MAX_RTR_SOLICITATION_INTERVAL and no
+ * MRC/MRD: RT = IRT + RAND*IRT, then RT = 2*RTprev + RAND*RTprev, and
+ * past MRT RT = MRT + RAND*MRT, with RAND uniform in -0.1..+0.1 (here in
+ * steps of 0.0001, without 64-bit arithmetic). */
+static u32 rs_jitter(u32 base, u32 rnd)
+{
+	s32 k = (s32)(rnd % 2001u) - 1000;     /* RAND * 10000 */
+
+	return (u32)((s32)base + (s32)(base / 100u) * k / 100);
+}
+
+u32 ip6_rs_backoff_ms(u32 prev_ms, u32 rnd)
+{
+	u32 rt;
+
+	if (!prev_ms)
+		return rs_jitter(RTR_SOLICITATION_INTERVAL, rnd);
+	if (prev_ms > MAX_RTR_SOLICITATION_INTERVAL)
+		prev_ms = MAX_RTR_SOLICITATION_INTERVAL;
+	rt = rs_jitter(prev_ms, rnd) + prev_ms;
+	if (rt > MAX_RTR_SOLICITATION_INTERVAL)
+		rt = rs_jitter(MAX_RTR_SOLICITATION_INTERVAL, rnd);
+	return rt;
+}
+
+void ip6_rs_stop(struct rt_netif *nif)
+{
+	struct ip6_if *ifp = ip6_ifp(nif);
+
+	/* rs_next_ms stays set: the link-local address being ready again
+	 * (a new DAD) does not start over; link up (if_start) does */
+	if (ifp && ifp->rs_left) {
+		ifp->rs_left = 0;
+		ifp_rearm(ifp);
+	}
+}
+
 static void ifp_timer_fn(void *arg)
 {
 	struct ip6_if *ifp = arg;
@@ -448,9 +490,11 @@ static void ifp_timer_fn(void *arg)
 	if (ifp->rs_left && (s32)(now - ifp->rs_next_ms) >= 0) {
 		if (in6_ifa_linklocal(ifp->nif, 1) && !rt_ip6_forwarding) {
 			nd6_send_rs(ifp->nif);
-			ifp->rs_left--;
+			ifp->rs_rt_ms = ip6_rs_backoff_ms(ifp->rs_rt_ms, rt_random32());
+			ifp->rs_next_ms = (now + ifp->rs_rt_ms) | 1u;
+		} else {
+			ifp->rs_next_ms = (now + RTR_SOLICITATION_INTERVAL) | 1u;
 		}
-		ifp->rs_next_ms = now + RTR_SOLICITATION_INTERVAL;
 	}
 	if (ifp->mld_pending && (s32)(now - ifp->mld_next_ms) >= 0) {
 		struct in6_multi *m, *n;
@@ -563,7 +607,8 @@ static void ifa_ready(struct in6_ifaddr *ia)
 	if (rt_in6_is_linklocal(&ia->addr) && ifp->nd && rt_ip6_accept_rtadv && !rt_ip6_forwarding &&
 	    ifp->rs_left == 0 && ifp->rs_next_ms == 0) {
 		/* RFC 4861 6.3.7: solicit routers after a random delay */
-		ifp->rs_left = MAX_RTR_SOLICITATIONS;
+		ifp->rs_left = 1;
+		ifp->rs_rt_ms = 0;
 		ifp->rs_next_ms = rt_now_ms() + rt_random32() % MAX_RTR_SOLICIT_DELAY;
 		if (!ifp->rs_next_ms)
 			ifp->rs_next_ms = 1;
@@ -1024,6 +1069,7 @@ static void if_start(struct ip6_if *ifp)
 
 	ifp->rs_left = 0;
 	ifp->rs_next_ms = 0;
+	ifp->rs_rt_ms = 0;
 	for (ia = ifp->addrs; ia; ia = ia->next)
 		if (ia->flags & RT_IN6_IFF_TENTATIVE)
 			dad_start(ia);

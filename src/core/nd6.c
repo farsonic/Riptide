@@ -704,6 +704,7 @@ static void ra_input(struct rt_netif *nif, const struct rt_ip6hdr *ip6, const u8
 		return;
 	if (in6_ifa_find(nif, &ip6->src))
 		return;                   /* our own */
+	ip6_rs_stop(nif);             /* RFC 7559: a router answered */
 	/* RFC 4191 2.2: 10 is reserved and treated as 00 (medium) */
 	switch ((m[5] >> 3) & 3) {
 	case 1: pref = 1; break;
