@@ -452,7 +452,7 @@ static void cards_show(void)
 	if (dyncyc[DYN_ADDR])
 		mui_nnset(dyncyc[DYN_ADDR], MUIA_Cycle_Active, (ULONG)card_pos(rp_ifcur(&rp_cfg.cur)));
 	if (ifbtn[1])
-		mui_set(ifbtn[1], MUIA_Disabled, (ULONG)(rp_ifcur(&rp_cfg.cur) == 0));
+		mui_set(ifbtn[1], MUIA_Disabled, (ULONG)(rp_iface_count(&rp_cfg.cur) < 2));
 }
 
 /* the names the address and VLAN forms offer, after cards or VLANs changed */

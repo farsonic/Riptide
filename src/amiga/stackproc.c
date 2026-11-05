@@ -66,6 +66,57 @@ static const char *kv(const char *arg, const char *key)
 	return NULL;
 }
 
+/* Cards riptide.conf turns off ("interface NAME ... disabled"): while the
+ * file is read, the lines that name them or their VLANs are skipped. */
+#define NDISABLED 8
+static char disabled_if[NDISABLED][RT_IFNAMSIZ];
+
+static int is_disabled(const char *name)
+{
+	int i;
+
+	for (i = 0; i < NDISABLED && disabled_if[i][0]; i++) {
+		u32 l = (u32)strlen(disabled_if[i]);
+		if (!rt_strncasecmp(name, disabled_if[i], l) && (name[l] == 0 || name[l] == '.'))
+			return 1;
+	}
+	return 0;
+}
+
+/* does a config line name a disabled card (as a word, NAME.VLAN or
+ * parent=NAME)? */
+static int names_disabled(char *line)
+{
+	char *copy, *argv[24];
+	const char *w;
+	u32 len = (u32)strlen(line);
+	int argc, i, r = 0;
+
+	if (!disabled_if[0][0])
+		return 0;
+	copy = rt_malloc(len + 1);
+	if (!copy)
+		return 0;
+	memcpy(copy, line, len + 1);
+	argc = rt_config_split(copy, argv, 24);
+	for (i = 1; i < argc && !r; i++) {
+		w = argv[i];
+		if (!rt_strncasecmp(w, "parent=", 7))
+			w += 7;
+		r = is_disabled(w);
+	}
+	rt_free(copy);
+	return r;
+}
+
+int amiga_if_disabled(int i, const char **name)
+{
+	if (i < 0 || i >= NDISABLED || !disabled_if[i][0])
+		return 0;
+	*name = disabled_if[i];
+	return 1;
+}
+
 int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 {
 	int i;
@@ -82,7 +133,7 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 
 		if (argc < 3) {
 			rt_snprintf(err, errlen, "usage: interface NAME device=DEVICE|mni=DRIVER [unit=N] [mtu=N] [reads=N] "
-			            "[tcpwindow=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [raw] [options=TEXT]");
+			            "[tcpwindow=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [raw] [options=TEXT] [disabled]");
 			return -RT_EINVAL;
 		}
 		if (strlen(argv[1]) >= RT_IFNAMSIZ) {
@@ -102,6 +153,16 @@ int amiga_config_unknown(int argc, char **argv, char *err, u32 errlen)
 			rt_snprintf(err, errlen, "interface %s exists already", argv[1]);
 			return -RT_EEXIST;
 		}
+		/* a card turned off: remembered, not opened */
+		for (i = 2; i < argc; i++)
+			if (!rt_strcasecmp(argv[i], "disabled")) {
+				int k;
+				for (k = 0; k < NDISABLED && disabled_if[k][0] && rt_strcasecmp(disabled_if[k], argv[1]); k++)
+					;
+				if (k < NDISABLED)
+					strcpy(disabled_if[k], argv[1]);
+				return 0;
+			}
 		for (i = 2; i < argc; i++) {
 			if ((v = kv(argv[i], "device")) != NULL)
 				dev = v;
@@ -286,7 +347,7 @@ static void config_line(char *line, int lineno, const char *path)
 	int r;
 
 	rt_lock();
-	r = rt_config_line(line, err, sizeof(err), amiga_config_unknown);
+	r = names_disabled(line) ? 0 : rt_config_line(line, err, sizeof(err), amiga_config_unknown);
 	rt_unlock();
 	if (r < 0) {
 		config_errors++;
@@ -322,6 +383,7 @@ int amiga_load_config(const char *path)
 	if (!path)
 		path = DEFAULT_CONFIG;
 	config_errors = 0;
+	memset(disabled_if, 0, sizeof(disabled_if));
 	if (for_each_line(path, config_line) < 0) {
 		if (explicit_path) {
 			amiga_out("Riptide: cannot open %s\n", path);
@@ -432,6 +494,12 @@ int amiga_status_text(char *buf, u32 len)
 				    (ia[k].flags & RT_IN6_IFF_TEMPORARY) ? " temporary" : "");
 			}
 		}
+	}
+	{
+		const char *dn;
+		int k;
+		for (k = 0; amiga_if_disabled(k, &dn); k++)
+			ADD("%-6s disabled in riptide.conf\n", dn);
 	}
 	{
 		char sv[160];

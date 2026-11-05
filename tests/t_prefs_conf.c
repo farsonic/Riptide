@@ -1200,6 +1200,21 @@ static void test_multi(void)
 	/* the only card stays */
 	rp_iface_delete(&c.cur, 0);
 	CHECK(!strcmp(c.cur.ifc[0].ifname, "eth2"));
+	rp_conf_commit(&c);
+
+	/* a card turned off: "disabled" in the file, taken out of the running
+	 * stack at once; on again needs a restart */
+	c.cur.ifc[0].disabled = 1;
+	cmds[0] = 0;
+	CHECK(rp_live_commands(&c, collect, NULL) == 0 && !strcmp(cmds, "interface eth2 delete;"));
+	t = text_of(&c);
+	CHECK((t && strstr(t, "interface eth2 device=a2065.device unit=1 disabled\n") &&
+	       strstr(t, "route add default 172.16.0.1 dev eth2 metric 0\n")) || (fprintf(stderr, "%s", t), 0));
+	free(t);
+	rp_conf_commit(&c);
+	CHECK(c.cur.ifc[0].disabled == 1);
+	c.cur.ifc[0].disabled = 0;
+	CHECK(rp_live_commands(&c, collect, NULL) == 1);
 	rp_conf_free(&c);
 
 	/* a VLAN or address on a card that is not there: kept as other lines;

@@ -130,6 +130,9 @@ const struct rp_field rp_fields[] = {
 	  "download crawl. Only for old FS-UAE builds that drop frames." },
 	{ P_IFACE, F_NUM,   FL_IF, MI(reads), 4, 128,      "_Reads", NULL, NULL,
 	  "How many receive requests Riptide keeps waiting at the driver. More can help fast cards." },
+	{ P_IFACE, F_CHECK, FL_IF | FL_RIGHT, MI(disabled), 0, 0, "Card o_ff", NULL, NULL,
+	  "Keep the card's settings but don't use it: Apply removes it with its routes, addresses and DHCP. "
+	  "On again: at the next start." },
 	{ P_IFACE, F_CHECK, 0, MS(ipv4),      0, 0,        "IPv_4", NULL, NULL,
 	  "Use IPv4 on all cards. Turn it off for an IPv6-only network." },
 	{ P_IFACE, F_CHECK, FL_RIGHT, MS(ipv6), 0, 0,      "IP_v6", NULL, NULL,
@@ -293,6 +296,7 @@ static const struct mdef { unsigned short off; unsigned char ifc; const char *te
 	{ DI(ifname), "eth0 (the first card)" },
 	{ DI(device), "uaenet.device (a new file)" },
 	{ DI(unit), "0" },
+	{ DI(disabled), "not ticked (the card is used)" },
 	{ DI(mtu), "the driver's (1500 on Ethernet)" },
 	{ DI(tcpwindow), "none (no limit)" },
 	{ DI(reads), RP_XSTR(RT_AMIGA_READS_DEF) },
@@ -1376,4 +1380,6 @@ void rp_iface_row(const struct rp_iface *f, char *buf, int len)
 		lf_add(buf, len, &n, ", DHCP%s%s", "", "");
 	else
 		lf_add(buf, len, &n, ", %s%s", f->addr[0] ? f->addr : "no address", "");
+	if (f->disabled)
+		lf_add(buf, len, &n, ", off%s%s", "", "");
 }

@@ -108,6 +108,7 @@ struct rp_iface {
 	char device[RP_STR];
 	long unit, mtu, reads, tcpwindow;     /* RP_UNSET when absent */
 	int  raw;
+	int  disabled;                        /* "disabled": kept in the file, not used */
 	char ifextra[RP_LONG];                /* other options, verbatim */
 	/* IPv4 address */
 	int  dhcp;                            /* 1 dhcp, 0 static */

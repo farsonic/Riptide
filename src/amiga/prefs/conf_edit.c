@@ -495,6 +495,8 @@ static void parse_interface(struct rp_conf *c, struct rp_line *l, struct toks *t
 			f->tcpwindow = num(v);
 		else if (eq(tk->t[i], "raw"))
 			f->raw = 1;
+		else if (eq(tk->t[i], "disabled"))
+			f->disabled = 1;
 		else {
 			size_t o = strlen(f->ifextra);
 			rt_snprintf(f->ifextra + o, sizeof(f->ifextra) - o, "%s%s", o ? " " : "", tk->raw[i]);
@@ -892,12 +894,12 @@ static int iface_changed(const struct rp_iface *o, const struct rp_iface *n)
 {
 	return str_changed(o->ifname, n->ifname) || str_changed(o->device, n->device) || o->unit != n->unit ||
 	       o->mtu != n->mtu || o->reads != n->reads || o->tcpwindow != n->tcpwindow || o->raw != n->raw ||
-	       str_changed(o->ifextra, n->ifextra);
+	       o->disabled != n->disabled || str_changed(o->ifextra, n->ifextra);
 }
 
 static int addr_changed(const struct rp_iface *o, const struct rp_iface *n)
 {
-	return o->dhcp != n->dhcp || str_changed(o->ifname, n->ifname) ||
+	return o->dhcp != n->dhcp || str_changed(o->ifname, n->ifname) || o->disabled != n->disabled ||
 	       (n->dhcp && (o->linklocal != n->linklocal || o->dhcp_wait != n->dhcp_wait)) ||
 	       (!n->dhcp && (str_changed(o->addr, n->addr) || str_changed(o->netmask, n->netmask) ||
 	                     str_changed(o->gateway, n->gateway) || o->metric != n->metric));
@@ -908,11 +910,16 @@ static int ifaces_changed(const struct rp_model *o, const struct rp_model *n)
 {
 	int k;
 
-	for (k = 0; k < RP_NIF; k++)
+	for (k = 0; k < RP_NIF; k++) {
+		/* a card turned off goes at once ("interface IF delete"); while
+		 * off its changes wait for the next start */
+		if (!str_changed(o->ifc[k].ifname, n->ifc[k].ifname) && n->ifc[k].disabled)
+			continue;
 		if (str_changed(o->ifc[k].ifname, n->ifc[k].ifname) ||
 		    (n->ifc[k].ifname[0] && (iface_changed(&o->ifc[k], &n->ifc[k]) ||
 		                             addr_changed(&o->ifc[k], &n->ifc[k]))))
 			return 1;
+	}
 	return 0;
 }
 
@@ -1219,6 +1226,8 @@ static int sync_iface(struct rp_conf *c, int k)
 			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " tcpwindow=%ld", n->tcpwindow);
 		if (n->raw)
 			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " raw");
+		if (n->disabled)
+			x += rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " disabled");
 		if (n->ifextra[0])
 			rt_snprintf(buf + x, sizeof(buf) - (size_t)x, " %s", n->ifextra);
 		anchor = k == 0 ? first_of(c->l_domain, first_of(c->l_hostname, top_anchor(c))) : iface_last(c, k);
@@ -1247,7 +1256,8 @@ static int sync_iface(struct rp_conf *c, int k)
 			else
 				rt_snprintf(buf, sizeof(buf), "ifconfig %s %s up", n->ifname, n->addr);
 			r |= put(c, &c->l_ifconfig[k], anchor, n->addr[0] ? buf : NULL);
-			if (k == 0 && n->metric == RP_UNSET)
+			/* a card turned off names itself, so the stack skips its route */
+			if (k == 0 && n->metric == RP_UNSET && !n->disabled)
 				rt_snprintf(buf, sizeof(buf), "route add default %s", n->gateway);
 			else
 				rt_snprintf(buf, sizeof(buf), "route add default %s dev %s metric %ld", n->gateway, n->ifname,
@@ -2516,9 +2526,17 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 			fn(buf, arg);
 		}
 	}
+	/* a card turned off leaves the running stack with its VLANs, routes,
+	 * addresses and DHCP lease (turning it on again needs a restart) */
+	for (i = 0; i < RP_NIF; i++)
+		if (n->ifc[i].ifname[0] && n->ifc[i].disabled && !o->ifc[i].disabled &&
+		    !str_changed(o->ifc[i].ifname, n->ifc[i].ifname)) {
+			rt_snprintf(buf, sizeof(buf), "interface %s delete", n->ifc[i].ifname);
+			fn(buf, arg);
+		}
 	/* IPv6 on or off on one card (back to the default needs a restart) */
 	for (i = 0; i < RP_NIF; i++)
-		if (n->ifc[i].ifname[0] && o->ifc[i].ipv6 != n->ifc[i].ipv6 &&
+		if (n->ifc[i].ifname[0] && !n->ifc[i].disabled && o->ifc[i].ipv6 != n->ifc[i].ipv6 &&
 		    !str_changed(o->ifc[i].ifname, n->ifc[i].ifname)) {
 			if (n->ifc[i].ipv6 < 0) {
 				restart = 1;

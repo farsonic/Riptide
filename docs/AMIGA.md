@@ -648,7 +648,7 @@ off the cost is one test per packet.
 
 ```
 interface NAME device=DEVICE [unit=N] [mtu=N] [reads=N] [tcpwindow=N] [raw]
-      [ipv4=on|off] [ipv6=on|off] [qos=on|off]
+      [ipv4=on|off] [ipv6=on|off] [qos=on|off] [disabled]
 interface NAME mni=DRIVER [unit=N] [options="TEXT"] [mtu=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off]
 interface NAME reads=N             # at run time: change a SANA-II interface's IPv4 reads
 interface NAME delete              # at run time: close the driver, drop the interface
@@ -660,6 +660,14 @@ loglevel N
 
 An `interface` line must come before the `ifconfig` or `dhcp` line that
 uses its name.
+
+**A card turned off.** `disabled` on an `interface` line keeps the card in
+the file but leaves it alone: Riptide does not open the driver and skips
+every line that names the card or its VLANs (`dhcp`, `ifconfig`, `route
+... dev NAME`, `parent=NAME` ...). `Riptide status` lists it as "disabled
+in riptide.conf". RiptidePrefs sets it with "Card off" on the Interface
+page; Apply then removes the running card (`interface NAME delete`: its
+VLANs, routes, addresses and DHCP lease go with it).
 
 **SANA-II devices.** `device=` names a SANA-II driver, for example
 `device=DEVS:Networks/a2065.device`.

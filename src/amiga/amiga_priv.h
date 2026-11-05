@@ -243,6 +243,8 @@ static inline const char *amiga_basename(const char *p)
 }
 /* "interface NAME delete" (lock held) */
 int  amiga_if_delete(const char *name, char *err, u32 errlen);
+/* the i-th card riptide.conf turns off ("interface NAME ... disabled"); 0 past the last */
+int  amiga_if_disabled(int i, const char **name);
 
 /* ---- stackproc.c --------------------------------------------------- */
 int  amiga_stack_start(const char *config, int selftest);

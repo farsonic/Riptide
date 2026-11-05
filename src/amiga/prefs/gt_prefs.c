@@ -209,7 +209,7 @@ static struct Gadget *mk_field(struct Gadget *g, int i, int y)
 {
 	const struct rp_field *f = &rp_fields[i];
 	struct TagItem t[5];
-	int n = 0, x = (f->flags & FL_RIGHT) ? x0 + lw + fw - 26 : x0 + lw, h = rowh;
+	int n = 0, x = (f->flags & FL_RIGHT) ? x0 + lw + fw - 26 : x0 + lw, h = rowh, half;
 	ULONG kind = STRING_KIND;
 
 	t[n].ti_Tag = GT_Underscore;
@@ -250,8 +250,10 @@ static struct Gadget *mk_field(struct Gadget *g, int i, int y)
 	}
 	t[n].ti_Tag = TAG_DONE;
 	t[n].ti_Data = 0;
+	/* a field with a check box at the right of its row takes half of it */
+	half = i + 1 < rp_nfields && rp_fields[i + 1].page == f->page && (rp_fields[i + 1].flags & FL_RIGHT);
 	g = mk(kind, g, G_FIELD + i, f->label, PLACETEXT_LEFT, x,
-	       y, kind == CHECKBOX_KIND ? 26 : kind == CYCLE_KIND ? fw / 2 : fw, h, t);
+	       y, kind == CHECKBOX_KIND ? 26 : (kind == CYCLE_KIND || half) ? fw / 2 : fw, h, t);
 	fgad[i] = g;
 	return g;
 }
