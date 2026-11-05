@@ -2505,6 +2505,10 @@ Riptide announces it to the routers (three unsolicited neighbour
 advertisements to ff02::2, a second apart, RFC 9131), so the first reply
 sent to it is not held up or lost while the router resolves it; `netstat
 -s -6` counts them as "address announcements". `lo0` has `::1`.
+Against floods of forged advertisements, router advertisements can give
+an interface at most 16 autoconfigured addresses (public and temporary),
+8 default routers and 32 prefixes and routes; more are ignored and
+counted ("Router adverts over limits" on the Counters page).
 
 **Configuration** (riptide.conf or `ip`/`ifconfig`/`route` at run time):
 

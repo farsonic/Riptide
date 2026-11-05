@@ -31,6 +31,10 @@
 #define TEMP_VALID_S              (2u * 86400u)   /* RFC 8981 3.8 */
 #define TEMP_PREFERRED_S          86400u
 #define TEMP_REGEN_ADVANCE_S      5u
+/* router advertisements cannot make more autoconfigured addresses than
+ * this per interface (public and temporary): a flood of prefixes would
+ * otherwise use up the memory */
+#define MAX_AUTOCONF_ADDRS        16
 
 /* ---- SipHash-2-4 ---- */
 static u64 rotl64(u64 x, int b) { return (x << b) | (x >> (64 - b)); }
@@ -882,6 +886,20 @@ int rt_in6_addr_list(const struct rt_netif *nif, struct rt_in6_ifaddr_info *out,
 
 /* ---- SLAAC (RFC 4862 5.5.3) and temporary addresses (RFC 8981) ---- */
 
+static int autoconf_full(const struct ip6_if *ifp)
+{
+	const struct in6_ifaddr *ia;
+	int n = 0;
+
+	for (ia = ifp->addrs; ia; ia = ia->next)
+		if (ia->flags & RT_IN6_IFF_AUTOCONF)
+			n++;
+	if (n < MAX_AUTOCONF_ADDRS)
+		return 0;
+	rt_icmp6stat.InRaLimited++;
+	return 1;
+}
+
 static void temp_create(struct ip6_if *ifp, const struct in6_ifaddr *pub)
 {
 	rt_in6_addr a;
@@ -895,7 +913,7 @@ static void temp_create(struct ip6_if *ifp, const struct in6_ifaddr *pub)
 		valid = pv;
 	if (pp < pref)
 		pref = pp;
-	if (pref <= TEMP_REGEN_ADVANCE_S)
+	if (pref <= TEMP_REGEN_ADVANCE_S || autoconf_full(ifp))
 		return;
 	a = pub->addr;
 	for (i = 0; i < 4; i++) {
@@ -966,7 +984,7 @@ void in6_slaac_prefix(struct rt_netif *nif, const rt_in6_addr *prefix, int plen,
 			       nif->name, plen, rt_inet6_ntop(prefix, buf, sizeof(buf)));
 			return;
 		}
-		if (make_iid(ifp, prefix, iid) < 0)
+		if (autoconf_full(ifp) || make_iid(ifp, prefix, iid) < 0)
 			return;
 		rt_in6_mask(&a, prefix, 64);
 		memcpy(a.b + 8, iid, 8);

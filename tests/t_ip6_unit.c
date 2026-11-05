@@ -571,6 +571,58 @@ static void test_ra_slaac(void)
 	flush(&eth0_cap);
 }
 
+/* a flood of router advertisements: each from another router with
+ * another prefix; addresses, default routers and prefixes stay capped */
+static int count_autoconf(struct rt_netif *n)
+{
+	struct ip6_if *ifp = ip6_ifp(n);
+	struct in6_ifaddr *ia;
+	int k = 0;
+
+	for (ia = ifp ? ifp->addrs : NULL; ia; ia = ia->next)
+		k += (ia->flags & RT_IN6_IFF_AUTOCONF) != 0;
+	return k;
+}
+
+static void count_ra_routes(struct rt_netif *n, int *dflt, int *other)
+{
+	struct rt_route6 *r;
+
+	*dflt = *other = 0;
+	for (r = rt_route6_list(); r; r = r->next)
+		if (r->netif == n && (r->flags & RT_RTF_RA))
+			(*(r->plen ? other : dflt))++;
+}
+
+static void test_ra_flood(void)
+{
+	u8 m[200];
+	char pfx[32], src[32];
+	u32 n, before = rt_icmp6stat.InRaLimited;
+	int i, d, o;
+
+	for (i = 0; i < 40; i++) {
+		snprintf(pfx, sizeof(pfx), "2001:db8:%x::", 0x100 + i);
+		snprintf(src, sizeof(src), "fe80::1:%x", i + 1);
+		n = build_ra(m, 30, 0, 0, pfx, 30, 20, 0, 0);
+		deliver(&eth1, mkicmp(P(src), P("ff02::1"), 255, m, n), rtr_mac);
+	}
+	rt_lock();
+	count_ra_routes(&eth1, &d, &o);
+	rt_unlock();
+	CHECK(count_autoconf(&eth1) == 16);
+	CHECK(d == 8);
+	CHECK(o == 32);
+	CHECK(rt_icmp6stat.InRaLimited - before == (40 - 16) + (40 - 8) + (40 - 32));
+	/* all of it times out */
+	advance(32000);
+	rt_lock();
+	count_ra_routes(&eth1, &d, &o);
+	rt_unlock();
+	CHECK(count_autoconf(&eth1) == 0 && d == 0 && o == 0);
+	flush(&eth1_cap);
+}
+
 static void test_neighbours(void)
 {
 	static const u8 payload[8] = { 0x80, 0, 0, 0, 0, 1, 0, 1 };
@@ -1418,6 +1470,7 @@ int main(void)
 	test_dest_sort();
 	test_ptp();
 	test_ratelimit();
+	test_ra_flood();
 	test_fuzz();
 	rt_lock();
 	rt_netif_remove(&eth0);

@@ -17,6 +17,10 @@
 
 #define ROUTE6_MAX_DYN  128
 #define RA_METRIC       1024     /* Linux: RA routes get metric 1024 */
+/* per interface, what router advertisements may add: default routers,
+ * and on-link prefixes plus more specific routes (RFC 4191) */
+#define RA_MAX_ROUTERS  8
+#define RA_MAX_ROUTES   32
 
 static struct rt_route6 *r6_head;
 static int r6_ndyn;
@@ -223,6 +227,20 @@ void rt_route6_flush_learned(struct rt_netif *nif)
 	}
 }
 
+/* has nif as many RA defaults (plen 0) or other RA routes as allowed? */
+static int ra_full(const struct rt_netif *nif, int dflt)
+{
+	const struct rt_route6 *r;
+	u32 now = rt_ip6_seconds();
+	int n = 0;
+
+	for (r = r6_head; r; r = r->next)
+		if (r->netif == nif && (r->flags & RT_RTF_RA) && !r6_expired(r, now) &&
+		    (r->plen == 0) == dflt)
+			n++;
+	return n >= (dflt ? RA_MAX_ROUTERS : RA_MAX_ROUTES);
+}
+
 void route6_ra_update(const rt_in6_addr *dst, int plen, const rt_in6_addr *gw,
                       struct rt_netif *nif, u32 lifetime_s, s8 pref)
 {
@@ -240,6 +258,10 @@ void route6_ra_update(const rt_in6_addr *dst, int plen, const rt_in6_addr *gw,
 	if (exp == 0 && lifetime_s != RT_IN6_INFINITE)
 		exp = 1;
 	if (!r) {
+		if (ra_full(nif, plen == 0)) {
+			rt_icmp6stat.InRaLimited++;
+			return;
+		}
 		if (rt_route6_add(dst, plen, gw, nif, RT_RTF_RA, RA_METRIC) < 0)
 			return;
 		r = route6_find(dst, plen, gw, nif);

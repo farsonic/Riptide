@@ -310,7 +310,9 @@ struct rt_icmp6_stats {
 	    InNeighborSolicits, InNeighborAdvertisements, InRedirects, InMLDQueries,
 	    OutMsgs, OutErrors, OutDestUnreachs, OutPktTooBigs, OutTimeExcds, OutParmProblems,
 	    OutEchoReplies, OutRouterSolicits, OutNeighborSolicits, OutNeighborAdvertisements,
-	    OutMLDv2Reports, OutRateLimited, DadDuplicates, OutUnsolicitedNAs;
+	    OutMLDv2Reports, OutRateLimited, DadDuplicates, OutUnsolicitedNAs,
+	    InRaLimited,      /* RA addresses, routes, routers over the limits, ignored */
+	    InNdFragmented;   /* neighbor discovery messages that came in fragments (RFC 6980) */
 };
 extern struct rt_ip6_stats   rt_ip6stat;
 extern struct rt_icmp6_stats rt_icmp6stat;

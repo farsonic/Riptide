@@ -182,6 +182,8 @@ static const struct cdef d_icmp6[] = {
 	C(rt_icmp6_stats, OutMLDv2Reports, "Multicast reports (MLDv2)"),
 	C(rt_icmp6_stats, OutRateLimited, "Held back (rate limit)"),
 	C(rt_icmp6_stats, DadDuplicates, "Duplicate addresses found"),
+	C(rt_icmp6_stats, InRaLimited, "Router adverts over limits"),
+	C(rt_icmp6_stats, InNdFragmented, "Fragmented ND dropped"),
 };
 static const struct cdef d_igmp[] = {
 	C(rt_igmp_stats, InMsgs, "Messages received"),
