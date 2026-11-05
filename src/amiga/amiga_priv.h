@@ -52,6 +52,8 @@ int  amiga_dbg_dump(const char *path, char *err, u32 errlen);  /* "debug dump FI
 void amiga_random_init(int use_file);
 void amiga_random_save(void);
 void amiga_random_event(u32 sigs);
+/* The RFC 7217 secret from (or into) ENVARC:Riptide/ipv6-secret. */
+void amiga_ipv6_secret(void);
 
 /* ---- libs.c: library construction ---------------------------------- */
 

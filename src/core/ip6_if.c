@@ -9,11 +9,13 @@
  * Interface identifiers: net.inet6.ip6.addr_gen_mode 1 (default) derives
  * them as RFC 7217 recommends, F(prefix, interface name, DAD counter,
  * secret) with SipHash-2-4 as F. The secret is net.inet6.ip6.stable_secret
- * when set (any text; set it in riptide.conf to get addresses that do not
- * reveal the hardware address). Without it the key is derived from the
- * interface's MAC address: the addresses are stable, differ per prefix and
- * do not embed the MAC, but someone who knows the MAC and this algorithm
- * can recompute them. Mode 0 uses modified EUI-64 (RFC 4291 2.5.1).
+ * when set (any text), else the random 128-bit key the OS layer keeps
+ * across restarts (rt_ip6_set_stable_key(); AmigaOS: ENVARC:Riptide/
+ * ipv6-secret). Only without either is the key derived from the
+ * interface's MAC address: the addresses are still stable, differ per
+ * prefix and do not embed the MAC, but someone who knows the MAC and this
+ * algorithm can recompute them. Mode 0 uses modified EUI-64 (RFC 4291
+ * 2.5.1).
  */
 #include "ip6_internal.h"
 
@@ -692,6 +694,15 @@ static int iid_reserved(const u8 *iid)
 	return 0;
 }
 
+static u8 stable_rand[16];
+static int stable_rand_set;
+
+void rt_ip6_set_stable_key(const u8 key[16])
+{
+	memcpy(stable_rand, key, 16);
+	stable_rand_set = 1;
+}
+
 static void stable_key(const struct ip6_if *ifp, u8 *key)
 {
 	static const u8 zero[16];
@@ -699,6 +710,10 @@ static void stable_key(const struct ip6_if *ifp, u8 *key)
 	u8 buf[48];
 	u32 n;
 
+	if (!rt_ip6_stable_secret[0] && stable_rand_set) {
+		memcpy(key, stable_rand, 16);
+		return;
+	}
 	if (rt_ip6_stable_secret[0]) {
 		n = (u32)strlen(rt_ip6_stable_secret);
 		a = rt_siphash(rt_ip6_stable_secret, n, zero);

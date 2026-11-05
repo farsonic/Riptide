@@ -406,6 +406,7 @@ void rt_free(void *p)
 #define SEED_FILE "ENVARC:Riptide/random-seed"
 #define SEED_DIR  "ENVARC:Riptide"
 #define SEED_LEN  32
+#define V6SECRET_FILE "ENVARC:Riptide/ipv6-secret"
 /* public ExecBase fields: IdleCount, DispCount (ULONG), Quantum and
  * Elapsed (UWORD) */
 #define EXECBASE_IDLECOUNT_OFS 280
@@ -459,16 +460,11 @@ static APTR seed_quiet(APTR win)
 	return old;
 }
 
-/* Save fresh generator output for the next start (stack process only). */
-void amiga_random_save(void)
+/* ENVARC:Riptide exists or was made (requesters off) */
+static int envarc_dir(void)
 {
-	u8 seed[SEED_LEN];
-	APTR win;
-	BPTR fh, l;
+	BPTR l = Lock((CONST_STRPTR)SEED_DIR, SHARED_LOCK);
 
-	rt_random_bytes(seed, sizeof(seed));
-	win = seed_quiet((APTR)-1);
-	l = Lock((CONST_STRPTR)SEED_DIR, SHARED_LOCK);
 	if (!l) {
 		l = Lock((CONST_STRPTR)"ENVARC:", SHARED_LOCK);
 		if (l) {
@@ -476,8 +472,22 @@ void amiga_random_save(void)
 			l = CreateDir((CONST_STRPTR)SEED_DIR);
 		}
 	}
-	if (l) {
-		UnLock(l);
+	if (!l)
+		return 0;
+	UnLock(l);
+	return 1;
+}
+
+/* Save fresh generator output for the next start (stack process only). */
+void amiga_random_save(void)
+{
+	u8 seed[SEED_LEN];
+	APTR win;
+	BPTR fh;
+
+	rt_random_bytes(seed, sizeof(seed));
+	win = seed_quiet((APTR)-1);
+	if (envarc_dir()) {
 		fh = Open((CONST_STRPTR)SEED_FILE, MODE_NEWFILE);
 		if (fh) {
 			Write(fh, seed, sizeof(seed));
@@ -486,6 +496,40 @@ void amiga_random_save(void)
 	}
 	seed_quiet(win);
 	memset(seed, 0, sizeof(seed));
+}
+
+/* The RFC 7217 secret for stable IPv6 addresses: 16 random bytes made at
+ * the first start and kept in ENVARC:Riptide/ipv6-secret, so the
+ * addresses stay the same across restarts without being derived from
+ * the MAC. If the file can be neither read nor written, the core falls
+ * back to a key derived from the MAC. Stack process, after rt_init(). */
+void amiga_ipv6_secret(void)
+{
+	u8 key[16];
+	APTR win = seed_quiet((APTR)-1);
+	BPTR fh = Open((CONST_STRPTR)V6SECRET_FILE, MODE_OLDFILE);
+	int ok = 0;
+
+	if (fh) {
+		ok = Read(fh, key, sizeof(key)) == (LONG)sizeof(key);
+		Close(fh);
+	} else if (envarc_dir()) {
+		rt_random_bytes(key, sizeof(key));
+		fh = Open((CONST_STRPTR)V6SECRET_FILE, MODE_NEWFILE);
+		if (fh) {
+			ok = Write(fh, key, sizeof(key)) == (LONG)sizeof(key);
+			Close(fh);
+			if (!ok)
+				DeleteFile((CONST_STRPTR)V6SECRET_FILE);
+		}
+	}
+	seed_quiet(win);
+	if (ok) {
+		rt_lock();
+		rt_ip6_set_stable_key(key);
+		rt_unlock();
+	}
+	memset(key, 0, sizeof(key));
 }
 
 /* Seed the generator; with use_file, from (and then renewing) the seed

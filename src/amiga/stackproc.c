@@ -778,6 +778,9 @@ int amiga_stack_start(const char *config, int selftest)
 		amiga_out("Riptide: initialisation failed: %s\n", rt_strerror(-r));
 		return -1;
 	}
+	/* before the configuration brings interfaces up */
+	if (!selftest)
+		amiga_ipv6_secret();
 	/* Amiga defaults (amiga_defaults.h), before the config so it can
 	 * override them */
 	rt_lock();

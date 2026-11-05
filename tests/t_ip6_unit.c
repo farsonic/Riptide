@@ -623,6 +623,35 @@ static void test_ra_flood(void)
 	flush(&eth1_cap);
 }
 
+/* the OS layer's random RFC 7217 secret replaces the MAC-derived key
+ * (net.inet6.ip6.stable_secret, when set, still wins) */
+static void test_stable_key(void)
+{
+	static const u8 key[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+	u8 msg[8 + RT_IFNAMSIZ + 1], iid[8], m[200];
+	struct in6_ifaddr *ia;
+	u64 h;
+	u32 n;
+
+	rt_lock();
+	CHECK(rt_sysctl_set_text("net.inet6.ip6.stable_secret", "") == 0);
+	rt_ip6_set_stable_key(key);
+	rt_unlock();
+	memset(msg, 0, sizeof(msg));
+	memcpy(msg, P("2001:db8:77::")->b, 8);
+	memcpy(msg + 8, eth1.name, strlen(eth1.name));
+	h = rt_siphash(msg, sizeof(msg), key);
+	rt_put_be32(iid, (u32)(h >> 32));
+	rt_put_be32(iid + 4, (u32)h);
+	n = build_ra(m, 0, 0, 0, "2001:db8:77::", 30, 20, 0, 0);
+	deliver(&eth1, mkicmp(&rtr_ll, P("ff02::1"), 255, m, n), rtr_mac);
+	ia = ifa_of(&eth1, 0, 1);
+	CHECK(ia && rt_in6_prefix_eq(&ia->addr, P("2001:db8:77::"), 64) && !memcmp(ia->addr.b + 8, iid, 8));
+	advance(32000);
+	CHECK(ifa_of(&eth1, 0, 1) == NULL);
+	flush(&eth1_cap);
+}
+
 static void test_neighbours(void)
 {
 	static const u8 payload[8] = { 0x80, 0, 0, 0, 0, 1, 0, 1 };
@@ -1471,6 +1500,7 @@ int main(void)
 	test_ptp();
 	test_ratelimit();
 	test_ra_flood();
+	test_stable_key();
 	test_fuzz();
 	rt_lock();
 	rt_netif_remove(&eth0);

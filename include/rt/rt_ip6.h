@@ -325,6 +325,12 @@ void rt_dns_remove_server6(const rt_in6_addr *a);
 #define RT_DNS_SRC_RA     1
 #define RT_DNS_SRC_DHCP6  2
 
+/* RFC 7217 identifiers: the random secret the OS layer keeps across
+ * restarts (net.inet6.ip6.stable_secret, when set, takes precedence;
+ * without either the key comes from the MAC address). Before the
+ * interfaces come up. */
+void rt_ip6_set_stable_key(const u8 key[16]);
+
 /* ---- init (rt_init) ---- */
 void rt_ip6_init(void);
 

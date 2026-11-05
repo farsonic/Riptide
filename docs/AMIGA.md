@@ -2527,7 +2527,7 @@ sysctl net.inet6.ip6.use_tempaddr=2            # RFC 8981 temporary addresses
 
 IPv6 sysctls: `net.inet6.ip6.enable` (1), `accept_rtadv` (1),
 `use_tempaddr` (0; 1 create, 2 also prefer temporary addresses),
-`addr_gen_mode` (1), `stable_secret` (empty: derived from the MAC),
+`addr_gen_mode` (1), `stable_secret` (empty: the random secret Riptide makes at its first start and keeps in `ENVARC:Riptide/ipv6-secret`, so addresses stay the same across restarts; derived from the MAC only if that file can be neither read nor written),
 `dad_count` (1), `gratuitous_na` (1; RFC 9131 announcements), `hlim` (64), `forwarding` (0), `mtu_expires` (600 s),
 `v6only` (0), and `net.inet6.icmp6.ratelimit` (1000 ms per destination),
 `errppslimit` (100/s), `echo_ignore_multicast` (0).
