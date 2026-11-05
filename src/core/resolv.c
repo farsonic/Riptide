@@ -1594,6 +1594,16 @@ static void neg_add(const char *name, u16 qtype, int r, u32 negttl)
 	e->stamp = ++dns_cache_clock;
 }
 
+/* Did the failure entry e block queries until less than dns.cache.fail_max
+ * ago, or does it still? Its deadline is at most 512 s ahead; one more
+ * than 24.8 days old must not look like a future one. */
+static int fail_recent(const struct neg_ent *e, u32 now)
+{
+	if ((s32)(e->expires - now) > 0)
+		return (u32)(e->expires - now) <= 512000u;
+	return now - e->expires < (u32)dns_fail_max * 1000u;
+}
+
 /* The query (name, qtype) failed with err (-RT_TRY_AGAIN or
  * -RT_NO_RECOVERY): no new query for 1, 2, 4, ... seconds, at most
  * dns.cache.fail_max; a failure long after the last one starts at 1 s
@@ -1606,7 +1616,7 @@ static void neg_fail(const char *name, u16 qtype, int err)
 	if (!dns_cache_enabled || dns_fail_max <= 0 || strlen(name) >= DNS_CACHE_NAME)
 		return;
 	e = neg_lookup(name, qtype, NEG_FAIL);
-	if (e && e->qtype == qtype && (s32)(now - e->expires) < dns_fail_max * 1000)
+	if (e && e->qtype == qtype && fail_recent(e, now))
 		e->fails = (u8)RT_MIN(e->fails + 1, 16);
 	else if ((e = neg_slot(name, qtype)) != NULL)
 		e->fails = 0;

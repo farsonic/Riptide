@@ -504,6 +504,26 @@ static void test_arp(void)
 		CHECK(!find_arp(ip4(192, 168, 1, 200), NULL));
 	}
 	flush_caps();
+
+	/* another host claims our address: one announcement per 10 s
+	 * (RFC 5227 2.4), also when the last conflict was 25 days ago */
+	{
+		static const u8 other[6] = { 0x02, 0, 0, 0, 0, 0x77 };
+		rt_netif_input(&eth0, make_arp(1, other, me, zero, me), RT_ETH_P_ARP, other, RT_BUFF_BCAST);
+		CHECK(eth0_cap.q.qlen == 1 && eth0_cap.q.head && memcmp(eth0_cap.q.head->data + 14, &me, 4) == 0 &&
+		      memcmp(eth0_cap.q.head->data + 8, eth0_mac, 6) == 0);
+		flush_caps();
+		rt_host_advance_clock(5000);
+		rt_netif_input(&eth0, make_arp(1, other, me, zero, me), RT_ETH_P_ARP, other, RT_BUFF_BCAST);
+		CHECK(eth0_cap.q.qlen == 0);
+		rt_host_advance_clock(25u * 86400u * 1000u);
+		rt_timers_run(rt_now_ms());
+		poll_stack();
+		flush_caps();
+		rt_netif_input(&eth0, make_arp(1, other, me, zero, me), RT_ETH_P_ARP, other, RT_BUFF_BCAST);
+		CHECK(eth0_cap.q.qlen == 1);
+		flush_caps();
+	}
 }
 
 /* ------------------------------------------------------------------ */

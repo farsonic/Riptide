@@ -47,7 +47,7 @@ struct ll_if {
 	u8  count;                     /* probes or announcements sent */
 	u32 cand;                      /* candidate or address, network order */
 	u32 conflicts;
-	u32 last_defend_ms;            /* 0 = never */
+	struct rt_evstamp last_defend; /* zero = never */
 };
 
 static struct ll_if *ll_list;
@@ -223,11 +223,11 @@ int rt_ipv4ll_arp(struct rt_netif *nif, u16 op, const u8 *sha, u32 sip, u32 tip)
 	if (sip != s->cand || nif->addr != s->cand)
 		return 0;
 	now = rt_now_ms();
-	if (s->last_defend_ms && (s32)(now - s->last_defend_ms) < LL_DEFEND_MS) {
+	if (rt_evstamp_within(&s->last_defend, now, LL_DEFEND_MS)) {
 		restart(s, 1);              /* second conflict: give it up */
 		return 1;
 	}
-	s->last_defend_ms = now ? now : 1;
+	rt_evstamp_set(&s->last_defend, now);
 	rt_arp_announce(nif, s->cand);
 	return 1;
 }

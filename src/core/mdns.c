@@ -51,7 +51,7 @@ static struct {
 static struct mdns_if {
 	struct rt_netif *nif;
 	u8  v4, v6;               /* groups joined */
-	u32 last_mc;              /* rt_now_ms() of the last multicast answer */
+	struct rt_evstamp last_mc; /* the last multicast answer */
 	/* records: bits K_A.. A, K_AAAA.. AAAA, K_P4.. PTR (v4), K_P6.. PTR (v6) */
 	int n4;
 	u32 a4[MDNS_V4];
@@ -390,7 +390,7 @@ static void announce(u32 ttl)
 		len = build_response(f, mdns_buf, sizeof(mdns_buf), 0, recs_of(f), 0, ttl, 1, NULL, 0);
 		if (len)
 			xmit_mcast(f, mdns_buf, len);
-		f->last_mc = rt_now_ms();
+		rt_evstamp_set(&f->last_mc, rt_now_ms());
 	}
 }
 
@@ -791,9 +791,9 @@ static void answer_query(struct mdns_if *f, const u8 *m, u32 len, const struct r
 		goto out;
 	}
 	/* multicast, at most once a second (probe defence: 250 ms) */
-	if ((s32)(rt_now_ms() - f->last_mc) < (ns ? 250 : 1000))
+	if (rt_evstamp_within(&f->last_mc, rt_now_ms(), ns ? 250 : 1000))
 		goto out;
-	f->last_mc = rt_now_ms();
+	rt_evstamp_set(&f->last_mc, rt_now_ms());
 	if (rt_in6_is_v4mapped(&cb->from.sin6_addr))
 		rt_in6_set_v4mapped(&dst, mdns_grp4());
 	else

@@ -59,6 +59,11 @@ The core files are owned per area:
   callbacks and frame input run in the stack thread, also under the lock.
 * Errors are negative errno values (`-RT_EWOULDBLOCK`), with BSD numbering.
 * Time: `rt_now_ms()` for timers, and `rt_now_us()` for RTT samples.
+  It wraps after 49.7 days, so `(s32)(now - last) < window` is only right
+  for a stamp renewed well within 24.8 days. For "last event" times that
+  may stay old (conflict defence, mDNS multicast pacing) use
+  `struct rt_evstamp` (`infra.h`): it also keeps `rt_ip6_seconds()`, which
+  does not wrap, so an old stamp never looks recent; all zero = no event.
 * Diagnostics (`rt_diag.h`): `RT_DBG(RT_DBG_TCP, ...)` logs to the debug
   ring when that category is on, and costs one test otherwise.
   `RT_PROF_ENTER/EXIT` bracket a profiler section. Sections run under the

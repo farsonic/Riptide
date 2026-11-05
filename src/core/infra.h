@@ -31,6 +31,27 @@ static inline int rt_ip_is_multicast(u32 a) { return (rt_ntohl(a) & 0xf0000000u)
 static inline int rt_ip_is_loopback_net(u32 a) { return (rt_ntohl(a) >> 24) == 127; }
 static inline int rt_ip_is_zeronet(u32 a) { return (rt_ntohl(a) >> 24) == 0; }
 
+/* ---- "last event" times ----
+ * (s32)(now - last) < window goes wrong on a stamp that is rarely renewed:
+ * once the event is 24.8 days old the difference turns negative and the
+ * event looks recent until it is 49.7 days old. An rt_evstamp keeps the
+ * rt_now_ms() time for the window and rt_ip6_seconds(), which does not
+ * wrap, to tell an old stamp from a recent one. All zero: no event yet. */
+struct rt_evstamp {
+	u32 ms;
+	u32 s;                /* 0 = unset (rt_ip6_seconds() starts at 1) */
+};
+static inline void rt_evstamp_set(struct rt_evstamp *t, u32 now)
+{
+	t->ms = now;
+	t->s = rt_ip6_seconds();
+}
+/* Did the event happen less than window ms (< 2^31) before now? */
+static inline int rt_evstamp_within(const struct rt_evstamp *t, u32 now, u32 window)
+{
+	return t->s && rt_ip6_seconds() - t->s <= window / 1000u + 1u && now - t->ms < window;
+}
+
 /* ---- buf.c ---- */
 /* Release the allocator's free lists (leak checks in tests). */
 void rt_buf_drain_cache(void);

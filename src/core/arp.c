@@ -345,12 +345,12 @@ void rt_arp_input(struct rt_netif *nif, struct rt_buf *b)
 	if (rt_netif_has_addr(nif, sip)) {
 		/* Someone else claims our address (RFC 5227 2.4): defend by
 		 * announcing once, and leave the table alone. */
-		static u32 last_defend;
+		static struct rt_evstamp last_defend;
 		u32 now = rt_now_ms();
 
-		if (last_defend && (s32)(now - last_defend) < 10000)
+		if (rt_evstamp_within(&last_defend, now, 10000))
 			goto drop;    /* RFC 5227 DEFEND_INTERVAL */
-		last_defend = now ? now : 1;
+		rt_evstamp_set(&last_defend, now);
 		rt_log(RT_LOG_WARN, "arp: address conflict on %s with %02x:%02x:%02x:%02x:%02x:%02x",
 		       nif->name, sha[0], sha[1], sha[2], sha[3], sha[4], sha[5]);
 		rt_arp_announce(nif, sip);
