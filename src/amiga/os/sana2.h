@@ -137,6 +137,9 @@ struct Sana2SpecialStatHeader {
 #define S2EVENT_DISCONNECT (1UL << 10)
 
 /* ---- SANA-II wireless extensions (the same public definitions) ----
+ * Command numbers, S2INFO_* tags and struct Sana2SignalQuality as in
+ * Neil Cafferkey's sana2wireless.h (AROS include/devices/sana2wireless.h,
+ * used by Prism2.device and WirelessManager).
  * Association (SSID, keys) is the business of a tool like WirelessManager;
  * Riptide only reads the state. */
 #define S2_GETSIGNALQUALITY 0xc010   /* ios2_StatData: struct Sana2SignalQuality */

@@ -558,6 +558,8 @@ static void nd_drv_info(struct rt_netif *nif, struct rt_ctl_driver *r)
 	rt_strlcpy(r->driver, ni->device, sizeof(r->driver));
 	r->unit = ni->unit;
 	r->flags |= RT_CTL_DRVF_DROPS;
+	if (ni->caps.ndc_Features & NDCF_LINK_EVENTS)
+		r->flags |= RT_CTL_DRVF_LINKEV;
 	r->drv_drops = ni->overruns - ni->overruns0;
 	r->dq_mtu = ni->caps.ndc_Mtu;
 	r->dq_bps = (u32)ni->link.ndls_SpeedMbps * 1000000u;

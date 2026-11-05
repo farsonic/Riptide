@@ -59,6 +59,8 @@
 672 void DeleteMsgPort(struct MsgPort* port a0)
 684 APTR AllocVec(ULONG byteSize d0, ULONG requirements d1)
 690 void FreeVec(APTR memoryBlock a1)
+696 APTR CreatePool(ULONG requirements d0, ULONG puddleSize d1, ULONG threshSize d2)
+702 void DeletePool(APTR poolHeader a0)
 
 @lib dos DOSBase basetype=DosLibrary
 30  BPTR Open(CONST_STRPTR name d1, LONG accessMode d2)
