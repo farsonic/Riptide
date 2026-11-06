@@ -4,7 +4,7 @@
  * Riptide's netdev backend can be tested in an emulator without a
  * Raspberry Pi 4.
  *
- *   fakenetdev [DEVICE] [UNIT] [STATSFILE]   (default uaenet.device unit 2)
+ *   fakenetdev [DEVICE] [UNIT] [STATSFILE] [PRI]   (default uaenet.device unit 2, priority 5)
  *
  * It puts "fakenet.device" into exec's device list and stays running as
  * the driver's unit task: frames the stack submits (ndo_TxSubmit) go out
@@ -378,6 +378,10 @@ int main(int argc, char **argv)
 
 	stats_path = argc > 3 ? argv[3] : NULL;
 	unit_task = FindTask(NULL);
+	/* above the stack and its programs, as Alice68's alice68net.device
+	 * (priority 5): a write that completes at once then reaches the stack
+	 * (nso_TxDone) before ndo_TxSubmit has returned to it */
+	SetTaskPri(unit_task, argc > 4 ? atoi(argv[4]) : 5);
 	sig_kick = 1UL << AllocSignal(-1);
 	s2port = CreateMsgPort();
 	s2ctl = (struct IOSana2Req *)CreateIORequest(s2port, sizeof(struct IOSana2Req));

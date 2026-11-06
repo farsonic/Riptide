@@ -534,19 +534,29 @@ static int nd_output(struct rt_netif *nif, struct rt_buf *b, const u8 *dsthw, u1
 	d.ntd_Segs = &sg;
 	d.ntd_NumSegs = 1;
 	d.ntd_Cookie = t;
+	/* The buffer leaves the free list and the frame is counted BEFORE the
+	 * driver sees it: a driver whose unit task runs above the sender may
+	 * complete it (nso_TxDone, which reuses t->next for the done list)
+	 * before ndo_TxSubmit even returns. Unlinking afterwards crossed the
+	 * free and done lists, and nd_poll could then loop for ever with the
+	 * stack lock held (alice68net.device, unit task at priority 5). */
+	ni->tx_free = t->next;
+	t->next = NULL;
+	rt_drv_tx_start(nif, len);
 	RT_PROF_ENTER(RT_PROF_DRV_TX);
 	if (ni->ops->ndo_TxSubmit(ni->drvctx, &d, 1) != 1) {
 		RT_PROF_EXIT(RT_PROF_DRV_TX);
 		/* the ring is full: the frame is lost, the buffer stays ours */
+		t->next = ni->tx_free;
+		ni->tx_free = t;
+		rt_drv_tx_done(nif, -1);
 		nif->stats.oerrors++;
 		nif->stats.iqdrops++;
 		rt_drv_tx_full(nif);
 		return -RT_ENOBUFS;
 	}
-	ni->tx_free = t->next;
 	ni->ops->ndo_TxKick(ni->drvctx);
 	RT_PROF_EXIT(RT_PROF_DRV_TX);
-	rt_drv_tx_start(nif, len);
 	return 0;
 }
 

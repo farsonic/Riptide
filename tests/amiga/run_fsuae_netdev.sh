@@ -65,6 +65,7 @@ Path DH0:C ADD
 @FAKE@
 DH0:C/rtcheck START="DH0:C/Riptide >DH0:out/riptide.log CONFIG=DH0:S/riptide.conf" NOCHECK >DH0:out/start
 DH0:C/ping -c 5 192.168.82.1 >DH0:out/ping
+DH0:C/ping -c 3 -i 1 192.168.82.1 >DH0:out/ping2
 DH0:C/Riptide STATUS >DH0:out/status
 DH0:C/speedtest --mirror 192.168.82.1:8080 --duration 6 >DH0:out/speed
 DH0:C/Riptide STATUS >DH0:out/status2
@@ -131,9 +132,10 @@ if [ "${BASELINE:-0}" != 1 ]; then
 	expect status '^eth0 +192\.168\.82\.2' 'netdev fakenet.device unit 0 \(ABI 1\), link 1000 Mb/s full duplex'
 fi
 expect ping '5 packets transmitted, 5 (packets )?received'
+expect ping2 '3 packets transmitted, 3 (packets )?received'
 expect speed '[Dd]ownload' '[Uu]pload'
 expect quit 'shutting down'
-for f in fake fakestats riptide.log ping status speed status2 quit; do echo "---- $f"; out $f; done
+for f in fake fakestats riptide.log ping ping2 status speed status2 quit; do echo "---- $f"; out $f; done
 echo "---- host side (rtnd1)"; tcpdump -n -r "$work/rtnd1.pcap" 2>/dev/null | head -12
 if [ $fails -eq 0 ]; then
 	if [ "${BASELINE:-0}" = 1 ]; then echo "ok   baseline: SANA-II uaenet.device on FS-UAE"; else echo "ok   netdev backend on FS-UAE (fakenet.device over uaenet.device)"; fi
