@@ -445,6 +445,17 @@ void rt_hosts_clear(void)
 	hosts_tail = NULL;
 }
 
+/* a restart of the configuration: no servers, search list or hosts, an
+ * empty cache (lock held; the dns.* sysctls are set back with the rest) */
+void rt_resolv_reset(void)
+{
+	rt_dns_clear_servers();
+	rt_dns_set_search("");
+	rt_hosts_clear();
+	memset(dns_cache, 0, sizeof(dns_cache));
+	neg_flush(0);
+}
+
 /* ======================================================================
  * Message encoding / decoding (pure functions, unit tested)
  * ====================================================================== */

@@ -750,6 +750,24 @@ bad:
 
 void rt_netsvc_init(void);   /* also starts mDNS (mdns.c) */
 void rt_mdns_init(void);
+void rt_mdns_reset(void);
+
+/* a restart of the configuration: NTP off with the built-in settings, the
+ * system's time zone, mDNS off (lock held) */
+void rt_netsvc_reset(void)
+{
+	ntp_enable(0);
+	ntp.nnames = 0;
+	ntp.ndhcp = 0;
+	ntp.backoff = 0;
+	ntp.interval_s = 3600;
+	ntp.step_ms = 500;
+	ntp.last_err[0] = 0;
+	rt_ntp_battclock = 0;
+	rt_tz_configured = 0;
+	rt_tz_offset = rt_tz_system;
+	rt_mdns_reset();
+}
 
 void rt_netsvc_init(void)
 {

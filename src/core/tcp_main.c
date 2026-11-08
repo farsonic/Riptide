@@ -2249,6 +2249,43 @@ const struct rt_proto_ops rt_tcp_ops = {
 	tcp_v4_ioctl
 };
 
+/* ---- a restart of the configuration ---- */
+
+static int tcp_addr_gone(const rt_in6_addr *a)
+{
+	if (rt_in6_is_unspec(a))
+		return 0;
+	if (rt_in6_is_v4mapped(a))
+		return rt_in6_v4(a) != 0 && !rt_ip_is_local(rt_in6_v4(a));
+	return !rt_ip6_is_local(a);
+}
+
+int rt_tcp_drop_lost(void)
+{
+	struct tcp_sock *tp, *next;
+	int n = 0;
+
+	tcp_enter();               /* sockets freed here go after the loop */
+	for (tp = tcp_all; tp; tp = next) {
+		int err;
+		next = tp->all_next;
+		if (tp->destroyed || tp->state == RT_TCPS_LISTEN || tp->state == RT_TCPS_CLOSED ||
+		    !tcp_addr_gone(&tp->saddr))
+			continue;
+		/* no RST: it could not leave from an address we no longer have */
+		err = tp->state == RT_TCPS_SYN_SENT ? RT_ENETUNREACH : RT_ECONNRESET;
+		tcp_write_queue_purge(tp);
+		tcp_done(tp);              /* one its program closed already is freed */
+		if (tp->so) {
+			tcp_sock_error(tp, err);
+			rt_sock_wakeup(tp->so, RT_SEV_ERROR);
+		}
+		n++;
+	}
+	tcp_exit();
+	return n;
+}
+
 /* ---- netstat ---- */
 int rt_tcp_list(struct rt_pcb_info *out, int max)
 {

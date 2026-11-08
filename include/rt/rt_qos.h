@@ -75,5 +75,7 @@ extern void (*rt_qos_program_hook)(char *buf, u32 len);
  *  rule ... | rules flush | status" */
 int  rt_qos_command(int argc, char **argv, char *out, u32 outlen);
 void rt_qos_init(void);
+/* no rules (a restart of the configuration; the sysctls are set back apart) */
+void rt_qos_reset(void);
 
 #endif

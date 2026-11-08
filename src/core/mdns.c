@@ -966,6 +966,14 @@ bad:
 	return -RT_EINVAL;
 }
 
+/* back to off, as after rt_init(); "mdns on" probes the name afresh */
+void rt_mdns_reset(void);
+void rt_mdns_reset(void)
+{
+	mdns_enable(0);
+	md.conflicts = 0;
+}
+
 void rt_mdns_init(void);
 void rt_mdns_init(void)
 {

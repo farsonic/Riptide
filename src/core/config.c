@@ -721,6 +721,26 @@ static int cfg_ifconfig6(int argc, char **argv, char *err, u32 errlen)
 
 /* route add|del|replace [-inet6|-6] DEST[/PLEN]|default [via|gw] GW [dev IF] [metric N] [mtu N] [reject]
  * route flush -inet6 [dev IF] */
+/* every IPv6 route but the interface routes (of nif, or all) */
+static void route6_flush(struct rt_netif *nif)
+{
+	struct rt_route6 *rt;
+
+	for (;;) {
+		for (rt = rt_route6_list(); rt; rt = rt->next)
+			if ((!nif || rt->netif == nif) && !(rt->flags & RT_RTF_CONNECTED))
+				break;
+		if (!rt)
+			return;
+		if (rt->flags & RT_RTF_PMTU) {
+			rt_route6_flush_learned(rt->netif);
+			continue;
+		}
+		if (rt_route6_delete(&rt->dst, rt->plen, &rt->gateway, rt->netif, 0) < 0)
+			return;
+	}
+}
+
 static int cfg_route6(int argc, char **argv, char *err, u32 errlen)
 {
 	static const char usage[] = "route add|del|replace -inet6 DEST[/PLEN]|default [via] GATEWAY [dev IF] "
@@ -737,19 +757,8 @@ static int cfg_route6(int argc, char **argv, char *err, u32 errlen)
 		for (; i < argc; i++)
 			if (!strcmp(argv[i], "dev") && i + 1 < argc && !(nif = rt_netif_find(argv[++i])))
 				return cfg_err(err, errlen, -RT_ENODEV, "route: no interface '%s'", argv[i]);
-		for (;;) {
-			for (rt = rt_route6_list(); rt; rt = rt->next)
-				if ((!nif || rt->netif == nif) && !(rt->flags & RT_RTF_CONNECTED))
-					break;
-			if (!rt)
-				return 0;
-			if (rt->flags & RT_RTF_PMTU) {
-				rt_route6_flush_learned(rt->netif);
-				continue;
-			}
-			if (rt_route6_delete(&rt->dst, rt->plen, &rt->gateway, rt->netif, 0) < 0)
-				return 0;
-		}
+		route6_flush(nif);
+		return 0;
 	}
 	if (!strcmp(argv[1], "add") || !strcmp(argv[1], "append"))
 		op = 'a';
@@ -1234,4 +1243,21 @@ int rt_config_line(const char *line, char *err, u32 errlen,
 	r = argc ? cfg_dispatch(argc, argv, err, errlen, unknown) : 0;
 	rt_free(copy);
 	return r;
+}
+
+void rt_config_reset(void)
+{
+	/* kern.hostname, kern.domainname, dns.*, net.inet.he.*, the
+	 * background lists, ... (the Amiga defaults come again after this) */
+	rt_sysctl_restore();
+	rt_hostname[0] = 0;
+	rt_domainname[0] = 0;
+	route_flush(NULL, 0);
+	route_flush(NULL, 1);
+	route6_flush(NULL);
+	rt_resolv_reset();
+	rt_ip4_auto_enable = 1;
+	rt_qos_reset();
+	rt_netsvc_reset();
+	rt_arch_select("auto");
 }

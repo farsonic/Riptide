@@ -334,3 +334,59 @@ void rt_sysctl_init(void)
 {
 	rt_sysctl_register(generic_sysctls, (int)RT_ARRAY_SIZE(generic_sysctls));
 }
+
+/* ---- built-in values, for a restart of the configuration ---- */
+
+/* the value of every writable variable when rt_init() finished, as text */
+static char **sysctl_saved;
+static int sysctl_nsaved;
+
+static int sysctl_savable(const struct rt_sysctl *e)
+{
+	return !(e->flags & RT_SYSCTL_RO) && (e->type == RT_SYSCTL_INT || e->type == RT_SYSCTL_STRING);
+}
+
+void rt_sysctl_snapshot(void)
+{
+	const struct rt_sysctl *e;
+	char buf[256];
+	int i, n;
+
+	for (n = 0; rt_sysctl_iter(n); n++)
+		;
+	if (sysctl_saved || !n)
+		return;
+	sysctl_saved = rt_zalloc((u32)n * sizeof(*sysctl_saved));
+	if (!sysctl_saved)
+		return;
+	sysctl_nsaved = n;
+	for (i = 0; i < n; i++) {
+		u32 l;
+		e = rt_sysctl_iter(i);
+		if (!sysctl_savable(e) || rt_sysctl_get_text(e, buf, sizeof(buf)) < 0)
+			continue;
+		l = (u32)strlen(buf) + 1;
+		sysctl_saved[i] = rt_malloc(l);
+		if (sysctl_saved[i])
+			memcpy(sysctl_saved[i], buf, l);
+	}
+}
+
+/* Set back what changed since rt_sysctl_snapshot(). Only changed values
+ * are written: handlers with side effects (dns.cache.flush) stay quiet. */
+int rt_sysctl_restore(void)
+{
+	const struct rt_sysctl *e;
+	char buf[256];
+	int i, n = 0;
+
+	for (i = 0; i < sysctl_nsaved; i++) {
+		e = rt_sysctl_iter(i);
+		if (!e || !sysctl_saved[i] || rt_sysctl_get_text(e, buf, sizeof(buf)) < 0 ||
+		    !strcmp(buf, sysctl_saved[i]))
+			continue;
+		if (rt_sysctl_set_text(e->name, sysctl_saved[i]) == 0)
+			n++;
+	}
+	return n;
+}

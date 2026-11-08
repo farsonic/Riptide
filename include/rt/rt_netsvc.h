@@ -45,5 +45,8 @@ void rt_mdns_if_gone(struct rt_netif *nif);
 const char *rt_mdns_hostname(void);
 
 void rt_netsvc_init(void);
+/* a restart of the configuration: NTP, the time zone and mDNS back to
+ * their state after rt_init() (lock held) */
+void rt_netsvc_reset(void);
 
 #endif

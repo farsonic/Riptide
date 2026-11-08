@@ -78,6 +78,17 @@ int rt_raw_list(struct rt_pcb_info *out, int max);
  * err with a message. */
 int rt_config_line(const char *line, char *err, u32 errlen,
                    int (*unknown)(int argc, char **argv, char *err, u32 errlen));
+/* Before the configuration is read again (a restart of Riptide without
+ * quitting): what its lines set goes back to the state rt_init() left -
+ * sysctls, host and domain name, static routes, DNS, hosts, QoS rules,
+ * NTP, time zone, mDNS, CPU routines. The OS glue removes its interfaces
+ * first; sockets are not touched. Lock held. */
+void rt_config_reset(void);
+/* After the configuration is read again: TCP connections whose local
+ * address no longer belongs to an interface are reset (the program gets
+ * ECONNRESET), as nothing could reach them. Listening sockets stay.
+ * Returns how many. Lock held. */
+int  rt_tcp_drop_lost(void);
 /* Split a line into whitespace separated words (quotes allowed); modifies
  * line in place. Returns argc. */
 int rt_config_split(char *line, char **argv, int max);
@@ -103,6 +114,8 @@ const char *rt_dns_search_list(void);    /* "a.example b.example", "" = none */
 int  rt_hosts_add(const char *name, u32 addr);   /* static host table */
 int  rt_hosts_remove(const char *name);          /* every entry of that name; -ENOENT */
 void rt_hosts_clear(void);
+/* servers, search list, hosts and cache emptied (lock held) */
+void rt_resolv_reset(void);
 /* Forward lookup; numeric strings and the static table are handled
  * without network traffic. canon (may be NULL) gets the canonical name. */
 int  rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 canonlen);

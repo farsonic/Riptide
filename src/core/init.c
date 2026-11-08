@@ -47,6 +47,10 @@ int rt_init(void)
 		return r;
 	rt_resolv_init();
 	rt_netsvc_init();
+	/* the built-in values a restart of the configuration goes back to */
+	rt_lock();
+	rt_sysctl_snapshot();
+	rt_unlock();
 	rt_initialised = 1;
 	return 0;
 }

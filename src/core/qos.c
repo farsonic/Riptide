@@ -754,6 +754,11 @@ static int h_qos_default(const struct rt_sysctl *e, void *old, u32 *oldlen, cons
 	return 0;
 }
 
+void rt_qos_reset(void)
+{
+	nrules = 0;
+}
+
 void rt_qos_init(void)
 {
 	nrules = 0;

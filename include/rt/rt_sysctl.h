@@ -53,5 +53,10 @@ int  rt_sysctl_get_text(const struct rt_sysctl *e, char *buf, u32 len);
 const struct rt_sysctl *rt_sysctl_find(const char *name);
 /* Enumerate: returns the i-th registered entry or NULL. */
 const struct rt_sysctl *rt_sysctl_iter(int i);
+/* Remember every writable value (rt_init() does it once, when all tables
+ * are registered); rt_sysctl_restore() sets back those that changed since
+ * and returns how many. Lock held. */
+void rt_sysctl_snapshot(void);
+int  rt_sysctl_restore(void);
 
 #endif
