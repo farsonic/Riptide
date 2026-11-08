@@ -1,7 +1,7 @@
 /*
  * Riptide - the Riptide process: configuration, the main loop that runs
  * timers and completed driver I/O under the stack lock, the public
- * "RIPTIDE" port (STATUS/QUIT) and shutdown.
+ * "RIPTIDE" port (STATUS/QUIT/RESTART), restarts and shutdown.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "amiga_priv.h"
@@ -23,6 +23,16 @@ static struct timerequest *ireq;    /* the idle tick, apart from treq */
 static int idle_pending;
 static int quit_requested;
 static u32 seed_saved_ms;          /* when the random seed was last saved */
+int amiga_drv_opens;
+static char config_path[128];      /* CONFIG=, "" for DEFAULT_CONFIG */
+static int start_loglevel;         /* DEBUG= at start-up */
+static u32 restarts;
+static struct rt_timer lost_timer; /* after a restart: connections left without an address */
+
+/* Long enough for a DHCP lease to come back (with the same address the
+ * connections survive the restart), short enough not to leave programs
+ * waiting on connections nothing can reach. */
+#define RESTART_GRACE_MS 15000u
 
 #define SEED_SAVE_MS (3600u * 1000u)
 
@@ -350,6 +360,20 @@ static int for_each_line(const char *path, void (*fn)(char *line, int lineno, co
 }
 
 static int config_errors;
+static char *config_report;        /* a restart: errors also go here */
+static u32 config_report_len;
+
+static void report(const char *fmt, const char *path, int lineno, const char *msg)
+{
+	u32 o;
+
+	amiga_out(fmt, path, lineno, msg);
+	if (!config_report)
+		return;
+	o = (u32)strlen(config_report);
+	if (o + 1 < config_report_len)
+		rt_snprintf(config_report + o, config_report_len - o, fmt, path, lineno, msg);
+}
 
 static void config_line(char *line, int lineno, const char *path)
 {
@@ -361,7 +385,7 @@ static void config_line(char *line, int lineno, const char *path)
 	rt_unlock();
 	if (r < 0) {
 		config_errors++;
-		amiga_out("%s:%d: %s\n", path, lineno, err[0] ? err : rt_strerror(-r));
+		report("%s:%d: %s\n", path, lineno, err[0] ? err : rt_strerror(-r));
 	}
 	amiga_log_flush();
 }
@@ -379,7 +403,7 @@ static void hosts_line(char *line, int lineno, const char *path)
 	if (argc < 2)
 		return;
 	if (rt_parse_ipv4(argv[0], &a) < 0) {
-		amiga_out("%s:%d: bad address '%s'\n", path, lineno, argv[0]);
+		report("%s:%d: bad address '%s'\n", path, lineno, argv[0]);
 		return;
 	}
 	for (i = 1; i < argc; i++)
@@ -438,6 +462,14 @@ int amiga_status_text(char *buf, u32 len)
 		ADD("Libraries: %s\n", libs);
 		rt_arch_describe(libs, sizeof(libs));
 		ADD("%s\n", libs);
+	}
+	{
+		/* what a restart must not leak: driver opens and signals */
+		ULONG sa = amiga_stack_task ? amiga_stack_task->tc_SigAlloc : 0;
+		int nsig = 0;
+		for (; sa; sa &= sa - 1)
+			nsig++;
+		ADD("Drivers open %d, signals %d, restarts %lu\n", amiga_drv_opens, nsig, (unsigned long)restarts);
 	}
 	for (n = rt_netif_list(); n; n = n->next) {
 		struct rt_dhcp_info di;
@@ -625,8 +657,8 @@ static int try_quit(char *msg, u32 len)
 		quit_requested = 2;
 		return 0;
 	}
-	rt_snprintf(msg, len, "Riptide: the TCP/IP libraries are still open (%d opens); not quitting.\n",
-	            users ? users : 1);
+	rt_snprintf(msg, len, "Riptide: the TCP/IP libraries are still open (%d opens); not quitting.\n"
+	            "'Riptide RESTART' applies a new configuration without quitting.\n", users ? users : 1);
 	return -1;
 }
 
@@ -700,7 +732,7 @@ static void handle_port(void)
 		out = reply_buf(m, &olen);
 		/* a command without a reply buffer is answered in text, which
 		 * holds the command line: RTCMD_COMMAND copies it first */
-		if (out != m->text || m->cmd != RTCMD_COMMAND)
+		if (out != m->text || (m->cmd != RTCMD_COMMAND && m->cmd != RTCMD_RESTART))
 			out[0] = 0;
 		switch (m->cmd) {
 		case RTCMD_STATUS:
@@ -710,6 +742,17 @@ static void handle_port(void)
 		case RTCMD_QUIT:
 			m->result = try_quit(out, olen) == 0 ? 0 : RT_EBUSY;
 			break;
+		case RTCMD_RESTART: {
+			char path[sizeof(config_path)];
+			/* the file name is in text, which the reply may overwrite */
+			m->text[sizeof(m->text) - 1] = 0;
+			rt_strlcpy(path, m->text, sizeof(path));
+			out[0] = 0;
+			r = amiga_stack_restart(path, out, olen);
+			m->result = r < 0 ? -r : 0;
+			amiga_log_flush();
+			break;
+		}
 		case RTCMD_COMMAND:
 			/* the command line is in text; the reply may overwrite it */
 			m->text[sizeof(m->text) - 1] = 0;
@@ -760,10 +803,102 @@ static void handle_port(void)
 	}
 }
 
-int amiga_stack_start(const char *config, int selftest)
+/* the Amiga defaults (amiga_defaults.h), before the config so it can
+ * override them; lock held */
+static void apply_defaults(int selftest)
 {
 	static const char *const amiga_defaults[] = RT_AMIGA_DEFAULTS;
-	int r, i;
+	int i;
+
+	for (i = 0; amiga_defaults[i]; i++) {
+		char e[64];
+		if (!selftest || !strncmp(amiga_defaults[i], "sysctl ", 7))
+			rt_config_line(amiga_defaults[i], e, sizeof(e), NULL);
+	}
+}
+
+static void lost_timer_fn(void *arg)
+{
+	int n = rt_tcp_drop_lost();
+
+	if (n)
+		rt_log(RT_LOG_INFO, "restart: %d connection%s reset, their address is gone", n, n == 1 ? "" : "s");
+}
+
+int amiga_stack_restart(const char *config, char *out, u32 olen)
+{
+	struct amiga_if *ai, *next, *list;
+	struct rt_netif *n;
+	const char *path;
+	char err[96];
+	int nifs = 0, r;
+	u32 o;
+
+	if (config && *config) {
+		BPTR fh;
+		if (strlen(config) >= sizeof(config_path)) {
+			rt_snprintf(out, olen, "Riptide: the file name is too long\n");
+			return -RT_ENAMETOOLONG;
+		}
+		/* a file that is not there leaves everything running */
+		fh = open_quiet(config);
+		if (!fh) {
+			rt_snprintf(out, olen, "Riptide: cannot open %s; not restarting.\n", config);
+			return -RT_ENOENT;
+		}
+		Close(fh);
+		rt_strlcpy(config_path, config, sizeof(config_path));
+	}
+	path = config_path[0] ? config_path : NULL;
+	amiga_log_line("Riptide: restarting the network");
+	amiga_log_flush();
+	rt_lock();
+	rt_timer_del(&lost_timer);
+	list = amiga_ifs;
+	amiga_ifs = NULL;
+	rt_unlock();
+	/* VLANs go with their parent; routes, ARP and DHCP with each interface */
+	for (ai = list; ai; ai = next) {
+		next = ai->next;
+		ai->close(ai);
+	}
+	rt_lock();
+	rt_config_reset();
+	amiga_user_reset();
+	SetTaskPri(FindTask(NULL), AMIGA_STACK_PRI);
+	rt_log_level = start_loglevel;
+	if (amiga_libs_set_compat(1, err, sizeof(err)) < 0)
+		rt_log(RT_LOG_WARN, "restart: %s", err);
+	apply_defaults(0);
+	rt_unlock();
+	config_report = out;
+	config_report_len = olen;
+	r = amiga_load_config(path);
+	config_report = NULL;
+	rt_lock();
+	rt_timer_after(&lost_timer, RESTART_GRACE_MS);
+	for (n = rt_netif_list(); n; n = n->next)
+		if (n->type != RT_IFT_LOOP)
+			nifs++;
+	rt_unlock();
+	amiga_ctx_signal_addrchg();
+	restarts++;
+	o = (u32)strlen(out);
+	if (o + 1 < olen)
+		rt_snprintf(out + o, olen - o, "Riptide: restarted (%d interface%s)%s\n", nifs, nifs == 1 ? "" : "s",
+		            r < 0 ? ", with the errors above" : "");
+	{
+		char line[48];
+		rt_snprintf(line, sizeof(line), "Riptide: restarted (%d interface%s)", nifs, nifs == 1 ? "" : "s");
+		amiga_log_line(line);
+	}
+	amiga_log_flush();
+	return r < 0 ? -RT_EINVAL : 0;
+}
+
+int amiga_stack_start(const char *config, int selftest)
+{
+	int r;
 
 	rt_sock_async_hook = amiga_async_hook;
 	amiga_rs_init();
@@ -781,15 +916,14 @@ int amiga_stack_start(const char *config, int selftest)
 	/* before the configuration brings interfaces up */
 	if (!selftest)
 		amiga_ipv6_secret();
-	/* Amiga defaults (amiga_defaults.h), before the config so it can
-	 * override them */
 	rt_lock();
-	for (i = 0; amiga_defaults[i]; i++) {
-		char e[64];
-		if (!selftest || !strncmp(amiga_defaults[i], "sysctl ", 7))
-			rt_config_line(amiga_defaults[i], e, sizeof(e), NULL);
-	}
+	apply_defaults(selftest);
 	rt_unlock();
+	/* what a restart reads again */
+	if (config)
+		rt_strlcpy(config_path, config, sizeof(config_path));
+	start_loglevel = rt_log_level;
+	rt_timer_init(&lost_timer, lost_timer_fn, NULL);
 	if (amiga_load_config(config) < 0 && config)
 		return -1;
 	if (selftest)

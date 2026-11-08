@@ -626,8 +626,10 @@ static void nd_close(struct amiga_if *ai)
 	if (ni->attached && !ni->tx_keep)
 		nd_ctl(ni, NETDEV_CMD_DETACH, NULL, 0);
 	ni->attached = 0;
-	if (ni->dev_open)
+	if (ni->dev_open) {
 		CloseDevice((struct IORequest *)ni->io);
+		amiga_drv_opens--;
+	}
 	if (ni->io)
 		DeleteIORequest((struct IORequest *)ni->io);
 	if (ni->port)
@@ -693,6 +695,7 @@ int netdev_open_if(const char *name, const char *device, ULONG unit, int mtu, ch
 		return -RT_ENXIO;
 	}
 	ni->dev_open = 1;
+	amiga_drv_opens++;
 
 	memset(&a, 0, sizeof(a));
 	a.nda_AbiVersion = NETDEV_ABI_VERSION;

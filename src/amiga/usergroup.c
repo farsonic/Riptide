@@ -41,11 +41,23 @@ struct RtLibDef rtlib_usergroup = {
 };
 
 /* the configured user ("user NAME [uid=N] [gid=N] [home=DIR] [realname=TEXT]") */
-char amiga_user_name[32] = "user";
-char amiga_user_home[64] = "SYS:";
-char amiga_user_realname[64] = "Amiga User";
+#define USER_NAME     "user"
+#define USER_HOME     "SYS:"
+#define USER_REALNAME "Amiga User"
+char amiga_user_name[32] = USER_NAME;
+char amiga_user_home[64] = USER_HOME;
+char amiga_user_realname[64] = USER_REALNAME;
 LONG amiga_user_uid = 0, amiga_user_gid = 0;
 static const char group_name[] = "users";
+
+void amiga_user_reset(void)
+{
+	rt_strlcpy(amiga_user_name, USER_NAME, sizeof(amiga_user_name));
+	rt_strlcpy(amiga_user_home, USER_HOME, sizeof(amiga_user_home));
+	rt_strlcpy(amiga_user_realname, USER_REALNAME, sizeof(amiga_user_realname));
+	amiga_user_uid = 0;
+	amiga_user_gid = 0;
+}
 
 #define UG struct UgBase *u = (struct UgBase *)base
 

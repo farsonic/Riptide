@@ -955,6 +955,7 @@ static void sana2_close(struct amiga_if *ai)
 		}
 		CloseDevice((struct IORequest *)si->ctl);
 		si->dev_open = 0;
+		amiga_drv_opens--;
 	}
 	if (si->wl_pool)
 		DeletePool(si->wl_pool);   /* S2_GETNETWORKINFO was aborted */
@@ -1294,6 +1295,7 @@ int sana2_open_if(const char *name, const char *device, ULONG unit, int mtu, int
 		return -RT_ENXIO;
 	}
 	si->dev_open = 1;
+	amiga_drv_opens++;
 	si->bufmgmt = si->ctl->ios2_BufferManagement;
 
 	memset(&q, 0, sizeof(q));

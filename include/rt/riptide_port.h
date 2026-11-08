@@ -15,7 +15,8 @@
  *
  * Commands (cmd):
  *   RTCMD_STATUS   status summary: interfaces, routes, DNS, users
- *   RTCMD_QUIT     quit if no program has the libraries open
+ *   RTCMD_QUIT     quit if no program has the libraries open (else
+ *                  EBUSY: RTCMD_RESTART applies a new configuration)
  *   RTCMD_COMMAND  text holds one line in the riptide.conf language, plus
  *                  the query verbs of rt_ctl_command() (include/rt/rt_ctl.h):
  *                  e.g. "route replace default via 10.0.2.2",
@@ -33,6 +34,18 @@
  *                  the next 4-byte boundary. A table that failed or did not
  *                  fit has length 0 (and RTMSGF_TRUNCATED is set). replylen
  *                  is the bytes used. Older Riptide versions answer EINVAL.
+ *   RTCMD_RESTART  (0.39) restart the network without quitting: every
+ *                  interface is closed, what riptide.conf set goes back to
+ *                  its start-up state and the file is read again; the
+ *                  libraries stay and so do the programs' sockets (TCP
+ *                  connections whose address is gone are reset after a
+ *                  few seconds). text: another configuration file, or ""
+ *                  for the one Riptide uses. Takes as long as opening the
+ *                  drivers. The reply says "Riptide: restarted (N
+ *                  interfaces)" and lists configuration errors (result
+ *                  EINVAL then; the stack keeps running without what
+ *                  failed). Older Riptide versions answer EINVAL "unknown
+ *                  command".
  *
  * Reply: result is 0 or a positive errno (BSD numbering); the text reply
  * (output, or the error message) goes to 'reply' when the client supplies
@@ -51,6 +64,7 @@
 #define RTCMD_QUIT     2
 #define RTCMD_COMMAND  3
 #define RTCMD_TABLES   4
+#define RTCMD_RESTART  5
 
 #define RTMSGF_TRUNCATED 1
 

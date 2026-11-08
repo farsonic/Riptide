@@ -1,14 +1,14 @@
 /*
  * Riptide - CLI entry point.
  *
- *   Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH]
+ *   Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [RESTART] [SELFTEST] [BENCH]
  *           [CAPTURE start|stop|status|save FILE|clear ...]
  *   Riptide PROFILE START|STOP|RESET|SHOW
  *   Riptide DEBUG CATEGORIES|NONE|SHOW [N]|CLEAR|DUMP FILE|STATUS [SIZE=KB]
  *   Riptide NTP [SYNC|STATUS|...] | MDNS [ON|OFF|STATUS] | DNS [...] | TIMEZONE [+HH:MM|AUTO]
  *   Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=...]
  *
- * Without QUIT/STATUS/CAPTURE/PROFILE/DEBUG it starts the stack and stays
+ * Without QUIT/STATUS/RESTART/CAPTURE/PROFILE/DEBUG it starts the stack and stays
  * in this process (start it with "Run >NIL: Riptide"); a numeric DEBUG is
  * then the log level. The others talk to a running instance through the
  * public message port "RIPTIDE" (CAPTURE: packet capture, the rest of the
@@ -19,9 +19,9 @@
 #include "amiga_priv.h"
 
 /* CAPTURE/F: the rest of the line as it is (ARGS/M would split "iface=x") */
-#define TEMPLATE "CONFIG/K,DEBUG/K,QUIT/S,STATUS/S,SELFTEST/S,BENCH/S,PROFILE/K,CAPTURE/K/F,HELP/S,ARGS/M"
-enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_SELFTEST, ARG_BENCH, ARG_PROFILE, ARG_CAPTURE,
-       ARG_HELP, ARG_ARGS, ARG_COUNT };
+#define TEMPLATE "CONFIG/K,DEBUG/K,QUIT/S,STATUS/S,RESTART/S,SELFTEST/S,BENCH/S,PROFILE/K,CAPTURE/K/F,HELP/S,ARGS/M"
+enum { ARG_CONFIG, ARG_DEBUG, ARG_QUIT, ARG_STATUS, ARG_RESTART, ARG_SELFTEST, ARG_BENCH, ARG_PROFILE,
+       ARG_CAPTURE, ARG_HELP, ARG_ARGS, ARG_COUNT };
 
 const char riptide_version_tag[] = "$VER: Riptide " RIPTIDE_VERSION_STRING " (" RIPTIDE_DATE ")";
 
@@ -33,6 +33,8 @@ static void put(const char *s)
 static const char help_text[] =
 	"Riptide [CONFIG=file] [DEBUG=level]       start the stack\n"
 	"Riptide STATUS | QUIT                      the running stack: status, stop\n"
+	"Riptide RESTART [CONFIG=file]              read riptide.conf again: interfaces,\n"
+	"                                           addresses... (programs keep running)\n"
 	"Riptide NTP [STATUS|ON|OFF|SYNC|SERVER...] time sync (also INTERVAL s, STEP ms,\n"
 	"                                           BATTCLOCK ON|OFF)\n"
 	"Riptide TIMEZONE [+HH:MM|AUTO]             time zone used for the clock\n"
@@ -202,6 +204,24 @@ static int riptide_main(void)
 		verb[i] = 0;
 		rc = send_verb(verb, more[1] ? more[1] : args[ARG_STATUS] ? "status" : "",
 		               more[1] ? more + 2 : NULL);
+		FreeArgs(rda);
+		return rc;
+	}
+	if (args[ARG_RESTART]) {
+		char full[128];
+		const char *cf = (const char *)args[ARG_CONFIG];
+		BPTR l;
+		/* the Riptide process has another current directory */
+		if (cf && (l = Lock((CONST_STRPTR)cf, ACCESS_READ)) != 0) {
+			if (NameFromLock(l, (STRPTR)full, sizeof(full)))
+				cf = full;
+			UnLock(l);
+		}
+		if (!more)
+			put("Riptide: restarting the network...\n");
+		rc = more ? 10 : send_command(RTCMD_RESTART, cf ? cf : "");
+		if (more)
+			put("Riptide: unexpected argument (Riptide HELP lists the commands)\n");
 		FreeArgs(rda);
 		return rc;
 	}

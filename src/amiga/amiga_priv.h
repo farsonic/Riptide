@@ -212,6 +212,7 @@ void amiga_log_line(const char *line);
 /* usergroup.c: the configured user */
 extern char amiga_user_name[32], amiga_user_home[64], amiga_user_realname[64];
 extern LONG amiga_user_uid, amiga_user_gid;
+void amiga_user_reset(void);            /* back to the built-in user (restart) */
 
 /* ---- interface drivers (sana2.c, mni.c) ---------------------------- */
 struct amiga_if {
@@ -246,6 +247,9 @@ void mni_cleanup(void);
 /* OpenDevice() for network drivers: an already loaded driver of the same
  * name and version by its name, else the path (sana2.c) */
 LONG amiga_open_device(const char *ifname, const char *device, ULONG unit, struct IORequest *io);
+/* drivers the backends hold open (OpenDevice/OpenLibrary), for STATUS:
+ * a restart must not leave it higher than before */
+extern int amiga_drv_opens;
 int  mni_open_if(const char *name, const char *driver, ULONG unit, const char *options,
                  int mtu, char *err, u32 errlen);
 struct amiga_if *amiga_if_find(const char *name);
@@ -268,6 +272,11 @@ int  amiga_if_disabled(int i, const char **name);
 int  amiga_stack_start(const char *config, int selftest);
 void amiga_stack_loop(void);
 void amiga_stack_stop(void);
+/* RTCMD_RESTART: close the interfaces, set back what riptide.conf set and
+ * read it again (config: another file, NULL or "" for the one Riptide
+ * started with), the libraries and sockets staying. The report (and any
+ * configuration errors) goes to out. 0 or -errno. */
+int  amiga_stack_restart(const char *config, char *out, u32 olen);
 /* Public port protocol: include/rt/riptide_port.h */
 int  amiga_status_text(char *buf, u32 len);
 

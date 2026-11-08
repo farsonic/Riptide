@@ -415,8 +415,10 @@ static void mni_close(struct amiga_if *ai)
 		MNI_CloseHandle(mi->base, mi->handle);
 		mi->handle = NULL;
 	}
-	if (mi->base)
+	if (mi->base) {
 		CloseLibrary(mi->base);
+		amiga_drv_opens--;
+	}
 	rt_lock();
 	for (i = 0; i < MNI_RX_POOL; i++)
 		rt_buf_free(mi->rx[i].b);
@@ -479,6 +481,7 @@ int mni_open_if(const char *name, const char *driver, ULONG unit, const char *op
 		mni_close(&mi->ai);
 		return -RT_ENXIO;
 	}
+	amiga_drv_opens++;
 	memset(info, 0, sizeof(info));
 	info[0] = MNI_API_VERSION;
 	MNI_GetInfo(mi->base, info);
