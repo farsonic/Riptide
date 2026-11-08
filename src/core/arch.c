@@ -89,6 +89,13 @@ int rt_arch_describe(char *buf, u32 len)
 	                   "", arch_choice);
 }
 
+/* a restart of the configuration: "auto" again, quietly when it is already */
+void rt_arch_reset(void)
+{
+	if (strcmp(arch_choice, "auto"))
+		rt_arch_select("auto");
+}
+
 int rt_arch_select(const char *routines)
 {
 	struct rt_arch_ops o;

@@ -307,6 +307,16 @@ int main(void)
 	keep = connect_to(5001);
 	lost = connect_to(5002);
 	CHECK(is_established(keep) && is_established(lost));
+	/* lost half closed, as nc leaves a connection once its input ends */
+	CHECK(rt_api_shutdown(&ctx, lost, 1) == 0);
+	advance(1);
+	CHECK(take(&f, &s, &d, &q, &a) && (f & 0x01));
+	inject(ME, 5002, s, F_ACK, PEER_ISN + 1, q + 1);
+	advance(1);
+	{
+		struct rt_tcp_info ti;
+		CHECK(t_get_info(&ctx, lost, &ti) == 0 && ti.tcpi_state == RT_TCPS_FIN_WAIT_2);
+	}
 	lfd = rt_api_socket(&ctx, RT_AF_INET, RT_SOCK_STREAM, 0);
 	CHECK(lfd >= 0 && rt_api_bind(&ctx, lfd, &any, sizeof(any)) == 0 && rt_api_listen(&ctx, lfd, 4) == 0);
 	t_set_nbio(&ctx, lfd, 1);
@@ -318,7 +328,7 @@ int main(void)
 	reset();
 	if_attach(ME);
 	CHECK(drop_lost() == 0);
-	CHECK(is_established(keep) && is_established(lost));
+	CHECK(is_established(keep));
 
 	/* a new address: both connections were on the old one */
 	if_detach();

@@ -119,6 +119,8 @@ extern u32 rt_arch_cpu;
  * "020", "040" or "060". Returns 0, -RT_EINVAL for an unknown name, or
  * -RT_EOPNOTSUPP if the build or the CPU lacks those routines. */
 int  rt_arch_select(const char *routines);
+/* back to "auto" unless it is already (a restart of the configuration) */
+void rt_arch_reset(void);
 /* MOVE16 permission (sysctl riptide.cpu.move16). The OS layer clears it
  * for good with rt_arch_move16_veto() when packet buffers may live in
  * memory unsafe for MOVE16 (e.g. Chip RAM). */

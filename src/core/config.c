@@ -1259,5 +1259,5 @@ void rt_config_reset(void)
 	rt_ip4_auto_enable = 1;
 	rt_qos_reset();
 	rt_netsvc_reset();
-	rt_arch_select("auto");
+	rt_arch_reset();
 }

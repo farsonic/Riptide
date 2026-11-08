@@ -140,6 +140,7 @@ this file to other machines; delete it if a disk image with it is cloned.
 
 ```
 Riptide [CONFIG=file] [DEBUG=level] [QUIT] [STATUS] [SELFTEST] [BENCH [TX [BYTES]]] [HELP]
+Riptide RESTART [CONFIG=file]
 Riptide CAPTURE start|stop|status|save FILE|clear [OPTIONS]
 Riptide PROFILE START|STOP|RESET|SHOW
 Riptide DEBUG CATEGORIES|NONE|STATUS|SHOW [N]|CLEAR|DUMP FILE [SIZE=KB]
@@ -154,7 +155,8 @@ Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=.
 | `CONFIG=file` | Use this configuration file instead of `ENV:Riptide/riptide.conf`. |
 | `DEBUG=n` | Log level: 0 = errors, 1 = warnings (the default), 2 = info, 3 = debug. |
 | `STATUS` | Ask the running Riptide for a summary: interfaces, addresses, packet counters, driver and DHCP state, NTP and mDNS state, socket buffer memory and background rules, the routing table, DNS servers and library users. |
-| `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open. |
+| `QUIT` | Ask the running Riptide to quit. It refuses while any program still has one of its libraries open: unloading them would crash those programs. To apply a new configuration then, use `RESTART`. |
+| `RESTART` | Restart the running Riptide's network without quitting: read `riptide.conf` again (see "Restarting without quitting"). With `CONFIG=file`, that file from now on. |
 | `SELFTEST` | Run the built-in library self test in one task, without starting the stack. It is used under the vamos emulator. |
 | `BENCH` | Time the C and assembly checksum and copy routines (see "CPU support") and what one call of the OS services the stack uses per packet costs, and exit. Needs timer.device, so not under vamos. |
 | `BENCH TX [BYTES]` | Time the TCP send path without a network or a second task: an upload (default 2 MB, 16 KB `send()`s) to a scripted receiver behind a fake interface that ACKs every second segment, printing µs per segment and the KB/s that leaves, then half of it again under the profiler (`src/core/txbench.c`). |
@@ -165,7 +167,7 @@ Riptide BACKGROUND [CLEAR] [program=NAME,...] [port=P,...] [lport=P,...] [mode=.
 | `DNS ...` | The `dns` keyword in the running stack: EDNS0 size, TCP fallback and the cache of the resolver, e.g. `Riptide DNS`, `Riptide DNS EDNS_SIZE 0`, `Riptide DNS FLUSH` (see "Resolver: EDNS0 and TCP"). |
 | `BACKGROUND ...` | The `background` keyword in the running stack: which connections yield to others (see "Background transfers"). Without arguments it shows the rules. |
 
-`QUIT`, `STATUS`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS`, `DNS`, `TIMEZONE` and `BACKGROUND` talk to the running
+`QUIT`, `STATUS`, `RESTART`, `CAPTURE`, `PROFILE`, `DEBUG`, `NTP`, `MDNS`, `DNS`, `TIMEZONE` and `BACKGROUND` talk to the running
 stack through the public message port `RIPTIDE`. You can also signal the
 Riptide process directly:
 
@@ -173,6 +175,57 @@ Riptide process directly:
   Riptide sends each of them Ctrl-C, as the historical stack does. It then quits once
   the last one has closed its library.
 * **Ctrl-F** prints the status to Riptide's output.
+
+### Restarting without quitting
+
+Programs that keep `bsdsocket.library` open (a mail checker, an IRC
+client, a web browser) stop `Riptide QUIT`:
+
+```
+1> Riptide QUIT
+Riptide: the TCP/IP libraries are still open (5 opens); not quitting.
+'Riptide RESTART' applies a new configuration without quitting.
+```
+
+`Riptide RESTART` applies a changed `riptide.conf` (another card, other
+addresses, routes, anything) without a reboot and without quitting:
+
+```
+1> Riptide RESTART
+Riptide: restarting the network...
+Riptide: restarted (1 interface)
+```
+
+What it does, in Riptide's process:
+
+1. Every interface is closed: SANA-II, netdev and MNI drivers are let go
+   (`CloseDevice`/`CloseLibrary`), and with each interface its VLANs,
+   addresses, routes, ARP entries and DHCP lease go.
+2. What the configuration sets goes back to its start-up state: static
+   routes (IPv4 and IPv6), DNS servers, domain and search list, the hosts
+   from the file and from `ENV:Riptide/hosts`, the host name, every
+   sysctl (back to the built-in values, then the Amiga defaults), QoS
+   rules, background rules, NTP, the time zone, mDNS, `ipv4 on|off`, the
+   CPU routines, `user`, `priority`, `loglevel`, `compat aliases` and the
+   cards marked `disabled`.
+3. The file is read again exactly as at start-up. Errors are printed as
+   then, and also in `RESTART`'s answer (it then returns 5); a driver
+   that does not open again leaves its interface out, the rest runs.
+
+The libraries stay in memory and every program's library base and
+socket stays valid. Listening sockets bound to any address (servers
+such as `nc -l`) keep accepting, UDP sockets keep working. A TCP
+connection whose local address is still there after the restart goes
+on; one whose address did not come back within 15 seconds (an address
+removed or changed, or a DHCP lease that came back different) is reset,
+and its program gets ECONNRESET instead of waiting for a timeout.
+Programs that asked for `SBTC_SIG_ADDRESS_CHANGE_MASK` get their signal.
+
+`RESTART CONFIG=file` reads another file, and later restarts keep using
+it; a file that cannot be opened leaves everything as it was. `Riptide
+STATUS` shows `Drivers open N, signals N, restarts N`: the drivers and
+signals Riptide's process holds, which a restart leaves as they were.
+RiptidePrefs restarts the network the same way (see "RiptidePrefs").
 
 ## Configuration file
 
@@ -1299,7 +1352,7 @@ empty field) leaves the line out, so Riptide's built-in value applies.
 A screenshot of the first page shows the window titled "Riptide
 Preferences": the Page cycle gadget at the top, the labelled fields of
 the page below it (string gadgets, check boxes for IPv4 and IPv6), a hint line
-("Interface changes need a restart of Riptide") and the buttons **Save**,
+("Apply restarts Riptide's network (no reboot)") and the buttons **Save**,
 **Use**, **Apply** and **Cancel** along the bottom.
 
 * **Save** writes `ENVARC:Riptide/riptide.conf` (the old one becomes
@@ -1309,11 +1362,17 @@ the page below it (string gadgets, check boxes for IPv4 and IPv6), a hint line
   RIPTIDE port: host name, domain, name servers (`nameserver flush` and
   `nameserver add`), NTP, time zone, mDNS, the sysctls, `qos on|off`, the
   QoS rules (`qos rules flush` and `qos rule ...`) and extra addresses
-  (`ifconfig IF ADDR -alias`, `ifconfig IF alias SPEC`). It says when
-  changes need a restart of Riptide: interface, address and IPv4/IPv6
-  on/off, and a setting set back to Default or emptied (the running
-  value stays until then). After Save or Use, RiptidePrefs offers the
-  same when Riptide is running.
+  (`ifconfig IF ADDR -alias`, `ifconfig IF alias SPEC`). Changes to
+  interfaces, addresses and IPv4/IPv6 on/off, and a setting set back to
+  Default or emptied, need Riptide's network restarted: RiptidePrefs
+  asks **Restart now** or **Later**. Restart now saves the settings to
+  `ENV:` (as Use does) and restarts Riptide's network without quitting,
+  as `Riptide RESTART` does (programs keep running; see "Restarting
+  without quitting"), then shows Riptide's answer, e.g. "Riptide:
+  restarted (1 interface)" or the lines that failed. Later applies the
+  rest and keeps the restart for the next Apply. After Save or Use,
+  RiptidePrefs offers the same when Riptide is running (Later then
+  leaves the saved file for the next restart).
 * The file is changed only where you changed a setting: comments, blank
   lines, unknown keywords, the order of lines, trailing `# comments` on
   edited lines and CRLF line ends stay as they were, so an unchanged file
@@ -2245,6 +2304,7 @@ The public message port `RIPTIDE` takes a `struct RiptideMsg`
 |---|---|
 | `RTCMD_STATUS` (1) | status text, as `Riptide STATUS` prints it |
 | `RTCMD_QUIT` (2) | quit if no program has the libraries open, else `result` = EBUSY |
+| `RTCMD_RESTART` (5) | 0.39: restart the network without quitting, as `Riptide RESTART` (see "Restarting without quitting"); `text` holds another configuration file or is empty. It takes as long as opening the drivers. The reply ends with `Riptide: restarted (N interfaces)`, after any configuration errors (`result` = EINVAL then); a file that cannot be opened gives ENOENT and changes nothing. Older versions answer EINVAL "unknown command" |
 | `RTCMD_COMMAND` (3) | `text` holds one line of the configuration language (all keywords above, including `interface ...` and `interface NAME delete`), or a query: `sysctl -a`, `sysctl [-n] NAME...`, `sysctl [-w] NAME=VALUE`. `capture ...` (packet capture) answers with its status line; `capture save FILE` writes the file from Riptide's process before it replies. `profile ...` and `debug ...` answer in the reply text (the table, the ring) |
 | `RTCMD_TABLES` (4) | 0.23: tables of [`net.riptide.*`](#tables-riptidesysctl-and-netriptide) without opening a library: `text` holds their numbers (e.g. `42 1 18`); a reply buffer is needed and gets, for each table, a ULONG number, a ULONG length and the dump as `RiptideSysCtl()` gives it, the next one 4-byte aligned (length 0 and `RTMSGF_TRUNCATED` for a table that failed or did not fit; `replylen` is the bytes used). RiptidePrefs' Status page reads this way once a second: opening and closing `riptide.library` costs more than the reads on a 68020, and an open library would keep Riptide from quitting. Older versions answer EINVAL |
 
@@ -3028,6 +3088,7 @@ Both builds generate their library glue from the LVO tables
 | `tests/amiga/run_fsuae_bridge.sh build/amiga` | Riptide on FS-UAE built with `tools/fs-uae` (`FSUAE_PCAP=` the binary), bridged to a veth pair (needs root; `BR_IF`, `BR_PEER`, `BR_NET` choose other veth names and another /24 than `rtbr0`, `rtbr1`, `192.168.77`): IPv4 ping and two 1 MB HTTP downloads from the host end with the full window (no retransmissions, nothing out of order, bytes compared), IPv6 address autoconfiguration, the RA default route and `ping6` against `tests/amiga/v6responder.py`. |
 | `tests/t_vlan_unit.c`, `tests/t_vlan_wire.c`, `tests/t_vlan_tap.c` (host; TAP needs root) | VLANs: the `interface ... vlan=` keyword and its errors, tags and PCP (fixed and from `SO_PRIORITY`) on transmit, receive by id, priority-tagged, unknown-id, QinQ and runt frames, the MTU clamp, parent down/up/removal, link multicast reference counts, the `ifaces` record, a failed line leaving nothing; two stacks on the simulated wire with VLANs 10 and 20 (UDP up to the MTU and fragmented, 1 MB TCP each way, isolation of a VLAN the peer lacks, removal at run time); against Linux over TAP with an `AF_PACKET` peer (the container kernel may lack 8021q): tagged ND, ARP with PCP 5, ping with 1518 byte frames, frames of another VLAN ignored. |
 | `tests/amiga/run_fsuae_vlan.sh build/amiga` | VLANs on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtv0`/`rtv1`, 192.168.130.0/24 untagged and 192.168.131.0/24 on VLAN 10, or `VL_IF`, `VL_PEER`, `VL_NET`, `VL_NET2`) against `tests/amiga/vlan_peer.py`: ping untagged and on VLAN 10 (also 1496 bytes: 1518 byte tagged frames through uaenet.device), UDP on VLAN 10, PCP 4 on the wire, `ip -d link`, `ifconfig`, `netstat -i`, `STATUS`, VLANs added and removed with `ip` and `ifconfig`, a duplicate id refused. |
+| `tests/amiga/run_fsuae_restart.sh build/amiga` | `Riptide RESTART` with programs holding the libraries open (six `nc -l` listeners and two connections to a host server, over uaenet.device and a veth pair; `FSUAE_PCAP` as for the VLAN test): `QUIT` is refused with the hint, then five restarts with another configuration each (the address moving between two subnets, one adding a card whose driver is missing). After each: the new address, ping, a listener from before the restarts accepting at the new address, `STATUS` with one driver open and the same number of signals. The connection whose address stayed gets the host's data sent after the restart; the one whose address went is reset in the grace time; the missing driver is reported; at the end the host connects from outside. `NETDEV=1` runs the card on the netdev backend (`fakenetdev.c`), so every restart detaches and attaches a netdev driver. |
 | `tests/t_udptx_unit.c` (host) | UDP sending (0.17) against a driver that holds its frames (4 slots): a non-blocking socket is writable while the driver has room, then not writable and `EWOULDBLOCK` (the interface marked for a wakeup), writable again after a completion; a blocking send waits for the completion; one blocked when the interface goes down, or when the driver stops completing frames (stalled for 1 s), wakes up and is not left sleeping; `SO_NO_CHECK` (and Linux's 11) leaves the IPv4 checksum 0, refused on TCP; `rt_api_sendmmsg()` whole, partial and `EWOULDBLOCK`, `rt_api_recvmmsg()` over loopback with lengths and addresses. |
 | `tests/amiga/run_fsuae_udpblast.sh build/amiga` | UDP send rate on bridged FS-UAE (`FSUAE_PCAP=`, root; veth `rtub0`/`rtub1`, 192.168.150.0/24; `CPUS`, default a1200-030 and a4000-040, cycle-exact): `tests/amiga/udpblast.c` sends 3000 datagrams per mode (blocking, non-blocking with WaitSelect, `SO_NO_CHECK`, `RiptideSendMMsg()` 16 at a time, multicast, 64-byte datagrams) to `tests/amiga/udpsink.py`, which counts them on the wire and those without a checksum; a second boot with `qos inflight 1`, `qos limit 8` makes the senders wait for room. Prints a table of rates and per-call times; `CHECK=1` fails on a lost or failed datagram, a checksum where there should be none (or the reverse), or a non-blocking sender that never had to wait. |
 | `tests/amiga/run_fsuae_mcast.sh build/amiga` | IPv4 multicast on the same bridged FS-UAE (veth `rtmc0`/`rtmc1`, 192.168.82.0/24, no default route) against `tests/amiga/mcast_peer.py`: `nc -u -l -m` joins a group (IGMPv3 report with Router Alert on the wire, a general query from Linux answered, Linux's datagrams received, the leave reported), `ip maddr` and `netstat -g` while joined and after, and `nc -u` to a group Linux joined (source and TTL 1 checked). Host side, `tests/t_igmp_unit.c` covers the IGMP state machines and socket options and `tests/t_mcast_tap.c` repeats the exchange with the Linux kernel over TAP. |
