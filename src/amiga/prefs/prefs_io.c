@@ -198,11 +198,56 @@ static void apply_one(const char *line, void *arg)
 	}
 }
 
+/* an Apply left changes that need a restart for later: the applied
+ * baseline no longer shows them, so remember */
+static int restart_owed;
+
+static void count_one(const char *line, void *arg)
+{
+	(*(int *)arg)++;
+}
+
+static int contains(const char *s, const char *word)
+{
+	size_t n = strlen(word);
+
+	for (; *s; s++)
+		if (!strncmp(s, word, n))
+			return 1;
+	return 0;
+}
+
+/* RTCMD_RESTART with the file rp_store() wrote, and its answer shown */
+static void restart_now(void)
+{
+	char msg[600];
+	const char *rep;
+	int r = cl_request(RTCMD_RESTART, RP_ENV_CONF, 0);
+
+	rep = cl_reply();
+	if (!rep)
+		rep = "";
+	if (r == 0 || contains(rep, "restarted")) {
+		/* the stack has what the file says, errors or not */
+		rp_conf_applied(&rp_cfg);
+		restart_owed = 0;
+		rt_snprintf(msg, sizeof(msg), "%s", rep[0] ? rep : "Riptide restarted.");
+	} else if (r < 0) {
+		rt_snprintf(msg, sizeof(msg), "Riptide is not running.\nThe settings take effect when it starts.");
+	} else if (contains(rep, "unknown command")) {
+		rt_snprintf(msg, sizeof(msg), "This Riptide cannot restart its network (0.39 or later can).\n"
+		            "The settings take effect when it starts again.");
+	} else {
+		rt_snprintf(msg, sizeof(msg), "Riptide did not restart:\n%s", rep[0] ? rep : cl_strerror(r));
+	}
+	rp_message(msg);
+}
+
 void rp_apply(int ask)
 {
 	struct apply_state st;
 	char msg[600];
-	int restart;
+	int restart, n = 0;
 
 	if (!FindPort((CONST_STRPTR)RIPTIDE_PORTNAME)) {
 		if (!ask)
@@ -210,13 +255,32 @@ void rp_apply(int ask)
 		return;
 	}
 	/* after an Apply: only what differs from what was applied */
-	if (ask && !(rp_cfg.have_applied ? rp_live_pending(&rp_cfg) : rp_conf_changed(&rp_cfg)))
+	if (ask && !restart_owed && !(rp_cfg.have_applied ? rp_live_pending(&rp_cfg) : rp_conf_changed(&rp_cfg)))
 		return;
-	if (ask && !rp_request("Riptide is running.\nApply the changes to it now?", "Apply|Later"))
+	if (rp_live_commands(&rp_cfg, count_one, &n) || restart_owed) {
+		/* Use and Save have written the file; Apply writes ENV: first */
+		if (rp_request(ask ? "Riptide is running. Some of the changes need a restart of its\n"
+		                     "network: the programs keep running, and connections over an\n"
+		                     "address that goes away are closed.\nRestart Riptide's network now?" :
+		                     "Some of the changes need a restart of Riptide's network: the\n"
+		                     "programs keep running, and connections over an address that goes\n"
+		                     "away are closed. Restart now saves the settings to ENV: (as Use\n"
+		                     "does) and restarts it.",
+		               "Restart now|Later")) {
+			if (!ask && rp_store(0) < 0)
+				return;
+			restart_now();
+			return;
+		}
+		if (ask)
+			return;            /* the file is saved: a later restart takes it */
+	} else if (ask && !rp_request("Riptide is running.\nApply the changes to it now?", "Apply|Later")) {
 		return;
+	}
 	memset(&st, 0, sizeof(st));
-	restart = rp_live_commands(&rp_cfg, apply_one, &st);
+	restart = rp_live_commands(&rp_cfg, apply_one, &st) || restart_owed;
 	rp_conf_applied(&rp_cfg);
+	restart_owed = restart;
 	if (st.failed)
 		rt_snprintf(msg, sizeof(msg), "Applied %d of %d setting%s.\n%s", st.n - st.failed, st.n,
 		            rp_plural((unsigned long)st.n), st.report);
@@ -227,7 +291,7 @@ void rp_apply(int ask)
 	if (restart)
 		rt_strlcpy(msg + strlen(msg),
 		           "\nInterface, address and IPv4/IPv6 changes, and\nsettings set back to Default, take effect\n"
-		           "when Riptide is restarted.",
+		           "when Riptide's network restarts (Apply, then\nRestart now; or Riptide RESTART).",
 		           sizeof(msg) - strlen(msg));
 	rp_message(msg);
 }

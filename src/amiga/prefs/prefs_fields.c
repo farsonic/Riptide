@@ -13,9 +13,9 @@
 #define RP_XSTR(x) RP_STR_(x)
 
 const struct rp_page rp_pages[RP_NPAGES] = {
-	{ "Interface", "Interface", "Interface changes need a restart of Riptide",
+	{ "Interface", "Interface", "Apply restarts Riptide's network (no reboot)",
 	  "The network cards Riptide uses: each one's SANA-II driver and unit, and how big its packets may be." },
-	{ "Address", "Address", "Address changes need a restart of Riptide",
+	{ "Address", "Address", "Apply restarts Riptide's network (no reboot)",
 	  "How each card gets its IPv4 address: from a DHCP server, or typed in here." },
 	{ "Extra addresses", "Extra addresses", "[IF|]A.B.C.D/BITS or A.B.C.D netmask M (up to 8)",
 	  "More IPv4 addresses on a card or VLAN, for example to reach a second network on the same cable." },
