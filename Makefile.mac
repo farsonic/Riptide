@@ -1,0 +1,51 @@
+# Riptide on the classic Mac OS (System 7, 68020 and later): the .IPP driver, a MacTCP
+# replacement over the Mac's .ENET Ethernet driver (docs/MAC.md).
+#
+#   make -f Makefile.mac              build/mac/Riptide.bin (MacBinary: copy with `hcopy -m`)
+#   make -f Makefile.mac CONF=f       with f as its riptide.conf (TEXT 128); default: DHCP on en0
+#   make -f Makefile.mac AURORA68=1   development on Aurora68: the log also goes to the Pi kernel's log
+#
+# Needs the m68k ELF toolchain only (Debian/Ubuntu: gcc-m68k-linux-gnu, binutils-m68k-linux-gnu)
+# and Python 3. The Mac-side code is GPL-2.0-only like the rest of Riptide.
+CROSS   ?= m68k-linux-gnu-
+CC      := $(CROSS)gcc
+LD      := $(CROSS)ld
+OBJCOPY := $(CROSS)objcopy
+PYTHON  ?= python3
+BUILD   := build/mac
+GCCINC  := $(shell $(CC) -print-file-name=include)
+LIBGCC  := $(shell $(CC) -m68020 -print-libgcc-file-name)
+CFLAGS  := -m68020 -O2 -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie -fomit-frame-pointer \
+           -msoft-float -nostdinc -isystem $(GCCINC) -fno-asynchronous-unwind-tables -fno-unwind-tables \
+           -fno-stack-protector -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter \
+           --param=min-pagesize=0 -Isrc/amiga/include -Isrc/mac -Iinclude -Iinclude/rt
+ifeq ($(AURORA68),1)
+CFLAGS  += -DAURORA68_LOG
+endif
+LDFLAGS := -T src/mac/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack
+CORE_SRC := $(wildcard src/core/*.c)
+MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/main_mac.c src/amiga/libc.c
+OBJ      := $(BUILD)/mac/drvr.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(MAC_SRC))
+HDRS     := $(wildcard include/rt/*.h src/core/*.h src/mac/*.h)
+
+all: $(BUILD)/Riptide.bin
+
+$(BUILD)/%.o: src/%.c $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/mac/drvr.o: src/mac/drvr.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/drvr.elf: $(OBJ) src/mac/link.ld
+	$(LD) $(LDFLAGS) -o $@ $(OBJ) $(LIBGCC) -Map $(BUILD)/drvr.map
+$(BUILD)/init.bin: src/mac/init.S
+	@mkdir -p $(BUILD)
+	$(CC) -m68020 $(if $(filter 1,$(AURORA68)),-DAURORA68_LOG) -c -o $(BUILD)/init.o $<
+	$(OBJCOPY) -O binary -j .text $(BUILD)/init.o $@
+$(BUILD)/Riptide.bin: $(BUILD)/drvr.elf $(BUILD)/init.bin tools/elf2mac.py tools/mac_rsrc.py $(CONF) FORCE
+	$(PYTHON) tools/elf2mac.py $(BUILD)/drvr.elf $(BUILD)/init.bin $(CONF) -o $@ --raw $(BUILD)/drvr.bin
+
+clean:
+	rm -rf $(BUILD)
+FORCE:
+.PHONY: all clean FORCE
