@@ -424,12 +424,21 @@ static int route_entry(const struct toks *tk, char *e, size_t size)
 	return strlen(e) + 1 < size && rp_valid_route(e);
 }
 
+/* the card of a riptide.conf that names none; the classic Mac OS build has its own (en0 on
+ * .ENET: Makefile.mac) */
+#ifndef RP_DEFAULT_IFNAME
+#define RP_DEFAULT_IFNAME "eth0"
+#endif
+#ifndef RP_DEFAULT_DEVICE
+#define RP_DEFAULT_DEVICE "uaenet.device"
+#endif
+
 static void model_defaults(struct rp_model *m)
 {
 	int i;
 
 	memset(m, 0, sizeof(*m));
-	iface_defaults(&m->ifc[0], "eth0", "uaenet.device");
+	iface_defaults(&m->ifc[0], RP_DEFAULT_IFNAME, RP_DEFAULT_DEVICE);
 	m->ipv6 = 1;
 	m->mdns = -1;
 	m->quickack = m->delack_segs = m->delack_ms = RP_UNSET;

@@ -1,7 +1,9 @@
 # Riptide on the classic Mac OS (System 7, 68020 and later): the .IPP driver, a MacTCP
-# replacement over the Mac's .ENET Ethernet driver (docs/MAC.md).
+# replacement over the Mac's .ENET Ethernet driver (docs/MAC.md), and RiptidePrefs, the Amiga's
+# MUI preferences editor built for the Mac (docs/MAC-GUI.md).
 #
-#   make -f Makefile.mac              build/mac/Riptide.bin (MacBinary: copy with `hcopy -m`)
+#   make -f Makefile.mac              build/mac/Riptide.bin and build/mac/RiptidePrefs.bin (MacBinary:
+#                                     copy with `hcopy -m`)
 #   make -f Makefile.mac CONF=f       with f as its riptide.conf (TEXT 128); default: DHCP on en0
 #   make -f Makefile.mac AURORA68=1   development on Aurora68: the log also goes to the Pi kernel's log
 #
@@ -28,7 +30,7 @@ MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/main_mac.c 
 OBJ      := $(BUILD)/mac/drvr.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(MAC_SRC))
 HDRS     := $(wildcard include/rt/*.h src/core/*.h src/mac/*.h)
 
-all: $(BUILD)/Riptide.bin
+all: $(BUILD)/Riptide.bin $(BUILD)/RiptidePrefs.bin
 
 $(BUILD)/%.o: src/%.c $(HDRS)
 	@mkdir -p $(dir $@)
@@ -44,6 +46,69 @@ $(BUILD)/init.bin: src/mac/init.S
 	$(OBJCOPY) -O binary -j .text $(BUILD)/init.o $@
 $(BUILD)/Riptide.bin: $(BUILD)/drvr.elf $(BUILD)/init.bin tools/elf2mac.py tools/mac_rsrc.py $(CONF) FORCE
 	$(PYTHON) tools/elf2mac.py $(BUILD)/drvr.elf $(BUILD)/init.bin $(CONF) -o $@ --raw $(BUILD)/drvr.bin
+
+# ---- RiptidePrefs: the MUI editor's own files (src/amiga/prefs, unchanged) on the Mac's MUI ----
+# The Amiga headers come with prototypes instead of jump-table calls (gen_lvos.py CC=proto, without
+# the names the Mac Toolbox has: src/mac/app/traps.txt); src/mac/mui implements what is called.
+APP     := $(BUILD)/app
+GEN     := $(BUILD)/gen
+APP_CFLAGS := -m68020 -O2 -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie -ffixed-a5 -msoft-float \
+           -nostdinc -isystem $(GCCINC) -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector \
+           -ffunction-sections -fdata-sections -Wall -Wno-unused-parameter --param=min-pagesize=0 \
+           -I$(BUILD) -Isrc/mac/app -Isrc/mac -Isrc/mac/prefs -Isrc/amiga/include -Isrc/amiga -Isrc/amiga/os \
+           -Iinclude -Iinclude/rt
+# the card of a riptide.conf without one: the Mac's Ethernet driver
+APP_CFLAGS += -DRP_DEFAULT_IFNAME='"en0"' -DRP_DEFAULT_DEVICE='".ENET"'
+ifeq ($(AURORA68),1)
+APP_CFLAGS += -DAURORA68_LOG
+endif
+# the editor's files from src/amiga/prefs, unchanged; mui_lang.c and driver_amiga.c have Mac
+# versions (src/mac/prefs/mac_lang.c: the Mac's words; driver_mac.c: .ENET)
+PREFS_AMIGA := conf_edit prefs_fields prefs_io mui_main mui_classes mui_theme mui_util mui_status \
+               prefs_status status_amiga mui_counters prefs_counters prefs_driver
+APP_OBJ := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o \
+           $(patsubst %,$(APP)/mac/mui/%.o,mm_boopsi mm_app mm_area mm_group mm_gadgets mm_gfx mm_os mm_thunks) \
+           $(APP)/mac/prefs/rp_main_mac.o $(APP)/mac/prefs/rtport_mac.o $(APP)/mac/prefs/mac_lang.o \
+           $(APP)/mac/prefs/driver_mac.o \
+           $(patsubst %,$(APP)/amiga/prefs/%.o,$(PREFS_AMIGA)) $(APP)/amiga/prefs/mui_thunks.o \
+           $(APP)/core/printf.o $(APP)/core/inet6_text.o $(APP)/amiga/libc.o
+GEN_H   := $(patsubst %,$(GEN)/%_calls.h,exec dos timer locale battclock intuition graphics gadtools icon) \
+           $(GEN)/muimaster_calls.h $(GEN)/openurl_calls.h $(GEN)/bsdsocket_calls.h $(GEN)/riptide_calls.h \
+           $(GEN)/usergroup_calls.h $(GEN)/toolbox_gen.h
+APP_HDRS := $(wildcard include/rt/*.h src/amiga/*.h src/amiga/os/*.h src/amiga/prefs/*.h src/amiga/cmd/*.h \
+            src/mac/app/*.h src/mac/mui/*.h src/mac/prefs/*.h) $(GEN_H)
+TRAPS   := src/mac/app/traps.txt
+
+$(GEN)/toolbox_gen.h $(GEN)/toolbox_glue.S: $(TRAPS) tools/mac_traps.py
+	@mkdir -p $(GEN)
+	$(PYTHON) tools/mac_traps.py $(TRAPS) -s $(GEN)/toolbox_glue.S -H $(GEN)/toolbox_gen.h
+$(GEN)/%_calls.h: src/amiga/os/os_lvos.txt tools/gen_lvos.py $(TRAPS)
+	@mkdir -p $(GEN)
+	$(PYTHON) tools/gen_lvos.py call proto $< $* $@ $(TRAPS)
+$(GEN)/muimaster_calls.h: src/amiga/prefs/mui_lvos.txt tools/gen_lvos.py $(TRAPS)
+	@mkdir -p $(GEN)
+	$(PYTHON) tools/gen_lvos.py call proto $< muimaster $@ $(TRAPS)
+$(GEN)/openurl_calls.h: src/amiga/prefs/openurl_lvos.txt tools/gen_lvos.py $(TRAPS)
+	@mkdir -p $(GEN)
+	$(PYTHON) tools/gen_lvos.py call proto $< openurl $@ $(TRAPS)
+$(GEN)/bsdsocket_calls.h $(GEN)/riptide_calls.h $(GEN)/usergroup_calls.h: $(GEN)/%_calls.h: src/amiga/lib_lvos.txt tools/gen_lvos.py $(TRAPS)
+	@mkdir -p $(GEN)
+	$(PYTHON) tools/gen_lvos.py call proto $< $* $@ $(TRAPS)
+
+$(APP)/%.o: src/%.c $(APP_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -c -o $@ $<
+$(APP)/%.o: src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -c -o $@ $<
+$(APP)/gen/toolbox_glue.o: $(GEN)/toolbox_glue.S
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -c -o $@ $<
+$(BUILD)/RiptidePrefs.elf: $(APP_OBJ) src/mac/app/app.ld
+	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ \
+	      $(APP_OBJ) $(LIBGCC) -Map $(BUILD)/RiptidePrefs.map
+$(BUILD)/RiptidePrefs.bin: $(BUILD)/RiptidePrefs.elf tools/elf2app.py tools/mac_elf.py tools/mac_rsrc.py
+	$(PYTHON) tools/elf2app.py $< --name RiptidePrefs --creator RTPF --size 1536 -o $@
 
 clean:
 	rm -rf $(BUILD)

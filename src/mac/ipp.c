@@ -19,6 +19,15 @@
 #include "rt_netif.h"
 #include "rt_socket.h"
 #include "mac.h"
+#include "rt_ctl.h"
+#include "rt_sysctl.h"
+#include "prefs/mac_ipp_private.h"
+/* include/rt/riptide_port.h's numbers (that header needs the Amiga's types) */
+#define RTCMD_STATUS   1
+#define RTCMD_COMMAND  3
+#define RTCMD_TABLES   4
+#define RTMSGF_TRUNCATED 1
+#define RIPTIDE_TEXTLEN 1024
 
 /* MacTCP csCodes */
 #define ipctlGetAddr   15
@@ -119,6 +128,81 @@ static void echo_poll(void)
 		}
 }
 
+/* ---- RiptidePrefs: the RIPTIDE port of the Amiga, as private Control calls --------------------- */
+/* RTCMD_TABLES: the tables numbered in list (decimal, spaces between) into out, each as a number,
+ * a length and the dump, 4-byte aligned (src/amiga/stackproc.c does the same for its port) */
+static u32 read_tables(const char *list, char *out, u32 olen, u32 *flags)
+{
+	s32 mib[3];
+	u32 used = 0;
+	*flags = 0;
+	mib[0] = 4;
+	mib[1] = RT_CTL_MIB_RIPTIDE;
+	while (*list) {
+		const char *e;
+		unsigned long w;
+		u32 *hd, dl;
+		while (*list == ' ') list++;
+		w = rt_strtoul(list, &e, 10);
+		if (e == list) break;
+		list = e;
+		if (used + 8 > olen) { *flags = RTMSGF_TRUNCATED; break; }
+		hd = (u32 *)(out + used);
+		dl = olen - used - 8;
+		mib[2] = (s32)w;
+		if (rt_sysctl_bymib(mib, 3, out + used + 8, &dl, NULL, 0) != 0) { dl = 0; *flags = RTMSGF_TRUNCATED; }
+		hd[0] = (u32)w;
+		hd[1] = dl;
+		used += 8 + ((dl + 3u) & ~3u);
+		if (used > olen) used = olen;
+	}
+	return used;
+}
+
+static int port_call(void *pb)
+{
+	struct rtmac_port_pb *p = pb;
+	int r;
+	if (!p->reply || p->replysize < 2) return controlErr;
+	if (p->text && p->textlen) p->text[p->textlen - 1] = 0;
+	p->flags = 0;
+	switch (p->cmd) {
+	case RTCMD_COMMAND: {
+		/* the line may share the reply's buffer (a message without one): copy it first */
+		char line[RIPTIDE_TEXTLEN];
+		rt_strlcpy(line, p->text ? p->text : "", sizeof line);
+		p->reply[0] = 0;
+		rt_lock();
+		r = rt_ctl_command(line, p->reply, p->replysize, mac_config_unknown);
+		rt_unlock();
+		p->result = r < 0 ? -r : 0;
+		p->replylen = (u32)strlen(p->reply);
+		return 0;
+	}
+	case RTCMD_TABLES:
+		rt_lock();
+		{
+		u32 fl = 0;
+		p->replylen = read_tables(p->text ? p->text : "", p->reply, p->replysize, &fl);
+		p->flags = fl;
+		}
+		rt_unlock();
+		p->result = 0;
+		return 0;
+	case RTCMD_STATUS:
+		rt_snprintf(p->reply, p->replysize, "Riptide for the Mac: %s\n", mac_nif ? mac_nif->name : "no network");
+		p->result = 0;
+		p->replylen = (u32)strlen(p->reply);
+		return 0;
+	default:
+		/* RTCMD_RESTART and RTCMD_QUIT: not on the Mac yet */
+		rt_strlcpy(p->reply, "unknown command\n", p->replysize);
+		p->result = RT_EINVAL;
+		p->replylen = (u32)strlen(p->reply);
+		return 0;
+	}
+}
+
 /* ---- dispatch -------------------------------------------------------------------------------- */
 static int handle(void *pb)
 {
@@ -130,6 +214,11 @@ static int handle(void *pb)
 		return 0;
 	case ipctlEchoICMP:
 		return echo_start(pb);
+	case RTMAC_PING:
+		PB_L(pb, 28) = RTMAC_MAGIC;
+		return 0;
+	case RTMAC_PORT:
+		return port_call(pb);
 	default:
 		rt_log(RT_LOG_WARN, ".IPP csCode %d is not supported yet", cs);
 		return controlErr;

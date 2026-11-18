@@ -15,6 +15,8 @@
 #include "rt_netif.h"
 #include "mac.h"
 
+#define ENET_DELMULTI 245
+#define ENET_ADDMULTI 246
 #define ENET_ATTACHPH 247
 #define ENET_WRITE    249
 #define ENET_GETINFO  252
@@ -74,6 +76,28 @@ static int enet_ctl(int cs, u16 prot, void *ptr, u16 size)
 	return mac_pbcontrol(pb, 0);
 }
 
+/* A link layer multicast group in or out of the card's filter (IPv6's all-nodes and solicited-node
+ * groups, 33:33:...): EAddMulti / EDelMulti with the address in csParam. The core calls this
+ * from the stack's deferred task, where a synchronous Device Manager call could wait on a busy
+ * driver for ever, so it is asynchronous, from a few parameter blocks used in turn. */
+#define MC_PBS 4
+static u8 mc_pb[MC_PBS][40];
+static int mac_mcast(struct rt_netif *n, const u8 *hw, int join)
+{
+	(void)n;
+	for (int i = 0; i < MC_PBS; i++) {
+		u8 *pb = mc_pb[i];
+		if (PB_RESULT(pb) > 0)
+			continue;                             /* still in progress */
+		memset(pb, 0, sizeof mc_pb[i]);
+		PB_REFNUM(pb) = enet_ref;
+		PB_CSCODE(pb) = join ? ENET_ADDMULTI : ENET_DELMULTI;
+		memcpy(pb + 28, hw, 6);
+		return mac_pbcontrol(pb, 1) < 0 ? -RT_EIO : 0;
+	}
+	return -RT_EBUSY;
+}
+
 static int mac_link_output(struct rt_netif *n, struct rt_buf *b, const u8 *dsthw, u16 ethertype)
 {
 	static const u8 bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -103,9 +127,15 @@ void net_mac_tx_done(void *pb)
 	for (int i = 0; i < TX_SLOTS; i++) if (tx[i].pb == pb) { tx[i].busy = 0; return; }
 }
 
-int net_mac_open(void)
+/* The card: .ENET as interface name (riptide.conf's "interface NAME device=.ENET unit=N", else
+ * en0). unit 0 is the first Ethernet card the Slot Manager finds, or the built-in port; Riptide
+ * for the Mac drives one card so far. */
+int net_mac_open(const char *name, unsigned unit, int mtu)
 {
 	u8 info[18];
+	if (mac_nif) { why("Riptide for the Mac drives one card"); return -RT_EEXIST; }
+	if (unit)
+		rt_log(RT_LOG_WARN, "%s: unit %u: only the first Ethernet card is used so far", name, unit);
 	mac_rx_ring = mac_newptr_sys((u32)mac_rx_slots * MAC_RX_SLOT);
 	tx = mac_newptr_sys(sizeof(struct txslot) * TX_SLOTS);
 	if (!mac_rx_ring || !tx) { why("not enough memory for the Ethernet buffers"); return -RT_ENOMEM; }
@@ -118,10 +148,11 @@ int net_mac_open(void)
 	nif.hwlen = 6;
 	memcpy(nif.hwaddr, info, 6);
 	nif.flags = RT_IFF_BROADCAST | RT_IFF_MULTICAST | RT_IFF_SIMPLEX;
-	nif.mtu = 1500;
+	nif.mtu = mtu >= 576 && mtu < 1500 ? (u16)mtu : 1500;
 	nif.link_output = mac_link_output;
+	nif.mcast = mac_mcast;
 	nif.driver = &enet_ref;
-	rt_snprintf(nif.name, sizeof nif.name, "en0");
+	rt_snprintf(nif.name, sizeof nif.name, "%s", name);
 	rt_snprintf(nif.descr, sizeof nif.descr, ".ENET refnum %d", (int)enet_ref);
 	rt_lock();
 	int r = rt_netif_add(&nif);
@@ -131,7 +162,7 @@ int net_mac_open(void)
 	static const u16 types[3] = { 0x0800, 0x0806, 0x86dd };
 	for (int i = 0; i < 3; i++)
 		if (enet_ctl(ENET_ATTACHPH, types[i], (void *)mac_enet_ph, 0)) { why(".ENET EAttachPH failed: another stack (MacTCP?) has the protocol"); return -RT_EBUSY; }
-	rt_log(RT_LOG_INFO, "en0: %02x:%02x:%02x:%02x:%02x:%02x on .ENET %d", nif.hwaddr[0], nif.hwaddr[1], nif.hwaddr[2], nif.hwaddr[3], nif.hwaddr[4], nif.hwaddr[5], (int)enet_ref);
+	rt_log(RT_LOG_INFO, "%s: %02x:%02x:%02x:%02x:%02x:%02x on .ENET %d", nif.name, nif.hwaddr[0], nif.hwaddr[1], nif.hwaddr[2], nif.hwaddr[3], nif.hwaddr[4], nif.hwaddr[5], (int)enet_ref);
 	return 0;
 }
 

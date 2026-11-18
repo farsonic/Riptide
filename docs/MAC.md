@@ -19,7 +19,15 @@ optional development log.
 | 1 | The driver installs and starts at boot, the core runs, Ethernet through `.ENET`, `ipctlGetAddr`, `ipctlEchoICMP` | done: PiPing (a MacTCP ping) gets replies through Riptide |
 | 2 | TCP and UDP: TCPCreate ... TCPRelease, the UDP set, ASR notifications, TCPStatus, TCPGlobalInfo | next |
 | 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName, HInfo, MXInfo) | |
-| 4 | A control panel: address, DHCP, DNS, the log | |
+| 4 | Preferences | done: RiptidePrefs, the Amiga's MUI editor built for the Mac (MAC-GUI.md) |
+
+Also working in the testbed (18 November): DHCP (`dhcp en0`: bound, lease kept), IPv6 (a
+link-local address and one from the router advertisement's prefix, each passing duplicate
+address detection and answering ICMPv6 echo; the IPv6 multicast groups are registered with
+`.ENET`'s EAddMulti), riptide.conf from the Preferences folder with the Amiga's `interface`
+line, and the Status page of RiptidePrefs reading the running stack.
+
+![RiptidePrefs on the Mac: the Status page with DHCP](mac-gui-status.png)
 
 ![PiPing through Riptide](mac-piping.png)
 
@@ -85,8 +93,10 @@ Needs `gcc-m68k-linux-gnu` and `binutils-m68k-linux-gnu` (Debian, Ubuntu) and Py
 MacBinary tool), take MacTCP out of the Control Panels folder, and restart.
 
 The configuration is riptide.conf, the same generic keywords as on the Amiga (AMIGA.md,
-"Configuration file"), on the interface `en0`; without a `'TEXT'` 128 resource it is `dhcp en0`.
-A static setup:
+"Configuration file"), on the interface `en0`. Riptide reads the one RiptidePrefs saves (the
+Riptide folder in the Preferences folder), else the Riptide file's `'TEXT'` 128 resource (make
+`CONF=`), else `dhcp en0`. The card line is the Amiga's, with the Mac's driver:
+`interface en0 device=.ENET unit=0` (without one the card is en0). A static setup:
 
 ```
 ifconfig en0 192.168.1.20/24

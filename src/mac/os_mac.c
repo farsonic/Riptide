@@ -154,7 +154,16 @@ void rt_log(int level, const char *fmt, ...)
 u32 rt_prof_ticks(void) { return (u32)rt_now_us(); }
 u32 rt_prof_hz(void) { return 1000000u; }
 static u32 busy_us, idle_us;
-void rt_cpu_counts(u32 *now, u32 *idle, u32 *hz) { *now = busy_us + idle_us; *idle = idle_us; *hz = 1000000u; }
+/* Riptide runs only in its deferred task (mac_stack_run counts the time there): the rest of the
+   clock's time it was idle, which the Status page's meter shows as Riptide's share of the Mac */
+void rt_cpu_counts(u32 *now, u32 *idle, u32 *hz)
+{
+	u32 t = (u32)rt_now_us();
+	idle_us = t - busy_us;
+	*now = t;
+	*idle = idle_us;
+	*hz = 1000000u;
+}
 
 /* ---- waiting: never (the Mac layer only uses non-blocking calls) --------------------------- */
 struct rt_sleeper { int woken; };

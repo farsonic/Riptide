@@ -22,6 +22,8 @@ void  mac_enet_ph(void);
 void  mac_tx_done(void);
 void  mac_dt_entry(void);
 void  mac_tm_entry(void);
+short mac_pb(void *pb, long trap);
+short mac_findfolder(int vref, long type, int create, short *vrefout, long *dirout);
 
 /* the receive ring the protocol handler fills (net_mac.c owns it) */
 extern u8 *mac_rx_ring;
@@ -42,7 +44,7 @@ static inline void mac_irq_restore(u16 sr) { __asm__ volatile("move.w %0,%%sr" :
 static inline u32 mac_ticks(void) { return *(volatile u32 *)0x16A; }
 
 /* net_mac.c */
-int  net_mac_open(void);
+int  net_mac_open(const char *name, unsigned unit, int mtu);
 void net_mac_poll(void);                       /* stack context: the received frames into the core */
 void net_mac_tx_done(void *pb);
 extern struct rt_netif *mac_nif;
@@ -52,6 +54,9 @@ extern char mac_net_why[64];
 int  ipp_control(void *pb);
 void ipp_poll(void);
 int  ipp_status(void *pb);
+
+/* main_mac.c: the keywords of riptide.conf the Mac layer handles (interface) */
+int  mac_config_unknown(int argc, char **argv, char *err, u32 errlen);
 
 /* parameter block fields (Inside Macintosh: Files / Devices; MacTCP.h) */
 #define PB_QLINK(pb)     (*(void **)((u8 *)(pb) + 0))

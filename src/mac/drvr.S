@@ -191,6 +191,39 @@ mac_pbopen:				| int (void *pb, int slot): _Open, or _OpenSlot
 	ext.l	%d0
 	rts
 
+	.globl	mac_pb
+mac_pb:					| short (void *pb, long trap): a synchronous File Manager call
+	move.l	4(%sp),%a0		| (_HOpen A200, _Read A002, _Close A001, _GetEOF A011, _HDelete A209);
+	move.l	8(%sp),%d0		| the trap word is written into the code below, the cache flushed
+	lea	2f(%pc),%a1
+	move.w	%d0,(%a1)
+	move.l	%a0,-(%sp)
+	moveq	#1,%d0
+	.short	0xA198			| _HWPriv: FlushInstructionCache
+	move.l	(%sp)+,%a0
+	nop
+2:	.short	0xA000
+	ext.l	%d0
+	rts
+
+	.globl	mac_findfolder
+mac_findfolder:				| short (int vref, long type, int create, short *vrefout, long *dirout)
+	link	%a6,#0
+	move.l	%d2,-(%sp)
+	clr.w	-(%sp)
+	move.w	10(%a6),-(%sp)
+	move.l	12(%a6),-(%sp)
+	move.b	19(%a6),-(%sp)
+	move.l	20(%a6),-(%sp)
+	move.l	24(%a6),-(%sp)
+	moveq	#0,%d0
+	.short	0xA823			| _FindFolder
+	move.w	(%sp)+,%d0
+	ext.l	%d0
+	move.l	-4(%a6),%d2
+	unlk	%a6
+	rts
+
 	.globl	mac_slotmanager
 mac_slotmanager:			| int (void *spblock, int selector)
 	move.l	4(%sp),%a0
