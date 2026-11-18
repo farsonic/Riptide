@@ -126,6 +126,9 @@ Other menu rules:
 - **Reserved keys (p. 128, Table 4-1).** ⌘N, O, W, S, P, Q, Z, X, C, V, A and period keep their
   meaning: a program's command keeps such a key only if it is that command. RiptidePrefs' "Save
   As…" loses its ⌘A, which is Select All's.
+- **Submenus (p. 79).** `NM_SUB` rows after an item become its hierarchical menu (ids 200 up, at
+  most four), for lists of attributes such as Quill's paragraph styles. Their items check, dim and
+  answer Command keys as other items do (`MUIM_FindUData` finds them).
 - **Labels (p. 67-71).** "..." becomes the ellipsis character, MUI's '_' keyboard markers go,
   Exit becomes Quit, and Drawer becomes Folder (`mm_hig.c`).
 - **State.** Menu items are enabled, disabled and checked as the program's Menuitem objects say.

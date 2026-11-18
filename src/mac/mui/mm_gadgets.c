@@ -914,7 +914,7 @@ DISPATCHER(mm_menustrip_dispatch)
 		int i;
 		d = INST_DATA(cl, obj);
 		for (i = 0; d->nm && d->nm[i].nm_Type != NM_END && i < MM_MAXMENU; i++)
-			if ((ULONG)d->nm[i].nm_UserData == u && d->nm[i].nm_Type == NM_ITEM) {
+			if ((ULONG)d->nm[i].nm_UserData == u && (d->nm[i].nm_Type == NM_ITEM || d->nm[i].nm_Type == NM_SUB)) {
 				if (!d->item[i]) {
 					struct TagItem t[1] = { { TAG_DONE, 0 } };
 					d->item[i] = NewObjectA(mm_cl_menuitem, NULL, t);

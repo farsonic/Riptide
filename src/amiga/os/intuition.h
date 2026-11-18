@@ -277,6 +277,7 @@ struct NewMenu {
 #define NM_END          0
 #define NM_TITLE        1
 #define NM_ITEM         2
+#define NM_SUB          3
 #define NM_BARLABEL     ((CONST_STRPTR)-1)
 #define CHECKIT         0x0001
 #define MENUTOGGLE      0x0008

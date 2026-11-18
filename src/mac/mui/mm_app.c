@@ -347,8 +347,17 @@ static void act(int menu, int item, int kind, ULONG udata, int edit)
 	}
 }
 
+/* Hierarchical menus (Guidelines p. 79: for lists of attributes): the NM_SUB rows after an item
+   become a submenu of it. Their ids are SUB_ID up; the Menu Manager takes 1 to 235 for submenus. */
+#define SUB_ID 200
+#define MAXSUBS 4
+static void *subs[MAXSUBS];
+static int nsubs;
+
 void *mm_mac_menu(int id)
 {
+	if (id >= SUB_ID && id < SUB_ID + nsubs)
+		return subs[id - SUB_ID];
 	return id >= APPLE_ID && id <= APPLE_ID + MAXMENUS ? menus[id - APPLE_ID] : NULL;
 }
 
@@ -487,6 +496,39 @@ static void edit_items(void *m, int id)
 		act(id, append(m, tr(e[i].t), e[i].k, i == 0), MA_EDIT, 0, (int)i);
 	}
 }
+/* an item's submenu: the NM_SUB rows from row first, as a hierarchical menu hung on item n of m
+   (its command key the hierarchical mark, its mark the submenu's id); the row after them */
+static int sub_items(const struct NewMenu *nm, int first, void *m, int n, const char *title)
+{
+	unsigned char pb[256];
+	char t[256], en[256];
+	void *s;
+	int j, k, sid = SUB_ID + nsubs;
+	if (nsubs >= MAXSUBS || !(s = NewMenu(sid, mac_pstr(pb, title)))) {
+		for (j = first; nm[j].nm_Type == NM_SUB; j++)
+			;
+		return j;
+	}
+	subs[nsubs++] = s;
+	InsertMenu(s, -1);                      /* hierMenu: in the menu list, not the bar */
+	SetItemCmd(m, n, 0x1B);                 /* hMenuCmd */
+	SetItemMark(m, n, sid);
+	for (j = first; nm[j].nm_Type == NM_SUB; j++) {
+		if (nm[j].nm_Label == NM_BARLABEL) {
+			separator(s);
+			continue;
+		}
+		label_of(&nm[j], t, sizeof t);
+		label_en(&nm[j], en, sizeof en);
+		k = append(s, t, nm[j].nm_CommKey && nm[j].nm_CommKey[0] && key_ok(nm[j].nm_CommKey[0], en) ? nm[j].nm_CommKey[0] : 0, 0);
+		if (nm[j].nm_Flags & CHECKED)
+			CheckItem(s, k, 1);
+		mm_menustrip_map(menu_strip, j, sid, k);
+		act(sid, k, MA_PROGRAM, (ULONG)nm[j].nm_UserData, 0);
+	}
+	return j;
+}
+
 /* the program's items of one NewMenu title, from row first */
 static int program_items(const struct NewMenu *nm, int first, void *m, int id, int file, ULONG *quit_udata, int *has_close)
 {
@@ -509,6 +551,12 @@ static int program_items(const struct NewMenu *nm, int first, void *m, int id, i
 		}
 		if (file && is_close(en))
 			*has_close = 1;
+		if (nm[i + 1].nm_Type == NM_SUB) {
+			/* an item with a submenu: no command of its own */
+			n = append(m, t, 0, 0);
+			i = sub_items(nm, i + 1, m, n, t) - 1;
+			continue;
+		}
 		n = append(m, t, nm[i].nm_CommKey && nm[i].nm_CommKey[0] && key_ok(nm[i].nm_CommKey[0], en) ? nm[i].nm_CommKey[0] : 0, 0);
 		if (nm[i].nm_Flags & CHECKED)
 			CheckItem(m, n, 1);
