@@ -135,6 +135,28 @@ static int lines_of(const char *t, int n, int width)
 	return lines;
 }
 
+/* A program's own modal dialog, made with NewDialog from its own item list: one ModalDialog with
+   the alert's filter, so Return and Enter press item def and Escape and Command-period item cancel
+   (1-based; 0 none), each flashing, and the user item outline (0 none, its box round the default
+   button) drawn as the default button's heavy outline (p. 206). Returns the item hit: the caller
+   loops, setting check boxes and radio buttons, until a button closes the dialog. */
+int mac_dialog_modal(void *dlg, int def, int cancel, int outline)
+{
+	short kind, hit = 0;
+	void *h;
+	Rect box;
+	al_def = def > 0 ? def : -1;
+	al_cancel = cancel > 0 ? cancel : -1;
+	al_outline = outline > 0 ? outline : -1;
+	if (al_outline > 0) {
+		GetDItem(dlg, al_outline, &kind, &h, &box);
+		SetDItem(dlg, al_outline, kind, (void *)pas_useritem, &box);
+	}
+	ModalDialog((void *)pas_dlgfilter, &hit);
+	al_def = al_cancel = al_outline = -1;
+	return hit;
+}
+
 int mac_alert(int icon, const char *text, const char *const *btn, int n, int def, int cancel)
 {
 	static char msg[1020];

@@ -138,6 +138,7 @@ void  mac_hlock(void **h);
 void  mac_hunlock(void **h);
 short mac_pb(void *pb, long trap);
 long  mac_gestalt(long selector, long *response);
+int   mac_dialog_modal(void *dlg, int def, int cancel, int outline);   /* mac_alert.c: a program's own dialog, one ModalDialog */
 short mac_findfolder(int vref, long type, int create, short *foundvref, long *founddir);
 void  mac_stdputfile(const unsigned char *prompt, const unsigned char *name, StandardFileReply *reply);
 void  mac_stdgetfile(long ntypes, const long *types, StandardFileReply *reply);

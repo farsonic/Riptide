@@ -864,7 +864,7 @@ DISPATCHER(mm_listview_dispatch)
 }
 
 /* ==================== Menustrip and Menuitem ==================== */
-#define MM_MAXMENU 128                  /* NewMenu rows (Quill: about 60 with its Font and Size menus) */
+#define MM_MAXMENU 320                  /* NewMenu rows (Quill: about 200 with its eleven menus) */
 struct mm_menustrip {
 	const struct NewMenu *nm;
 	Object *item[MM_MAXMENU];       /* MUIM_FindUData's answers, made when first asked */

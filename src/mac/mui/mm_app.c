@@ -324,7 +324,7 @@ void mm_win_activate_string(struct mm_win *w, Object *s)
 
 /* ---- menus ---- */
 #define APPLE_ID 128
-#define MAXMENUS 8
+#define MAXMENUS 14                     /* the bar's menus after Apple (Quill: File to View, eleven) */
 static void *menus[MAXMENUS + 1];
 static int nmenus;
 static Object *menu_strip;
@@ -335,7 +335,7 @@ static int menus_done;
    Human Interface Guidelines (1992) want them, so the item a Mac menu shows is not the NewMenu row
    it came from. One entry per item. */
 enum { MA_NONE, MA_PROGRAM, MA_ABOUT, MA_DESK, MA_CLOSE, MA_QUIT, MA_EDIT };
-#define MAXACTS 160
+#define MAXACTS 400
 static struct { short menu, item, kind, edit; ULONG udata; } acts[MAXACTS];
 static int nacts;
 static void act(int menu, int item, int kind, ULONG udata, int edit)
@@ -350,7 +350,7 @@ static void act(int menu, int item, int kind, ULONG udata, int edit)
 /* Hierarchical menus (Guidelines p. 79: for lists of attributes): the NM_SUB rows after an item
    become a submenu of it. Their ids are SUB_ID up; the Menu Manager takes 1 to 235 for submenus. */
 #define SUB_ID 200
-#define MAXSUBS 4
+#define MAXSUBS 12
 static void *subs[MAXSUBS];
 static int nsubs;
 
