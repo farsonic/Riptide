@@ -88,6 +88,14 @@ static void askminmax(Object *o)
 		int h = mo->fixh ? mo->fixh : mo->fixh_lines * mm_font.tf_YSize + muiAreaData(o)->mad_subheight;
 		m.MinHeight = m.DefHeight = m.MaxHeight = (WORD)h;
 	}
+	/* a push button as the Human Interface Guidelines size it (p. 204-205): 20 pixels high at
+	   least, and no narrower than OK and Cancel's 59 */
+	if (mo->frame == MUIV_Frame_Button) {
+		if (m.MinHeight < 20) m.MinHeight = 20;
+		if (m.DefHeight < 20) m.DefHeight = 20;
+		if (m.MinWidth < 59) m.MinWidth = 59;
+		if (m.DefWidth < 59) m.DefWidth = 59;
+	}
 	if (m.MaxWidth > MUI_MAXMAX || m.MaxWidth < 0)
 		m.MaxWidth = MUI_MAXMAX;
 	if (m.MaxHeight > MUI_MAXMAX || m.MaxHeight < 0)

@@ -589,6 +589,9 @@ struct qbutton_data {
 	ULONG id;               /* ... giving this return ID */
 };
 
+#ifdef MM_MAC_HIG
+void mm_hig_button(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1, int held);
+#endif
 static void qbutton_draw(struct qbutton_data *d, Object *obj)
 {
 	struct RastPort *rp = _rp(obj);
@@ -597,10 +600,18 @@ static void qbutton_draw(struct qbutton_data *d, Object *obj)
 	LONG face = sel ? tpen(T_PRESSED) : d->hot && !dis ? tpen(T_HOVER) : tpen(T_BUTTON);
 	LONG w = theme_keytextlen(rp, d->label);
 
+#ifdef MM_MAC_HIG
+	/* the Mac's push button (src/mac/mui/mm_area.c: rounded, inverted while held) */
+	(void)face;
+	mm_hig_button(rp, x0, y0, x1, y1, sel && !dis);
+	theme_keytext(rp, x0 + (x1 - x0 + 1 - w) / 2, y0 + (y1 - y0 + 1 - theme_fh()) / 2, d->label,
+	              dis ? tpen(T_DISABLED) : sel ? tpen(T_WHITE) : tpen(T_TEXT));
+#else
 	theme_fill(rp, x0 + 1, y0 + 1, x1 - 1, y1 - 1, face);
 	theme_rect(rp, x0, y0, x1, y1, sel ? tpen(T_ACCENT) : tpen(T_BORDER));
 	theme_keytext(rp, x0 + (x1 - x0 + 1 - w) / 2, y0 + (y1 - y0 + 1 - theme_fh()) / 2, d->label,
 	              dis ? tpen(T_DISABLED) : tpen(T_TEXT));
+#endif
 }
 
 DISPATCHER(qbutton_dispatch)

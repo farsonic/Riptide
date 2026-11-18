@@ -104,9 +104,127 @@ src/mac/app (start-up, Toolbox glue) and src/mac/mui/mm_os.c (exec and dos), wit
 Output(), Input(), Read and Write in src/mac/term. A new tool for the Amiga is one line in the
 terminal's table (term_main.c) and one name in Makefile.mac's TERM_TOOLS.
 
+## Human Interface Guidelines
+
+Mac programs follow Apple's *Macintosh Human Interface Guidelines* (Addison-Wesley, 1992). The
+Mac MUI layer does what the guidelines ask for every MUI program built on it, so a port gets it
+without changes of its own. Page numbers are the book's.
+
+![The File menu RiptidePrefs gets](mac-hig-file-menu.png) ![Its Edit menu](mac-hig-edit-menu.png)
+
+**Menus** (ch. 4; `src/mac/mui/mm_app.c`, `menus_install`): the menu bar is made from the program's
+NewMenu strip, or for a program without one (Lagoon) from nothing. It is laid out as the Mac has it:
+
+| Menu | What goes there |
+|---|---|
+| Apple (p. 95) | "About *program*…" first. It is the program's own About command, wherever its strip had it, and is named from `MUIA_Application_Title`. Without one, an alert with the program's name. Then a separator and the desk accessories. |
+| File (p. 87) | The program's Project or File menu, renamed File. Close ⌘W (what the front window's close box does) unless the program has a Close. Then a separator and Quit ⌘Q last. The program's Quit goes there, or `MUIV_Application_ReturnID_Quit` if it has none. |
+| Edit (p. 101) | Always present: Undo ⌘Z, a separator, Cut ⌘X, Copy ⌘C, Paste ⌘V, Clear. They work on the text field being typed in, and on desk accessories through SystemEdit. A program's own Edit commands follow after a separator. |
+| the rest | The program's other menus, in its order. |
+
+Other menu rules:
+- **Reserved keys (p. 128, Table 4-1).** ⌘N, O, W, S, P, Q, Z, X, C, V, A and period keep their
+  meaning: a program's command keeps such a key only if it is that command. RiptidePrefs' "Save
+  As…" loses its ⌘A, which is Select All's.
+- **Labels (p. 67-71).** "..." becomes the ellipsis character, MUI's '_' keyboard markers go,
+  Exit becomes Quit, and Drawer becomes Folder (`mm_hig.c`).
+- **State.** Menu items are enabled, disabled and checked as the program's Menuitem objects say.
+
+**Windows** (ch. 5):
+- **Kind (p. 140-145).** A window whose size MUI can change gets a size box and a zoom box. A
+  fixed-size one is a plain document window, with neither.
+- **Placement (p. 147-149).** Windows open on the main screen, wholly below the menu bar.
+  - A window the program centres goes across the screen and a third of the way down, where the
+    Mac puts its dialogs.
+  - Other windows open from the top left, each new one below and to the right of the last.
+- **Close (⌘W).** File's Close does what the close box does: `MUIA_Window_CloseRequest`.
+
+**Alerts and dialogs** (ch. 6; `src/mac/app/mac_alert.c`, `MUI_RequestA` in `mm_os.c`):
+- **Layout (p. 192-197).** MUI's requester is the Mac's alert box: the note icon for one
+  button and the caution icon for more, the message wrapped in the system font, and the buttons
+  at the bottom right.
+- **Button order (p. 196).** The order is reversed for the Mac: MUI's first gadget, the
+  affirmative one, stands at the right, and its last gadget, the negative one, at the left as
+  Cancel. MUI's return values are kept.
+- **Default button (p. 205-206).** The default button, the gadget MUI marks '*' or else the
+  first, has the heavy rounded outline and answers Return and Enter. Cancel answers Escape and
+  ⌘-period, each flashing for eight ticks.
+- **Placement.** Alerts sit a third of the way down the main screen, and the program's windows
+  behind them are redrawn while they are up.
+- **Formatting.** The text is formatted as exec's RawDoFmt formats it (`%d` is a WORD), and MUI's
+  escape sequences are dropped.
+- **Programs without MUI.** The same alert serves them: the Riptide Terminal's About box is one.
+
+![An alert: the Terminal's About box](mac-hig-alert.png)
+
+**Controls** (ch. 7):
+- **Push buttons (p. 204-205).** Push buttons (`MUIV_Frame_Button`) are rounded rectangles,
+  inverted while held, at least 20 pixels high and 59 wide.
+- **Pop-up menus (p. 85).** Cycle gadgets are pop-up menus: a box with a one-pixel shadow and the
+  triangle, the current choice ticked, the label to the left.
+- **Dimmed items.** Disabled controls and labels are dimmed: on a one-bit screen a light grey
+  pattern takes a quarter of the ink. Until now a wrong pen mode, notPatXor where patBic was meant,
+  had turned them into grey blocks.
+- **Password fields.** A `MUIA_String_Secret` string shows a bullet for each character. The text
+  stays in the object, is never put in TextEdit, and is never cut or copied.
+
+![A pop-up menu](mac-hig-popup.png) ![Dimmed labels](mac-hig-dimmed.png) ![Lagoon's password field](mac-hig-lagoon-password.png)
+
+**Behaviour** (ch. 10, p. 286):
+- **Pointers.** The I-beam over a text field that can be edited, the arrow elsewhere.
+- **The watch.** The watch while a window or the whole program sleeps (`MUIA_Window_Sleep`,
+  `MUIA_Application_Sleep`).
+- **Tab.** Tab moves between the text fields of the cycle chain, as it did before.
+
+What the layer cannot do for a program:
+- **Custom classes.** A program's own classes that draw themselves (RiptidePrefs' `qbutton` and
+  `qlabel`) are out of the layer's reach. They keep their look unless the program changes them
+  for the Mac. RiptidePrefs does this under `MM_MAC_HIG`: a Mac-only define, set by Makefile.mac
+  and never by the Amiga build, so the Amiga binary is the same byte for byte. Its buttons then
+  use `mm_hig_button` and its labels show no '_' markers.
+- **Escape in program windows.** Escape and ⌘-period in an ordinary MUI window stay with the
+  program. The guidelines give them no meaning outside dialogs and alerts, and turning them into
+  a close request would quit main windows.
+
+## Porting another MUI program to the Mac
+
+The steps that brought RiptidePrefs and Lagoon (farsonic/lagoon, branch mac-port) over:
+
+1. **Build files.** Compile the program's MUI sources unchanged with `APP_CFLAGS` from
+   Makefile.mac. They give the Amiga's types (`src/amiga/os`), plain prototypes in place of the
+   library jump tables (`tools/gen_lvos.py CC=proto`) and `-DMM_MAC_HIG`. Link them with
+   `src/mac/app` (crt0, ostraps, the Toolbox glue, `mac_alert.o`) and `src/mac/mui`
+   (`mm_*.o`, `mm_hig.o`, `mm_thunks.o`). Lagoon's Makefile.mac does this from another
+   repository with `RIPTIDE ?= ../riptide`, copying nothing.
+2. **Link errors.** Each one is an OS call or MUI class the layer does not have yet. Add it to
+   `src/mac/mui` (`mm_os.c` for exec, dos and ASL; the class files for MUI), never to the program.
+   Keep every MUI attribute the layer already understands.
+3. **Custom classes.** Dispatchers go into the program's thunks (`mui_thunks.S` style:
+   register-passing BOOPSI dispatchers). Classes that draw themselves get `#ifdef MM_MAC_HIG`
+   where the Mac look differs: `mm_hig_button` for buttons, no '_' underlines.
+4. **The program's words.** Provide `tr()`, the translation hook, if the program has one (for
+   RiptidePrefs, `src/mac/prefs/mac_lang.c`). Add a rule wherever a text names an Amiga thing:
+   SANA-II, DEVS:, ENV:, Workbench, the Amiga. The generic words (Folder, Quit, the ellipsis) are
+   done by `mm_hig.c` already.
+5. **Titles and settings.**
+   - Give the Application object a `MUIA_Application_Title`: the About item uses it.
+   - Mark password strings `MUIA_String_Secret`.
+   - Mark the default requester gadget with '*'.
+6. **Check on the Mac** (the QEMU testbed, docs/MAC.md):
+   - the menus: About in the Apple menu, File ending with Close and Quit, the standard Edit;
+   - a requester: buttons, icon, Return, Escape;
+   - windows: placement, size box only if resizable;
+   - pop-ups;
+   - disabled controls;
+   - the I-beam and the watch.
+7. **Check the Amiga.** The program's Amiga binary must not change: `sha256sum` before and after.
+
 ## Known gaps
 
 - Riptide for the Mac drives one Ethernet card (unit 0).
 - RESTART (applying card and address changes without a restart of the Mac) is not there yet.
 - The window is laid out from the editor's sizes; the 512 x 342 screen of a compact Mac is
   narrower than the editor's smallest compact window (530 pixels).
+- The guidelines' fonts are only partly followed: menus, alerts and push button names are in the
+  system font, but the MUI windows' own text is Geneva 10 (the editor's layouts are measured for
+  it), where the guidelines would have Chicago 12 for labels and buttons.

@@ -270,14 +270,18 @@ DISPATCHER(mm_area_dispatch)
 		if (mo->bg)
 			mm_fill(port, &r, mo->bg & 0xFFFFFF);
 		if (mo->frame == MUIV_Frame_Button) {
-			/* a push button: white, black when held down, a shadow right and below */
+			/* a push button as the Human Interface Guidelines draw it (p. 204-205): a rounded
+			   rectangle, white with a black outline, inverted (black) while it is held down;
+			   a disabled one has its name dimmed (mm_text's T_DISABLED) */
 			Rect in = r;
-			in.right--;
-			in.bottom--;
-			mm_fill(port, &in, mo->selected && !mo->disabled ? mm_theme_rgb(T_TEXT) : mm_theme_rgb(T_WHITE));
-			mm_frame(port, &in, mm_theme_rgb(T_BORDER));
-			mm_line(port, in.left + 1, r.bottom - 1, r.right - 1, r.bottom - 1, mm_theme_rgb(T_BORDER));
-			mm_line(port, r.right - 1, in.top + 1, r.right - 1, r.bottom - 1, mm_theme_rgb(T_BORDER));
+			SetPort(port);
+			ForeColor(33);                  /* blackColor */
+			BackColor(30);                  /* whiteColor */
+			if (mo->selected && !mo->disabled)
+				PaintRoundRect(&in, 12, 12);
+			else
+				EraseRoundRect(&in, 12, 12);
+			FrameRoundRect(&in, 12, 12);
 		} else if (mo->frame != MUIV_Frame_None) {
 			Rect in = r;
 			InsetRect(&in, 1, 1);
@@ -295,6 +299,23 @@ DISPATCHER(mm_area_dispatch)
 		return 0;
 	}
 	return DoSuperMethodA(cl, obj, msg);
+}
+
+/* A push button as the Human Interface Guidelines draw it, for a program's own button classes
+   (RiptidePrefs' qbutton under MM_MAC_HIG): a rounded rectangle, black outline, white, or black
+   while held; the program draws its label on it. */
+void mm_hig_button(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1, int held)
+{
+	Rect r;
+	SetPort(mm_rp_port(rp));
+	r.left = (short)x0; r.top = (short)y0; r.right = (short)(x1 + 1); r.bottom = (short)(y1 + 1);
+	ForeColor(33);
+	BackColor(30);
+	if (held)
+		PaintRoundRect(&r, 12, 12);
+	else
+		EraseRoundRect(&r, 12, 12);
+	FrameRoundRect(&r, 12, 12);
 }
 
 /* ---- Rectangle: room that stretches ---- */

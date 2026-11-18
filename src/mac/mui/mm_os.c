@@ -244,12 +244,145 @@ void MUI_FreeAslRequest(APTR req)
 	mm_free(req);
 }
 
+/* MUI's requester as the Mac's alert box (src/mac/app/mac_alert.c draws it as the Human Interface
+   Guidelines say). The text is formatted as exec's RawDoFmt does it (%d, %u, %x take a WORD from
+   the argument stream, %ld, %lu, %lx and %s a LONG), MUI's escape sequences ("\33c", "\33b",
+   "\33[...]") are dropped, and the Amiga's words become the Mac's (mm_hig_text). The gadgets,
+   "_Save|_Use|*_Cancel", keep MUI's answers (the first 1, the next 2 ..., the last 0) but stand
+   in the Mac's order: the first, the affirmative, at the right, the last, the negative, at the
+   left as Cancel (Escape, Command-period). The default (Return) is the one marked '*', else the
+   first. One button: the note icon; more: caution. */
+int mac_alert(int icon, const char *text, const char *const *btn, int n, int def, int cancel);
+const char *tr(const char *s);          /* the program's words (its translation hook) */
+static int fmt_raw(char *out, int max, const char *fmt, const UBYTE *args)
+{
+	int o = 0;
+	while (*fmt && o < max - 1) {
+		char spec[16], tmp[64];
+		int k = 0, isl = 0;
+		if (*fmt != '%') {
+			out[o++] = *fmt++;
+			continue;
+		}
+		spec[k++] = *fmt++;
+		while ((*fmt == '-' || *fmt == '0' || (*fmt >= '1' && *fmt <= '9') || *fmt == '.') && k < 10)
+			spec[k++] = *fmt++;
+		if (*fmt == 'l') {
+			isl = 1;
+			fmt++;
+		}
+		if (!*fmt)
+			break;
+		switch (*fmt) {
+		case 's': case 'b': {
+			const char *str = args ? (const char *)*(const ULONG *)args : "";
+			if (args) args += 4;
+			spec[k++] = 's'; spec[k] = 0;
+			rt_snprintf(tmp, sizeof tmp, spec, str ? str : "");
+			/* long strings: the whole of it, not the 63 characters tmp holds */
+			if (str && strlen(str) >= sizeof tmp - 1 && k == 2) {
+				while (*str && o < max - 1)
+					out[o++] = *str++;
+				fmt++;
+				continue;
+			}
+			break;
+		}
+		case 'd': case 'u': case 'x': case 'X': case 'c': {
+			long v = 0;
+			if (args) {
+				if (isl) { v = (long)*(const ULONG *)args; args += 4; }
+				else { v = *(const UWORD *)args; if (*fmt == 'd') v = (short)v; args += 2; }
+			}
+			spec[k++] = 'l'; spec[k++] = *fmt == 'c' ? 'c' : *fmt; spec[k] = 0;
+			rt_snprintf(tmp, sizeof tmp, spec, v);
+			break;
+		}
+		case '%':
+			tmp[0] = '%'; tmp[1] = 0;
+			break;
+		default:
+			tmp[0] = 0;
+		}
+		fmt++;
+		for (k = 0; tmp[k] && o < max - 1; k++)
+			out[o++] = tmp[k];
+	}
+	out[o] = 0;
+	return o;
+}
+static void strip_escapes(char *s)
+{
+	char *d = s;
+	while (*s) {
+		if (*s == '\033') {
+			s++;
+			if (*s == '[') {
+				while (*s && *s != ']')
+					s++;
+				if (*s)
+					s++;
+			} else if (*s == 'I' && s[1] == '[') {
+				while (*s && *s != ']')
+					s++;
+				if (*s)
+					s++;
+			} else if (*s) {
+				s++;
+			}
+			continue;
+		}
+		*d++ = *s++;
+	}
+	*d = 0;
+}
 LONG MUI_RequestA(APTR app, APTR win, ULONG flags, CONST_STRPTR title, CONST_STRPTR gadgets, CONST_STRPTR fmt,
                   APTR params)
 {
-	(void)app; (void)win; (void)flags; (void)title; (void)gadgets; (void)fmt; (void)params;
-	SysBeep(5);
-	return 1;
+	static char text[1020], gbuf[256], label[6][64];
+	const char *btn[6];
+	int n = 0, star = -1, i, def, r, map[6];
+	(void)app; (void)win; (void)flags; (void)title;
+	fmt_raw(text, sizeof text, fmt ? tr((const char *)fmt) : "", (const UBYTE *)params);
+	strip_escapes(text);
+	mm_hig_text(text, sizeof text);
+	rt_strlcpy(gbuf, gadgets ? tr((const char *)gadgets) : "OK", sizeof gbuf);
+	/* the gadgets in MUI's order */
+	{
+		char *g = gbuf;
+		while (*g && n < 6) {
+			int k = 0;
+			if (*g == '*') {
+				star = n;
+				g++;
+			}
+			while (*g && *g != '|') {
+				if (*g != '_' && k < 63)
+					label[n][k++] = *g;
+				g++;
+			}
+			label[n][k] = 0;
+			mm_hig_text(label[n], sizeof label[n]);
+			n++;
+			if (*g == '|')
+				g++;
+		}
+	}
+	if (!n) {
+		rt_strlcpy(label[0], "OK", sizeof label[0]);
+		n = 1;
+	}
+	/* the Mac's order: MUI's first gadget at the right */
+	for (i = 0; i < n; i++) {
+		btn[i] = label[n - 1 - i];
+		map[i] = n - 1 - i;
+	}
+	def = n - 1 - (star >= 0 ? star : 0);
+	r = mac_alert(n == 1 ? 1 : 2, text, btn, n, def, n > 1 ? 0 : -1);
+	if (r < 0)
+		return 0;
+	r = map[r];                                     /* MUI's index: 0 first ... n-1 last */
+	return r == n - 1 ? 0 : r + 1;                  /* the last (or only) gadget: 0, as MUI */
 }
 
 /* openurl.library: no browser on a classic Mac to hand the address to */

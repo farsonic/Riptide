@@ -254,6 +254,9 @@ void theme_keytext(struct RastPort *rp, LONG x, LONG y, const char *s, LONG pen)
 	SetDrMd(rp, JAM1);
 	Move(rp, x, y + base);
 	Text(rp, (CONST_STRPTR)t, (ULONG)i);
+#ifdef MM_MAC_HIG
+	key = -1;       /* the Mac shows no keyboard markers (Human Interface Guidelines, src/mac/mui/mm_hig.c) */
+#endif
 	if (key >= 0 && key < i) {
 		/* underline the shortcut letter, one pixel under the baseline */
 		LONG ux = x + TextLength(rp, (CONST_STRPTR)t, (ULONG)key);

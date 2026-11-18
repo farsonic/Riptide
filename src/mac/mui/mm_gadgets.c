@@ -2,7 +2,9 @@
  * Riptide - the Mac's MUI (see mm.h): the gadgets.
  *
  *   String     a TextEdit record of its own in the window; typing, Return (MUIA_String_Acknowledge),
- *              Tab to the next string of the cycle chain, Cut, Copy and Paste
+ *              Tab to the next string of the cycle chain, Cut, Copy and Paste. MUIA_String_Secret:
+ *              a bullet for each character (the Human Interface Guidelines' password field); the
+ *              text itself stays in the object, never in TextEdit, and is not copied or cut
  *   Cycle      a box with the chosen entry and a pop-up menu of the others (PopUpMenuSelect)
  *   List       the rows (MUIM_List_InsertSingle, MUIM_List_Clear, MUIA_List_Active, MUIA_List_Quiet)
  *              with a scroll bar of its own when they do not fit
@@ -15,11 +17,15 @@
 #include "prefs/mui_theme.h"
 
 /* ==================== String ==================== */
+#ifndef MUIA_String_Secret
+#define MUIA_String_Secret 0x80428769UL
+#endif
 struct mm_string {
 	TEHandle te;
 	char *buf;
 	int maxlen;
 	int active;
+	int secret;
 };
 ULONG mm_string_datasize(void) { return sizeof(struct mm_string); }
 #define SD(o) ((struct mm_string *)INST_DATA(mm_cl_string, o))
@@ -28,12 +34,48 @@ ULONG mm_string_datasize(void) { return sizeof(struct mm_string); }
 static void str_sync(Object *o)
 {
 	struct mm_string *d = SD(o);
+	if (d->secret)
+		return;                                 /* buf is the text; TextEdit has bullets */
 	if (d->te && *d->te) {
 		TERec *t = *d->te;
 		int n = t->teLength < d->maxlen - 1 ? t->teLength : d->maxlen - 1;
 		memcpy(d->buf, *t->hText, (unsigned long)n);
 		d->buf[n] = 0;
 	}
+}
+
+/* TextEdit's text from buf: the text, or a bullet for each character */
+static void str_te_set(Object *o)
+{
+	struct mm_string *d = SD(o);
+	if (!d->te)
+		return;
+	if (d->secret) {
+		char dots[256];
+		int n = (int)strlen(d->buf), i;
+		if (n > (int)sizeof dots)
+			n = (int)sizeof dots;
+		for (i = 0; i < n; i++)
+			dots[i] = (char)0xA5;
+		TESetText(dots, n, d->te);
+	} else {
+		TESetText(d->buf, (long)strlen(d->buf), d->te);
+	}
+}
+/* a secret string's edit: replace the selection [a, b) of buf by the n characters at s */
+static void sec_replace(struct mm_string *d, int a, int b, const char *s, int n)
+{
+	int len = (int)strlen(d->buf), tail;
+	if (a < 0) a = 0;
+	if (b > len) b = len;
+	if (a > b) a = b;
+	if (len - (b - a) + n > d->maxlen - 1)
+		n = d->maxlen - 1 - (len - (b - a));
+	if (n < 0)
+		n = 0;
+	tail = len - b;
+	memmove(d->buf + a + n, d->buf + b, (unsigned long)tail + 1);
+	memcpy(d->buf + a, s, (unsigned long)n);
 }
 
 static void str_rects(Object *o)
@@ -108,6 +150,22 @@ void mm_string_key(Object *o, EventRecord *ev)
 	}
 	if (c == 0x1B)
 		return;
+	if (d->secret) {
+		int a = (*d->te)->selStart, b = (*d->te)->selEnd;
+		if (c == 8) {                           /* backspace: the selection, or the character before */
+			if (a == b && a > 0)
+				a--;
+			sec_replace(d, a, b, "", 0);
+		} else if (c == 0x7F) {                 /* forward delete */
+			if (a == b)
+				b++;
+			sec_replace(d, a, b, "", 0);
+		} else if (c >= 32) {
+			char ch = (char)c;
+			sec_replace(d, a, b, &ch, 1);
+			c = 0xA5;
+		}
+	}
 	TEKey(c, d->te);
 	str_changed(o);
 }
@@ -119,6 +177,8 @@ void mm_string_edit(Object *o, int cmd)
 		return;
 	SetPort(MMO(o)->win->macwin);
 	mm_use_font(0);
+	if (d->secret && (cmd == 2 || cmd == 3))
+		return;                                 /* a password is not copied */
 	switch (cmd) {
 	case 2:
 		TECut(d->te);
@@ -145,7 +205,17 @@ void mm_string_edit(Object *o, int cmd)
 				k++;
 			if (k > room)
 				k = room;
-			if (k > 0) {
+			if (k > 0 && d->secret) {
+				char dots[256];
+				long j;
+				if (k > (long)sizeof dots)
+					k = (long)sizeof dots;
+				sec_replace(d, (*d->te)->selStart, (*d->te)->selEnd, s, (int)k);
+				for (j = 0; j < k; j++)
+					dots[j] = (char)0xA5;
+				TEDelete(d->te);
+				TEInsert(dots, k, d->te);
+			} else if (k > 0) {
 				TEDelete(d->te);
 				TEInsert(s, k, d->te);
 			}
@@ -154,6 +224,8 @@ void mm_string_edit(Object *o, int cmd)
 		break;
 	}
 	case 5:
+		if (d->secret)
+			sec_replace(d, (*d->te)->selStart, (*d->te)->selEnd, "", 0);
 		TEDelete(d->te);
 		break;
 	}
@@ -191,6 +263,7 @@ DISPATCHER(mm_string_dispatch)
 		s = (const char *)mm_tag(tl, MUIA_String_Contents, 0);
 		if (s)
 			rt_strlcpy(d->buf, s, (size_t)d->maxlen);
+		d->secret = mm_tag(tl, MUIA_String_Secret, 0) != 0;
 		if (!MMO(obj)->frame)
 			MMO(obj)->frame = MUIV_Frame_String;
 		MMO(obj)->flags |= MMF_STRING | MMF_INPUT;
@@ -212,7 +285,7 @@ DISPATCHER(mm_string_dispatch)
 				SetPort(MMO(obj)->win->macwin);
 				mm_use_font(0);
 				str_rects(obj);
-				TESetText(d->buf, (long)strlen(d->buf), d->te);
+				str_te_set(obj);
 				if (MMO(obj)->flags & MMF_SHOWN)
 					MUI_Redraw(obj, MADF_DRAWOBJECT);
 			}
@@ -250,7 +323,7 @@ DISPATCHER(mm_string_dispatch)
 		d->te = (TEHandle)TENew(&r, &r);
 		if (d->te) {
 			(*d->te)->crOnly = -1;
-			TESetText(d->buf, (long)strlen(d->buf), d->te);
+			str_te_set(obj);
 		}
 		d->active = 0;
 		return TRUE;
@@ -288,9 +361,21 @@ DISPATCHER(mm_string_dispatch)
 			void *port = MMO(obj)->win->macwin;
 			SetPort(port);
 			if (MMO(obj)->disabled || !d->te) {
+				char dots[256];
+				const char *t = d->buf;
+				int n;
 				str_sync(obj);
+				n = (int)strlen(d->buf);
+				if (d->secret) {
+					int i;
+					if (n > (int)sizeof dots)
+						n = (int)sizeof dots;
+					for (i = 0; i < n; i++)
+						dots[i] = (char)0xA5;
+					t = dots;
+				}
 				mm_text(port, _mleft(obj), _mtop(obj) + (_mheight(obj) - mm_font.tf_YSize) / 2 + mm_font.tf_Baseline,
-				        d->buf, (int)strlen(d->buf), mm_theme_rgb(MMO(obj)->disabled ? T_DISABLED : T_TEXT), 0);
+				        t, n, mm_theme_rgb(MMO(obj)->disabled ? T_DISABLED : T_TEXT), 0);
 			} else {
 				Rect v;
 				mm_use_font(0);

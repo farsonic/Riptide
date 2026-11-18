@@ -426,8 +426,12 @@ static void do_menu(long mr)
 	int id = (int)(mr >> 16), item = (int)(mr & 0xFFFF);
 	if (id == APPLE_ID) {
 		if (item == 1) {
-			static const char about[] = "Riptide Terminal: Riptide's network tools on the Mac. Type help.\n";
-			append(about, sizeof about - 1);
+			/* an About box (Human Interface Guidelines p. 98), not text in the console */
+			int mac_alert(int icon, const char *text, const char *const *btn, int n, int def, int cancel);
+			static const char *const ok[] = { "OK" };
+			mac_alert(1, "Riptide Terminal\n\nRiptide's network tools (ip, ping, arp, route, netstat, host, "
+			             "traceroute, nc, ftp ...) in a Mac window, running on the Riptide TCP/IP stack. "
+			             "Type help for the list.", ok, 1, 0, -1);
 		} else {
 			unsigned char name[64];
 			GetItem(menus[0], item, name);

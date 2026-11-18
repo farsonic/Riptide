@@ -143,6 +143,39 @@ mac_us:
 
 | Pascal callbacks into C: a routine the Toolbox calls with Pascal arguments, which it pops itself.
 | pascal void (ControlHandle ctl, short part) -> void c_ctl_action(void *ctl, int part)
+| pascal void (DialogPtr dlg, short item) -> void c_useritem(void *dlg, int item): a user item's
+| drawing procedure (mac_alert.c: the default button's outline)
+	.globl	pas_useritem
+pas_useritem:
+	move.w	4(%sp),%d0
+	ext.l	%d0
+	move.l	6(%sp),%a0
+	move.l	%d0,-(%sp)
+	move.l	%a0,-(%sp)
+	bsr.l	c_useritem
+	addq.l	#8,%sp
+	move.l	(%sp)+,%a0
+	addq.l	#6,%sp
+	jmp	(%a0)
+
+| pascal Boolean (DialogPtr dlg, EventRecord *ev, short *item) -> int c_dlgfilter(dlg, ev, item):
+| ModalDialog's filter (mac_alert.c: Return, Enter, Escape, Command-period, the windows behind)
+	.globl	pas_dlgfilter
+pas_dlgfilter:
+	move.l	4(%sp),-(%sp)
+	move.l	12(%sp),-(%sp)
+	move.l	20(%sp),-(%sp)
+	bsr.l	c_dlgfilter
+	lea	12(%sp),%sp
+	move.l	(%sp)+,%a0
+	lea	12(%sp),%sp
+	tst.l	%d0
+	sne	%d0
+	and.b	#1,%d0
+	move.b	%d0,(%sp)		| the BOOLEAN: the high byte of the result word
+	clr.b	1(%sp)
+	jmp	(%a0)
+
 	.globl	pas_ctl_action
 pas_ctl_action:
 	move.w	4(%sp),%d0

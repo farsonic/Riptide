@@ -72,6 +72,9 @@ APP_CFLAGS := -m68020 -O2 -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-p
            -Iinclude -Iinclude/rt
 # the card of a riptide.conf without one: the Mac's Ethernet driver
 APP_CFLAGS += -DRP_DEFAULT_IFNAME='"en0"' -DRP_DEFAULT_DEVICE='".ENET"'
+# the Human Interface Guidelines in a program's own classes, where the Mac layer cannot reach
+# (docs/MAC-GUI.md, "Human Interface Guidelines"); never defined for the Amiga
+APP_CFLAGS += -DMM_MAC_HIG
 ifeq ($(AURORA68),1)
 APP_CFLAGS += -DAURORA68_LOG
 endif
@@ -79,8 +82,8 @@ endif
 # versions (src/mac/prefs/mac_lang.c: the Mac's words; driver_mac.c: .ENET)
 PREFS_AMIGA := conf_edit prefs_fields prefs_io mui_main mui_classes mui_theme mui_util mui_status \
                prefs_status status_amiga mui_counters prefs_counters prefs_driver
-APP_OBJ := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o \
-           $(patsubst %,$(APP)/mac/mui/%.o,mm_boopsi mm_app mm_area mm_group mm_gadgets mm_gfx mm_os mm_thunks) \
+APP_OBJ := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o $(APP)/mac/app/mac_alert.o \
+           $(patsubst %,$(APP)/mac/mui/%.o,mm_boopsi mm_app mm_area mm_group mm_gadgets mm_gfx mm_os mm_hig mm_thunks) \
            $(APP)/mac/prefs/rp_main_mac.o $(APP)/mac/prefs/rtport_mac.o $(APP)/mac/prefs/mac_lang.o \
            $(APP)/mac/prefs/driver_mac.o \
            $(patsubst %,$(APP)/amiga/prefs/%.o,$(PREFS_AMIGA)) $(APP)/amiga/prefs/mui_thunks.o \
@@ -128,7 +131,7 @@ $(BUILD)/RiptidePrefs.bin: $(BUILD)/RiptidePrefs.elf tools/elf2app.py tools/mac_
 # calls the terminal gives its console renamed out of the way (src/mac/term/term_os.c).
 TERM      := $(BUILD)/term
 TERM_TOOLS := arp ftp host hostname ifconfig ip nc netstat ping ping6 route sysctl traceroute traceroute6 speedtest
-TERM_OBJ  := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o \
+TERM_OBJ  := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o $(APP)/mac/app/mac_alert.o \
              $(TERM)/mac/term/term_main.o $(TERM)/mac/term/term_os.o $(TERM)/mac/term/term_bsd.o $(TERM)/mac/term/term_thunks.o $(TERM)/mac/mui/mm_os.o \
              $(patsubst %,$(TERM)/amiga/cmd/%.o,cmdlib $(TERM_TOOLS)) \
              $(patsubst %,$(TERM)/apps/speedtest/%.o,st_main st_xml st_http st_util) \

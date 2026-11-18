@@ -380,7 +380,7 @@ void mm_text(void *port, int x, int y, const char *s, int n, ULONG rgb, int b)
 				d.bottom = (short)(y + mm_font.tf_YSize - mm_font.tf_Baseline);
 				/* a quarter of the ink taken away: half (the Mac's own grey) leaves Geneva 9 unreadable */
 				PenPat(pat_ltgray);
-				PenMode(14);    /* patBic */
+				PenMode(11);    /* patBic (11; 14 was notPatXor, which turned disabled labels into blocks) */
 				PaintRect(&d);
 				PenNormal();
 			}

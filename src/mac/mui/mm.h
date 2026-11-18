@@ -99,6 +99,7 @@ struct mm_win {
 	int sleep;
 	int w, h;                       /* the content's size */
 	int needs_layout;
+	int resizable;                  /* a grow box and a zoom box (MUI: MaxWidth > MinWidth, or heights) */
 };
 extern Object *mm_app;
 extern struct Screen mm_screen;
@@ -160,4 +161,8 @@ char *mm_strdup(const char *s);
 void  mm_log(const char *fmt, ...);
 extern int mm_error;
 
+/* mm_hig.c: the Human Interface Guidelines' words and characters in place of the Amiga's
+   ("..." the ellipsis, Drawer Folder); label: also Exit -> Quit, and no '_' markers */
+void mm_hig_text(char *s, int size);
+void mm_hig_label(char *s, int size);
 #endif

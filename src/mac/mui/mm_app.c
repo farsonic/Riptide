@@ -53,17 +53,24 @@ void mm_app_returnid(ULONG id)
 }
 
 static void mm_event_once(void);
+static char app_title[64];
+static int app_sleep;
 
 DISPATCHER(mm_app_dispatch)
 {
 	struct mm_appd *a;
 	switch (msg->MethodID) {
-	case OM_NEW:
+	case OM_NEW: {
+		const char *title;
 		if (!(obj = (Object *)DoSuperMethodA(cl, obj, msg)))
 			return 0;
+		title = (const char *)mm_tag(((struct opSet *)msg)->ops_AttrList, MUIA_Application_Title, 0);
+		if (title)
+			rt_strlcpy(app_title, title, sizeof app_title);
 		mm_app = obj;
 		mm_set_app(obj);
 		return (ULONG)obj;
+	}
 	case OM_DISPOSE: {
 		Object *c, *next;
 		for (c = MMO(obj)->child; c; c = next) {
@@ -157,10 +164,28 @@ DISPATCHER(mm_app_dispatch)
 		}
 		return 0;
 	}
+	case OM_SET: {
+		/* the whole program busy: the watch (Guidelines p. 286), the arrow again after */
+		ULONG v;
+		if (mm_tag_find(((struct opSet *)msg)->ops_AttrList, MUIA_Application_Sleep, &v)) {
+			app_sleep += v ? 1 : -1;
+			if (app_sleep < 0)
+				app_sleep = 0;
+			if (app_sleep)
+				SetCursor(*(void **)GetCursor(4));
+			else
+				InitCursor();
+		}
+		break;
+	}
 	case OM_GET: {
 		struct opGet *g = (struct opGet *)msg;
-		if (g->opg_AttrID == MUIA_Application_Iconified || g->opg_AttrID == MUIA_Application_Sleep) {
+		if (g->opg_AttrID == MUIA_Application_Iconified) {
 			*g->opg_Storage = 0;
+			return TRUE;
+		}
+		if (g->opg_AttrID == MUIA_Application_Sleep) {
+			*g->opg_Storage = app_sleep != 0;
 			return TRUE;
 		}
 		break;
@@ -244,7 +269,8 @@ void mm_win_redraw(struct mm_win *w)
 	m.id = MUIM_Draw;
 	m.flags = MADF_DRAWOBJECT;
 	DoMethodA(w->root, (Msg)&m);
-	draw_grip(w);
+	if (w->resizable)
+		draw_grip(w);
 	ValidRect(PORT_RECT(w->macwin));
 }
 
@@ -300,90 +326,240 @@ void mm_win_activate_string(struct mm_win *w, Object *s)
 #define APPLE_ID 128
 #define MAXMENUS 8
 static void *menus[MAXMENUS + 1];
-static int nmenus, edit_menu = -1, edit_shift;
+static int nmenus;
 static Object *menu_strip;
-static ULONG about_udata;
+static char app_title[64];
+static int menus_done;
+
+/* What each Mac menu item does: the menus are the program's NewMenu strip arranged as the
+   Human Interface Guidelines (1992) want them, so the item a Mac menu shows is not the NewMenu row
+   it came from. One entry per item. */
+enum { MA_NONE, MA_PROGRAM, MA_ABOUT, MA_DESK, MA_CLOSE, MA_QUIT, MA_EDIT };
+#define MAXACTS 160
+static struct { short menu, item, kind, edit; ULONG udata; } acts[MAXACTS];
+static int nacts;
+static void act(int menu, int item, int kind, ULONG udata, int edit)
+{
+	if (nacts < MAXACTS) {
+		acts[nacts].menu = (short)menu; acts[nacts].item = (short)item; acts[nacts].kind = (short)kind;
+		acts[nacts].udata = udata; acts[nacts].edit = (short)edit;
+		nacts++;
+	}
+}
 
 void *mm_mac_menu(int id)
 {
 	return id >= APPLE_ID && id <= APPLE_ID + MAXMENUS ? menus[id - APPLE_ID] : NULL;
 }
 
-/* a NewMenu label as menu text: "..." becomes the ellipsis, '_' marks go */
-static void menu_text(const char *s, unsigned char *p)
+/* a NewMenu label as the Mac's menu text: tr(), then the guidelines' words (mm_hig.c: the
+   ellipsis, Quit, no '_' markers) */
+static void label_of(const struct NewMenu *e, char *t, int size)
 {
-	int n = 0;
-	for (s = tr(s); *s && n < 250; s++) {
-		if (s[0] == '.' && s[1] == '.' && s[2] == '.') {
-			p[++n] = 0xC9;
-			s += 2;
+	rt_strlcpy(t, e->nm_Label && e->nm_Label != NM_BARLABEL ? tr((const char *)e->nm_Label) : "", (size_t)size);
+	mm_hig_label(t, size);
+}
+static int starts(const char *s, const char *w)
+{
+	while (*w) {
+		char a = *s++, b = *w++;
+		if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+		if (b >= 'a' && b <= 'z') b = (char)(b - 32);
+		if (a != b)
+			return 0;
+	}
+	return 1;
+}
+/* The keyboard equivalents Apple reserves (Guidelines p. 128, Table 4-1) keep their meaning: a
+   program's command keeps such a key only if it is that command. */
+static int key_ok(int k, const char *label)
+{
+	static const struct { char key; const char *cmd; } res[] = {
+		{ 'N', "New" }, { 'O', "Open" }, { 'W', "Close" }, { 'S', "Save" }, { 'P', "Print" }, { 'Q', "Quit" },
+		{ 'Z', "Undo" }, { 'X', "Cut" }, { 'C', "Copy" }, { 'V', "Paste" }, { 'A', "Select All" }, { '.', "" },
+	};
+	unsigned i;
+	if (k >= 'a' && k <= 'z')
+		k -= 32;
+	for (i = 0; i < sizeof res / sizeof res[0]; i++)
+		if (res[i].key == k) {
+			int n = (int)strlen(res[i].cmd);
+			if (!n || !starts(label, res[i].cmd))
+				return 0;
+			/* "Save As..." is not Save */
+			return label[n] == 0 || (label[n] == (char)0xC9 && k != 'S');
+		}
+	return 1;
+}
+static int is_file_title(const char *t) { return starts(t, "Project") || starts(t, "File"); }
+static int is_about(const char *t) { return starts(t, "About"); }
+static int is_quit(const char *t) { return !strcmp(t, "Quit"); }
+static int is_close(const char *t) { return starts(t, "Close"); }
+
+static void *new_menu(const char *title)
+{
+	unsigned char pb[256];
+	void *m;
+	if (nmenus > MAXMENUS)
+		return NULL;
+	m = NewMenu(APPLE_ID + nmenus, mac_pstr(pb, title));
+	menus[nmenus] = m;
+	InsertMenu(m, 0);
+	nmenus++;
+	return m;
+}
+static int append(void *m, const char *text, int key, int disabled)
+{
+	unsigned char pb[256];
+	int n;
+	AppendMenu(m, mac_pstr(pb, " "));
+	n = CountMItems(m);
+	SetItem(m, n, mac_pstr(pb, text));
+	if (key)
+		SetItemCmd(m, n, (unsigned char)key);
+	if (disabled)
+		DisableItem(m, n);
+	return n;
+}
+static void separator(void *m)
+{
+	unsigned char pb[8];
+	int n = CountMItems(m);
+	if (n) {
+		/* no separator after a separator */
+		unsigned char t[256];
+		GetItem(m, n, t);
+		if (t[0] == 1 && t[1] == '-')
+			return;
+	}
+	AppendMenu(m, mac_pstr(pb, "(-"));
+}
+/* the standard Edit menu's six items (p. 101): the text fields and desk accessories use them */
+static void edit_items(void *m, int id)
+{
+	static const struct { const char *t; char k; } e[] = {
+		{ "Undo", 'Z' }, { "-", 0 }, { "Cut", 'X' }, { "Copy", 'C' }, { "Paste", 'V' }, { "Clear", 0 } };
+	unsigned i;
+	for (i = 0; i < 6; i++) {
+		if (e[i].t[0] == '-') {
+			separator(m);
 			continue;
 		}
-		if (*s != '_')
-			p[++n] = (unsigned char)*s;
+		act(id, append(m, e[i].t, e[i].k, i == 0), MA_EDIT, 0, (int)i);
 	}
-	p[0] = (unsigned char)n;
+}
+/* the program's items of one NewMenu title, from row first */
+static int program_items(const struct NewMenu *nm, int first, void *m, int id, int file, ULONG *quit_udata, int *has_close)
+{
+	char t[256];
+	int i, n;
+	for (i = first; nm[i].nm_Type != NM_END && nm[i].nm_Type != NM_TITLE; i++) {
+		if (nm[i].nm_Type != NM_ITEM)
+			continue;
+		if (nm[i].nm_Label == NM_BARLABEL) {
+			separator(m);
+			continue;
+		}
+		label_of(&nm[i], t, sizeof t);
+		if (is_about(t))
+			continue;                       /* the Apple menu has it */
+		if (file && is_quit(t)) {
+			*quit_udata = (ULONG)nm[i].nm_UserData;
+			continue;                       /* last in File, after a separator */
+		}
+		if (file && is_close(t))
+			*has_close = 1;
+		n = append(m, t, nm[i].nm_CommKey && nm[i].nm_CommKey[0] && key_ok(nm[i].nm_CommKey[0], t) ? nm[i].nm_CommKey[0] : 0, 0);
+		if (nm[i].nm_Flags & CHECKED)
+			CheckItem(m, n, 1);
+		mm_menustrip_map(menu_strip, i, id, n);
+		act(id, n, MA_PROGRAM, (ULONG)nm[i].nm_UserData, 0);
+	}
+	/* a trailing separator goes */
+	n = CountMItems(m);
+	if (n) {
+		GetItem(m, n, (unsigned char *)t);
+		if (t[0] == 1 && t[1] == '-')
+			DeleteMenuItem(m, n);
+	}
+	return i;
 }
 
+/* Install the menu bar once (the first window that opens): the strip of the program, or none.
+   Apple menu: About <program>… (the program's About command, wherever its strip had it), then
+   the desk accessories. File: the program's Project or File menu, Close ⌘W, Quit ⌘Q last.
+   Edit: the six standard commands, then the program's Edit commands if it has an Edit menu.
+   Then the program's other menus. (Guidelines ch. 4: p. 95 the Apple menu, p. 87 File, p. 101
+   Edit, p. 128 the reserved keys.) */
 static void menus_install(Object *strip)
 {
-	const struct NewMenu *nm = mm_menustrip_nm(strip);
+	const struct NewMenu *nm = strip ? mm_menustrip_nm(strip) : NULL;
 	unsigned char pb[256];
-	void *m = NULL;
-	int i, item = 0;
-	if (menu_strip || !nm)
+	char t[256];
+	ULONG about_udata = 0, quit_udata = (ULONG)MUIV_Application_ReturnID_Quit;
+	void *m;
+	int i, has_close = 0, file_row = -1, edit_row = -1, id;
+	if (menus_done)
 		return;
+	menus_done = 1;
 	menu_strip = strip;
-	pb[0] = 1;
-	pb[1] = 0x14;           /* the apple */
-	menus[0] = NewMenu(APPLE_ID, pb);
-	for (i = 0; nm[i].nm_Type != NM_END; i++)
-		if (nm[i].nm_Type == NM_ITEM && nm[i].nm_Label != NM_BARLABEL &&
-		    !strncmp(tr((const char *)nm[i].nm_Label), "About", 5)) {
-			about_udata = (ULONG)nm[i].nm_UserData;
-			break;
+	nacts = 0;
+	for (i = 0; nm && nm[i].nm_Type != NM_END; i++) {
+		if (nm[i].nm_Type == NM_TITLE) {
+			label_of(&nm[i], t, sizeof t);
+			if (file_row < 0 && is_file_title(t))
+				file_row = i;
+			else if (edit_row < 0 && !strcmp(t, "Edit"))
+				edit_row = i;
+		} else if (nm[i].nm_Type == NM_ITEM && nm[i].nm_Label != NM_BARLABEL) {
+			label_of(&nm[i], t, sizeof t);
+			if (is_about(t) && !about_udata)
+				about_udata = (ULONG)nm[i].nm_UserData;
 		}
-	AppendMenu(menus[0], mac_pstr(pb, " "));
-	SetItem(menus[0], 1, mac_pstr(pb, "About RiptidePrefs\xC9"));
-	AppendMenu(menus[0], mac_pstr(pb, "(-"));
-	AddResMenu(menus[0], MAC_TYPE('D', 'R', 'V', 'R'));
+	}
+	/* Apple */
+	pb[0] = 1;
+	pb[1] = 0x14;
+	menus[0] = NewMenu(APPLE_ID, pb);
 	InsertMenu(menus[0], 0);
 	nmenus = 1;
-	for (i = 0; nm[i].nm_Type != NM_END; i++) {
-		if (nm[i].nm_Type == NM_TITLE) {
-			if (nmenus > MAXMENUS)
-				break;
-			menu_text((const char *)nm[i].nm_Label, pb);
-			m = NewMenu(APPLE_ID + nmenus, pb);
-			menus[nmenus] = m;
-			item = 0;
-			if (!strcmp(tr((const char *)nm[i].nm_Label), "Edit")) {
-				/* the Mac's own editing commands first: the text fields and desk accessories use them */
-				AppendMenu(m, mac_pstr(pb, "Undo/Z;(-;Cut/X;Copy/C;Paste/V;Clear;(-"));
-				DisableItem(m, 1);
-				edit_menu = nmenus;
-				edit_shift = 7;
-				item = 7;
-			}
-			InsertMenu(m, 0);
-			nmenus++;
-			continue;
+	rt_snprintf(t, sizeof t, "About %s\xC9", app_title);
+	act(APPLE_ID, append(menus[0], t, 0, 0), MA_ABOUT, about_udata, 0);
+	AppendMenu(menus[0], mac_pstr(pb, "(-"));
+	AddResMenu(menus[0], MAC_TYPE('D', 'R', 'V', 'R'));
+	/* File */
+	id = APPLE_ID + nmenus;
+	m = new_menu("File");
+	if (m) {
+		if (file_row >= 0)
+			program_items(nm, file_row + 1, m, id, 1, &quit_udata, &has_close);
+		if (!has_close) {
+			separator(m);
+			act(id, append(m, "Close", 'W', 0), MA_CLOSE, 0, 0);
 		}
-		if (!m || nm[i].nm_Type != NM_ITEM)
-			continue;
-		item++;
-		if (nm[i].nm_Label == NM_BARLABEL) {
-			AppendMenu(m, mac_pstr(pb, "(-"));
-		} else {
-			AppendMenu(m, mac_pstr(pb, " "));
-			menu_text((const char *)nm[i].nm_Label, pb);
-			SetItem(m, item, pb);
-			if (nm[i].nm_CommKey && nm[i].nm_CommKey[0])
-				SetItemCmd(m, item, (unsigned char)nm[i].nm_CommKey[0]);
-			if (nm[i].nm_Flags & CHECKED)
-				CheckItem(m, item, 1);
+		separator(m);
+		act(id, append(m, "Quit", 'Q', 0), MA_QUIT, quit_udata, 0);
+	}
+	/* Edit */
+	id = APPLE_ID + nmenus;
+	m = new_menu("Edit");
+	if (m) {
+		edit_items(m, id);
+		if (edit_row >= 0) {
+			separator(m);
+			program_items(nm, edit_row + 1, m, id, 0, &quit_udata, &has_close);
 		}
-		mm_menustrip_map(strip, i, APPLE_ID + nmenus - 1, item);
+	}
+	/* the others, in the program's order */
+	for (i = 0; nm && nm[i].nm_Type != NM_END; i++) {
+		if (nm[i].nm_Type != NM_TITLE || i == file_row || i == edit_row)
+			continue;
+		label_of(&nm[i], t, sizeof t);
+		id = APPLE_ID + nmenus;
+		m = new_menu(t);
+		if (!m)
+			break;
+		program_items(nm, i + 1, m, id, 0, &quit_udata, &has_close);
 	}
 	DrawMenuBar();
 }
@@ -393,47 +569,61 @@ static struct mm_win *front_win(void)
 	return win_of_mac(FrontWindow());
 }
 
+/* Close (⌘W): what the front window's close box does */
+static void close_front(void)
+{
+	struct mm_win *w = front_win();
+	if (w)
+		mm_notify_fire(w->obj, MUIA_Window_CloseRequest, TRUE);
+}
+
 static void do_menu(long r)
 {
-	int id = (int)(r >> 16), item = (int)(r & 0xFFFF);
+	int id = (int)(r >> 16), item = (int)(r & 0xFFFF), i;
 	unsigned char pb[256];
 	if (!id) {
 		HiliteMenu(0);
 		return;
 	}
-	if (id == APPLE_ID) {
-		if (item == 1) {
-			if (about_udata)
-				mm_app_returnid(about_udata);
-		} else {
+	for (i = 0; i < nacts; i++)
+		if (acts[i].menu == id && acts[i].item == item)
+			break;
+	if (i == nacts) {
+		if (id == APPLE_ID) {                   /* a desk accessory */
 			GetItem(menus[0], item, pb);
 			OpenDeskAcc(pb);
 		}
-	} else if (edit_menu >= 0 && id == APPLE_ID + edit_menu && item < edit_shift) {
-		if (!SystemEdit(item - 1)) {
+		HiliteMenu(0);
+		return;
+	}
+	switch (acts[i].kind) {
+	case MA_ABOUT:
+		if (acts[i].udata)
+			mm_app_returnid(acts[i].udata);
+		else {
+			int mac_alert(int icon, const char *text, const char *const *btn, int n, int def, int cancel);
+			static const char *const ok[] = { "OK" };
+			mac_alert(1, app_title, ok, 1, 0, -1);
+		}
+		break;
+	case MA_PROGRAM:
+		if (acts[i].udata)
+			mm_app_returnid(acts[i].udata);
+		break;
+	case MA_QUIT:
+		mm_app_returnid(acts[i].udata);
+		break;
+	case MA_CLOSE:
+		close_front();
+		break;
+	case MA_EDIT:
+		/* SystemEdit: Undo 0, Cut 2, Copy 3, Paste 4, Clear 5 (the desk accessory in front, if any) */
+		if (!SystemEdit(acts[i].edit)) {
 			struct mm_win *w = front_win();
-			if (w && w->active && item >= 3 && item <= 6)
-				mm_string_edit(w->active, item - 1);
+			if (w && w->active && acts[i].edit >= 2)
+				mm_string_edit(w->active, acts[i].edit);
 		}
-	} else if (menu_strip) {
-		const struct NewMenu *nm = mm_menustrip_nm(menu_strip);
-		int i, mi = 0, k = 0;
-		/* the NewMenu row of Mac menu id, item */
-		for (i = 0; nm[i].nm_Type != NM_END; i++) {
-			if (nm[i].nm_Type == NM_TITLE) {
-				k++;
-				mi = (k == edit_menu) ? edit_shift : 0;
-				continue;
-			}
-			if (nm[i].nm_Type == NM_ITEM) {
-				mi++;
-				if (APPLE_ID + k == id && mi == item) {
-					if (nm[i].nm_UserData)
-						mm_app_returnid((ULONG)nm[i].nm_UserData);
-					break;
-				}
-			}
-		}
+		break;
 	}
 	HiliteMenu(0);
 }
@@ -466,26 +656,20 @@ static int has_color_qd(void)
 	return mac_gestalt(MAC_TYPE('q', 'd', ' ', ' '), &r) == 0 && r >= 0x100;
 }
 
-static int win_open(Object *obj, struct mm_wind *d)
+/* the Mac window and the classes set up in it; procID: zoomDocProc or noGrowDocProc */
+static int win_make(Object *obj, struct mm_wind *d, int proc)
 {
 	struct mm_win *w = &d->w;
 	struct { ULONG id; struct MUI_RenderInfo *ri; } s;
-	struct MUI_MinMax *mm;
-	Rect b, u;
-	ULONG m;
-	if (d->open)
-		return 1;
-	if (!w->root)
-		return 0;
+	Rect b;
 	b.left = 40;
 	b.top = 60;
 	b.right = 240;
 	b.bottom = 200;
-	mac_pstr(d->ptitle, d->title ? tr(d->title) : "");
 	if (has_color_qd())
-		w->macwin = NewCWindow(NULL, &b, d->ptitle, 0, zoomDocProc, (void *)-1, 1, 0);
+		w->macwin = NewCWindow(NULL, &b, d->ptitle, 0, proc, (void *)-1, 1, 0);
 	else
-		w->macwin = NewWindow(NULL, &b, d->ptitle, 0, zoomDocProc, (void *)-1, 1, 0);
+		w->macwin = NewWindow(NULL, &b, d->ptitle, 0, proc, (void *)-1, 1, 0);
 	if (!w->macwin)
 		return 0;
 	SetPort(w->macwin);
@@ -507,12 +691,47 @@ static int win_open(Object *obj, struct mm_wind *d)
 	s.id = MUIM_Setup;
 	s.ri = &w->ri;
 	if (!DoMethodA(w->root, (Msg)&s)) {
+		mm_rp_free(w->rp);
+		w->rp = NULL;
 		DisposeWindow(w->macwin);
 		w->macwin = NULL;
 		return 0;
 	}
 	mm_root_minmax(w->root);
+	return 1;
+}
+
+static int windows_opened;
+
+static int win_open(Object *obj, struct mm_wind *d)
+{
+	struct mm_win *w = &d->w;
+	struct MUI_MinMax *mm;
+	Rect u;
+	ULONG m;
+	if (d->open)
+		return 1;
+	if (!w->root)
+		return 0;
+	mac_pstr(d->ptitle, d->title ? tr(d->title) : "");
+	if (!win_make(obj, d, zoomDocProc))
+		return 0;
 	mm = &muiAreaData(w->root)->mad_MinMax;
+	/* Guidelines p. 140-145: a window whose size cannot change has no size box and no zoom box.
+	   MUI tells only after Setup, so such a window is made again as a plain document window. */
+	w->resizable = mm->MaxWidth > mm->MinWidth || mm->MaxHeight > mm->MinHeight;
+	if (!w->resizable) {
+		m = MUIM_Cleanup;
+		DoMethodA(w->root, (Msg)&m);
+		mm_gfx_port_gone(w->macwin);
+		DisposeWindow(w->macwin);
+		w->macwin = NULL;
+		mm_rp_free(w->rp);
+		w->rp = NULL;
+		if (!win_make(obj, d, 4 /* noGrowDocProc */))
+			return 0;
+		mm = &muiAreaData(w->root)->mad_MinMax;
+	}
 	usable(&u);
 	w->w = mm->DefWidth;
 	w->h = mm->DefHeight;
@@ -526,11 +745,23 @@ static int win_open(Object *obj, struct mm_wind *d)
 		w->h = mm->MinHeight;
 	SizeWindow(w->macwin, w->w, w->h, 0);
 	{
-		int x = (u.left + u.right - w->w) / 2, y = (u.top + u.bottom - w->h) / 2;
-		if (d->left >= 0 && d->left != MUIV_Window_LeftEdge_Centered)
+		/* Where (Guidelines p. 147-149): on the main screen, wholly below the menu bar.
+		   A window the program centres: across the screen, a third of the way down (where the
+		   Mac puts its alerts and dialogs). Otherwise each new window below and to the right of
+		   the last, from the top left. A position the program gives is kept, inside the screen. */
+		int x, y, room_h = u.bottom - u.top - w->h;
+		if (d->left == MUIV_Window_LeftEdge_Centered || d->left < 0)
+			x = d->left == MUIV_Window_LeftEdge_Centered ? (u.left + u.right - w->w) / 2 : u.left + 8 + 20 * (windows_opened % 6);
+		else
 			x = (int)d->left;
-		if (d->top >= 0 && d->top != MUIV_Window_TopEdge_Centered)
+		if (d->top == MUIV_Window_TopEdge_Centered || d->top < 0)
+			y = d->top == MUIV_Window_TopEdge_Centered ? u.top + (room_h > 0 ? room_h / 3 : 0) : u.top + 4 + 20 * (windows_opened % 6);
+		else
 			y = (int)d->top;
+		if (x + w->w > u.right - 2)
+			x = u.right - 2 - w->w;
+		if (y + w->h > u.bottom)
+			y = u.bottom - w->h;
 		if (x < u.left + 2)
 			x = u.left + 2;
 		if (y < u.top)
@@ -538,14 +769,14 @@ static int win_open(Object *obj, struct mm_wind *d)
 		MoveWindow(w->macwin, x, y, 1);
 		w->awin.LeftEdge = (WORD)x;
 		w->awin.TopEdge = (WORD)y;
+		windows_opened++;
 	}
 	w->awin.Width = (WORD)w->w;
 	w->awin.Height = (WORD)w->h;
 	mm_layout(w->root, 0, 0, w->w, w->h);
 	m = MUIM_Show;
 	DoMethodA(w->root, (Msg)&m);
-	if (d->strip)
-		menus_install(d->strip);
+	menus_install(d->strip);
 	ShowWindow(w->macwin);
 	SelectWindow(w->macwin);
 	mm_gfx_port_moved(w->macwin);
@@ -871,6 +1102,17 @@ static void bubble_show(struct mm_win *w, Point p)
 /* the pointer moved in the front window */
 static void mouse_moved(struct mm_win *w, Point p, short mods)
 {
+	/* Guidelines p. 286: the I-beam over text that can be edited, the arrow elsewhere */
+	static int ibeam = -1;
+	Object *o = mm_hit(w->root, p.h, p.v, MMF_INPUT);
+	int want = o && (MMO(o)->flags & MMF_STRING) && !MMO(o)->disabled;
+	if (want != ibeam) {
+		if (want)
+			SetCursor(*(void **)GetCursor(1));          /* iBeamCursor */
+		else
+			InitCursor();
+		ibeam = want;
+	}
 	handlers(w, IDCMP_MOUSEMOVE, 0, p.h, p.v, mods, -1);
 }
 
@@ -1019,6 +1261,31 @@ static long sleep_ticks(void)
 
 static int in_front = 1;
 
+/* an update event for one of the windows: also called by the alerts while they are up
+   (src/mac/app/mac_alert.c), so the windows behind them are drawn */
+void mac_alert_update(void *event)
+{
+	EventRecord *ev = event;
+	struct mm_win *w;
+	void *save;
+	GetPort(&save);
+	if ((void *)ev->message == bubble) {
+		BeginUpdate(bubble);
+		bubble_draw();
+		EndUpdate(bubble);
+		SetPort(save);
+		return;
+	}
+	w = win_of_mac((void *)ev->message);
+	if (w) {
+		mm_gfx_port_moved(w->macwin);   /* the Monitors control panel may have changed the depth */
+		BeginUpdate(w->macwin);
+		mm_win_redraw(w);
+		EndUpdate(w->macwin);
+	}
+	SetPort(save);
+}
+
 static void mm_event_once(void)
 {
 	EventRecord ev;
@@ -1139,19 +1406,7 @@ static void mm_event_once(void)
 			key_down(w, &ev);
 		break;
 	case updateEvt:
-		if ((void *)ev.message == bubble) {
-			BeginUpdate(bubble);
-			bubble_draw();
-			EndUpdate(bubble);
-			break;
-		}
-		w = win_of_mac((void *)ev.message);
-		if (w) {
-			mm_gfx_port_moved(w->macwin);   /* the Monitors control panel may have changed the depth */
-			BeginUpdate(w->macwin);
-			mm_win_redraw(w);
-			EndUpdate(w->macwin);
-		}
+		mac_alert_update(&ev);
 		break;
 	case activateEvt:
 		/* the string being typed in shows its caret only in the front window */
