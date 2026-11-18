@@ -4,7 +4,8 @@
 #ifndef RT_MAC_H
 #define RT_MAC_H
 #include "rt_types.h"
-struct rt_sockctx;
+#include "rt_socket.h"
+struct rtmac_api;
 
 /* drvr.S: trap glue */
 void *mac_newptr_sys(u32 size);
@@ -44,6 +45,21 @@ const char *mac_log_ring(u32 *len, u32 *pos);
 static inline u16 mac_irq_off(void) { u16 sr; __asm__ volatile("move.w %%sr,%0\n\tori.w #0x0700,%%sr" : "=d"(sr) :: "memory"); return sr; }
 static inline void mac_irq_restore(u16 sr) { __asm__ volatile("move.w %0,%%sr" :: "d"(sr) : "memory"); }
 static inline u32 mac_ticks(void) { return *(volatile u32 *)0x16A; }
+
+/* os_mac.c and api_mac.c: a program calling the core in its own context (RTMAC_API) */
+struct rt_sleeper { int woken; };
+struct mac_client {
+	struct mac_client *next;
+	void (*yield)(void *arg);                    /* the program's: take its events */
+	int (*brk)(void *arg);                       /* the program's: was a stop asked for */
+	void *arg;
+	struct rt_sleeper sl;
+	int consumed_break;
+	struct rt_sockctx sc;
+};
+void mac_core_enter(struct mac_client *c);     /* the core is the program's (the deferred task waits) */
+void mac_core_leave(void);
+extern const struct rtmac_api mac_api;
 
 /* net_mac.c */
 int  net_mac_open(const char *name, unsigned unit, int mtu);

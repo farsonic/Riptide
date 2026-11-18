@@ -133,6 +133,14 @@ mac_stdgetfile:
 	unlk	%a6
 	rts
 
+| unsigned long long mac_us(void): Microseconds (System 7), the high long in A0, the low in D0
+	.globl	mac_us
+mac_us:
+	.short	0xA193
+	move.l	%d0,%d1
+	move.l	%a0,%d0
+	rts
+
 | Pascal callbacks into C: a routine the Toolbox calls with Pascal arguments, which it pops itself.
 | pascal void (ControlHandle ctl, short part) -> void c_ctl_action(void *ctl, int part)
 	.globl	pas_ctl_action

@@ -20,6 +20,7 @@ optional development log.
 | 2 | TCP and UDP: TCPCreate ... TCPRelease, the UDP set, ASR notifications, TCPStatus, TCPGlobalInfo | done in the testbed (src/mac/mactcp.c): tests/mac/mactcp_test.c passes 21 of 21 against the Aurora68 peer |
 | 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName; HInfo and MXInfo answer noAnsErr) | done in the testbed: the Riptide DNR file (src/mac/dnr), an asynchronous DNS client in the driver |
 | 4 | Preferences | done: RiptidePrefs, the Amiga's MUI editor built for the Mac (MAC-GUI.md) |
+| 5 | The command-line tools | done: the Riptide Terminal, the Amiga's ip, ifconfig, route, arp, netstat, ping, ping6, traceroute, traceroute6, host, hostname, nc, ftp, sysctl and speedtest in a Mac window ("The Riptide Terminal" below) |
 
 Also working in the testbed (18 November): DHCP (`dhcp en0`: bound, lease kept), IPv6 (a
 link-local address and one from the router advertisement's prefix, each passing duplicate
@@ -83,7 +84,8 @@ already installed, MacTCP's for instance, it does nothing.
 ## Building and installing
 
 ```
-make -f Makefile.mac                 # build/mac/Riptide.bin, a MacBinary extension file
+make -f Makefile.mac                 # build/mac/Riptide.bin, a MacBinary extension file, and the
+                                     # programs: RiptidePrefs.bin, RiptideTerminal.bin, RiptideDNR.bin
 make -f Makefile.mac CONF=my.conf    # with my.conf as its riptide.conf ('TEXT' 128)
 make -f Makefile.mac AURORA68=1      # development on Aurora68: the log also goes to the Pi's log
 ```
@@ -143,6 +145,52 @@ Install: Riptide in the Extensions folder, Riptide DNR in the System Folder, Mac
 Control Panels folder; RiptidePrefs anywhere. `make -f Makefile.mac test` builds the test program
 (MacTCPTest.bin), which runs against Aurora68's `tools/pinet.py` (TCP and UDP echo on port 7, DNS
 for `*.testbed`).
+
+## The Riptide Terminal
+
+Riptide for the Amiga comes with command-line tools (src/amiga/cmd). The Mac has no command line,
+so the Riptide Terminal (src/mac/term, `build/mac/RiptideTerminal.bin`) is one: a window you can
+move, resize and zoom, a scrolling console in Monaco 9, and a `riptide>` prompt. A line typed
+there runs the tool it names, from the same source files as the Amiga's tools, unchanged
+(compiled as RiptidePrefs' files are, with the Amiga's types and plain prototypes, docs/MAC-GUI.md):
+`ip addr`, `ip route`, `ip neigh`, `ifconfig`, `route -n`, `arp -a`, `netstat -s`, `ping -c 3 HOST`,
+`ping6`, `traceroute`, `host NAME`, `nc HOST PORT`, `ftp`, `sysctl -a`, `speedtest`. Output goes to
+the console, Command-period stops the running tool (the Amiga's Ctrl-C), nc and ftp read lines
+typed while they run (Command-D or Control-D ends that input, as Ctrl-\ does on the Amiga), Up
+and Down bring back earlier lines, File > Clear Window (Command-K) empties it. Built in are
+`help`, `history`, `clear`, `quit` and `conf LINE`, which hands a riptide.conf line to the
+running stack (as the RIPTIDE port's COMMAND: `conf nameserver 192.168.1.1`,
+`conf host printer 192.168.1.9`). The lines of the text file "Terminal Startup" in
+Preferences:Riptide:, if there is one, run at launch as if typed.
+
+**The tools wait, and on the Mac nothing else does.** The tools use the BSD socket interface: a
+recv waits for data, select for a socket or a timeout, a name lookup for its answer. MacTCP's
+interface (ipp.c) never waits: it queues the call for the stack's deferred task. So the driver
+has a second way in for programs: the private Control call `RTMAC_API` answers with the address
+of a table of plain C functions (src/mac/api_mac.c, struct rtmac_api in
+src/mac/prefs/mac_ipp_private.h): the core's socket calls (`rt_api_*`), the resolver
+(`rt_resolve_name46`, `rt_resolve_addr`, `rt_resolve_addr6`), sysctl (the `net.riptide` tables
+ip, route, arp and netstat print), the configuration commands, interface names. The program calls
+them directly, in its own context, the way a bsdsocket.library call runs in the calling task on
+the Amiga. While such a call runs the core is the program's: the deferred task, should an
+interrupt start it, puts its work off, and the call asks for it again when it leaves
+(os_mac.c, `mac_core_enter`/`mac_core_leave`). A call that must wait sleeps on its client's
+sleeper: it gives the core back, calls the program's yield function (WaitNextEvent: the Mac, and
+the deferred task that brings the frames in, go on; the window stays alive), takes the core again
+and looks once more, until a waker sets the sleeper, the time is up or Command-period was
+pressed (`-EINTR`, or `SIGBREAKF_CTRL_C` for a select that asked for it, as WaitSelect does).
+src/mac/term/term_bsd.c turns the table into bsdsocket.library's and riptide.library's calls,
+term_os.c gives the tools Output(), Input(), Delay(), the EClock (the Mac's Microseconds) and
+the rest of what they use, on RiptidePrefs' exec and dos (mm_os.c).
+
+On the Amiga each run of a tool is a fresh program. Here the tools stay loaded, so their static
+data is put back before every run: the linker script (src/mac/term/term.ld) gathers their
+`.data` and `.bss` in one place, and the terminal keeps a copy of the first.
+
+Left out: `rtdiag`, which runs other commands through SystemTagList and writes a packet capture
+(the Mac driver has no capture files). `speedtest` is in, but needs the Internet.
+
+![The Riptide Terminal](mac-terminal.png)
 
 ## Notes for the next stages
 

@@ -165,11 +165,64 @@ void rt_cpu_counts(u32 *now, u32 *idle, u32 *hz)
 	*hz = 1000000u;
 }
 
-/* ---- waiting: never (the Mac layer only uses non-blocking calls) --------------------------- */
-struct rt_sleeper { int woken; };
+/* ---- waiting -------------------------------------------------------------------------------
+   The deferred task never waits (the MacTCP interface uses non-blocking calls). A program calling
+   the core in its own context (api_mac.c) does: its client's sleeper gives the core back and
+   calls the program's yield until a waker sets 'woken', the time is up or the user stops it. */
 static struct rt_sleeper the_sleeper;
 volatile int mac_wakeups;                          /* ipp.c rescans its pending calls when this moves */
-struct rt_sleeper *rt_sleeper_self(void) { return &the_sleeper; }
+static struct mac_client *core_client;            /* the program the core is lent to, or NULL */
+static volatile u8 core_lent, stack_put_off;
+void mac_core_enter(struct mac_client *c)
+{
+	u16 sr = mac_irq_off();
+	core_lent = 1;
+	core_client = c;
+	mac_irq_restore(sr);
+}
+void mac_core_leave(void)
+{
+	u16 sr = mac_irq_off();
+	int run = stack_put_off;
+	core_lent = 0;
+	core_client = NULL;
+	stack_put_off = 0;
+	mac_irq_restore(sr);
+	if (run)
+		mac_schedule();
+}
+struct rt_sleeper *rt_sleeper_self(void) { return core_client ? &core_client->sl : &the_sleeper; }
+#define BREAK_SIGNAL (1u << 12)                    /* SIGBREAKF_CTRL_C, as WaitSelect's mask has it */
+static int client_wait(struct mac_client *c, s32 timeout_ms, u32 *extra_signals)
+{
+	u32 want = extra_signals ? *extra_signals : 0, t0 = rt_now_ms();
+	if (extra_signals)
+		*extra_signals = 0;
+	for (;;) {
+		int depth;
+		if (c->sl.woken) {
+			c->sl.woken = 0;
+			return 0;
+		}
+		if (c->brk && c->brk(c->arg)) {
+			if (want & BREAK_SIGNAL) {
+				*extra_signals = BREAK_SIGNAL;
+				return 0;
+			}
+			return -RT_EINTR;
+		}
+		if (timeout_ms == 0 || (timeout_ms > 0 && rt_now_ms() - t0 >= (u32)timeout_ms))
+			return -RT_ETIMEDOUT;
+		/* give the core back while the program takes its events */
+		depth = lock_depth;
+		lock_depth = 0;
+		mac_core_leave();
+		if (c->yield)
+			c->yield(c->arg);
+		mac_core_enter(c);
+		lock_depth = depth;
+	}
+}
 void rt_waitq_add(struct rt_waitq *wq, struct rt_wait_entry *e, struct rt_sleeper *s)
 {
 	e->sleeper = s; e->prev = NULL; e->next = wq->head;
@@ -189,6 +242,8 @@ void rt_waitq_wake(struct rt_waitq *wq)
 }
 int rt_sleeper_wait(struct rt_sleeper *s, s32 timeout_ms, u32 *extra_signals)
 {
+	if (core_client && s == &core_client->sl)
+		return client_wait(core_client, timeout_ms, extra_signals);
 	(void)timeout_ms;
 	if (extra_signals) *extra_signals = 0;
 	if (s->woken) { s->woken = 0; return 0; }
@@ -220,7 +275,14 @@ void rt_kick(void) { mac_schedule(); }
 void mac_stack_run(void)
 {
 	u16 sr = mac_irq_off();
-	dt_queued = 0; in_stack = 1;
+	dt_queued = 0;
+	if (core_lent) {
+		/* a program is in the core (api_mac.c): its leaving asks for this again */
+		stack_put_off = 1;
+		mac_irq_restore(sr);
+		return;
+	}
+	in_stack = 1;
 	mac_irq_restore(sr);
 	u64 t0 = rt_now_us();
 	u32 ms;
@@ -259,6 +321,11 @@ int mac_os_init(u32 heap_bytes)
 	   Error 28, the first Mac boot). The core keeps its frames small (docs/DESIGN.md), so the
 	   deferred task runs on the stack it interrupted. mac_stack_top stays 0. */
 	{ u32 seed[4] = { rt_os_jitter(), mac_ticks(), *(volatile u32 *)0x20C, (u32)pool }; rt_rng_stir(seed, sizeof seed); }
+#ifdef AURORA68_LOG
+	/* where the driver's image is: a PC in the kernel's heartbeat, less this, is an address in
+	   build/mac/drvr.map */
+	{ char t[64]; rt_snprintf(t, sizeof t, "image at %p (mac_os_init)", (void *)mac_os_init); mac_log_line(t); }
+#endif
 	dt.qtype = 7; dt.addr = (void *)mac_dt_entry; dt.param = NULL;
 	tm.qtype = 0; tm.addr = (void *)mac_tm_entry;
 	mac_insxtime(&tm);

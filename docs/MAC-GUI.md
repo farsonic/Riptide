@@ -96,6 +96,14 @@ suit it). The testbed (docs/MAC.md, "Testing on Aurora68") runs it under QEMU; A
 Screens under 560 usable lines (every classic size up to 640 x 480) get the editor's compact
 layout, which fits a 640 x 480 screen in 610 x 361.
 
+## The Riptide Terminal
+
+The same idea for the command-line tools: src/amiga/cmd compiled unchanged into one Mac program
+with a console window (docs/MAC.md, "The Riptide Terminal"). It reuses this editor's Mac pieces:
+src/mac/app (start-up, Toolbox glue) and src/mac/mui/mm_os.c (exec and dos), with the console's
+Output(), Input(), Read and Write in src/mac/term. A new tool for the Amiga is one line in the
+terminal's table (term_main.c) and one name in Makefile.mac's TERM_TOOLS.
+
 ## Known gaps
 
 - Riptide for the Mac drives one Ethernet card (unit 0).

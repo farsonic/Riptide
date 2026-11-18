@@ -6,7 +6,8 @@
  * caller's ioCompletion. Synchronous callers spin on ioResult as they do with MacTCP.
  *
  * ipctlGetAddr and ipctlEchoICMP are here; TCP, UDP and the resolver's lookups are in mactcp.c;
- * RiptidePrefs' private calls (RTMAC_*) too. Anything else answers "not supported yet" and is
+ * RiptidePrefs' private calls (RTMAC_*) too, and RTMAC_API, the address of the calls programs make
+ * directly (api_mac.c: the Riptide Terminal's socket interface). Anything else answers "not supported yet" and is
  * logged with its csCode.
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -219,6 +220,10 @@ static int handle(void *pb)
 		return 0;
 	case RTMAC_PORT:
 		return port_call(pb);
+	case RTMAC_API:
+		/* the calls programs make in their own context (api_mac.c) */
+		PB_L(pb, 28) = (u32)&mac_api;
+		return 0;
 	default:
 		if ((cs >= 20 && cs <= 43) || cs == RTMAC_DNS) {
 			int r = mactcp_call(pb, &ctx);

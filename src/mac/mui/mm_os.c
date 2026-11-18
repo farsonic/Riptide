@@ -68,6 +68,9 @@ void mm_log(const char *fmt, ...)
 	mm_log_line(buf);
 }
 
+#ifndef MM_LOG_NAME
+#define MM_LOG_NAME "RiptidePrefs"            /* the program the log lines are from */
+#endif
 #ifdef AURORA68_LOG
 void mm_log_line(const char *s)
 {
@@ -75,7 +78,7 @@ void mm_log_line(const char *s)
 	char t[220];
 	volatile UBYTE *c = (volatile UBYTE *)((*(volatile UBYTE *)0xCB2 ? 0xF9000000u : 0x00900000u) + 0x1000u);
 	ULONG n, seq, i;
-	rt_snprintf(t, sizeof t, "RiptidePrefs: %s", s);
+	rt_snprintf(t, sizeof t, MM_LOG_NAME ": %s", s);
 	n = (ULONG)strlen(t);
 	*(volatile UWORD *)(c + 8) = 2;
 	*(const char *volatile *)(c + 28) = t;

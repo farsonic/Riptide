@@ -26,11 +26,11 @@ CFLAGS  += -DAURORA68_LOG
 endif
 LDFLAGS := -T src/mac/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack
 CORE_SRC := $(wildcard src/core/*.c)
-MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/mactcp.c src/mac/main_mac.c src/amiga/libc.c
+MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/mactcp.c src/mac/api_mac.c src/mac/main_mac.c src/amiga/libc.c
 OBJ      := $(BUILD)/mac/drvr.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(MAC_SRC))
 HDRS     := $(wildcard include/rt/*.h src/core/*.h src/mac/*.h)
 
-all: $(BUILD)/Riptide.bin $(BUILD)/RiptidePrefs.bin $(BUILD)/RiptideDNR.bin
+all: $(BUILD)/Riptide.bin $(BUILD)/RiptidePrefs.bin $(BUILD)/RiptideDNR.bin $(BUILD)/RiptideTerminal.bin
 
 $(BUILD)/%.o: src/%.c $(HDRS)
 	@mkdir -p $(dir $@)
@@ -122,6 +122,42 @@ $(BUILD)/RiptidePrefs.elf: $(APP_OBJ) src/mac/app/app.ld
 	      $(APP_OBJ) $(LIBGCC) -Map $(BUILD)/RiptidePrefs.map
 $(BUILD)/RiptidePrefs.bin: $(BUILD)/RiptidePrefs.elf tools/elf2app.py tools/mac_elf.py tools/mac_rsrc.py
 	$(PYTHON) tools/elf2app.py $< --name RiptidePrefs --creator RTPF --size 1536 -o $@
+
+# ---- the Riptide Terminal: the Amiga's network tools (src/amiga/cmd, unchanged) in a Mac window ----
+# Each tool's main is compiled under its own name; mm_os.c (RiptidePrefs' exec and dos) with the
+# calls the terminal gives its console renamed out of the way (src/mac/term/term_os.c).
+TERM      := $(BUILD)/term
+TERM_TOOLS := arp ftp host hostname ifconfig ip nc netstat ping ping6 route sysctl traceroute traceroute6 speedtest
+TERM_OBJ  := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o \
+             $(TERM)/mac/term/term_main.o $(TERM)/mac/term/term_os.o $(TERM)/mac/term/term_bsd.o $(TERM)/mac/term/term_thunks.o $(TERM)/mac/mui/mm_os.o \
+             $(patsubst %,$(TERM)/amiga/cmd/%.o,cmdlib $(TERM_TOOLS)) \
+             $(patsubst %,$(TERM)/apps/speedtest/%.o,st_main st_xml st_http st_util) \
+             $(APP)/core/printf.o $(APP)/core/inet6_text.o $(APP)/core/netdb.o $(APP)/amiga/libc.o
+TERM_HDRS := $(APP_HDRS) $(wildcard src/mac/term/*.h src/apps/speedtest/*.h)
+MM_OS_RENAMES := -DRead=mm_file_Read -DWrite=mm_file_Write -DPutStr=mm_PutStr -DOpenLibrary=mm_OpenLibrary \
+             -DOpenDevice=mm_OpenDevice -DCloseDevice=mm_CloseDevice -DRiptideSysCtl=mm_RiptideSysCtl \
+             -DSocketBase=mm_SocketBase -DRiptideBase=mm_RiptideBase -Dc_ctl_action=mm_c_ctl_action \
+             -DMM_LOG_NAME='"Riptide Terminal"'
+$(TERM)/amiga/cmd/%.o: src/amiga/cmd/%.c $(TERM_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -Damiga_main=main_$* -DSysBase=cl_SysBase -c -o $@ $<
+$(TERM)/apps/speedtest/%.o: src/apps/speedtest/%.c $(TERM_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -c -o $@ $<
+$(TERM)/mac/mui/mm_os.o: src/mac/mui/mm_os.c $(TERM_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) $(MM_OS_RENAMES) -c -o $@ $<
+$(TERM)/mac/term/%.o: src/mac/term/%.c $(TERM_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -c -o $@ $<
+$(TERM)/mac/term/%.o: src/mac/term/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -c -o $@ $<
+$(BUILD)/RiptideTerminal.elf: $(TERM_OBJ) src/mac/term/term.ld
+	$(LD) -T src/mac/term/term.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ \
+	      $(TERM_OBJ) $(LIBGCC) -Map $(BUILD)/RiptideTerminal.map
+$(BUILD)/RiptideTerminal.bin: $(BUILD)/RiptideTerminal.elf tools/elf2app.py tools/mac_elf.py tools/mac_rsrc.py
+	$(PYTHON) tools/elf2app.py $< --name "Riptide Terminal" --creator RTTM --size 1024 -o $@
 
 # ---- tests/mac: a MacTCP program that tests Riptide against the Aurora68 testbed peer ----
 TEST_OBJ := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o $(APP)/tests/mac/mactcp_test.o \
