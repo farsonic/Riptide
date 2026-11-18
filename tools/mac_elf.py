@@ -7,6 +7,12 @@ _image_end, then a long count and the offsets of every 32-bit absolute field (R_
 a section-relative symbol), with _reloc_off in the image set to the table's offset. The program
 adds its load address to each field before it runs. Any other absolute relocation type is an
 error: the code must be built -fno-pic with 32-bit absolute or PC-relative references only.
+
+One exception: libgcc's soft-float routines (lb1sf68.S, built position-independent for Linux)
+find their rounding-mode variable through a global offset table: R_68K_GOT32 (the table's
+entry, PC-relative) and R_68K_GOT32O (an offset into the table) need nothing at load time, but
+each entry of .got holds an absolute address, which the linker filled in without a relocation
+record (Quill's Mac build, where doubles come from libgcc). Those entries are added to the table.
 SPDX-License-Identifier: GPL-2.0-only
 """
 import struct, sys
@@ -65,9 +71,17 @@ def build_image(elf):
                 if off + 4 > end:
                     sys.exit(f"relocation at {off:#x} outside the image")
                 relocs.add(off)
-            elif typ in (2, 3, 6, 7, 8):                              # absolute 16/8 bit: cannot be moved
+            elif typ in (7, 10):                                      # through the GOT (see above)
+                continue
+            elif typ in (2, 3, 6, 8):                                 # absolute 16/8 bit: cannot be moved
                 if shndx != SHN_ABS:
                     sys.exit(f"absolute relocation type {typ} at {off:#x}: build with -fno-pic, 32-bit addresses")
+    for s in secs:
+        if s['name'] == '.got' and s['flags'] & 2:
+            for o in range(s['addr'], s['addr'] + s['size'], 4):
+                v, = struct.unpack('>I', img[o:o + 4])
+                if 0 < v < end:                                       # an address in the image
+                    relocs.add(o)
     img += b'\0' * ((4 - len(img) % 4) % 4)
     table_off = len(img)
     img += struct.pack('>I', len(relocs)) + b''.join(struct.pack('>I', o) for o in sorted(relocs))

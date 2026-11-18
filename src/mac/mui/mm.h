@@ -154,6 +154,12 @@ void  mm_gfx_port_gone(void *port);
 /* the theme's colours for the built-in classes (mm_gfx.c reads the theme's tokens) */
 ULONG mm_theme_rgb(int token);
 
+/* a program's action procedure for its own controls' TrackControl (mm_os.c c_ctl_action), or NULL */
+extern void (*mm_ctl_action)(void *ctl, int part);
+/* a program's own Edit menu commands when no String is active (Undo 0, Cut 2, Copy 3, Paste 4,
+   Clear 5), and which of them can be chosen now (bit n: command n), or NULL (mm_app.c) */
+extern int (*mm_edit_action)(int edit);
+extern unsigned (*mm_edit_state)(void);
 /* ---- small things ---- */
 void *mm_alloc(ULONG n);                         /* cleared; NULL when out of memory */
 void  mm_free(void *p);

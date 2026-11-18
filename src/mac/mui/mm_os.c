@@ -841,9 +841,11 @@ static ULONG execbase_area[256];
 struct ExecBase *SysBase = (struct ExecBase *)execbase_area;
 struct Library *SocketBase, *RiptideBase;
 
-/* the Toolbox calls a control's action procedure (ostraps.S); RiptidePrefs has no controls */
+/* the Toolbox calls a control's action procedure (ostraps.S: TrackControl with pas_ctl_action):
+ * to the program's, when it set one (Quill's page view scrolls with its arrows), else nothing */
+void (*mm_ctl_action)(void *ctl, int part);
 void c_ctl_action(void *ctl, int part)
 {
-	(void)ctl;
-	(void)part;
+	if (mm_ctl_action)
+		mm_ctl_action(ctl, part);
 }

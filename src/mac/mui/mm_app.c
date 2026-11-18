@@ -352,11 +352,50 @@ void *mm_mac_menu(int id)
 	return id >= APPLE_ID && id <= APPLE_ID + MAXMENUS ? menus[id - APPLE_ID] : NULL;
 }
 
+/* A program whose window edits something other than a String gadget (Quill's page view) takes
+   the Edit menu's commands itself: mm_edit_action gets them when no String is active (Undo 0,
+   Cut 2, Copy 3, Paste 4, Clear 5, SystemEdit's numbers), and mm_edit_state says, just before a
+   menu is pulled down or a Command key looked up, which of them can be chosen (bit n for command
+   n). Without them the Edit menu works as before: the String being typed in, desk accessories. */
+int (*mm_edit_action)(int edit);
+unsigned (*mm_edit_state)(void);
+static int edit_menu_id;                /* the Edit menu's id (menus_install) */
+static struct mm_win *front_win(void);
+
+static void edit_menu_state(void)
+{
+	void *m = mm_mac_menu(edit_menu_id);
+	unsigned bits;
+	int i;
+	if (!m || !mm_edit_state)
+		return;
+	/* a desk accessory in front, or a String being typed in: all of them, as the Toolbox expects */
+	if (!front_win() || front_win()->active)
+		bits = 0x3D;
+	else
+		bits = mm_edit_state();
+	for (i = 0; i < 6; i++) {
+		if (i == 1)
+			continue;               /* the separator */
+		if (bits & (1u << i))
+			EnableItem(m, i + 1);
+		else
+			DisableItem(m, i + 1);
+	}
+}
+
 /* a NewMenu label as the Mac's menu text: tr(), then the guidelines' words (mm_hig.c: the
    ellipsis, Quit, no '_' markers) */
 static void label_of(const struct NewMenu *e, char *t, int size)
 {
 	rt_strlcpy(t, e->nm_Label && e->nm_Label != NM_BARLABEL ? tr((const char *)e->nm_Label) : "", (size_t)size);
+	mm_hig_label(t, size);
+}
+/* the label as the program wrote it, untranslated: what the reserved commands (Quit, Close,
+   About, the Command keys of key_ok) are recognised by, so a program in German keeps them */
+static void label_en(const struct NewMenu *e, char *t, int size)
+{
+	rt_strlcpy(t, e->nm_Label && e->nm_Label != NM_BARLABEL ? (const char *)e->nm_Label : "", (size_t)size);
 	mm_hig_label(t, size);
 }
 static int starts(const char *s, const char *w)
@@ -445,13 +484,13 @@ static void edit_items(void *m, int id)
 			separator(m);
 			continue;
 		}
-		act(id, append(m, e[i].t, e[i].k, i == 0), MA_EDIT, 0, (int)i);
+		act(id, append(m, tr(e[i].t), e[i].k, i == 0), MA_EDIT, 0, (int)i);
 	}
 }
 /* the program's items of one NewMenu title, from row first */
 static int program_items(const struct NewMenu *nm, int first, void *m, int id, int file, ULONG *quit_udata, int *has_close)
 {
-	char t[256];
+	char t[256], en[256];
 	int i, n;
 	for (i = first; nm[i].nm_Type != NM_END && nm[i].nm_Type != NM_TITLE; i++) {
 		if (nm[i].nm_Type != NM_ITEM)
@@ -461,15 +500,16 @@ static int program_items(const struct NewMenu *nm, int first, void *m, int id, i
 			continue;
 		}
 		label_of(&nm[i], t, sizeof t);
-		if (is_about(t))
+		label_en(&nm[i], en, sizeof en);
+		if (is_about(en))
 			continue;                       /* the Apple menu has it */
-		if (file && is_quit(t)) {
+		if (file && is_quit(en)) {
 			*quit_udata = (ULONG)nm[i].nm_UserData;
 			continue;                       /* last in File, after a separator */
 		}
-		if (file && is_close(t))
+		if (file && is_close(en))
 			*has_close = 1;
-		n = append(m, t, nm[i].nm_CommKey && nm[i].nm_CommKey[0] && key_ok(nm[i].nm_CommKey[0], t) ? nm[i].nm_CommKey[0] : 0, 0);
+		n = append(m, t, nm[i].nm_CommKey && nm[i].nm_CommKey[0] && key_ok(nm[i].nm_CommKey[0], en) ? nm[i].nm_CommKey[0] : 0, 0);
 		if (nm[i].nm_Flags & CHECKED)
 			CheckItem(m, n, 1);
 		mm_menustrip_map(menu_strip, i, id, n);
@@ -506,13 +546,13 @@ static void menus_install(Object *strip)
 	nacts = 0;
 	for (i = 0; nm && nm[i].nm_Type != NM_END; i++) {
 		if (nm[i].nm_Type == NM_TITLE) {
-			label_of(&nm[i], t, sizeof t);
+			label_en(&nm[i], t, sizeof t);
 			if (file_row < 0 && is_file_title(t))
 				file_row = i;
 			else if (edit_row < 0 && !strcmp(t, "Edit"))
 				edit_row = i;
 		} else if (nm[i].nm_Type == NM_ITEM && nm[i].nm_Label != NM_BARLABEL) {
-			label_of(&nm[i], t, sizeof t);
+			label_en(&nm[i], t, sizeof t);
 			if (is_about(t) && !about_udata)
 				about_udata = (ULONG)nm[i].nm_UserData;
 		}
@@ -529,21 +569,22 @@ static void menus_install(Object *strip)
 	AddResMenu(menus[0], MAC_TYPE('D', 'R', 'V', 'R'));
 	/* File */
 	id = APPLE_ID + nmenus;
-	m = new_menu("File");
+	m = new_menu(tr("File"));
 	if (m) {
 		if (file_row >= 0)
 			program_items(nm, file_row + 1, m, id, 1, &quit_udata, &has_close);
 		if (!has_close) {
 			separator(m);
-			act(id, append(m, "Close", 'W', 0), MA_CLOSE, 0, 0);
+			act(id, append(m, tr("Close"), 'W', 0), MA_CLOSE, 0, 0);
 		}
 		separator(m);
-		act(id, append(m, "Quit", 'Q', 0), MA_QUIT, quit_udata, 0);
+		act(id, append(m, tr("Quit"), 'Q', 0), MA_QUIT, quit_udata, 0);
 	}
 	/* Edit */
 	id = APPLE_ID + nmenus;
-	m = new_menu("Edit");
+	m = new_menu(tr("Edit"));
 	if (m) {
+		edit_menu_id = id;
 		edit_items(m, id);
 		if (edit_row >= 0) {
 			separator(m);
@@ -622,6 +663,8 @@ static void do_menu(long r)
 			struct mm_win *w = front_win();
 			if (w && w->active && acts[i].edit >= 2)
 				mm_string_edit(w->active, acts[i].edit);
+			else if (w && !w->active && mm_edit_action)
+				mm_edit_action(acts[i].edit);
 		}
 		break;
 	}
@@ -941,11 +984,19 @@ static UWORD raw_key(int c)
 	return 0xFF;
 }
 
+/* the Mac's modifier keys as Amiga qualifiers: Option is Alt (as on a PC keyboard by position),
+   Command is the Amiga key, Control is Control */
 static UWORD qualifier(short mods)
 {
 	UWORD q = 0;
 	if (mods & shiftKey)
 		q |= IEQUALIFIER_LSHIFT;
+	if (mods & optionKey)
+		q |= IEQUALIFIER_LALT;
+	if (mods & cmdKey)
+		q |= IEQUALIFIER_LCOMMAND;
+	if (mods & controlKey)
+		q |= IEQUALIFIER_CONTROL;
 	return q;
 }
 
@@ -1203,6 +1254,12 @@ static void key_down(struct mm_win *w, EventRecord *ev)
 		mm_string_key(w->active, ev);
 		return;
 	}
+	/* A handler that asks for IDCMP_VANILLAKEY gets the character typed first, as on the Amiga,
+	   in Code; on the Mac it is the Mac Roman character (an editor such as Quill's page view
+	   turns it into Unicode itself), arrows and the other function keys as their Mac codes
+	   (0x1C-0x1F, 1 home, 4 end, 11 and 12 page up and down, 8 delete, 0x7F forward delete). */
+	if (handlers(w, IDCMP_VANILLAKEY, (UWORD)c, 0, 0, ev->modifiers, muikey))
+		return;
 	if (raw != 0xFF && handlers(w, IDCMP_RAWKEY, raw, 0, 0, ev->modifiers, muikey))
 		return;
 	if (c == 9) {
@@ -1318,6 +1375,7 @@ static void mm_event_once(void)
 		still_since = 0;
 		switch (part) {
 		case inMenuBar:
+			edit_menu_state();
 			do_menu(MenuSelect(pt_long(ev.where)));
 			break;
 		case inSysWindow:
@@ -1397,8 +1455,10 @@ static void mm_event_once(void)
 	case keyDown:
 	case autoKey:
 		if (ev.modifiers & cmdKey) {
-			if (ev.what == keyDown)
+			if (ev.what == keyDown) {
+				edit_menu_state();
 				do_menu(MenuKey((int)(ev.message & charCodeMask)));
+			}
 			break;
 		}
 		w = front_win();

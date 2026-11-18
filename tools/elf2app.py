@@ -2,7 +2,7 @@
 """Riptide on the classic Mac OS: pack an application (linked at 0 with --emit-relocs:
 src/mac/app/app.ld) as a MacBinary II file.
 
-    elf2app.py prog.elf --name RiptidePrefs --creator RTPF [--size KB] [--rsrc TYPE:ID:file ...] -o out.bin
+    elf2app.py prog.elf --name RiptidePrefs --creator RTPF [--size KB] [--rsrc TYPE:ID:file ...] [--bundle] -o out.bin
 
 CODE 1 holds the self-relocating image (mac_elf.py); src/mac/app/crt0.S fixes it up at the
 start. CODE 0 is the jump table with the one entry, the start of CODE 1; below A5 there is room
@@ -19,6 +19,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('elf'); ap.add_argument('--name', required=True); ap.add_argument('--creator', required=True)
 ap.add_argument('--size', type=int, default=1024, help='the partition, KB')
 ap.add_argument('--rsrc', action='append', default=[], help='TYPE:ID:file, another resource')
+ap.add_argument('--bundle', action='store_true', help="the Finder's hasBundle flag: the program brings a BNDL (its icons, the files it opens)")
 ap.add_argument('-o', required=True)
 a = ap.parse_args()
 img, nrel, end = build_image(a.elf)
@@ -33,5 +34,5 @@ for r in a.rsrc:
     t, i, f = r.split(':', 2)
     rf.add(t.encode('mac_roman'), int(i), open(f, 'rb').read())
 creator = a.creator.encode('mac_roman')[:4].ljust(4, b' ')
-open(a.o, 'wb').write(macbinary(a.name, b'APPL', creator, b'', rf.build()))
+open(a.o, 'wb').write(macbinary(a.name, b'APPL', creator, b'', rf.build(), finder_flags=0x2000 if a.bundle else 0))
 print(f"{a.o}: CODE 1 {len(code1)} bytes ({end} image, {nrel} relocations)")
