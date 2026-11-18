@@ -146,7 +146,9 @@ void  mm_line(void *port, int x0, int y0, int x1, int y1, ULONG rgb);
 void  mm_text(void *port, int x, int y, const char *s, int n, ULONG rgb, int bold);
 int   mm_textw(const char *s, int n, int bold);
 void  mm_use_font(int bold);
-int   mm_mono(void);                             /* the screen has one bit per pixel */
+int   mm_mono_port(void *port);                  /* the port shows one bit per pixel (NULL: the current port) */
+void  mm_gfx_port_moved(void *port);             /* a window opened, moved or changed size: its screen again */
+void  mm_gfx_port_gone(void *port);
 #define MM_RGB(r, g, b) (((ULONG)(r) << 16) | ((ULONG)(g) << 8) | (ULONG)(b))
 /* the theme's colours for the built-in classes (mm_gfx.c reads the theme's tokens) */
 ULONG mm_theme_rgb(int token);

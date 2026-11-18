@@ -10,6 +10,10 @@ binary is byte-identical with and without the Mac work (checked with `sha256sum`
 
 ![RiptidePrefs on a Mac, Interface page](mac-gui-interface.png)
 
+On a 256-colour screen (the theme's colours, as on the Amiga):
+
+![RiptidePrefs on a colour screen](mac-gui-colour.png)
+
 ## How it is put together
 
 ```
@@ -35,7 +39,7 @@ what those prototypes name:
 |---|---|
 | BOOPSI classes, `DoMethodA`, `DoSuperMethodA` (mui_util.c, mui_thunks.S: dispatchers called with the class in a0, object in a2, message in a1) | the same calls, unchanged; the built-in classes use the same register thunks (mm_thunks.S) |
 | MUI: Application, Window, Group (rows, columns, pages, weights), Area, Rectangle, String, Cycle, Image (check mark), List, Listview, menu strips from NewMenu, notifications, event handlers, input handlers (timers), MUI_Redraw | mm_boopsi.c, mm_app.c, mm_area.c, mm_group.c, mm_gadgets.c: a window per MUI window, TextEdit for strings, pop-up menus for cycles, the menu bar from the NewMenu table (Apple menu and the Mac's Edit items added), help bubbles after a second's rest |
-| graphics.library (SetAPen, RectFill, Text, TextLength, ObtainBestPenA, ScrollRaster ...) | mm_gfx.c on QuickDraw: pens are RGB, colour screens use RGBForeColor, one-bit screens dither the theme's greys and dim disabled text |
+| graphics.library (SetAPen, RectFill, Text, TextLength, ObtainBestPenA, ScrollRaster ...) | mm_gfx.c on QuickDraw: pens are RGB. Each window is drawn for the screen it is on (the deepest screen it touches, asked again when it opens, moves, changes size or is redrawn): colour screens of 2 bits and more get RGBForeColor in colour windows (NewCWindow), one-bit screens dither the theme's greys and dim disabled text. A window dragged from the SE's screen to a colour screen changes over |
 | exec ports and lists, dos files (Lock, Open, Read, Write, Rename ...), ASL | mm_os.c: the File Manager by path, Standard File for Open and Save As |
 | ENVARC:Riptide/ and ENV:Riptide/ | the Riptide folder in the Preferences folder, and its folder "In Use" (emptied by Riptide when the Mac starts, as ENV: goes with a reboot) |
 | the RIPTIDE message port (COMMAND, TABLES, STATUS) | rtport_mac.c: FindPort("RIPTIDE") answers when Riptide's .IPP is installed; a message put there becomes a private .IPP Control call (`RTMAC_PORT`, src/mac/ipp.c), run in the stack's context with the core's own `rt_ctl_command` and `rt_sysctl_bymib` |

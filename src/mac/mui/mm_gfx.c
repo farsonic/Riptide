@@ -130,10 +130,113 @@ ULONG SetSoftStyle(struct RastPort *rp, ULONG style, ULONG enable)
 	return RPD(rp)->style;
 }
 
-static int mono_screen = 1;
-int mm_mono(void)
+/* ---- colour or one bit, per window ----
+ * A port draws in colour when it is a colour port (NewCWindow) on a screen of two bits or more:
+ * the deepest screen the window touches decides (GetMaxDevice), as QuickDraw then maps the RGB
+ * colours on each screen itself. A one-bit screen gets the dither patterns. Each window's answer
+ * is kept and asked again when it opens, moves, changes size or is redrawn (a change of depth in
+ * the Monitors control panel redraws every window). */
+#define NPORTS 16
+static struct { void *port; UBYTE mono; } ports[NPORTS];
+
+static int gd_depth(void **gd)
 {
-	return mono_screen;
+	void **pm;
+	if (!gd || !*gd)
+		return 1;
+	pm = *(void ***)((char *)*gd + 22);             /* gdPMap */
+	return pm && *pm ? *(short *)((char *)*pm + 32) : 1;     /* pixelSize */
+}
+
+/* The deepest active screen the global rectangle r touches: the device list (DeviceList, 0x8A8)
+ * walked through gdNextGD, each device's gdRect, gdFlags bit 15 for an active screen (GDevice
+ * record: gdFlags 20, gdPMap 22, gdNextGD 30, gdRect 34). Read from low memory rather than through
+ * GetMaxDevice, whose trap word is easy to get wrong. */
+static int max_depth(const Rect *r)
+{
+	void **gd = *(void ***)0x8A8;
+	int best = 0, guard = 0;
+	while (gd && *gd && guard++ < 16) {
+		char *d = (char *)*gd;
+		Rect *g = (Rect *)(d + 34);
+		if ((*(unsigned short *)(d + 20) & 0x8000) && g->left < r->right && g->right > r->left &&
+		    g->top < r->bottom && g->bottom > r->top) {
+			int k = gd_depth(gd);
+			if (k > best)
+				best = k;
+		}
+		gd = *(void ***)(d + 30);
+	}
+	return best ? best : gd_depth(*(void ***)0x8A4);
+}
+
+static int has_cqd = -1;
+static int color_qd(void)
+{
+	if (has_cqd < 0) {
+		long r = 0;
+		has_cqd = mac_gestalt(MAC_TYPE('q', 'd', ' ', ' '), &r) == 0 && r >= 0x100;
+	}
+	return has_cqd;
+}
+
+static int compute_mono(void *port)
+{
+	void *old;
+	Rect r;
+	Point a, b;
+	if (!color_qd() || !port || !PORT_IS_COLOR(port))
+		return 1;
+	GetPort(&old);
+	SetPort(port);
+	a.h = PORT_RECT(port)->left;
+	a.v = PORT_RECT(port)->top;
+	b.h = PORT_RECT(port)->right;
+	b.v = PORT_RECT(port)->bottom;
+	LocalToGlobal(&a);
+	LocalToGlobal(&b);
+	SetPort(old);
+	r.left = a.h;
+	r.top = a.v;
+	r.right = b.h;
+	r.bottom = b.v;
+	return max_depth(&r) <= 1;
+}
+
+void mm_gfx_port_moved(void *port)
+{
+	int i, free = -1;
+	for (i = 0; i < NPORTS; i++) {
+		if (ports[i].port == port) {
+			ports[i].mono = (UBYTE)compute_mono(port);
+			return;
+		}
+		if (!ports[i].port && free < 0)
+			free = i;
+	}
+	if (free >= 0) {
+		ports[free].port = port;
+		ports[free].mono = (UBYTE)compute_mono(port);
+	}
+}
+
+void mm_gfx_port_gone(void *port)
+{
+	int i;
+	for (i = 0; i < NPORTS; i++)
+		if (ports[i].port == port)
+			ports[i].port = NULL;
+}
+
+int mm_mono_port(void *port)
+{
+	int i;
+	if (!port)
+		GetPort(&port);
+	for (i = 0; i < NPORTS; i++)
+		if (ports[i].port == port)
+			return ports[i].mono;
+	return compute_mono(port);
 }
 
 void mm_gfx_init(int compact)
@@ -156,17 +259,9 @@ void mm_gfx_init(int compact)
 	mm_font.tf_YSize = (UWORD)(fi.ascent + fi.descent + fi.leading);
 	mm_font.tf_Baseline = (UWORD)fi.ascent;
 	mm_font.tf_XSize = (UWORD)fi.widMax;
-	/* the main screen's depth: MainDevice -> gdPMap -> pixelSize */
-	mdev = *(void **)0x8A4;
-	mono_screen = 1;
-	if (mdev && *(void **)mdev) {
-		char *gd = *(char **)mdev;
-		void **pm = *(void ***)(gd + 22);
-		if (pm && *pm)
-			mono_screen = *(short *)((char *)*pm + 32) <= 1;
-	}
-	mm_log("font Geneva %d: height %d, baseline %d; %s screen", font_size, mm_font.tf_YSize, mm_font.tf_Baseline,
-	       mono_screen ? "one-bit" : "colour");
+	mdev = color_qd() ? *(void **)0x8A4 : NULL;      /* MainDevice */
+	mm_log("font Geneva %d: height %d, baseline %d; main screen %d bit%s%s", font_size, mm_font.tf_YSize,
+	       mm_font.tf_Baseline, gd_depth(mdev), gd_depth(mdev) == 1 ? "" : "s", color_qd() ? "" : " (no Color QuickDraw)");
 }
 
 /* ---- drawing in an RGB colour ---- */
@@ -203,7 +298,7 @@ void mm_fill(void *port, const Rect *r, ULONG rgb)
 		SetPort(port);
 	if (r->right <= r->left || r->bottom <= r->top)
 		return;
-	if (mono_screen) {
+	if (mm_mono_port(port)) {
 		int l = lum(rgb);
 		mono_ink();
 		/* a line drawn as a box one pixel thin (the classes' separators): solid, as mm_line draws */
@@ -225,7 +320,7 @@ void mm_frame(void *port, const Rect *r, ULONG rgb)
 {
 	if (port)
 		SetPort(port);
-	if (mono_screen) {
+	if (mm_mono_port(port)) {
 		mono_ink();
 		PenPat(lum(rgb) >= 215 ? pat_white : pat_black);
 		FrameRect(r);
@@ -241,7 +336,7 @@ void mm_line(void *port, int x0, int y0, int x1, int y1, ULONG rgb)
 {
 	if (port)
 		SetPort(port);
-	if (mono_screen) {
+	if (mm_mono_port(port)) {
 		mono_ink();
 		PenPat(lum(rgb) >= 215 ? pat_white : pat_black);
 	} else {
@@ -265,7 +360,7 @@ void mm_text(void *port, int x, int y, const char *s, int n, ULONG rgb, int b)
 	if (port)
 		SetPort(port);
 	mm_use_font(b);
-	if (mono_screen) {
+	if (mm_mono_port(port)) {
 		int l = lum(rgb);
 		mono_ink();
 		if (l >= 215) {

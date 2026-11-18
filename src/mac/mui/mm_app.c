@@ -182,6 +182,8 @@ struct mm_wind {
 ULONG mm_win_datasize(void) { return sizeof(struct mm_wind); }
 #define WD(o) ((struct mm_wind *)INST_DATA(mm_cl_win, o))
 
+static int has_color_qd(void);
+
 static struct mm_win *win_of_mac(void *mw)
 {
 	Object *c;
@@ -264,6 +266,7 @@ void mm_win_layout(struct mm_win *w)
 	ULONG msg;
 	if (!w->macwin)
 		return;
+	mm_gfx_port_moved(w->macwin);
 	mm_root_minmax(w->root);
 	m = &muiAreaData(w->root)->mad_MinMax;
 	nw = w->w < m->MinWidth ? m->MinWidth : w->w;
@@ -448,6 +451,7 @@ static void win_close(struct mm_wind *d)
 	DoMethodA(w->root, (Msg)&m);
 	m = MUIM_Cleanup;
 	DoMethodA(w->root, (Msg)&m);
+	mm_gfx_port_gone(w->macwin);
 	DisposeWindow(w->macwin);
 	w->macwin = NULL;
 	mm_rp_free(w->rp);
@@ -544,6 +548,7 @@ static int win_open(Object *obj, struct mm_wind *d)
 		menus_install(d->strip);
 	ShowWindow(w->macwin);
 	SelectWindow(w->macwin);
+	mm_gfx_port_moved(w->macwin);
 	d->open = 1;
 	mm_log("window \"%s\" %dx%d (smallest %dx%d)", d->title ? d->title : "", w->w, w->h, mm->MinWidth, mm->MinHeight);
 	return 1;
@@ -758,6 +763,7 @@ static Point last_mouse = { -1, -1 };
 static void bubble_hide(void)
 {
 	if (bubble) {
+		mm_gfx_port_gone(bubble);
 		DisposeWindow(bubble);
 		bubble = NULL;
 	}
@@ -850,9 +856,11 @@ static void bubble_show(struct mm_win *w, Point p)
 			r.top -= dy;
 			r.bottom -= dy;
 		}
-		bubble = NewWindow(NULL, &r, &e, 1, plainDBox, (void *)-1, 0, 0);
+		bubble = has_color_qd() ? NewCWindow(NULL, &r, &e, 1, plainDBox, (void *)-1, 0, 0) :
+		                          NewWindow(NULL, &r, &e, 1, plainDBox, (void *)-1, 0, 0);
 		if (!bubble)
 			return;
+		mm_gfx_port_moved(bubble);
 		bubble_obj = o;
 		bubble_text = t;
 		bubble_draw();
@@ -1058,6 +1066,13 @@ static void mm_event_once(void)
 				LocalToGlobal(&o);
 				w->awin.LeftEdge = o.h;
 				w->awin.TopEdge = o.v;
+				/* onto another screen: colour or one bit there, and drawn anew */
+				{
+					int was = mm_mono_port(mw);
+					mm_gfx_port_moved(mw);
+					if (was != mm_mono_port(mw))
+						InvalRect(PORT_RECT(mw));
+				}
 			}
 			break;
 		case inGoAway:
@@ -1132,6 +1147,7 @@ static void mm_event_once(void)
 		}
 		w = win_of_mac((void *)ev.message);
 		if (w) {
+			mm_gfx_port_moved(w->macwin);   /* the Monitors control panel may have changed the depth */
 			BeginUpdate(w->macwin);
 			mm_win_redraw(w);
 			EndUpdate(w->macwin);

@@ -519,7 +519,7 @@ static void list_draw(Object *o)
 		if (row.bottom > _mbottom(o) + 1)
 			row.bottom = (short)(_mbottom(o) + 1);
 		/* the chosen row: the theme's colour, or on a one-bit screen inverted, as Mac lists show it */
-		int sel = k == d->active && k < d->n, inv = sel && mm_mono();
+		int sel = k == d->active && k < d->n, inv = sel && mm_mono_port(port);
 		mm_fill(port, &row, inv ? MM_RGB(0, 0, 0) : sel ? mm_theme_rgb(T_PRESSED) : mm_theme_rgb(T_WHITE));
 		if (k < d->n) {
 			char txt[160];
