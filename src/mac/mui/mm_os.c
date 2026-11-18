@@ -156,6 +156,7 @@ struct mm_filereq {
 	char drawer[256];
 	char file[64];
 	int save;
+	int any;                        /* ASLFR_InitialPattern "#?": every file, not only text */
 	char title[80];
 	char initial[64];
 };
@@ -205,6 +206,10 @@ APTR MUI_AllocAslRequest(ULONG type, const struct TagItem *tags)
 	if (!r)
 		return NULL;
 	r->save = (int)mm_tag(tags, RT_ASLFR_DoSaveMode, 0);
+	{
+		const char *pat = (const char *)mm_tag(tags, RT_ASLFR_InitialPattern, 0);
+		r->any = pat && pat[0] == '#' && pat[1] == '?' && !pat[2];
+	}
 	rt_strlcpy(r->title, (const char *)mm_tag(tags, RT_ASLFR_TitleText, (ULONG)""), sizeof r->title);
 	rt_strlcpy(r->initial, (const char *)mm_tag(tags, RT_ASLFR_InitialFile, (ULONG)"riptide.conf"), sizeof r->initial);
 	r->fr.fr_File = (STRPTR)r->file;
@@ -223,7 +228,7 @@ LONG MUI_AslRequest(APTR req, const struct TagItem *tags)
 		mac_stdputfile(mac_pstr(p1, r->title), mac_pstr(p2, r->initial), &rep);
 	} else {
 		long types[1] = { MAC_TYPE('T', 'E', 'X', 'T') };
-		mac_stdgetfile(1, types, &rep);
+		mac_stdgetfile(r->any ? -1 : 1, types, &rep);
 	}
 	if (!rep.sfGood)
 		return FALSE;

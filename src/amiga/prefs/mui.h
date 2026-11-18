@@ -144,6 +144,7 @@ struct rt_filereq {
 #define RT_ASLFR_TitleText    (TAG_USER + 0x80000 + 1)
 #define RT_ASLFR_InitialFile  (TAG_USER + 0x80000 + 8)
 #define RT_ASLFR_InitialDrawer (TAG_USER + 0x80000 + 9)
+#define RT_ASLFR_InitialPattern (TAG_USER + 0x80000 + 10)
 #define RT_ASLFR_DoSaveMode   (TAG_USER + 0x80000 + 44)
 
 /* method messages */
@@ -271,6 +272,7 @@ struct MUIP_CreateShortHelp { ULONG MethodID; LONG mx; LONG my; };
 #define MUIV_Window_LeftEdge_Centered (-1L)
 #define MUIV_Window_TopEdge_Centered (-1L)
 #define MUIV_Frame_None              0
+#define MUIV_Frame_Button            1
 #define MUIV_Frame_String            4
 #define MUIV_Frame_InputList         6
 #define MUIV_InputMode_RelVerify     1

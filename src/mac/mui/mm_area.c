@@ -25,6 +25,9 @@ static void frame_metrics(ULONG frame, int *bw, int *inner_h, int *inner_v)
 	case MUIV_Frame_InputList:
 		*bw = 1; *inner_h = 1; *inner_v = 1;
 		break;
+	case MUIV_Frame_Button:
+		*bw = 2; *inner_h = 8; *inner_v = 2;
+		break;
 	default:
 		*bw = 1; *inner_h = 1; *inner_v = 1;
 		break;
@@ -266,7 +269,16 @@ DISPATCHER(mm_area_dispatch)
 		mm_box(obj, &r);
 		if (mo->bg)
 			mm_fill(port, &r, mo->bg & 0xFFFFFF);
-		if (mo->frame != MUIV_Frame_None) {
+		if (mo->frame == MUIV_Frame_Button) {
+			/* a push button: white, black when held down, a shadow right and below */
+			Rect in = r;
+			in.right--;
+			in.bottom--;
+			mm_fill(port, &in, mo->selected && !mo->disabled ? mm_theme_rgb(T_TEXT) : mm_theme_rgb(T_WHITE));
+			mm_frame(port, &in, mm_theme_rgb(T_BORDER));
+			mm_line(port, in.left + 1, r.bottom - 1, r.right - 1, r.bottom - 1, mm_theme_rgb(T_BORDER));
+			mm_line(port, r.right - 1, in.top + 1, r.right - 1, r.bottom - 1, mm_theme_rgb(T_BORDER));
+		} else if (mo->frame != MUIV_Frame_None) {
 			Rect in = r;
 			InsetRect(&in, 1, 1);
 			if (mo->frame == MUIV_Frame_String || mo->frame == MUIV_Frame_InputList)
@@ -355,9 +367,35 @@ DISPATCHER(mm_image_dispatch)
 }
 
 /* ---- Text: a line of text (the editor draws its own labels; this is for completeness) ---- */
-struct mm_textd { const char *s; };
+/* the text: copied, as MUI copies it (Lagoon's front end keeps no buffers for its labels), with
+ * MUI's leading escapes understood: ESC c centre, ESC r right, ESC l left, ESC b bold, ESC n
+ * normal (others skipped). A Text in a button frame (MUIV_Frame_Button) is drawn white on black
+ * while it is held down. */
+struct mm_textd { char *s; UBYTE align, bold; };
 ULONG mm_text_datasize(void) { return sizeof(struct mm_textd); }
 #define MUIA_Text_Contents 0x8042f8dcUL
+
+static void text_set(struct mm_textd *d, const char *s)
+{
+	if (!s)
+		s = "";
+	d->align = 0;
+	d->bold = 0;
+	while (s[0] == 033 && s[1]) {
+		switch (s[1]) {
+		case 'c': d->align = 1; break;
+		case 'r': d->align = 2; break;
+		case 'l': d->align = 0; break;
+		case 'b': d->bold = 1; break;
+		case 'n': d->bold = 0; break;
+		}
+		s += 2;
+	}
+	if (d->s && !strcmp(d->s, s))
+		return;
+	mm_free(d->s);
+	d->s = mm_strdup(s);
+}
 
 DISPATCHER(mm_text_dispatch)
 {
@@ -367,18 +405,56 @@ DISPATCHER(mm_text_dispatch)
 		if (!(obj = (Object *)DoSuperMethodA(cl, obj, msg)))
 			return 0;
 		d = INST_DATA(cl, obj);
-		d->s = (const char *)mm_tag(((struct opSet *)msg)->ops_AttrList, MUIA_Text_Contents, (ULONG)"");
+		d->s = NULL;
+		text_set(d, (const char *)mm_tag(((struct opSet *)msg)->ops_AttrList, MUIA_Text_Contents, (ULONG)""));
 		return (ULONG)obj;
-	case OM_SET:
+	case OM_DISPOSE:
 		d = INST_DATA(cl, obj);
-		d->s = (const char *)mm_tag(((struct opSet *)msg)->ops_AttrList, MUIA_Text_Contents, (ULONG)d->s);
+		mm_free(d->s);
+		d->s = NULL;
+		break;
+	case OM_SET: {
+		ULONG v, r;
+		int changed = 0;
+		d = INST_DATA(cl, obj);
+		if (mm_tag_find(((struct opSet *)msg)->ops_AttrList, MUIA_Text_Contents, &v)) {
+			char *old = d->s;
+			d->s = NULL;
+			text_set(d, (const char *)v);
+			changed = !old || !d->s || strcmp(old, d->s);
+			mm_free(old);
+		}
+		r = DoSuperMethodA(cl, obj, msg);
+		/* new contents on a shown text: drawn now, over the background it stands on */
+		if (changed && (MMO(obj)->flags & MMF_SHOWN) && MMO(obj)->win) {
+			struct mm_obj *mo = MMO(obj);
+			Object *p = mo->parent;
+			ULONG bg = mo->bg;
+			Rect box;
+			while (!bg && p) {
+				bg = MMO(p)->bg;
+				p = MMO(p)->parent;
+			}
+			mm_box(obj, &box);
+			if (mo->frame == MUIV_Frame_None)
+				mm_fill(mo->win->macwin, &box, bg ? bg & 0xFFFFFF : mm_theme_rgb(T_WINDOW));
+			MUI_Redraw(obj, MADF_DRAWOBJECT);
+		}
+		return r;
+	}
+	case OM_GET:
+		if (((struct opGet *)msg)->opg_AttrID == MUIA_Text_Contents) {
+			d = INST_DATA(cl, obj);
+			*((struct opGet *)msg)->opg_Storage = (ULONG)(d->s ? d->s : "");
+			return TRUE;
+		}
 		break;
 	case MUIM_AskMinMax: {
 		struct MUI_MinMax *m = ((struct MUIP_AskMinMax *)msg)->MinMaxInfo;
 		int w;
 		d = INST_DATA(cl, obj);
 		DoSuperMethodA(cl, obj, msg);
-		w = mm_textw(d->s, (int)strlen(d->s), 0);
+		w = mm_textw(d->s ? d->s : "", d->s ? (int)strlen(d->s) : 0, d->bold);
 		m->MinWidth += (WORD)w;
 		m->DefWidth += (WORD)w;
 		m->MaxWidth = MUI_MAXMAX;
@@ -390,9 +466,17 @@ DISPATCHER(mm_text_dispatch)
 	case MUIM_Draw:
 		DoSuperMethodA(cl, obj, msg);
 		d = INST_DATA(cl, obj);
-		if ((((struct MUIP_Draw *)msg)->flags & MADF_DRAWOBJECT) && MMO(obj)->win)
-			mm_text(MMO(obj)->win->macwin, _mleft(obj), _mtop(obj) + mm_font.tf_Baseline, d->s, (int)strlen(d->s),
-			        mm_theme_rgb(T_TEXT), 0);
+		if ((((struct MUIP_Draw *)msg)->flags & MADF_DRAWOBJECT) && MMO(obj)->win && d->s) {
+			struct mm_obj *mo = MMO(obj);
+			int n = (int)strlen(d->s), x = _mleft(obj), w = mm_textw(d->s, n, d->bold);
+			ULONG rgb = mo->frame == MUIV_Frame_Button && mo->selected && !mo->disabled ? mm_theme_rgb(T_WHITE)
+			                                                                        : mm_theme_rgb(T_TEXT);
+			if (d->align == 1 && _mwidth(obj) > w)
+				x += (_mwidth(obj) - w) / 2;
+			else if (d->align == 2 && _mwidth(obj) > w)
+				x += _mwidth(obj) - w;
+			mm_text(mo->win->macwin, x, _mtop(obj) + mm_font.tf_Baseline, d->s, n, rgb, d->bold);
+		}
 		return 0;
 	}
 	return DoSuperMethodA(cl, obj, msg);
