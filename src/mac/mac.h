@@ -4,6 +4,7 @@
 #ifndef RT_MAC_H
 #define RT_MAC_H
 #include "rt_types.h"
+struct rt_sockctx;
 
 /* drvr.S: trap glue */
 void *mac_newptr_sys(u32 size);
@@ -18,6 +19,7 @@ void **mac_getresource(u32 type, int id);
 void  mac_releaseresource(void **h);
 void  mac_complete(void *pb, int result);
 void  mac_call_pascal1(void *proc, u32 arg, void *a0);
+void  mac_call_asr(void *proc, void *stream, u32 event, void *udata, u32 reason, void *icmp, int tcp);
 void  mac_enet_ph(void);
 void  mac_tx_done(void);
 void  mac_dt_entry(void);
@@ -54,6 +56,10 @@ extern char mac_net_why[64];
 int  ipp_control(void *pb);
 void ipp_poll(void);
 int  ipp_status(void *pb);
+
+/* mactcp.c: MacTCP's TCP and UDP streams, and the resolver's lookups (ipp.c hands them over) */
+int  mactcp_call(void *pb, struct rt_sockctx *ctx);   /* 1: pending, else the result */
+void mactcp_poll(struct rt_sockctx *ctx);
 
 /* main_mac.c: the keywords of riptide.conf the Mac layer handles (interface) */
 int  mac_config_unknown(int argc, char **argv, char *err, u32 errlen);

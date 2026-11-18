@@ -5,9 +5,9 @@
  * handled by the stack's deferred task, which completes it with mac_complete: ioResult, then the
  * caller's ioCompletion. Synchronous callers spin on ioResult as they do with MacTCP.
  *
- * Stage 1 of the port (docs/MAC.md): ipctlGetAddr and ipctlEchoICMP, which carry the whole path
- * (driver entry, deferred task, the core, .ENET, completion routines). The other calls answer
- * "not supported yet" and are logged with their csCode.
+ * ipctlGetAddr and ipctlEchoICMP are here; TCP, UDP and the resolver's lookups are in mactcp.c;
+ * RiptidePrefs' private calls (RTMAC_*) too. Anything else answers "not supported yet" and is
+ * logged with its csCode.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <string.h>
@@ -220,6 +220,11 @@ static int handle(void *pb)
 	case RTMAC_PORT:
 		return port_call(pb);
 	default:
+		if ((cs >= 20 && cs <= 43) || cs == RTMAC_DNS) {
+			int r = mactcp_call(pb, &ctx);
+			if (r != -17)
+				return r;
+		}
 		rt_log(RT_LOG_WARN, ".IPP csCode %d is not supported yet", cs);
 		return controlErr;
 	}
@@ -252,4 +257,5 @@ void ipp_poll(void)
 		if (r != 1) mac_complete(pb, r);
 	}
 	echo_poll();
+	mactcp_poll(&ctx);
 }

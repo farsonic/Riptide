@@ -17,8 +17,8 @@ optional development log.
 | Stage | What | State |
 |---|---|---|
 | 1 | The driver installs and starts at boot, the core runs, Ethernet through `.ENET`, `ipctlGetAddr`, `ipctlEchoICMP` | done: PiPing (a MacTCP ping) gets replies through Riptide |
-| 2 | TCP and UDP: TCPCreate ... TCPRelease, the UDP set, ASR notifications, TCPStatus, TCPGlobalInfo | next |
-| 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName, HInfo, MXInfo) | |
+| 2 | TCP and UDP: TCPCreate ... TCPRelease, the UDP set, ASR notifications, TCPStatus, TCPGlobalInfo | done in the testbed (src/mac/mactcp.c): tests/mac/mactcp_test.c passes 21 of 21 against the Aurora68 peer |
+| 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName; HInfo and MXInfo answer noAnsErr) | done in the testbed: the Riptide DNR file (src/mac/dnr), an asynchronous DNS client in the driver |
 | 4 | Preferences | done: RiptidePrefs, the Amiga's MUI editor built for the Mac (MAC-GUI.md) |
 
 Also working in the testbed (18 November): DHCP (`dhcp en0`: bound, lease kept), IPv6 (a
@@ -119,15 +119,34 @@ HD=test.image tools/run-solo.sh 200 mac.net=/tmp/psmac-net
 Built with `AURORA68=1`, every Riptide log line and the INIT's milestones show in the kernel log
 as `[MAC] Riptide: ...`, written through the Aurora68 card's mailbox.
 
+## TCP, UDP and the resolver (stages 2 and 3)
+
+`src/mac/mactcp.c` makes each MacTCP stream a socket of the core. A call that cannot finish at
+once (an open, a receive with no data, a send with the send buffer full) stays on its stream and
+is looked at again whenever the stack runs; it completes like every other call, through
+`mac_complete`. The notification routines are called from the stack's context as MacTCP calls
+them: TCPDataArrival when data comes and no receive waits for it, TCPClosing at the other end's
+FIN, TCPTerminate when the connection dies, UDPDataArrival. TCPNoCopyRcv and UDPRead hand out
+the stream's own receive buffer (given back with TCPRcvBfrReturn and UDPBfrReturn); TCPSend
+completes when its data is in the core's send buffer.
+
+The resolver is the Riptide DNR file: type `'cdev'`, creator `'ztcp'`, in the System Folder,
+holding `'dnrp'` 0 (src/mac/dnr). Apple's DNR glue, which every MacTCP program carries, finds it
+as it finds MacTCP's (MacTCP must be out of the Control Panels folder and the System Folder).
+Dotted addresses are answered at once; names and addresses go to the driver as a private call
+(`RTMAC_DNS`), and the answer reaches the program's result procedure from the call's completion
+routine, StrToAddr having returned cacheFault meanwhile. The lookups are the driver's own small
+DNS client (A and PTR queries over UDP, the configured name servers, the search domain), because
+the core's resolver waits in select, which the deferred task must never do.
+
+Install: Riptide in the Extensions folder, Riptide DNR in the System Folder, MacTCP out of the
+Control Panels folder; RiptidePrefs anywhere. `make -f Makefile.mac test` builds the test program
+(MacTCPTest.bin), which runs against Aurora68's `tools/pinet.py` (TCP and UDP echo on port 7, DNS
+for `*.testbed`).
+
 ## Notes for the next stages
 
-- TCP (stage 2): MacTCP streams own a receive buffer the application gives at TCPCreate; TCPRcv
-  copies from it, TCPNoCopyRcv hands out RDS entries pointing into it, and TCPSend takes a WDS.
-  Each maps to a non-blocking Riptide socket. The ASR (`TCPNotifyProc`: stream, event code,
-  user data, terminate reason, ICMP report) is a pascal procedure called at the stack's level.
-- The resolver (stage 3): the DNR glue in every MacTCP program (`dnr.c`) opens the first file of
-  type `'cdev'` with creator `'ztcp'` or `'mtcp'` in the System Folder or Control Panels and loads
-  its `'dnrp'` resource, so the Riptide file will carry one and the right type and creator once
-  the control panel exists.
+- Real programs (Internet Explorer, Fetch, NCSA Telnet) will show what is missing: TCPPassiveOpen
+  with a remote filter, urgent data, TCPExtendedStat, UDPMulti*, HInfo and MXInfo.
 - Unknown csCodes are logged ("csCode N is not supported yet"), which shows what a real program
   asks for first.

@@ -26,11 +26,11 @@ CFLAGS  += -DAURORA68_LOG
 endif
 LDFLAGS := -T src/mac/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack
 CORE_SRC := $(wildcard src/core/*.c)
-MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/main_mac.c src/amiga/libc.c
+MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/mactcp.c src/mac/main_mac.c src/amiga/libc.c
 OBJ      := $(BUILD)/mac/drvr.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(MAC_SRC))
 HDRS     := $(wildcard include/rt/*.h src/core/*.h src/mac/*.h)
 
-all: $(BUILD)/Riptide.bin $(BUILD)/RiptidePrefs.bin
+all: $(BUILD)/Riptide.bin $(BUILD)/RiptidePrefs.bin $(BUILD)/RiptideDNR.bin
 
 $(BUILD)/%.o: src/%.c $(HDRS)
 	@mkdir -p $(dir $@)
@@ -46,6 +46,19 @@ $(BUILD)/init.bin: src/mac/init.S
 	$(OBJCOPY) -O binary -j .text $(BUILD)/init.o $@
 $(BUILD)/Riptide.bin: $(BUILD)/drvr.elf $(BUILD)/init.bin tools/elf2mac.py tools/mac_rsrc.py $(CONF) FORCE
 	$(PYTHON) tools/elf2mac.py $(BUILD)/drvr.elf $(BUILD)/init.bin $(CONF) -o $@ --raw $(BUILD)/drvr.bin
+
+# ---- the Riptide DNR file: the resolver MacTCP programs load ('dnrp', src/mac/dnr) ----
+DNR_OBJ := $(BUILD)/dnr/dnrp_entry.o $(BUILD)/dnr/dnrp.o
+$(BUILD)/dnr/dnrp_entry.o: src/mac/dnr/dnrp_entry.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/dnr/dnrp.o: src/mac/dnr/dnrp.c src/mac/prefs/mac_ipp_private.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+$(BUILD)/dnrp.elf: $(DNR_OBJ) src/mac/dnr/link.ld
+	$(LD) -T src/mac/dnr/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ $(DNR_OBJ) $(LIBGCC)
+$(BUILD)/RiptideDNR.bin: $(BUILD)/dnrp.elf tools/mkdnr.py tools/mac_elf.py tools/mac_rsrc.py
+	$(PYTHON) tools/mkdnr.py $< -o $@
 
 # ---- RiptidePrefs: the MUI editor's own files (src/amiga/prefs, unchanged) on the Mac's MUI ----
 # The Amiga headers come with prototypes instead of jump-table calls (gen_lvos.py CC=proto, without
@@ -110,7 +123,19 @@ $(BUILD)/RiptidePrefs.elf: $(APP_OBJ) src/mac/app/app.ld
 $(BUILD)/RiptidePrefs.bin: $(BUILD)/RiptidePrefs.elf tools/elf2app.py tools/mac_elf.py tools/mac_rsrc.py
 	$(PYTHON) tools/elf2app.py $< --name RiptidePrefs --creator RTPF --size 1536 -o $@
 
+# ---- tests/mac: a MacTCP program that tests Riptide against the Aurora68 testbed peer ----
+TEST_OBJ := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o $(APP)/tests/mac/mactcp_test.o \
+            $(APP)/core/printf.o $(APP)/amiga/libc.o $(APP)/mac/app/nocallback.o
+$(APP)/tests/mac/%.o: tests/mac/%.c $(APP_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(APP_CFLAGS) -c -o $@ $<
+$(BUILD)/mactcp_test.elf: $(TEST_OBJ) src/mac/app/app.ld
+	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ $(TEST_OBJ) $(LIBGCC)
+$(BUILD)/MacTCPTest.bin: $(BUILD)/mactcp_test.elf tools/elf2app.py
+	$(PYTHON) tools/elf2app.py $< --name "MacTCP test" --creator RTMT --size 256 -o $@
+test: $(BUILD)/MacTCPTest.bin
+
 clean:
 	rm -rf $(BUILD)
 FORCE:
-.PHONY: all clean FORCE
+.PHONY: all clean test FORCE

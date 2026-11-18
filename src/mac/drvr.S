@@ -298,6 +298,24 @@ mac_call_pascal1:			| void (void *proc, u32 arg, void *a0): pascal proc(arg), A0
 	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
 
+	.globl	mac_call_asr
+mac_call_asr:				| void (proc, stream, event, udata, reason, icmp, tcp): a MacTCP notification
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)	| routine, pascal: TCP (stream, event, userData, terminReason, icmpMsg),
+	move.l	%sp,%a4			| UDP (stream, event, userData, icmpMsg); the stack comes back whatever it does
+	lea	44+4(%sp),%a3		| the C arguments
+	move.l	(%a3),%a1		| proc
+	move.l	4(%a3),-(%sp)		| stream
+	move.w	8+2(%a3),-(%sp)		| eventCode
+	move.l	12(%a3),-(%sp)		| userDataPtr
+	tst.l	24(%a3)
+	beq.s	1f
+	move.w	16+2(%a3),-(%sp)	| terminReason (TCP only)
+1:	move.l	20(%a3),-(%sp)		| icmpMsg
+	jsr	(%a1)
+	move.l	%a4,%sp
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+
 /* ---- the stack's context: a deferred task on a stack of its own --------------------------- */
 	.globl	mac_dt_entry
 mac_dt_entry:				| A1 = dtParam
