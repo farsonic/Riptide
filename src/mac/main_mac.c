@@ -190,6 +190,39 @@ static int names_card(const char *t, u32 len)
 	return 0;
 }
 
+/* The Mac's own name for itself: the "Macintosh Name" of the Sharing Setup control panel, 'STR '
+ * -16413 in the System file (System 7), made into a host name label (letters, digits and hyphens,
+ * lower case; spaces become hyphens). Riptide's host name when riptide.conf names none, and with
+ * it the mDNS name: "Mac SE" answers as mac-se.local. Without one, "macintosh". */
+static void default_hostname(void)
+{
+	void **h;
+	u32 o = 0;
+	if (rt_hostname[0])
+		return;
+	h = mac_getresource(0x53545220u /* 'STR ' */, -16413);
+	if (h && *h) {
+		const u8 *p = *h;
+		u32 n = p[0];
+		for (u32 i = 1; i <= n && o < sizeof rt_hostname - 1; i++) {
+			u8 c = p[i];
+			if (c >= 'A' && c <= 'Z')
+				c = (u8)(c + 32);
+			if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+				rt_hostname[o++] = (char)c;
+			else if ((c == ' ' || c == '-' || c == '_' || c == '.') && o && rt_hostname[o - 1] != '-')
+				rt_hostname[o++] = '-';
+		}
+		while (o && rt_hostname[o - 1] == '-')
+			o--;
+	}
+	/* the System file's resource stays: Sharing Setup uses it */
+	if (!o)
+		o = (u32)rt_strlcpy(rt_hostname, "macintosh", sizeof rt_hostname);
+	rt_hostname[o] = 0;
+	rt_log(RT_LOG_INFO, "host name %s (the Macintosh Name in Sharing Setup)", rt_hostname);
+}
+
 /* riptide.conf: the Preferences folder's (RiptidePrefs saves it), else the 'TEXT' 128 resource of
  * the Riptide file (make CONF=), else DHCP on en0. Without an interface line the card is en0. */
 static void configure(void)
@@ -226,7 +259,10 @@ static void configure(void)
 		if (r < 0) rt_log(RT_LOG_ERR, "no network (%d): %s", r, mac_net_why);
 		else net_up = 1;
 	}
+	/* the mDNS responder (name.local) is on unless riptide.conf says "mdns off", as on the Amiga */
+	config_text("mdns on\n", 8);
 	config_text(text, len);
+	default_hostname();
 	if (h) mac_releaseresource(h);
 	if (file) rt_free(file);
 }
