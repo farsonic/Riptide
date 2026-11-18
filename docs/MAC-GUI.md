@@ -219,6 +219,48 @@ The steps that brought RiptidePrefs and Lagoon (farsonic/lagoon, branch mac-port
    - the I-beam and the watch.
 7. **Check the Amiga.** The program's Amiga binary must not change: `sha256sum` before and after.
 
+## A program with its own editing view: what Quill's port added (18 November 2026)
+
+Quill (farsonic/Quill, branch mac-port) is a word processor: its window is one custom MUI class
+that draws pages and takes every key and click itself, not a form of gadgets. Its Amiga front end
+is too tied to graphics.library to compile here, so the Mac got a small MUI front end of its own
+(Quill's docs/mac.md); what the layer needed for it is general, and any such program can use it:
+
+- **Typed characters.** An event handler that asks for `IDCMP_VANILLAKEY` gets each key as the
+  character typed, in `Code`, before the `IDCMP_RAWKEY` handlers: Mac Roman (the program converts
+  it; Option combinations such as Option-E arrive already composed), the arrows as 0x1C-0x1F, Home
+  1, End 4, Page Up 11, Page Down 12, Delete 8, forward delete 0x7F, Return 13, Enter 3. `Qualifier`
+  now carries Option as `IEQUALIFIER_LALT`, Command as `IEQUALIFIER_LCOMMAND` and Control as
+  `IEQUALIFIER_CONTROL` besides Shift. Command keys themselves never reach a handler: they are the
+  menus'.
+- **The Edit menu.** A program whose editing is not a String gadget sets `mm_edit_action` (Undo 0,
+  Cut 2, Copy 3, Paste 4, Clear 5, SystemEdit's numbers) and `mm_edit_state` (bit n: command n can be
+  chosen). The layer asks for the state just before a menu is pulled down or a Command key is
+  looked up and enables the items to match; a desk accessory in front or a String being typed in
+  keeps the old behaviour.
+- **Its own controls.** A program may make Toolbox controls in its window (Quill's scroll bars:
+  `NewControl` with `scrollBarProc`, created in MUIM_Draw once the window exists, gone with it).
+  For arrows and paging held down, set `mm_ctl_action` and pass `pas_ctl_action` to TrackControl;
+  for the thumb pass NULL. Move or size a control only when its place changed: MoveControl hides
+  it first, which adds it to the update region, and an update that moves it again never ends.
+- **Drawing only what is invalid.** In MUIM_Draw during an update the window's visRgn is already
+  cut to the update region: its bounding box (`RGN_BBOX(visRgn)`, the GrafPort's field at 24) is
+  what needs drawing.
+- **Translated programs.** About, Close, Quit and the reserved Command keys (key_ok) are recognised
+  by the program's untranslated NewMenu label, so they keep working in German or French; the
+  layer's own File, Edit, Undo, Cut, Copy, Paste, Clear, Close and Quit go through `tr()`. Up to
+  128 NewMenu rows (was 64).
+- **Building.** `-DMM_LOG_NAME='"Program"'` names the log lines (default RiptidePrefs). A program
+  using doubles links libgcc's soft-float routines, which reach a variable through a global offset
+  table: `tools/mac_elf.py` relocates its entries and allows the GOT relocations. `elf2app.py
+  --bundle` sets the Finder's hasBundle flag for a program that brings BNDL, FREF and icons
+  (`--rsrc`), so its documents get its icons and open it.
+- **Test the C library apart.** Quill brings its own C library (stdio over the File Manager); built
+  for the host with a POSIX stand-in for the File Manager, and for the 68020 under qemu-m68k, it ran
+  Quill's core with results identical to the native build: when the first pages came out blank on
+  the Mac, that cleared the core and the library in minutes and pointed at the view (the control
+  update loop above).
+
 ## Known gaps
 
 - Riptide for the Mac drives one Ethernet card (unit 0).
