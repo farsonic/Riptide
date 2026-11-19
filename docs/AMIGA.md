@@ -259,6 +259,9 @@ ipv4 [IFNAME] on|off               # IPv4 on that interface (or all, and the def
 ipv6 [IFNAME] on|off               # IPv6 on that interface (or all, and the default)
 happy_eyeballs on|off | delay MS | resolution_delay MS | prefer auto|ipv6|ipv4 |
       aaaa_filter on|off | status  # connecting by name, see "Happy Eyeballs"
+standin on|off|prefer|status | standin A.B.C.D[/N]
+                                   # IPv6-only hosts for IPv4 programs, see "IPv6-only hosts
+                                   # for IPv4 programs (RFC 6535)"
 qos on|off [IFNAME] | inflight N | limit N | priodscp on|off | status
 qos rule [proto=tcp|udp] [port=|lport=|rport=P,..] [program=NAME]
       [priority=interactive|default|bulk|0-7] [dscp=EF|CS1|AF41|0-63]
@@ -2372,11 +2375,66 @@ RiptideConnectResult`: the address that answered, the time it took, how
 many addresses there were and attempts started). Open riptide.library
 version 2 for it.
 
-**Programs that use gethostbyname()** only ever get IPv4 addresses, so
+**Programs that use gethostbyname()** only ever get IPv4 addresses (or,
+for a name with no IPv4 address, a stand-in: see the next section), so
 they are not affected by IPv6 problems. Programs that use
 `getaddrinfo()` and try the first result only get IPv4 first whenever
 IPv6 cannot reach the Internet (`aaaa_filter`), and RFC 6724 order
 otherwise; `getaddrinfo()` itself does the lookups in parallel.
+
+## IPv6-only hosts for IPv4 programs (RFC 6535)
+
+Most Amiga programs know only IPv4: IBrowse, AWeb, AmiFTP, YAM, AmIRC and
+the like look names up with `gethostbyname()` and open `AF_INET` sockets.
+Riptide lets them reach hosts that have only an IPv6 address, by name,
+without any change to the program: RFC 6535's "Bump-in-the-Host", the
+same as Riptide on the Mac does for MacTCP programs.
+
+- **The lookup.** When a name has no IPv4 address but has an IPv6 one (a
+  DNS AAAA record, or a `host` line with an IPv6 address),
+  `gethostbyname()`, `gethostbyname_r()`, `gethostbyname2(AF_INET)` and
+  `getaddrinfo()` with `AF_INET` answer with a *stand-in*: an IPv4 address
+  from 198.18.0.0/15, a range set aside for benchmarking (RFC 2544) that
+  never appears on the Internet. A name that has an IPv4 address gets it
+  as before, and no AAAA question is asked for it. `getaddrinfo()` with
+  `AF_UNSPEC` or `AF_INET6`, and `gethostbyname2(AF_INET6)`, give the
+  real IPv6 address, so IPv6-aware programs never see stand-ins.
+- **The connection.** An `AF_INET` socket that connects or sends to a
+  stand-in talks to the real IPv6 address, over IPv6. The program sees
+  only IPv4: `getpeername()`, `recvfrom()`, `recvmsg()` and `WaitSelect()`
+  behave as for any IPv4 peer, the peer's address is the stand-in, and
+  `getsockname()` gives the Amiga's own IPv4 address. TCP and UDP both
+  work; a UDP socket can talk to stand-ins and ordinary IPv4 addresses at
+  the same time. `IP_TOS` and `IP_TTL` on such a socket apply to the IPv6
+  packets too; other IP-level options are only for IPv4 traffic and do no
+  harm.
+- **The way back.** `gethostbyaddr()` and `getnameinfo()` of a stand-in
+  give the name it was made for.
+- **What does not work.** Ping and other raw sockets: ICMP is not
+  translated, so sending to a stand-in fails with "network is
+  unreachable" (Riptide's own `ping -6`, or `ping6`, pings over IPv6). A socket the
+  program bound to a particular IPv4 address cannot reach a stand-in.
+  Programs that take connections in (servers) stay IPv4. FTP carries
+  addresses inside the protocol: an IPv4-only FTP program reaches an
+  IPv6-only server's commands, but its data connections need passive
+  mode and a server that still answers PASV over IPv6, which many do not
+  (RFC 2428).
+
+There are 64 stand-ins. One in use by a socket keeps its IPv6 address
+for as long as the socket is open; an idle one goes to a new address
+only when all are taken, the one used longest ago first. A program that
+keeps an address for days (a long DNS cache) may therefore meet a
+stand-in that now means another host; look the name up again.
+
+| keyword | sysctl | default | |
+|---|---|---|---|
+| `standin on\|off` | `net.inet.standin.enable` | on | stand-ins for names with only IPv6 addresses |
+| `standin prefer` | `net.inet.standin.prefer6` | off | stand-ins also for names with both, so IPv4 programs use IPv6 where they can (`standin on` turns it off again) |
+| `standin A.B.C.D[/N]` | | 198.18.0.0/15 | the range (N 8..25) |
+| `standin status` | | | on or off, the range, how many are in use |
+
+With `standin off` the lookups are as before (no IPv4 address: the name
+is not found) and connections already open go on.
 
 ## Priorities and quality of service
 
