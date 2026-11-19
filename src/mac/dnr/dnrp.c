@@ -37,7 +37,8 @@ struct hostInfo {
 _Static_assert(__builtin_offsetof(struct hostInfo, addr) == 260, "hostInfo");
 
 short dnrp_pb(void *pb, long trap);
-void dnrp_call_result(void *proc, void *hostinfo, void *udata);
+void dnrp_call_result(void *proc, void *hostinfo, void *udata, void *a5);
+extern void *dnrp_caller_a5;            /* dnrp_entry.S: the A5 of the program calling now */
 void dnrp_done(void);
 
 #define NQ 8
@@ -111,7 +112,7 @@ void dnrp_complete(struct rtmac_dns_pb *pb)
 		h->addr[i] = i < pb->count && !pb->ptr ? pb->addrs[i] : 0;
 	pb->busy = 0;
 	if (pb->proc)
-		dnrp_call_result(pb->proc, h, pb->udata);
+		dnrp_call_result(pb->proc, h, pb->udata, pb->a5);
 }
 
 static long lookup(int ptr, const char *name, unsigned long addr, struct hostInfo *h, void *proc, void *udata)
@@ -141,6 +142,7 @@ static long lookup(int ptr, const char *name, unsigned long addr, struct hostInf
 	q->pb.rtn = h;
 	q->pb.proc = proc;
 	q->pb.udata = udata;
+	q->pb.a5 = ((unsigned long)dnrp_caller_a5 & 1) ? 0 : dnrp_caller_a5;
 	q->pb.busy = 1;
 	h->rtnCode = cacheFault;
 	if (dnrp_pb(&q->pb, 0xA404) < 0) {

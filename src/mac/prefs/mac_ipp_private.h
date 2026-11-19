@@ -54,6 +54,7 @@ struct rtmac_dns_pb {
 	char cname[256];                /* 56 */
 	void *rtn, *proc, *udata;       /* the caller's hostInfo, result procedure and user data */
 	long busy;
+	void *a5;                       /* the caller's A5, for its result procedure */
 };
 _Static_assert(__builtin_offsetof(struct rtmac_dns_pb, ptr) == 28, "rtmac_dns_pb");
 

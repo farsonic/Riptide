@@ -33,7 +33,13 @@ relocated:
 	moveq	#1,%d0
 	.short	0xA198			| _HWPriv: FlushInstructionCache
 	movem.l	(%sp)+,%d2-%d4/%a2-%a4
-3:	bra.l	dnrp_main
+3:	lea	dnrp_caller_a5(%pc),%a0	| the calling program's A5: its result procedure gets it back
+	move.l	%a5,(%a0)
+	bra.l	dnrp_main
+
+	.globl	dnrp_caller_a5
+dnrp_caller_a5:
+	.long	0
 
 | The completion routine of a lookup's _Control: A0 = the parameter block, interrupt time.
 	.globl	dnrp_done
@@ -45,13 +51,17 @@ dnrp_done:
 	movem.l	(%sp)+,%d0-%d7/%a0-%a6
 	rts
 
-| void dnrp_call_result(void *proc, void *hostinfo, void *udata): PROCEDURE ResultProc(hostInfoPtr; userDataPtr)
+| void dnrp_call_result(void *proc, void *hostinfo, void *udata, void *a5): PROCEDURE ResultProc(hostInfoPtr;
+| userDataPtr), with A5 the program's (it runs at deferred time, whichever program is in front)
 	.globl	dnrp_call_result
 dnrp_call_result:
 	movem.l	%d2-%d7/%a2-%a6,-(%sp)
 	move.l	%sp,%a4
 	move.l	44+4(%sp),%a1
-	move.l	44+8(%sp),-(%sp)
+	move.l	44+16(%sp),%d0
+	beq.s	1f
+	move.l	%d0,%a5
+1:	move.l	44+8(%sp),-(%sp)
 	move.l	44+16(%sp),-(%sp)
 	jsr	(%a1)
 	move.l	%a4,%sp

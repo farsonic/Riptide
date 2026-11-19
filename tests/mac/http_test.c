@@ -33,6 +33,9 @@
  *     the program's, D0 the event and A2 the user data, and that they are never re-entered.
  *   - A stream opened again; a reset (TCPRemoteAbort); TCPAbort; an open refused (openFailed);
  *     TCPGlobalInfo; TCPRelease.
+ *   - Connections the server closes after 30 idle seconds while the program sits in
+ *     WaitNextEvent, once in front and once with the Finder in front: TCPClosing with the
+ *     program's A5, then TCPClose and TCPTerminate.
  * Each result goes to the window and, built with AURORA68_LOG, to the Pi's log as
  * "[MAC] Browser test: ...".
  * SPDX-License-Identifier: GPL-2.0-only
@@ -1146,6 +1149,100 @@ static void test_global(void)
 	      "TCPGlobalInfo: parameters, statistics, the stream table", r);
 }
 
+/* ---- connections the server closes while the program idles, in front and behind ------------- */
+/* the Process Manager (_OSDispatch): to put the Finder in front while a connection idles, so that
+   its close is noticed while another program is current */
+short pm_current(void *psn);
+short pm_next(void *psn);
+short pm_info(const void *psn, void *info);
+short pm_front(const void *psn);
+__asm__(".globl pm_current\npm_current:\n\tmove.l %d2,-(%sp)\n\tmove.l 8(%sp),%a0\n\tclr.w -(%sp)\n\tmove.l %a0,-(%sp)\n"
+        "\tmove.w #0x37,-(%sp)\n\t.short 0xA88F\n\tmove.w (%sp)+,%d0\n\text.l %d0\n\tmove.l (%sp)+,%d2\n\trts\n"
+        ".globl pm_next\npm_next:\n\tmove.l %d2,-(%sp)\n\tmove.l 8(%sp),%a0\n\tclr.w -(%sp)\n\tmove.l %a0,-(%sp)\n"
+        "\tmove.w #0x38,-(%sp)\n\t.short 0xA88F\n\tmove.w (%sp)+,%d0\n\text.l %d0\n\tmove.l (%sp)+,%d2\n\trts\n"
+        ".globl pm_info\npm_info:\n\tmove.l %d2,-(%sp)\n\tmove.l 8(%sp),%a0\n\tmove.l 12(%sp),%a1\n\tclr.w -(%sp)\n"
+        "\tmove.l %a0,-(%sp)\n\tmove.l %a1,-(%sp)\n\tmove.w #0x3A,-(%sp)\n\t.short 0xA88F\n\tmove.w (%sp)+,%d0\n"
+        "\text.l %d0\n\tmove.l (%sp)+,%d2\n\trts\n"
+        ".globl pm_front\npm_front:\n\tmove.l %d2,-(%sp)\n\tmove.l 8(%sp),%a0\n\tclr.w -(%sp)\n\tmove.l %a0,-(%sp)\n"
+        "\tmove.w #0x3B,-(%sp)\n\t.short 0xA88F\n\tmove.w (%sp)+,%d0\n\text.l %d0\n\tmove.l (%sp)+,%d2\n\trts\n");
+
+static int finder_psn(unsigned char *psn)
+{
+	unsigned char info[60];
+	memset(psn, 0, 8);
+	while (pm_next(psn) == 0) {
+		memset(info, 0, sizeof info);
+		*(u32 *)info = sizeof info;
+		if (pm_info(psn, info) == 0 && *(u32 *)(info + 20) == MAC_TYPE('M', 'A', 'C', 'S'))
+			return 1;
+	}
+	return 0;
+}
+
+/* GET /idle (the page, kept alive), read the page, then idle in WaitNextEvent until the server
+   closes after 30 s: the TCPClosing notification must come, with this program's A5, also when the
+   Finder is in front; then TCPClose and TCPTerminate */
+static void idle_one(struct conn *c, int behind)
+{
+	unsigned char me[8], finder[8], pb[104];
+	char t[160];
+	short r;
+	u32 t0;
+	int front_back = 0;
+	reset_conn(c);
+	c->path = "/idle";
+	c->nocopy = c->chain = 0;
+	c->expect_error = 0;
+	open_start(c, 80);
+	r = wait_call(&c->c, 600);
+	if (r) {
+		check(0, "idle: TCPActiveOpen", r);
+		return;
+	}
+	send_get(c);
+	t0 = TickCount();
+	while (!find_str(c->body, "</html>") && TickCount() - t0 < 10 * 60 && !stopped()) {
+		rcv_start(c, 5);
+		r = wait_call(&c->c, 6 * 60);
+		if (r)
+			break;
+		take(c, c->in, *(unsigned short *)(c->c.pb + 40));
+	}
+	if (behind && pm_current(me) == 0 && finder_psn(finder) && pm_front(finder) == 0)
+		front_back = 1;
+	t0 = TickCount();
+	while (!c->st.closing && TickCount() - t0 < 45 * 60 && !stopped())
+		pump(30);                               /* idle: nothing asked of the stream */
+	if (front_back)
+		pm_front(me);
+	rt_snprintf(t, sizeof t, "idle: the server's close after 30 s, noticed %s: TCPClosing, with our A5",
+	            behind ? (front_back ? "with the Finder in front" : "(the Finder could not be put in front)") : "in front");
+	check(find_str(c->body, "It works") && c->st.closing == 1 && !c->st.a5_bad, t, c->st.closing);
+	memset(pb, 0, sizeof pb);
+	*(char **)(pb + 36) = c->in;
+	*(unsigned short *)(pb + 40) = 16;
+	r = ctl(pb, TCPRcv, c->stream);
+	check(r == connectionClosing, "idle: TCPRcv afterwards: connectionClosing", r);
+	memset(pb, 0, sizeof pb);
+	r = ctl(pb, TCPClose, c->stream);
+	t0 = TickCount();
+	while (!c->st.terminate && TickCount() - t0 < 300 && !stopped())
+		pump(1);
+	check(r == 0 && c->st.terminate == 1 && c->st.reason == TCPULPClose, "idle: TCPClose, TCPTerminate (TCPULPClose)",
+	      r ? r : c->st.reason);
+}
+
+static void test_idle(void)
+{
+	struct conn *c = &conns[3];
+	c->name = "idle";
+	c->in = small_in[3];
+	c->inlen = sizeof small_in[3];
+	idle_one(c, 0);
+	if (!stopped())
+		idle_one(c, 1);
+}
+
 /* every stream aborted and released, every call of ours finished, the resolver closed: nothing is
    left with the driver that points into this program */
 static void cleanup(int report)
@@ -1225,6 +1322,8 @@ static void run_tests(void)
 		test_reset_abort();
 	if (ipp && !stopped())
 		test_global();
+	if (ipp && !stopped())
+		test_idle();
 	if (leave_open) {
 		running = 0;
 		return;                                 /* on purpose: the driver must clean up after us */
