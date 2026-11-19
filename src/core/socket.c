@@ -127,6 +127,8 @@ void sock_free(struct rt_socket *so)
 		}
 	}
 	rt_bufq_purge(&so->rcvq);
+	if (so->standin)
+		rt_standin_hold(so->standin, 0);
 	rt_free(so);
 }
 

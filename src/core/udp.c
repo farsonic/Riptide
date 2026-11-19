@@ -668,6 +668,17 @@ static void dst_fixup(rt_in6_addr *d)
 		*d = rt_in6addr_loopback;
 }
 
+/* An AF_INET socket that talks to the IPv6 address of a stand-in (socket_api.c, RFC 6535): an
+ * IPv4 wildcard binding becomes the dual-stack one, so the answers reach it and IPv4 still
+ * works; an address the program bound stays (and the send fails as before). */
+static void udp_widen(struct udp_pcb *pcb, const rt_in6_addr *dst)
+{
+	if (pcb->so->domain != RT_AF_INET || rt_in6_is_v4mapped(dst))
+		return;
+	if (rt_in6_is_v4mapped(&pcb->laddr) && pcb->laddr.w[3] == RT_INADDR_ANY)
+		memset(&pcb->laddr, 0, sizeof(pcb->laddr));
+}
+
 /* Families of a binding and a peer must agree (IPv4-mapped vs IPv6). */
 static int family_clash(const rt_in6_addr *la, const rt_in6_addr *fa)
 {
@@ -698,6 +709,11 @@ static int udp_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *sin)
 		return -RT_EADDRNOTAVAIL;
 	faddr = sin->sin6_addr;
 	dst_fixup(&faddr);
+	if (pcb->connected && pcb->laddr_implicit && so->domain == RT_AF_INET && !rt_in6_is_v4mapped(&faddr)) {
+		any_addr(pcb, &pcb->laddr);             /* a new peer, of the other family */
+		pcb->laddr_implicit = 0;
+	}
+	udp_widen(pcb, &faddr);
 	if (family_clash(&pcb->laddr, &faddr))
 		return -RT_EAFNOSUPPORT;
 	scope = sin->sin6_scope_id;
@@ -826,6 +842,8 @@ static int udp_send(struct rt_socket *so, const struct rt_iov *iov, int iovcnt,
 		return -RT_EINVAL;
 	dst_fixup(&daddr);
 	v4 = rt_in6_is_v4mapped(&daddr);
+	if (!v4)
+		udp_widen(pcb, &daddr);
 	if (family_clash(&pcb->laddr, &daddr))
 		return -RT_EAFNOSUPPORT;
 	if (!v4 && rt_in6_is_mcast(&daddr) && pcb->opt.mcast_if)

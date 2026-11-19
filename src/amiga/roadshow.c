@@ -1887,7 +1887,7 @@ ULONG bsd_gethostbyname_r(RTREG(a6) struct Library *base, RTREG(a0) STRPTR name,
 		return 0;
 	}
 	cname[0] = 0;
-	r = rt_resolve_name((const char *)name, addrs, 8, cname, sizeof(cname));
+	r = rt_resolve_name4((const char *)name, addrs, 8, cname, sizeof(cname));   /* stand-ins too */
 	if (r <= 0) {
 		if (he)
 			*(LONG *)he = herr(r);

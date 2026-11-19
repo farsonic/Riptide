@@ -242,7 +242,7 @@ ULONG riptide_gethostbyname2(RTREG(a6) struct Library *base, RTREG(a0) CONST_STR
 	if (fam == RT_AF_INET6)
 		r = rt_resolve_name6((const char *)name, a6, 8, cname, sizeof(cname));
 	else
-		r = rt_resolve_name((const char *)name, addrs, 8, cname, sizeof(cname));
+		r = rt_resolve_name4((const char *)name, addrs, 8, cname, sizeof(cname));   /* stand-ins */
 	if (r <= 0) {
 		c->herrno = herr_of(r);
 		if (c->herrnoptr)
@@ -476,7 +476,10 @@ LONG riptide_getaddrinfo(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR 
 			u32 a4[8];
 			char c4[256];
 			c4[0] = 0;
-			r4 = rt_resolve_name(host, a4, 8, c4, sizeof(c4));
+			/* AF_INET: a program that asked for IPv4 only gets stand-ins for IPv6-only names
+			   (RFC 6535, src/core/standin.c); AF_UNSPEC and AF_INET6 the real addresses */
+			r4 = family == RT_AF_INET ? rt_resolve_name4(host, a4, 8, c4, sizeof(c4)) :
+			                            rt_resolve_name(host, a4, 8, c4, sizeof(c4));
 			for (i = 0; i < r4 && naddr < GAI_MAX; i++)
 				rt_in6_set_v4mapped(&addrs[naddr++], a4[i]);
 			if (!cname[0])

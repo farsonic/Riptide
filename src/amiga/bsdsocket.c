@@ -517,7 +517,8 @@ ULONG bsd_gethostbyname(RTREG(a6) struct Library *base, RTREG(a0) CONST_STRPTR n
 		return 0;
 	}
 	cname[0] = 0;
-	r = rt_resolve_name((const char *)name, addrs, 8, cname, sizeof(cname));
+	/* IPv4 only: an IPv6-only name answers with stand-ins (RFC 6535, src/core/standin.c) */
+	r = rt_resolve_name4((const char *)name, addrs, 8, cname, sizeof(cname));
 	if (r <= 0) {
 		set_herrno(c, r < 0 ? h_from_res(r) : NO_DATA);
 		return 0;

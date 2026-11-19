@@ -1177,6 +1177,10 @@ static int tcp_v4_connect(struct rt_socket *so, const struct rt_sockaddr_in6 *si
 		if (rt_in6_is_mcast(&daddr))
 			return -RT_ENETUNREACH;
 	}
+	/* an AF_INET socket to the IPv6 address of a stand-in (socket_api.c, RFC 6535): a source
+	   address not chosen yet is IPv6's; one the program bound stays and fails below */
+	if (!v4 && so->domain == RT_AF_INET && rt_in6_is_v4mapped(&tp->saddr) && rt_inaddr_is_any(&tp->saddr))
+		memset(&tp->saddr, 0, sizeof(tp->saddr));
 	/* the bound address and the peer must be of one family */
 	if (!rt_in6_is_unspec(&tp->saddr) && rt_in6_is_v4mapped(&tp->saddr) != v4)
 		return -RT_EAFNOSUPPORT;
@@ -2305,7 +2309,7 @@ int rt_tcp_list(struct rt_pcb_info *out, int max)
 			p->fport = rt_ntohs(tp->dport);
 			p->laddr = rt_in6_is_v4mapped(&tp->saddr) ? rt_in6_v4(&tp->saddr) : 0;
 			p->faddr = rt_in6_is_v4mapped(&tp->daddr) ? rt_in6_v4(&tp->daddr) : 0;
-			p->v6 = tp->family == RT_AF_INET6;
+			p->v6 = tp->family == RT_AF_INET6 || !rt_in6_is_v4mapped(&tp->daddr);   /* or a stand-in's */
 			p->v6only = tp->v6only;
 			p->laddr6 = tp->saddr;
 			p->faddr6 = tp->daddr;

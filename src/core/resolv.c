@@ -2163,6 +2163,69 @@ int rt_resolve_name(const char *name, u32 *addrs, int max, char *canon, u32 cano
 	return resolve(name, DNS_TYPE_A, addrs, NULL, max, canon, canonlen);
 }
 
+/* An IPv6 address an IPv4-only program may be given a stand-in for: not one that is IPv4
+ * already, nor one that needs a scope (link-local) or is no host's (RFC 6535 3.2's exclusions);
+ * ::1 is allowed (a host line for a local test server) */
+static int standin_wanted(const rt_in6_addr *a)
+{
+	return !rt_in6_is_unspec(a) && !rt_in6_is_v4mapped(a) && !rt_in6_is_mcast(a) &&
+	       !rt_in6_is_linklocal(a) &&
+	       (rt_in6_is_loopback(a) || a->w[0] || a->w[1] || a->w[2]);     /* not IPv4-compatible */
+}
+
+/* the IPv6 addresses of a name as stand-ins; count, or the AAAA lookup's error */
+static int resolve_standins(const char *name, u32 *addrs, int max, char *canon, u32 canonlen)
+{
+	rt_in6_addr a6[4];
+	int r = rt_resolve_name6(name, a6, max < 4 ? max : 4, canon, canonlen), i, n = 0;
+
+	if (r <= 0)
+		return r;
+	rt_lock();
+	for (i = 0; i < r; i++) {
+		u32 v4;
+		if (standin_wanted(&a6[i]) && (v4 = rt_standin_for(&a6[i], name)) != 0)
+			addrs[n++] = v4;
+	}
+	rt_unlock();
+	return n ? n : -RT_NO_DATA;
+}
+
+/* RFC 6535's extension name resolver: A records as they are; for a name without any (no such
+ * record, no such name, or only a host line with an IPv6 address), its AAAA ones as stand-ins.
+ * With net.inet.standin.prefer6 the AAAA records come first. */
+int rt_resolve_name4(const char *name, u32 *addrs, int max, char *canon, u32 canonlen)
+{
+	rt_in6_addr a6;
+	s32 on, prefer;
+	int r, r6;
+
+	if (!name || !addrs || max <= 0)
+		return -RT_NO_RECOVERY;
+	rt_lock();
+	on = rt_standin_enable;
+	prefer = rt_standin_prefer6;
+	rt_unlock();
+	if (!on)
+		return rt_resolve_name(name, addrs, max, canon, canonlen);
+	if (prefer && rt_parse_ipv4(name, &addrs[0]) < 0) {
+		r6 = resolve_standins(name, addrs, max, canon, canonlen);
+		if (r6 > 0)
+			return r6;
+	}
+	r = rt_resolve_name(name, addrs, max, canon, canonlen);
+	if (r > 0 || prefer)
+		return r;
+	/* no IPv4 address: a host line or a cached AAAA answer is used whatever went wrong (a host
+	   line needs no name server); asking for AAAA only when A had a definite answer, so a dead
+	   name server does not cost twice */
+	if (r != -RT_NO_DATA && r != -RT_HOST_NOT_FOUND && r != 0 &&
+	    rt_resolve_local46(name, 1, NULL, &a6, 1) <= 0)
+		return r;
+	r6 = resolve_standins(name, addrs, max, canon, canonlen);
+	return r6 > 0 ? r6 : r;
+}
+
 int rt_resolve_name6(const char *name, rt_in6_addr *addrs, int max, char *canon, u32 canonlen)
 {
 	rt_in6_addr a;
@@ -2224,6 +2287,14 @@ int rt_resolve_addr(u32 addr, char *name, u32 namelen)
 
 	if (!name || namelen == 0)
 		return -RT_NO_RECOVERY;
+	rt_lock();
+	found = rt_standin_lookup(addr, &a, name, namelen);
+	rt_unlock();
+	if (found) {
+		/* a stand-in (standin.c): the name it was made for, else its IPv6 address's name
+		   (RFC 6535 3.2) */
+		return name[0] ? 0 : rt_resolve_addr6(&a, name, namelen);
+	}
 	rt_in6_set_v4mapped(&a, addr);
 	rt_lock();
 	found = hosts_reverse(&a, name, namelen);

@@ -154,6 +154,9 @@ struct rt_socket {
 	u8   tx_wait;                 /* waits for room on tx_ifindex */
 	u32  tx_ifindex;              /* 0: not known yet */
 	char prog[16];                /* the program that made it ("": Riptide itself, 0.23) */
+	/* An AF_INET socket whose traffic goes over IPv6 to a stand-in's address (RFC 6535,
+	 * standin.c): the stand-in it holds, network order; 0 none */
+	u32  standin;
 };
 #define RT_SOQ_PRIO      0x01     /* the program set SO_PRIORITY */
 #define RT_SOQ_RULE_PRIO 0x02     /* priority from a rule */

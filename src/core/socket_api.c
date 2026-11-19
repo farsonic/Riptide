@@ -309,7 +309,12 @@ void sock_addr_out(int domain, const struct rt_sockaddr_in6 *n, void *a, u32 *al
 		sin.sin_len = sizeof(sin);
 		sin.sin_family = RT_AF_INET;
 		sin.sin_port = n->sin6_port;
-		sin.sin_addr = rt_in6_is_v4mapped(&n->sin6_addr) ? rt_in6_v4(&n->sin6_addr) : 0;
+		if (rt_in6_is_v4mapped(&n->sin6_addr))
+			sin.sin_addr = rt_in6_v4(&n->sin6_addr);
+		else if (!rt_in6_is_unspec(&n->sin6_addr))
+			sin.sin_addr = rt_standin_for(&n->sin6_addr, NULL);   /* an IPv6 peer (RFC 6535) */
+		else
+			sin.sin_addr = 0;
 		full = sizeof(sin);
 		cnt = *alen < full ? *alen : full;
 		memcpy(a, &sin, cnt);
@@ -320,6 +325,34 @@ void sock_addr_out(int domain, const struct rt_sockaddr_in6 *n, void *a, u32 *al
 /* ======================================================================
  * socket / bind / listen / accept / connect
  * ====================================================================== */
+
+/* RFC 6535's function mapper: an AF_INET socket that connects or sends to a stand-in
+ * (standin.c) goes to the IPv6 address it stands for. TCP and UDP take IPv6 peers on AF_INET
+ * sockets (their control blocks are dual-stack); the program sees the stand-in again through
+ * sock_addr_out(). The socket holds the stand-in it used last, so the slot is not given away
+ * while it is in use. Raw sockets are refused: ICMP is not translated. (lock held) */
+static int standin_map(struct rt_socket *so, struct rt_sockaddr_in6 *sin)
+{
+	rt_in6_addr a6;
+	u32 v4;
+
+	if (so->domain != RT_AF_INET || !rt_in6_is_v4mapped(&sin->sin6_addr))
+		return 0;
+	v4 = rt_in6_v4(&sin->sin6_addr);
+	if (!rt_standin_lookup(v4, &a6, NULL, 0))
+		return 0;
+	if (so->type == RT_SOCK_RAW)
+		return -RT_ENETUNREACH;
+	sin->sin6_addr = a6;
+	sin->sin6_scope_id = 0;
+	if (so->standin != v4) {
+		if (so->standin)
+			rt_standin_hold(so->standin, 0);
+		rt_standin_hold(v4, 1);
+		so->standin = v4;
+	}
+	return 0;
+}
 
 /* "qos rule"s with ports, once the ports are known (lport/rport 0 =
  * look them up) */
@@ -561,6 +594,8 @@ int rt_api_connect(struct rt_sockctx *c, int fd, const void *a, u32 alen)
 		r = -RT_EAFNOSUPPORT;
 		goto out;
 	}
+	if (sin.sin6_family == RT_AF_INET && (r = standin_map(so, &sin)) < 0)
+		goto out;
 	if (so->state & RT_SS_ISLISTENING) {
 		r = -RT_EOPNOTSUPP;
 		goto out;
@@ -801,6 +836,7 @@ static int send_addr(struct rt_socket *so, const void *to, u32 tolen, struct rt_
 			r = -RT_EAFNOSUPPORT;
 		} else {
 			sin->sin6_family = RT_AF_INET;
+			r = standin_map(so, sin);
 		}
 	}
 	if (r == 0 && rt_qos_nrules())
@@ -1214,6 +1250,14 @@ static int sock_name(struct rt_sockctx *c, int fd, void *a, u32 *alen, int peer)
 			r = -RT_ENOTCONN;
 		else
 			r = so->ops->getname ? so->ops->getname(so, &sin, peer) : -RT_EOPNOTSUPP;
+		if (r == 0 && !peer && so->domain == RT_AF_INET && !rt_in6_is_v4mapped(&sin.sin6_addr) &&
+		    !rt_in6_is_unspec(&sin.sin6_addr)) {
+			/* an IPv6 source under an AF_INET socket (a stand-in's peer): our IPv4
+			   address, as the program would have had (else a stand-in for the IPv6 one) */
+			u32 v4 = rt_in6_is_loopback(&sin.sin6_addr) ? RT_INADDR_LOOPBACK : rt_ip_select_source(0);
+			if (v4)
+				rt_in6_set_v4mapped(&sin.sin6_addr, v4);
+		}
 		if (r == 0)
 			sock_addr_out(so->domain, &sin, a, alen);
 	}
