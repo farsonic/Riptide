@@ -14,8 +14,8 @@
 	.section .text.drvr,"ax"
 	.globl	_drvr_start
 _drvr_start:
-	.short	0x4C00			| dNeedLock, dStatEnable, dCtlEnable
-	.short	0			| drvrDelay
+	.short	0x6C00			| dNeedLock, dNeedTime, dStatEnable, dCtlEnable
+	.short	30			| drvrDelay: accRun every half second (ipp.c: programs that quit)
 	.short	0			| drvrEMask
 	.short	0			| drvrMenu
 	.short	drv_open-_drvr_start
@@ -45,11 +45,20 @@ drv_open:
 	move.l	%a0,-(%sp)
 	jsr	rt_mac_open
 	addq.l	#8,%sp
-	movem.l	(%sp)+,%d1-%d7/%a0-%a6
+	tst.l	%d0
+	bne.s	1f
+	jsr	ipp_opened		| the Gestalt selector, the resolver check, the log
+	moveq	#0,%d0
+1:	movem.l	(%sp)+,%d1-%d7/%a0-%a6
 	rts
 
-drv_close:
-	moveq	#-24,%d0		| closErr: the stack stays (MacTCP's .IPP is never closed either)
+drv_close:				| closErr: the stack stays, and stays open for every program
+	movem.l	%d1-%d7/%a0-%a6,-(%sp)	| (MacTCP's .IPP is never closed either)
+	move.l	%a1,-(%sp)
+	move.l	%a0,-(%sp)
+	jsr	ipp_close
+	addq.l	#8,%sp
+	movem.l	(%sp)+,%d1-%d7/%a0-%a6
 	rts
 
 drv_prime:
@@ -67,10 +76,11 @@ drv_status:
 
 drv_control:
 	movem.l	%d1-%d7/%a0-%a6,-(%sp)
+	move.l	%a5,-(%sp)		| the caller's A5: its notification routines get it back
 	move.l	%a1,-(%sp)
 	move.l	%a0,-(%sp)
-	jsr	rt_mac_control		| 1 = in progress (completed later by mac_complete), else the result
-	addq.l	#8,%sp
+	jsr	ipp_control_a5		| 1 = in progress (completed later by mac_complete), else the result
+	lea	12(%sp),%sp
 	movem.l	(%sp)+,%d1-%d7/%a0-%a6
 	cmp.l	#1,%d0
 	beq.s	pending
@@ -272,16 +282,19 @@ mac_releaseresource:			| void (void **handle)
 
 /* ---- completions -------------------------------------------------------------------------- */
 	.globl	mac_complete
-mac_complete:				| void (void *pb, int result): ioResult, then ioCompletion (A0 = pb, D0)
-	movem.l	%d2-%d7/%a2-%a6,-(%sp)
-	move.l	44+4(%sp),%a0
-	move.l	44+8(%sp),%d0
-	move.w	%d0,16(%a0)
+mac_complete:				| void (void *pb, int result): ioResult, then ioCompletion. MacTCP.h
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)	| declares the completion routines as C functions of the parameter
+	move.l	44+4(%sp),%a0		| block (TCPIOCompletionProc, UDPIOCompletionProc: the block on the
+	move.l	44+8(%sp),%d0		| stack), the Device Manager's convention has it in A0 with the result
+	move.w	%d0,16(%a0)		| in D0: both, and the stack comes back either way
 	move.l	12(%a0),%d1
 	beq.s	1f
 	move.l	%d1,%a1
 	ext.l	%d0
+	move.l	%sp,%a4
+	move.l	%a0,-(%sp)
 	jsr	(%a1)
+	move.l	%a4,%sp
 1:	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
 
@@ -315,6 +328,93 @@ mac_call_asr:				| void (proc, stream, event, udata, reason, icmp, tcp): a MacTC
 	move.l	%a4,%sp
 	movem.l	(%sp)+,%d2-%d7/%a2-%a6
 	rts
+
+	.globl	mac_call_asr5
+mac_call_asr5:				| void (proc, stream, event, udata, reason, icmp, tcp, a5): a MacTCP
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)	| notification routine as the MacTCP Programmer's Guide describes the
+	move.l	%sp,%a4			| call: pascal arguments, and A5 = the program's A5, D0 = the event,
+	lea	44+4(%sp),%a3		| D1 = the reason, A1 = the ICMP report, A2 = the user data
+	move.l	(%a3),%a6		| proc
+	move.l	4(%a3),-(%sp)		| stream
+	move.w	8+2(%a3),-(%sp)		| eventCode
+	move.l	12(%a3),-(%sp)		| userDataPtr
+	tst.l	24(%a3)
+	beq.s	1f
+	move.w	16+2(%a3),-(%sp)	| terminReason (TCP only)
+1:	move.l	20(%a3),-(%sp)		| icmpMsg
+	moveq	#0,%d0
+	move.w	8+2(%a3),%d0
+	moveq	#0,%d1
+	move.w	16+2(%a3),%d1
+	move.l	12(%a3),%a2
+	move.l	20(%a3),%a1
+	move.l	28(%a3),%d2
+	beq.s	2f
+	move.l	%d2,%a5
+2:	jsr	(%a6)
+	move.l	%a4,%sp
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+
+	.globl	mac_call_notify
+mac_call_notify:			| void (proc, pb, a5): an ICMP echo's notification, proc(pb), with A0 = pb
+	movem.l	%d2-%d7/%a2-%a6,-(%sp)	| and the program's A5; C or pascal, the stack comes back either way
+	move.l	44+4(%sp),%a1
+	move.l	44+8(%sp),%a0
+	move.l	44+12(%sp),%d2
+	beq.s	1f
+	move.l	%d2,%a5
+1:	move.l	%sp,%a4
+	move.l	%a0,-(%sp)
+	jsr	(%a1)
+	move.l	%a4,%sp
+	movem.l	(%sp)+,%d2-%d7/%a2-%a6
+	rts
+
+	.globl	mac_next_process
+mac_next_process:			| short (ProcessSerialNumber *psn): GetNextProcess (Process Manager;
+	move.l	%d2,-(%sp)		| Toolbox traps may change D2, which C keeps)
+	move.l	8(%sp),%a0
+	clr.w	-(%sp)
+	move.l	%a0,-(%sp)
+	move.w	#0x38,-(%sp)
+	.short	0xA88F			| _OSDispatch
+	move.w	(%sp)+,%d0
+	ext.l	%d0
+	move.l	(%sp)+,%d2
+	rts
+
+	.globl	mac_process_info
+mac_process_info:			| short (const ProcessSerialNumber *psn, ProcessInfoRec *info):
+	move.l	%d2,-(%sp)		| GetProcessInformation
+	move.l	8(%sp),%a0
+	move.l	12(%sp),%a1
+	clr.w	-(%sp)
+	move.l	%a0,-(%sp)
+	move.l	%a1,-(%sp)
+	move.w	#0x3A,-(%sp)
+	.short	0xA88F
+	move.w	(%sp)+,%d0
+	ext.l	%d0
+	move.l	(%sp)+,%d2
+	rts
+
+	.globl	mac_newgestalt
+mac_newgestalt:				| short (u32 selector, void *proc): _NewGestalt
+	move.l	4(%sp),%d0
+	move.l	8(%sp),%a0
+	.short	0xA3AD
+	ext.l	%d0
+	rts
+
+	.globl	mac_gestalt_mtcp
+mac_gestalt_mtcp:			| pascal OSErr (OSType selector, long *response): MacTCP 2.0 answers 3
+	move.l	4(%sp),%a0		| (MacTCP Programmer's Guide, "The Gestalt call")
+	move.l	#3,(%a0)
+	move.l	(%sp)+,%a0
+	addq.l	#8,%sp
+	clr.w	(%sp)			| noErr
+	jmp	(%a0)
 
 /* ---- the stack's context: a deferred task on a stack of its own --------------------------- */
 	.globl	mac_dt_entry

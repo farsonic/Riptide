@@ -1,5 +1,5 @@
 /*
- * Riptide - the Riptide Terminal on the classic Mac OS: the AmigaOS calls the network tools make
+ * Riptide - the Riptide Command Terminal on the classic Mac OS: the AmigaOS calls the network tools make
  * (src/amiga/cmd, unchanged), beyond those RiptidePrefs already has (src/mac/mui/mm_os.c: memory,
  * lists, ports, files by path). Output() and Input() are the terminal's console; the timer.device
  * the tools read the EClock from is the Mac's Microseconds; Ctrl-C is Command-period;

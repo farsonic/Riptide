@@ -3,9 +3,13 @@
 
     mkdnr.py dnrp.elf -o "Riptide DNR.bin"
 
-A MacBinary file of type 'cdev' and creator 'ztcp' (what Apple's DNR glue looks for in the System
-Folder and the Control Panels folder) holding 'dnrp' 0: the self-relocating image of
-src/mac/dnr (mac_elf.py).
+A MacBinary file of type 'cdev' and creator 'mtcp' holding 'dnrp' 0: the self-relocating image of
+src/mac/dnr (mac_elf.py). Apple's DNR glue (dnr.c, in every MacTCP program) looks for 'cdev' 'ztcp'
+in the Control Panels folder, then 'cdev' 'mtcp' in the System Folder, then 'cdev' 'mtcp' in the
+Control Panels folder; the oldest glue only for 'cdev' 'mtcp' in the System Folder. So the file goes
+in the System Folder with creator 'mtcp', which every version finds. (Until 19 November 2026 it
+was made with 'ztcp', which no version looks for in the System Folder: OpenResolver failed and
+StrToAddr answered notOpenErr, -28.)
 SPDX-License-Identifier: GPL-2.0-only
 """
 import argparse, os, sys
@@ -19,5 +23,5 @@ a = ap.parse_args()
 img, nrel, end = build_image(a.elf)
 rf = ResourceFork()
 rf.add(b'dnrp', 0, img, name='Riptide')
-open(a.o, 'wb').write(macbinary('Riptide DNR', b'cdev', b'ztcp', rsrc_fork=rf.build()))
+open(a.o, 'wb').write(macbinary('Riptide DNR', b'cdev', b'mtcp', rsrc_fork=rf.build()))
 print(f"{a.o}: dnrp {len(img)} bytes ({nrel} relocations)")

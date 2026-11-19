@@ -1,5 +1,5 @@
 /*
- * Riptide - the Riptide Terminal on the classic Mac OS: what its files share.
+ * Riptide - the Riptide Command Terminal on the classic Mac OS: what its files share.
  * term_main.c: the window, the console and the commands; term_os.c: the Amiga calls the tools
  * make (exec, dos, timer.device) on the Mac; term_bsd.c: bsdsocket.library and riptide.library
  * on the stack's calls for programs (RTMAC_API).

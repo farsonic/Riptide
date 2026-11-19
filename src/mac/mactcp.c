@@ -1,19 +1,29 @@
 /* src/mac/mactcp.c - Riptide on the classic Mac OS: MacTCP's TCP and UDP streams (stage 2) and the
- * resolver's lookups (stage 3), on the core's sockets (MacTCP Programmer's Guide; MacTCP.h).
+ * resolver's lookups (stage 3), on the core's sockets (MacTCP Programmer's Guide, 1993; MacTCP.h).
  *
  * A MacTCP stream is a socket here. Every call arrives through ipp.c in the stack's deferred
  * task; one that cannot finish at once (an open waiting for the other end, a receive waiting for
  * data, a send waiting for room) is kept on its stream and looked at again each time the stack
- * runs, then completed with mac_complete (ioResult, then ioCompletion). Synchronous callers spin
- * on ioResult, as they do with MacTCP. The notification routines (ASRs) are called as MacTCP
- * calls them, from the stack's context: TCPDataArrival when data comes and no receive waits for
- * it, TCPClosing when the other end has closed, TCPTerminate when the connection is gone.
+ * runs, then completed through ipp_result (ioResult, then ioCompletion; errors are logged once per
+ * kind). Synchronous callers spin on ioResult, as they do with MacTCP.
+ *
+ * The notification routines (ASRs) are called as MacTCP calls them: from the stack's context
+ * (never from inside another notification), with A5 set to the creating program's A5 (the
+ * guide: "A5 is already set up to point to application globals"), the event in D0, the reason in
+ * D1, the user data in A2, and the pascal arguments on the stack. TCPDataArrival when data comes
+ * and no receive waits for it (once, until a receive completes), TCPClosing when the other end
+ * has closed and everything it sent has been delivered, TCPTerminate exactly once per connection,
+ * however it ends (with TCPULPClose after both ends closed gracefully), TCPULPTimeout when a
+ * stream asked for "report" and its sends have not moved for the ULP timeout.
+ *
+ * A stream outlives its connections: after TCPTerminate it is back where TCPCreate left it, and a
+ * program may open it again (browsers do).
  *
  * The stream's receive buffer (TCPCreate, UDPCreate) is where TCPNoCopyRcv and UDPRead hand data
  * out (the caller gives it back with TCPRcvBfrReturn and UDPBfrReturn); TCPRcv copies into the
  * caller's own buffer. TCPSend completes once its data is in the core's send buffer: the WDS may
  * be reused from then on, which is earlier than MacTCP allows and so asks nothing more of the
- * caller.
+ * caller. TCPClose completes at once (MacTCP waits for the FIN's acknowledgement).
  *
  * The lookups (RTMAC_DNS, from the 'dnrp' code of the Riptide DNR file): a small DNS client of
  * its own, asynchronous like everything else here (the core's resolver waits in select, which the
@@ -31,6 +41,7 @@
 #include "rt_socket.h"
 #include "riptide.h"
 #include "mac.h"
+#include "ipp.h"
 #include "prefs/mac_ipp_private.h"
 
 /* csCodes */
@@ -38,7 +49,7 @@ enum { UDPCreate = 20, UDPRead, UDPBfrReturn, UDPWrite, UDPRelease, UDPMaxMTUSiz
        UDPMultiCreate, UDPMultiSend, UDPMultiRead,
        TCPCreate = 30, TCPPassiveOpen, TCPActiveOpen, TCPSend = 34, TCPNoCopyRcv, TCPRcvBfrReturn, TCPRcv,
        TCPClose, TCPAbort, TCPStatus, TCPExtendedStat, TCPRelease, TCPGlobalInfo };
-/* results */
+/* results (the guide's appendix) */
 #define connectionClosing     -23005
 #define invalidLength         -23006
 #define connectionExists      -23007
@@ -49,6 +60,7 @@ enum { UDPCreate = 20, UDPRead, UDPBfrReturn, UDPWrite, UDPRelease, UDPMaxMTUSiz
 #define connectionTerminated  -23012
 #define invalidBufPtr         -23013
 #define invalidRDS            -23014
+#define invalidWDS            -23014
 #define openFailed            -23015
 #define commandTimeout        -23016
 #define duplicateSocket       -23017
@@ -59,16 +71,25 @@ enum { UDPCreate = 20, UDPRead, UDPBfrReturn, UDPWrite, UDPRelease, UDPMaxMTUSiz
 #define dnrErr                -23047
 #define outOfMemory           -23048
 #define controlErr            -17
-/* notifications */
+/* TCPEventCode */
 #define TCPClosing      1
+#define TCPULPTimeout   2
 #define TCPTerminate    3
 #define TCPDataArrival  4
+/* TCPTerminationReason */
 #define TCPRemoteAbort  2
 #define TCPNetworkFailure 3
+#define TCPULPTimeoutTerminate 5
 #define TCPULPAbort     6
+#define TCPULPClose     7
 #define UDPDataArrival  1
 /* TCP connection states as TCPStatus gives them */
-enum { stClosed = 0, stListen = 2, stSynSent = 6, stEstablished = 8, stFinWait1 = 10, stCloseWait = 14 };
+enum { stClosed = 0, stListen = 2, stSynSent = 6, stEstablished = 8, stFinWait1 = 10, stFinWait2 = 12,
+       stCloseWait = 14, stClosing = 16 };
+/* validity bits of the open, send and close calls */
+#define V_ULPVALUE  0x80
+#define V_ULPACTION 0x40
+#define ULP_DEFAULT 120                 /* seconds: "0 means ... its default value of 2 minutes" */
 
 #define NSTREAMS 32
 #define S_MAGIC 0x5254534DUL            /* 'RTSM' */
@@ -77,15 +98,22 @@ struct mstream {
 	int tcp, fd, state;
 	u8 *rbuf;                       /* the caller's receive buffer */
 	u32 rlen;
-	void *notify, *udata;
+	void *notify, *udata, *a5;      /* the ASR, its user data, the creating program's A5 */
 	void *open_pb;                  /* a TCP open waiting */
 	u32 open_deadline;
 	int passive;
+	u32 filt_host;                  /* TCPPassiveOpen: accept only this remote end (0: any) */
+	u16 filt_port;
 	void *rcv_q, *snd_q;            /* receives and sends waiting, linked by qLink */
 	u32 rcv_deadline;
 	u32 snd_off;                    /* bytes of the first send's WDS already sent */
-	int peer_fin, told_fin, told_data, dead, reason;
+	u32 snd_moved;                  /* rt_now_ms when a send last made progress */
+	u8 ulp_secs, ulp_report;        /* the connection's ULP timeout and action */
+	int conn;                       /* a connection is up (opened, not yet terminated) */
+	int peer_fin, told_fin, told_data, closed, nodelay;
+	int graceful;                   /* the last connection ended with both ends closing */
 	int loaned;                     /* rbuf is out (TCPNoCopyRcv, UDPRead) */
+	u32 own_lo, own_hi;             /* the creator's partition (mactcp_reap); 1: not a program's */
 	u32 rhost;
 	u16 rport, lport;
 };
@@ -102,7 +130,7 @@ static struct mstream *stream_of(void *pb)
 static void asr(struct mstream *s, u32 event, u32 reason)
 {
 	if (s->notify)
-		mac_call_asr(s->notify, s, event, s->udata, reason, NULL, s->tcp);
+		mac_call_asr5(s->notify, s, event, s->udata, reason, NULL, s->tcp, s->a5);
 }
 
 static void q_add(void **q, void *pb)
@@ -122,16 +150,18 @@ static void *q_pop(void **q)
 	return pb;
 }
 
-static void fail_all(struct mstream *s, int r)
+/* what waits on the stream fails: receives with rr, sends and the open with r */
+static void fail_all(struct mstream *s, int rr, int r)
 {
 	void *pb;
 	while ((pb = q_pop(&s->rcv_q)) != NULL)
-		mac_complete(pb, r);
+		ipp_result(pb, rr);
 	while ((pb = q_pop(&s->snd_q)) != NULL)
-		mac_complete(pb, r);
+		ipp_result(pb, r);
 	if (s->open_pb) {
-		mac_complete(s->open_pb, r);
+		pb = s->open_pb;
 		s->open_pb = NULL;
+		ipp_result(pb, r);
 	}
 }
 
@@ -154,7 +184,7 @@ static int ready(struct rt_sockctx *c, int fd, int wr)
 static u32 pending(struct rt_sockctx *c, int fd)
 {
 	int n = 0;
-	if (rt_api_ioctl(c, fd, RT_FIONREAD, &n) < 0 || n < 0)
+	if (fd < 0 || rt_api_ioctl(c, fd, RT_FIONREAD, &n) < 0 || n < 0)
 		return 0;
 	return (u32)n;
 }
@@ -194,13 +224,34 @@ static void stream_close(struct rt_sockctx *c, struct mstream *s)
 	s->fd = -1;
 }
 
+/* the ULP timeout and action of an open, send or close: bytes 32, 33 and the validity bits at 34 */
+static void take_ulp(struct mstream *s, void *pb)
+{
+	u8 v = ((u8 *)pb)[34];
+	if (v & V_ULPVALUE)
+		s->ulp_secs = ((u8 *)pb)[32];
+	if (v & V_ULPACTION)
+		s->ulp_report = ((u8 *)pb)[33] == 0;
+}
+
+static u32 ulp_secs(struct mstream *s)
+{
+	u32 t = s->ulp_secs ? s->ulp_secs : ULP_DEFAULT;
+	return t < 2 ? 2 : t;
+}
+
 /* ==================== TCP ==================== */
 static int tcp_create(void *pb, struct rt_sockctx *c)
 {
 	int i;
 	(void)c;
-	if (!PB_P(pb, 32) || PB_L(pb, 36) < 4096)
-		return PB_P(pb, 32) ? invalidLength : invalidBufPtr;
+	if (!PB_P(pb, 32))
+		return invalidBufPtr;
+	if (PB_L(pb, 36) < 4096)
+		return invalidLength;
+	for (i = 0; i < NSTREAMS; i++)
+		if (streams[i].magic == S_MAGIC && streams[i].rbuf == PB_P(pb, 32))
+			return streamAlreadyOpen;
 	for (i = 0; i < NSTREAMS; i++)
 		if (streams[i].magic != S_MAGIC) {
 			struct mstream *s = &streams[i];
@@ -212,6 +263,7 @@ static int tcp_create(void *pb, struct rt_sockctx *c)
 			s->rlen = PB_L(pb, 36);
 			s->notify = PB_P(pb, 40);
 			s->udata = PB_P(pb, 44);
+			s->a5 = ipp_creator_a5(pb);
 			PB_L(pb, 28) = (u32)s;
 			return 0;
 		}
@@ -223,17 +275,22 @@ static int tcp_open(void *pb, struct rt_sockctx *c, int passive)
 	struct mstream *s = stream_of(pb);
 	struct rt_sockaddr_in a;
 	int fd, r;
-	if (!s)
+	if (!s || !s->tcp)
 		return invalidStreamPtr;
 	if (s->fd >= 0 || s->open_pb)
 		return connectionExists;
+	if (!passive && (!PB_L(pb, 36) || !PB_W(pb, 40)))
+		return invalidLength;                   /* "remote IP address; cannot be 0" */
 	fd = rt_api_socket(c, RT_AF_INET, RT_SOCK_STREAM, RT_IPPROTO_TCP);
 	if (fd < 0)
 		return insufficientResources;
 	nonblock(c, fd);
 	s->fd = fd;
-	s->peer_fin = s->told_fin = s->told_data = s->dead = s->loaned = 0;
+	s->conn = s->peer_fin = s->told_fin = s->told_data = s->closed = s->loaned = s->nodelay = s->graceful = 0;
 	s->snd_off = 0;
+	s->ulp_secs = 0;
+	s->ulp_report = 0;                              /* the default action is abort */
+	take_ulp(s, pb);
 	s->lport = PB_W(pb, 46);
 	if (s->lport || passive) {
 		int one = 1;
@@ -245,21 +302,27 @@ static int tcp_open(void *pb, struct rt_sockctx *c, int passive)
 		}
 	}
 	s->passive = passive;
-	s->open_deadline = secs_deadline(((u8 *)pb)[35]);       /* commandTimeoutValue */
 	if (passive) {
+		/* the command timeout (byte 35, 0 = for ever) and the remote end to accept (0 = any) */
+		s->open_deadline = secs_deadline(((u8 *)pb)[35] && ((u8 *)pb)[35] < 2 ? 2 : ((u8 *)pb)[35]);
+		s->filt_host = PB_L(pb, 36);
+		s->filt_port = PB_W(pb, 40);
 		if (rt_api_listen(c, fd, 1) < 0) {
 			stream_close(c, s);
 			return openFailed;
 		}
 		s->state = stListen;
 	} else {
+		/* "no command timeout is provided; if the connection cannot be established within the ULP
+		   timeout period, the command is completed in error" */
+		s->open_deadline = secs_deadline(ulp_secs(s));
 		s->rhost = PB_L(pb, 36);
 		s->rport = PB_W(pb, 40);
 		fill_addr(&a, s->rhost, s->rport);
 		r = rt_api_connect(c, fd, &a, sizeof a);
 		if (r < 0 && r != -RT_EINPROGRESS && r != -RT_EALREADY) {
 			stream_close(c, s);
-			return openFailed;
+			return r == -RT_ENETUNREACH || r == -RT_EHOSTUNREACH ? ipDestDeadErr : openFailed;
 		}
 		s->state = stSynSent;
 	}
@@ -285,58 +348,78 @@ static void tcp_fill_ends(struct rt_sockctx *c, struct mstream *s, void *pb)
 	PB_W(pb, 40) = s->rport;
 }
 
+static void tcp_up(struct rt_sockctx *c, struct mstream *s, void *pb)
+{
+	s->state = stEstablished;
+	s->conn = 1;
+	s->snd_moved = rt_now_ms();
+	tcp_fill_ends(c, s, pb);
+	s->open_pb = NULL;
+	ipp_result(pb, 0);
+}
+
 static void tcp_poll_open(struct rt_sockctx *c, struct mstream *s)
 {
 	void *pb = s->open_pb;
 	if (s->passive) {
 		struct rt_sockaddr_in a;
 		u32 l = sizeof a;
-		int nfd = rt_api_accept(c, s->fd, &a, &l);
-		if (nfd >= 0) {
+		int nfd;
+		while ((nfd = rt_api_accept(c, s->fd, &a, &l)) >= 0) {
+			if ((s->filt_host && a.sin_addr != s->filt_host) || (s->filt_port && a.sin_port != s->filt_port)) {
+				rt_api_close(c, nfd);           /* not the remote end the open asked for */
+				l = sizeof a;
+				continue;
+			}
 			rt_api_close(c, s->fd);
 			s->fd = nfd;
 			nonblock(c, nfd);
-			s->state = stEstablished;
-			tcp_fill_ends(c, s, pb);
-			s->open_pb = NULL;
-			mac_complete(pb, 0);
+			tcp_up(c, s, pb);
 			return;
 		}
 	} else if (ready(c, s->fd, 1)) {
 		int err = 0;
 		u32 l = sizeof err;
 		rt_api_getsockopt(c, s->fd, RT_SOL_SOCKET, RT_SO_ERROR, &err, &l);
-		s->open_pb = NULL;
 		if (err) {
+			s->open_pb = NULL;
 			stream_close(c, s);
 			s->state = stClosed;
-			mac_complete(pb, openFailed);
+			ipp_result(pb, err == RT_ENETUNREACH || err == RT_EHOSTUNREACH ? ipDestDeadErr : openFailed);
 			return;
 		}
-		s->state = stEstablished;
-		tcp_fill_ends(c, s, pb);
-		mac_complete(pb, 0);
+		tcp_up(c, s, pb);
 		return;
 	}
 	if (expired(s->open_deadline)) {
 		s->open_pb = NULL;
 		stream_close(c, s);
 		s->state = stClosed;
-		mac_complete(pb, commandTimeout);
+		ipp_result(pb, s->passive ? commandTimeout : openFailed);
 	}
 }
 
-/* the connection died: what waits fails, and the ASR hears of it once */
-static void tcp_dead(struct rt_sockctx *c, struct mstream *s, int reason)
+/* the connection is over: what waits fails, the ASR hears TCPTerminate once, and the stream is
+   back where TCPCreate left it (a loaned buffer stays out until it is given back) */
+static void tcp_terminate(struct rt_sockctx *c, struct mstream *s, int reason)
 {
-	if (s->dead)
+	if (!s->conn && !s->open_pb)
 		return;
-	s->dead = 1;
-	s->reason = reason;
+	s->conn = 0;
+	s->graceful = reason == TCPULPClose;
 	s->state = stClosed;
-	fail_all(s, connectionTerminated);
+	fail_all(s, reason == TCPULPClose ? connectionClosing : connectionTerminated, connectionTerminated);
+	stream_close(c, s);
 	asr(s, TCPTerminate, (u32)reason);
-	(void)c;
+}
+
+static int sock_reason(int err)
+{
+	if (err == RT_ECONNRESET || err == RT_ECONNREFUSED || err == RT_EPIPE)
+		return TCPRemoteAbort;
+	if (err == RT_ETIMEDOUT)
+		return TCPULPTimeoutTerminate;
+	return TCPNetworkFailure;
 }
 
 static void tcp_poll_rcv(struct rt_sockctx *c, struct mstream *s)
@@ -345,34 +428,26 @@ static void tcp_poll_rcv(struct rt_sockctx *c, struct mstream *s)
 	while ((pb = s->rcv_q) != NULL) {
 		int nocopy = PB_CSCODE(pb) == TCPNoCopyRcv;
 		u32 avail = pending(c, s->fd);
-		if (!avail) {
-			if (s->peer_fin || (ready(c, s->fd, 0) && !pending(c, s->fd))) {
-				/* readable with nothing to read: the other end has closed */
+		if (!avail || (nocopy && s->loaned)) {
+			if (!avail && (s->peer_fin || (ready(c, s->fd, 0) && !pending(c, s->fd)))) {
+				/* readable with nothing to read: the other end has closed, all is delivered */
 				s->peer_fin = 1;
 				q_pop(&s->rcv_q);
-				mac_complete(pb, connectionClosing);
+				ipp_result(pb, connectionClosing);
 				continue;
 			}
 			if (expired(s->rcv_deadline)) {
 				q_pop(&s->rcv_q);
-				mac_complete(pb, commandTimeout);
+				ipp_result(pb, commandTimeout);
 				s->rcv_deadline = s->rcv_q ? secs_deadline(((u8 *)s->rcv_q)[32]) : 0;
 				continue;
 			}
-			return;
+			return;                         /* nothing yet (or the buffer is still out) */
 		}
 		if (nocopy) {
 			u8 *rds = PB_P(pb, 42);
-			u32 nrds = PB_W(pb, 46), n;
+			u32 n = avail < s->rlen ? avail : s->rlen;
 			int r;
-			if (s->loaned)
-				return;                         /* the buffer is still out */
-			if (!rds || nrds < 2) {
-				q_pop(&s->rcv_q);
-				mac_complete(pb, invalidRDS);
-				continue;
-			}
-			n = avail < s->rlen ? avail : s->rlen;
 			if (n > 65535)
 				n = 65535;
 			r = rt_api_recv(c, s->fd, s->rbuf, n, RT_MSG_DONTWAIT);
@@ -381,6 +456,7 @@ static void tcp_poll_rcv(struct rt_sockctx *c, struct mstream *s)
 					s->peer_fin = 1;
 				return;
 			}
+			/* one piece, and the RDS's terminating zero */
 			rt_put_be16(rds, (u16)r);
 			memcpy(rds + 2, &s->rbuf, 4);
 			rt_put_be16(rds + 6, 0);
@@ -388,13 +464,7 @@ static void tcp_poll_rcv(struct rt_sockctx *c, struct mstream *s)
 		} else {
 			u8 *buf = PB_P(pb, 36);
 			u32 len = PB_W(pb, 40);
-			int r;
-			if (!buf || !len) {
-				q_pop(&s->rcv_q);
-				mac_complete(pb, invalidBufPtr);
-				continue;
-			}
-			r = rt_api_recv(c, s->fd, buf, len, RT_MSG_DONTWAIT);
+			int r = rt_api_recv(c, s->fd, buf, len, RT_MSG_DONTWAIT);
 			if (r <= 0) {
 				if (r == 0)
 					s->peer_fin = 1;
@@ -406,7 +476,7 @@ static void tcp_poll_rcv(struct rt_sockctx *c, struct mstream *s)
 		((u8 *)pb)[35] = 0;     /* urgentFlag */
 		q_pop(&s->rcv_q);
 		s->told_data = 0;
-		mac_complete(pb, 0);
+		ipp_result(pb, 0);
 		s->rcv_deadline = s->rcv_q ? secs_deadline(((u8 *)s->rcv_q)[32]) : 0;
 	}
 }
@@ -416,7 +486,7 @@ static void tcp_poll_snd(struct rt_sockctx *c, struct mstream *s)
 	void *pb;
 	while ((pb = s->snd_q) != NULL) {
 		const u8 *w = PB_P(pb, 38);
-		u32 off = s->snd_off, skip = off;
+		u32 skip = s->snd_off;
 		/* past what went already, then as much as the socket takes */
 		for (; rt_get_be16(w); w += 6) {
 			u32 len = rt_get_be16(w);
@@ -431,9 +501,11 @@ static void tcp_poll_snd(struct rt_sockctx *c, struct mstream *s)
 			if (r < 0) {
 				if (r == -RT_EAGAIN || r == -RT_EWOULDBLOCK)
 					return;
-				tcp_dead(c, s, TCPNetworkFailure);
+				tcp_terminate(c, s, sock_reason(-r));
 				return;
 			}
+			if (r > 0)
+				s->snd_moved = rt_now_ms();
 			s->snd_off += (u32)r;
 			if ((u32)r < len - skip)
 				return;                         /* the send buffer is full: later */
@@ -441,32 +513,50 @@ static void tcp_poll_snd(struct rt_sockctx *c, struct mstream *s)
 		}
 		q_pop(&s->snd_q);
 		s->snd_off = 0;
-		mac_complete(pb, 0);
+		ipp_result(pb, 0);
 	}
+}
+
+static int tcp_state(struct mstream *s)
+{
+	if (s->open_pb)
+		return s->passive ? stListen : stSynSent;
+	if (!s->conn)
+		return stClosed;
+	if (s->closed)
+		return s->peer_fin ? stClosing : stFinWait1;
+	return s->told_fin ? stCloseWait : stEstablished;
 }
 
 static void tcp_poll(struct rt_sockctx *c, struct mstream *s)
 {
+	int err = 0;
+	u32 l = sizeof err;
 	if (s->fd < 0)
 		return;
 	if (s->open_pb) {
 		tcp_poll_open(c, s);
 		return;
 	}
-	if (s->state != stEstablished && s->state != stCloseWait && s->state != stFinWait1)
+	if (!s->conn)
 		return;
-	{
-		int err = 0;
-		u32 l = sizeof err;
-		if (rt_api_getsockopt(c, s->fd, RT_SOL_SOCKET, RT_SO_ERROR, &err, &l) == 0 && err) {
-			tcp_dead(c, s, err == RT_ECONNRESET ? TCPRemoteAbort : TCPNetworkFailure);
-			return;
-		}
+	if (rt_api_getsockopt(c, s->fd, RT_SOL_SOCKET, RT_SO_ERROR, &err, &l) == 0 && err) {
+		tcp_terminate(c, s, sock_reason(err));
+		return;
 	}
 	tcp_poll_snd(c, s);
-	tcp_poll_rcv(c, s);
-	if (s->dead)
+	if (!s->conn)
 		return;
+	tcp_poll_rcv(c, s);
+	/* the ULP timeout: sends that have not moved for that long */
+	if (s->snd_q && (u32)(rt_now_ms() - s->snd_moved) >= ulp_secs(s) * 1000u) {
+		s->snd_moved = rt_now_ms();
+		if (!s->ulp_report) {
+			tcp_terminate(c, s, TCPULPTimeoutTerminate);
+			return;
+		}
+		asr(s, TCPULPTimeout, 0);
+	}
 	/* the notifications: data that no receive waits for, the other end's close */
 	if (!s->rcv_q && !s->told_data && pending(c, s->fd)) {
 		s->told_data = 1;
@@ -475,47 +565,73 @@ static void tcp_poll(struct rt_sockctx *c, struct mstream *s)
 	if (!s->told_fin && !pending(c, s->fd) && (s->peer_fin || ready(c, s->fd, 0))) {
 		s->peer_fin = 1;
 		s->told_fin = 1;
-		if (s->state == stEstablished)
-			s->state = stCloseWait;
 		asr(s, TCPClosing, 0);
 	}
+	/* both ends have closed and everything is delivered: the connection is over, gracefully */
+	if (s->closed && s->told_fin && !s->snd_q)
+		tcp_terminate(c, s, TCPULPClose);
+	else
+		s->state = tcp_state(s);
 }
 
+/* TCPStatus (the guide's table and TCPStatusPB: a long after the two ULP bytes, so remoteHost
+   is at 38 and connectionState at 52) */
 static int tcp_status(void *pb, struct rt_sockctx *c)
 {
+	static u8 connstats[96];        /* TCPConnectionStats, zero */
 	struct mstream *s = stream_of(pb);
 	struct rt_sockaddr_in a;
-	u32 l = sizeof a;
-	if (!s)
+	u32 l = sizeof a, unread;
+	if (!s || !s->tcp)
 		return invalidStreamPtr;
-	memset((u8 *)pb + 32, 0, 64);
-	PB_L(pb, 36) = s->rhost;
-	PB_W(pb, 40) = s->rport;
+	memset((u8 *)pb + 32, 0, 66);                           /* up to userDataPtr at 98 */
+	((u8 *)pb)[32] = (u8)ulp_secs(s);
+	((u8 *)pb)[33] = s->ulp_report ? 0 : 1;
+	PB_L(pb, 38) = s->rhost;
+	PB_W(pb, 42) = s->rport;
 	if (s->fd >= 0 && rt_api_getsockname(c, s->fd, &a, &l) == 0) {
-		PB_L(pb, 42) = a.sin_addr;
-		PB_W(pb, 46) = a.sin_port;
+		PB_L(pb, 44) = a.sin_addr;
+		PB_W(pb, 48) = a.sin_port;
+	} else {
+		PB_L(pb, 44) = mac_nif ? mac_nif->addr : 0;
+		PB_W(pb, 48) = s->lport;
 	}
-	((u8 *)pb)[50] = (u8)(s->fd < 0 ? stClosed : s->state);
-	PB_W(pb, 52) = 8192;                                    /* sendWindow */
-	PB_W(pb, 54) = (u16)(s->rlen > 65535 ? 65535 : s->rlen); /* rcvWindow */
-	PB_W(pb, 58) = (u16)(s->fd >= 0 ? (pending(c, s->fd) > 65535 ? 65535 : pending(c, s->fd)) : 0);
-	PB_L(pb, 88) = 1460;                                    /* sendMaxSegSize */
-	return s->fd < 0 && !s->open_pb ? connectionDoesntExist : 0;
+	((u8 *)pb)[52] = (u8)tcp_state(s);
+	unread = pending(c, s->fd);
+	PB_W(pb, 54) = 8192;                                    /* sendWindow */
+	PB_W(pb, 56) = (u16)(s->rlen > 65535 ? 65535 : s->rlen); /* rcvWindow */
+	PB_W(pb, 60) = (u16)(unread > 65535 ? 65535 : unread);  /* amtUnreadData */
+	PB_L(pb, 82) = 100;                                     /* srtt, ms */
+	PB_L(pb, 86) = 100;                                     /* lastRTT */
+	PB_L(pb, 90) = 1460;                                    /* sendMaxSegSize */
+	PB_P(pb, 94) = connstats;
+	return s->conn || s->open_pb ? 0 : connectionDoesntExist;
 }
 
 static int tcp_global(void *pb)
 {
-	static u32 params[16], stats[32];
+	static u32 params[6], stats[13];
+	static struct mstream *table[NSTREAMS];
+	static const u8 rto[] = "\x0bVan Jacobson";
+	int i;
+	params[0] = (u32)rto;
+	params[1] = 200;                /* minimum retransmission timeout, ms */
+	params[2] = 60000;              /* maximum */
+	params[3] = 1460;               /* MSS we can receive */
+	params[4] = NSTREAMS;
+	params[5] = 65535;              /* largest receive window */
+	for (i = 0; i < NSTREAMS; i++)
+		table[i] = streams[i].magic == S_MAGIC && streams[i].tcp ? &streams[i] : NULL;
 	PB_P(pb, 32) = params;
 	PB_P(pb, 36) = stats;
-	PB_P(pb, 40) = NULL;
+	PB_P(pb, 40) = table;
 	PB_W(pb, 48) = NSTREAMS;
 	return 0;
 }
 
 static void stream_free(struct rt_sockctx *c, struct mstream *s, int r)
 {
-	fail_all(s, r);
+	fail_all(s, r, r);
 	stream_close(c, s);
 	s->magic = 0;
 }
@@ -526,8 +642,10 @@ static int udp_create(void *pb, struct rt_sockctx *c)
 	struct rt_sockaddr_in a;
 	u32 l = sizeof a;
 	int i, fd;
-	if (!PB_P(pb, 32) || PB_L(pb, 36) < 2048)
-		return PB_P(pb, 32) ? invalidLength : invalidBufPtr;
+	if (!PB_P(pb, 32))
+		return invalidBufPtr;
+	if (PB_L(pb, 36) < 2048)
+		return invalidLength;
 	for (i = 0; i < NSTREAMS && streams[i].magic == S_MAGIC; i++)
 		;
 	if (i == NSTREAMS)
@@ -552,6 +670,7 @@ static int udp_create(void *pb, struct rt_sockctx *c)
 		s->rlen = PB_L(pb, 36);
 		s->notify = PB_P(pb, 40);
 		s->udata = PB_P(pb, 46);
+		s->a5 = ipp_creator_a5(pb);
 		s->lport = a.sin_port;
 		PB_W(pb, 44) = a.sin_port;
 		PB_L(pb, 28) = (u32)s;
@@ -572,7 +691,7 @@ static void udp_poll(struct rt_sockctx *c, struct mstream *s)
 		if (r < 0) {
 			if (expired(s->rcv_deadline)) {
 				q_pop(&s->rcv_q);
-				mac_complete(pb, commandTimeout);
+				ipp_result(pb, commandTimeout);
 				s->rcv_deadline = s->rcv_q ? secs_deadline(PB_W(s->rcv_q, 32)) : 0;
 				continue;
 			}
@@ -587,7 +706,7 @@ static void udp_poll(struct rt_sockctx *c, struct mstream *s)
 		s->loaned = 1;
 		q_pop(&s->rcv_q);
 		s->told_data = 0;
-		mac_complete(pb, 0);
+		ipp_result(pb, 0);
 		s->rcv_deadline = s->rcv_q ? secs_deadline(PB_W(s->rcv_q, 32)) : 0;
 	}
 	if (!s->told_data && !s->loaned && ready(c, s->fd, 0)) {
@@ -607,7 +726,7 @@ static int udp_write(void *pb, struct rt_sockctx *c)
 	if (!s || s->tcp)
 		return invalidStreamPtr;
 	if (!w)
-		return invalidRDS;
+		return invalidWDS;
 	for (; rt_get_be16(w); w += 6) {
 		u32 len = rt_get_be16(w);
 		const u8 *p;
@@ -626,6 +745,7 @@ static int udp_write(void *pb, struct rt_sockctx *c)
 #define NDNS 8
 struct dnsq {
 	void *pb;
+	u32 own_lo, own_hi;             /* the partition of the parameter block (mactcp_reap) */
 	int fd, server, tries, ptr;
 	u16 id;
 	u32 deadline;
@@ -735,7 +855,7 @@ static int dns_name(const u8 *m, int mlen, int p, char *out, int olen)
 static void dns_done(struct rt_sockctx *c, struct dnsq *q, int r)
 {
 	if (q->pb)
-		mac_complete(q->pb, r);
+		ipp_result(q->pb, r);
 	q->pb = NULL;
 	if (q->fd >= 0)
 		rt_api_close(c, q->fd);
@@ -869,10 +989,98 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 	return 1;
 }
 
+/* RTMAC_DNSCANCEL: the lookups whose parameter blocks lie in [lo, hi) are withdrawn, never completed:
+   the 'dnrp' code's CloseResolver, before Apple's DNR glue disposes of that code */
+static int dns_cancel(struct rt_sockctx *c, u32 lo, u32 hi)
+{
+	for (int i = 0; i < NDNS; i++) {
+		struct dnsq *q = &dnsq[i];
+		if (q->pb && (u32)q->pb >= lo && (u32)q->pb < hi) {
+			q->pb = NULL;
+			if (q->fd >= 0)
+				rt_api_close(c, q->fd);
+			q->fd = -1;
+		}
+	}
+	return 0;
+}
+
+/* ==================== programs that have quit ==================== */
+/* where an address is: the index of the live partition holding it, or -1 */
+static int part_of(u32 a, const u32 *lo, const u32 *hi, int n)
+{
+	for (int k = 0; k < n; k++)
+		if (a >= lo[k] && a < hi[k])
+			return k;
+	return -1;
+}
+
+/* 1: the owner recorded is gone. The first look records the owner: the partition holding addr, or
+   "not a program's" (1), which is never released. */
+static int owner_gone(u32 *own_lo, u32 *own_hi, u32 addr, const u32 *lo, const u32 *hi, int n)
+{
+	int k;
+	if (!*own_lo) {
+		k = part_of(addr, lo, hi, n);
+		*own_lo = k < 0 ? 1 : lo[k];
+		*own_hi = k < 0 ? 1 : hi[k];
+		return 0;
+	}
+	if (*own_lo == 1)
+		return 0;
+	for (k = 0; k < n; k++)
+		if (lo[k] == *own_lo && hi[k] == *own_hi)
+			return 0;
+	return 1;
+}
+
+void mactcp_reap(struct rt_sockctx *c, const u32 *lo, const u32 *hi, int n)
+{
+	for (int i = 0; i < NSTREAMS; i++) {
+		struct mstream *s = &streams[i];
+		if (s->magic != S_MAGIC || !owner_gone(&s->own_lo, &s->own_hi, (u32)s->a5, lo, hi, n))
+			continue;
+		rt_log(RT_LOG_WARN, ".IPP: %s stream %08lx of a program that quit without releasing it: released",
+		       s->tcp ? "TCP" : "UDP", (unsigned long)s);
+		/* nothing of the program's is touched again: its calls are dropped, not completed */
+		s->notify = NULL;
+		s->rcv_q = s->snd_q = s->open_pb = NULL;
+		if (s->tcp && s->conn && s->fd >= 0) {
+			struct { s32 onoff, secs; } lg = { 1, 0 };
+			rt_api_setsockopt(c, s->fd, RT_SOL_SOCKET, RT_SO_LINGER, &lg, sizeof lg);
+		}
+		stream_close(c, s);
+		s->magic = 0;
+	}
+	for (int i = 0; i < NDNS; i++) {
+		struct dnsq *q = &dnsq[i];
+		if (!q->pb || !owner_gone(&q->own_lo, &q->own_hi, (u32)q->pb, lo, hi, n))
+			continue;
+		rt_log(RT_LOG_WARN, ".IPP: a lookup of a program that has quit: dropped");
+		q->pb = NULL;
+		if (q->fd >= 0)
+			rt_api_close(c, q->fd);
+		q->fd = -1;
+	}
+}
+
 /* ==================== dispatch ==================== */
+/* the stream of a TCP call that needs a connection: 0 if there is one, else the result */
+static int need_conn(void *pb, struct mstream **sp, int closing)
+{
+	struct mstream *s = stream_of(pb);
+	*sp = s;
+	if (!s || !s->tcp)
+		return invalidStreamPtr;
+	if (!s->conn)
+		return s->graceful && closing ? connectionClosing : connectionDoesntExist;
+	return 0;
+}
+
 int mactcp_call(void *pb, struct rt_sockctx *c)
 {
 	struct mstream *s;
+	int r;
 	switch (PB_CSCODE(pb)) {
 	case TCPCreate:
 		return tcp_create(pb, c);
@@ -880,65 +1088,95 @@ int mactcp_call(void *pb, struct rt_sockctx *c)
 		return tcp_open(pb, c, 1);
 	case TCPActiveOpen:
 		return tcp_open(pb, c, 0);
-	case TCPSend:
-		if (!(s = stream_of(pb)))
-			return invalidStreamPtr;
-		if (s->dead)
-			return connectionTerminated;
-		if (s->fd < 0 || s->state == stListen || s->open_pb)
-			return connectionDoesntExist;
+	case TCPSend: {
+		u32 n;
+		if ((r = need_conn(pb, &s, 0)) != 0)
+			return r;
+		if (s->closed)
+			return connectionClosing;       /* "a TCPClose command was already issued" */
 		if (!PB_P(pb, 38))
-			return invalidRDS;
-		if (!wds_total(PB_P(pb, 38)))
-			return 0;
+			return invalidWDS;
+		n = wds_total(PB_P(pb, 38));
+		if (n == 0 || n > 65535)
+			return invalidLength;
+		take_ulp(s, pb);
+		if (((u8 *)pb)[35] && !s->nodelay) {    /* push: no waiting for more (Nagle off) */
+			int one = 1;
+			rt_api_setsockopt(c, s->fd, RT_IPPROTO_TCP, RT_TCP_NODELAY, &one, sizeof one);
+			s->nodelay = 1;
+		}
+		if (!s->snd_q)
+			s->snd_moved = rt_now_ms();
 		q_add(&s->snd_q, pb);
 		tcp_poll_snd(c, s);
 		return 1;
+	}
 	case TCPRcv:
 	case TCPNoCopyRcv:
-		if (!(s = stream_of(pb)))
-			return invalidStreamPtr;
-		if (s->dead)
-			return connectionTerminated;
-		if (s->fd < 0 || s->open_pb)
-			return connectionDoesntExist;
+		if ((r = need_conn(pb, &s, 1)) != 0)
+			return r;
+		if (PB_CSCODE(pb) == TCPRcv) {
+			if (!PB_P(pb, 36))
+				return invalidBufPtr;
+			if (!PB_W(pb, 40))
+				return invalidLength;
+		} else {
+			if (!PB_P(pb, 42))
+				return invalidBufPtr;
+			if (!PB_W(pb, 46))
+				return invalidLength;   /* "the RDS has 0 entries"; one is enough */
+		}
 		if (!s->rcv_q)
 			s->rcv_deadline = secs_deadline(((u8 *)pb)[32]);
 		q_add(&s->rcv_q, pb);
 		tcp_poll_rcv(c, s);
 		return 1;
 	case TCPRcvBfrReturn:
-		if (!(s = stream_of(pb)))
+		if (!(s = stream_of(pb)) || !s->tcp)
 			return invalidStreamPtr;
+		if (!PB_P(pb, 42))
+			return invalidBufPtr;
+		if (!s->loaned)
+			return invalidRDS;              /* "returned more than once" */
 		s->loaned = 0;
 		return 0;
 	case TCPClose:
-		if (!(s = stream_of(pb)))
-			return invalidStreamPtr;
-		if (s->fd < 0)
-			return connectionDoesntExist;
-		rt_api_shutdown(c, s->fd, 1);     /* SHUT_WR: our FIN */
-		s->state = s->peer_fin ? stClosed : stFinWait1;
+		if ((r = need_conn(pb, &s, 1)) != 0)
+			return r;
+		if (s->closed)
+			return connectionClosing;
+		take_ulp(s, pb);
+		tcp_poll_snd(c, s);                     /* what is queued goes before the FIN */
+		if (s->snd_q) {
+			/* sends still waiting for room: they go first; the FIN follows them (tcp_poll) */
+			s->closed = 2;
+			return 0;
+		}
+		rt_api_shutdown(c, s->fd, 1);           /* SHUT_WR: our FIN */
+		s->closed = 1;
+		s->state = tcp_state(s);
 		return 0;
 	case TCPAbort:
-		if (!(s = stream_of(pb)))
+		if (!(s = stream_of(pb)) || !s->tcp)
 			return invalidStreamPtr;
-		if (s->fd < 0)
+		if (!s->conn && !s->open_pb)
 			return connectionDoesntExist;
-		{
+		if (s->fd >= 0) {
 			struct { s32 onoff, secs; } lg = { 1, 0 };
 			rt_api_setsockopt(c, s->fd, RT_SOL_SOCKET, RT_SO_LINGER, &lg, sizeof lg);    /* a reset */
 		}
-		fail_all(s, connectionTerminated);
-		stream_close(c, s);
-		s->state = stClosed;
-		asr(s, TCPTerminate, TCPULPAbort);
+		tcp_terminate(c, s, TCPULPAbort);
+		s->graceful = 0;
 		return 0;
 	case TCPStatus:
 		return tcp_status(pb, c);
 	case TCPRelease:
-		if (!(s = stream_of(pb)))
+		if (!(s = stream_of(pb)) || !s->tcp)
 			return invalidStreamPtr;
+		if (s->conn && s->fd >= 0) {            /* an open connection is aborted */
+			struct { s32 onoff, secs; } lg = { 1, 0 };
+			rt_api_setsockopt(c, s->fd, RT_SOL_SOCKET, RT_SO_LINGER, &lg, sizeof lg);
+		}
 		PB_P(pb, 32) = s->rbuf;
 		PB_L(pb, 36) = s->rlen;
 		stream_free(c, s, connectionTerminated);
@@ -958,6 +1196,8 @@ int mactcp_call(void *pb, struct rt_sockctx *c)
 	case UDPBfrReturn:
 		if (!(s = stream_of(pb)) || s->tcp)
 			return invalidStreamPtr;
+		if (!PB_P(pb, 40))
+			return invalidBufPtr;
 		s->loaned = 0;
 		return 0;
 	case UDPWrite:
@@ -974,6 +1214,8 @@ int mactcp_call(void *pb, struct rt_sockctx *c)
 		return 0;
 	case RTMAC_DNS:
 		return dns_call(pb, c);
+	case RTMAC_DNSCANCEL:
+		return dns_cancel(c, PB_L(pb, 28), PB_L(pb, 32));
 	}
 	return controlErr;
 }
@@ -984,10 +1226,16 @@ void mactcp_poll(struct rt_sockctx *c)
 		struct mstream *s = &streams[i];
 		if (s->magic != S_MAGIC)
 			continue;
-		if (s->tcp)
-			tcp_poll(c, s);
-		else
+		if (!s->tcp) {
 			udp_poll(c, s);
+			continue;
+		}
+		tcp_poll(c, s);
+		/* a TCPClose that waited for the sends before it: the FIN, once they are all out */
+		if (s->magic == S_MAGIC && s->conn && s->closed == 2 && !s->snd_q) {
+			rt_api_shutdown(c, s->fd, 1);
+			s->closed = 1;
+		}
 	}
 	dns_poll(c);
 }

@@ -11,6 +11,8 @@
 #define RTMAC_PORT  0x5251      /* a RIPTIDE port message (riptide_port.h): cmd, text, reply */
 #define RTMAC_DNS   0x5252      /* a lookup for the resolver's 'dnrp' code (struct rtmac_dns_pb) */
 #define RTMAC_API   0x5253      /* the stack's calls for programs (struct rtmac_api), in csParam's first long */
+#define RTMAC_DNSCANCEL 0x5254  /* the lookups whose parameter blocks lie from csParam's first long up to its
+                                   second are withdrawn, never completed (the 'dnrp' code's CloseResolver) */
 #define RTMAC_MAGIC 0x52495054UL /* 'RIPT' */
 
 /* the parameter block of RTMAC_PORT: CntrlParam's header, then the message */

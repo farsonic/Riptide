@@ -1,5 +1,5 @@
 /*
- * Riptide - the Riptide Terminal on the classic Mac OS: bsdsocket.library and riptide.library,
+ * Riptide - the Riptide Command Terminal on the classic Mac OS: bsdsocket.library and riptide.library,
  * as the network tools (src/amiga/cmd) call them, on the stack's calls for programs (RTMAC_API,
  * src/mac/api_mac.c). The socket calls are the core's own (rt_api_*), run in this program's
  * context as they run in the calling task on the Amiga: a blocking recv waits, select waits,

@@ -2,7 +2,7 @@
  *
  * MacTCP programs reach the stack through the .IPP driver's Control calls, which only queue a
  * parameter block for the stack's deferred task and complete it later (ipp.c, mactcp.c). The
- * Riptide Terminal (src/mac/term) runs the Amiga's network tools, which use the BSD socket
+ * Riptide Command Terminal (src/mac/term) runs the Amiga's network tools, which use the BSD socket
  * interface: calls that wait, as on the Amiga. So this file gives programs the core's socket
  * layer itself (rt_api_*), the resolver, sysctl and the configuration commands, called directly
  * in the program's own context, which is how a bsdsocket.library call runs in the calling task

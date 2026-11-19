@@ -139,7 +139,7 @@ static void test_tcp(void)
 		      "TCPRcv: the echo", r);
 		memset(pb + 32, 0, 70);
 		r = ctl(pb, 40, s);                             /* TCPStatus */
-		check(r == 0 && pb[50] == 8, "TCPStatus: established", r);
+		check(r == 0 && pb[52] == 8 && *(u32 *)(pb + 38) == PEER, "TCPStatus: established (state at 52)", r);
 		memset(pb + 32, 0, 70);
 		r = ctl(pb, 38, s);                             /* TCPClose */
 		check(r == 0, "TCPClose", r);

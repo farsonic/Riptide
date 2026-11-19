@@ -16,7 +16,7 @@
  *   - the program's own windows behind it redrawn while it is up (mac_alert_update, which a
  *     program may supply: the Mac MUI layer does, src/mac/mui/mm_app.c).
  *
- * MUI_RequestA (src/mac/mui/mm_os.c) and the Riptide Terminal's About box are built on it.
+ * MUI_RequestA (src/mac/mui/mm_os.c) and the Riptide Command Terminal's About box are built on it.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stddef.h>

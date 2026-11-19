@@ -1,9 +1,10 @@
 /* src/mac/dnr/dnrp.c - Riptide on the classic Mac OS: the resolver of MacTCP programs (stage 3).
  *
- * Every MacTCP program carries Apple's DNR glue (dnr.c), which opens the first file of type 'cdev'
- * and creator 'ztcp' (or 'mtcp') it finds in the System Folder or the Control Panels folder, loads
- * its 'dnrp' 0 resource and calls it for OpenResolver, StrToAddr, AddrToStr, AddrToName and the
- * rest. This is that code, in the Riptide DNR file: dotted addresses are answered at once (noErr,
+ * Every MacTCP program carries Apple's DNR glue (dnr.c), which looks for a file holding 'dnrp': type
+ * 'cdev' creator 'ztcp' in the Control Panels folder, then 'cdev' 'mtcp' in the System Folder, then
+ * 'cdev' 'mtcp' in the Control Panels folder (tools/mkdnr.py: the Riptide DNR file is 'cdev' 'mtcp'
+ * in the System Folder). It loads the first 'dnrp' and calls it for OpenResolver, StrToAddr,
+ * AddrToStr, AddrToName and the rest; when that fails, StrToAddr answers notOpenErr (-28). This is that code, in the Riptide DNR file: dotted addresses are answered at once (noErr,
  * no result procedure, as MacTCP does with its cache), names and addresses go to Riptide's .IPP
  * driver as a private call (RTMAC_DNS, answered by src/mac/mactcp.c) and the answer reaches the
  * program's result procedure from the call's completion routine, with StrToAddr having returned
@@ -171,10 +172,25 @@ long dnrp_main(long sel, long a, long b, long c, long d)
 	case OPENRESOLVER:
 		return open_ipp() ? openFailed : 0;
 	case CLOSERESOLVER:
+		/* Apple's glue disposes of this code next: lookups still waiting must never complete
+		   into it (dnrp_done is here), so the driver withdraws them */
+		if (ipp_ref) {
+			unsigned char pb[80];
+			zero(pb, sizeof pb);
+			*(short *)(pb + 24) = ipp_ref;
+			*(short *)(pb + 26) = RTMAC_DNSCANCEL;
+			*(void **)(pb + 28) = (void *)qs;
+			*(void **)(pb + 32) = (void *)(qs + NQ);
+			dnrp_pb(pb, 0xA004);
+			for (int i = 0; i < NQ; i++)
+				qs[i].pb.busy = 0;
+		}
 		return 0;
 	case STRTOADDR: {
 		struct hostInfo *h = (struct hostInfo *)b;
 		unsigned long ad;
+		/* a dotted address "is returned immediately" (MacTCP Programmer's Guide, StrToAddr): noErr,
+		   rtnCode noErr, the result procedure not called */
 		if (dotted((const char *)a, &ad)) {
 			zero(h, sizeof *h);
 			copy(h->cname, (const char *)a, sizeof h->cname);

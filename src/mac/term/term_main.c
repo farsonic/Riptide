@@ -1,5 +1,5 @@
 /*
- * Riptide - the Riptide Terminal: the Amiga's network tools on the classic Mac OS.
+ * Riptide - the Riptide Command Terminal: the Amiga's network tools on the classic Mac OS.
  *
  * Riptide for the Amiga comes with command-line tools (src/amiga/cmd): ip, ifconfig, route, arp,
  * netstat, ping, ping6, traceroute, traceroute6, host, hostname, nc, ftp, sysctl, speedtest. The
@@ -16,8 +16,9 @@
  * data is put back before every run (term.ld gathers it between __tool_data and __tool_bss_end).
  *
  * Built in: help, clear, history, conf LINE (a riptide.conf line for the running stack, as the
- * RIPTIDE port's COMMAND), quit. At the start the lines of Preferences:Riptide:Terminal Startup,
- * if there is such a file, are run as if typed.
+ * RIPTIDE port's COMMAND), quit. At the start the lines of Preferences:Riptide:Command Terminal
+ * Startup (or Terminal Startup, its name before the program was renamed), if there is such a file,
+ * are run as if typed.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include "term.h"
@@ -429,7 +430,7 @@ static void do_menu(long mr)
 			/* an About box (Human Interface Guidelines p. 98), not text in the console */
 			int mac_alert(int icon, const char *text, const char *const *btn, int n, int def, int cancel);
 			static const char *const ok[] = { "OK" };
-			mac_alert(1, "Riptide Terminal\n\nRiptide's network tools (ip, ping, arp, route, netstat, host, "
+			mac_alert(1, "Riptide Command Terminal\n\nRiptide's network tools (ip, ping, arp, route, netstat, host, "
 			             "traceroute, nc, ftp ...) in a Mac window, running on the Riptide TCP/IP stack. "
 			             "Type help for the list.", ok, 1, 0, -1);
 		} else {
@@ -688,7 +689,7 @@ static void menus_init(void)
 {
 	unsigned char pb[100];
 	menus[0] = NewMenu(APPLE_ID, mac_pstr(pb, "\x14"));
-	AppendMenu(menus[0], mac_pstr(pb, "About Riptide Terminal;(-"));
+	AppendMenu(menus[0], mac_pstr(pb, "About Riptide Command Terminal;(-"));
 	AddResMenu(menus[0], MAC_TYPE('D', 'R', 'V', 'R'));
 	InsertMenu(menus[0], 0);
 	menus[1] = NewMenu(FILE_ID, mac_pstr(pb, "File"));
@@ -702,7 +703,10 @@ static void menus_init(void)
 
 static void run_startup(void)
 {
-	BPTR f = Open((CONST_STRPTR)"ENVARC:Riptide/Terminal Startup", MODE_OLDFILE);
+	/* "Command Terminal Startup", or the name it had before the program was renamed */
+	BPTR f = Open((CONST_STRPTR)"ENVARC:Riptide/Command Terminal Startup", MODE_OLDFILE);
+	if (!f)
+		f = Open((CONST_STRPTR)"ENVARC:Riptide/Terminal Startup", MODE_OLDFILE);
 	char buf[2048], *p, *e;
 	LONG n;
 	if (!f)
@@ -746,7 +750,7 @@ int main(void)
 	r.top = sb.top + LM_MBARHEIGHT + 22;
 	r.right = sb.right - 6 < r.left + 620 ? sb.right - 6 : r.left + 620;
 	r.bottom = sb.bottom - 6 < r.top + 420 ? sb.bottom - 6 : r.top + 420;
-	win = NewWindow(NULL, &r, mac_pstr(title, "Riptide Terminal"), 1, zoomDocProc, (void *)-1, 1, 0);
+	win = NewWindow(NULL, &r, mac_pstr(title, "Riptide Command Terminal"), 1, zoomDocProc, (void *)-1, 1, 0);
 	SetPort(win);
 	TextFont(monaco);
 	TextSize(9);
@@ -771,7 +775,7 @@ int main(void)
 		                         "(Riptide in the Extensions folder, the Mac restarted).\n";
 		append(no, sizeof no - 1);
 	} else {
-		static const char hello[] = "Riptide Terminal. \"help\" lists the tools.\n";
+		static const char hello[] = "Riptide Command Terminal. \"help\" lists the tools.\n";
 		append(hello, sizeof hello - 1);
 	}
 	prompt();

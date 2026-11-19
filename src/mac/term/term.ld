@@ -1,4 +1,4 @@
-/* src/mac/term/term.ld - the Riptide Terminal: src/mac/app/app.ld, with the network tools' static
+/* src/mac/term/term.ld - the Riptide Command Terminal: src/mac/app/app.ld, with the network tools' static
  * data gathered in one place (between __tool_data and __tool_data_end, __tool_bss and
  * __tool_bss_end), which term_main.c puts back as it was before every run of a tool: on the
  * Amiga each run is a fresh program.

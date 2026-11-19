@@ -126,7 +126,7 @@ $(BUILD)/RiptidePrefs.elf: $(APP_OBJ) src/mac/app/app.ld
 $(BUILD)/RiptidePrefs.bin: $(BUILD)/RiptidePrefs.elf tools/elf2app.py tools/mac_elf.py tools/mac_rsrc.py
 	$(PYTHON) tools/elf2app.py $< --name RiptidePrefs --creator RTPF --size 1536 -o $@
 
-# ---- the Riptide Terminal: the Amiga's network tools (src/amiga/cmd, unchanged) in a Mac window ----
+# ---- the Riptide Command Terminal: the Amiga's network tools (src/amiga/cmd, unchanged) in a Mac window ----
 # Each tool's main is compiled under its own name; mm_os.c (RiptidePrefs' exec and dos) with the
 # calls the terminal gives its console renamed out of the way (src/mac/term/term_os.c).
 TERM      := $(BUILD)/term
@@ -140,7 +140,7 @@ TERM_HDRS := $(APP_HDRS) $(wildcard src/mac/term/*.h src/apps/speedtest/*.h)
 MM_OS_RENAMES := -DRead=mm_file_Read -DWrite=mm_file_Write -DPutStr=mm_PutStr -DOpenLibrary=mm_OpenLibrary \
              -DOpenDevice=mm_OpenDevice -DCloseDevice=mm_CloseDevice -DRiptideSysCtl=mm_RiptideSysCtl \
              -DSocketBase=mm_SocketBase -DRiptideBase=mm_RiptideBase -Dc_ctl_action=mm_c_ctl_action \
-             -DMM_LOG_NAME='"Riptide Terminal"'
+             -DMM_LOG_NAME='"Riptide Command Terminal"'
 $(TERM)/amiga/cmd/%.o: src/amiga/cmd/%.c $(TERM_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(APP_CFLAGS) -Damiga_main=main_$* -DSysBase=cl_SysBase -c -o $@ $<
@@ -160,7 +160,7 @@ $(BUILD)/RiptideTerminal.elf: $(TERM_OBJ) src/mac/term/term.ld
 	$(LD) -T src/mac/term/term.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ \
 	      $(TERM_OBJ) $(LIBGCC) -Map $(BUILD)/RiptideTerminal.map
 $(BUILD)/RiptideTerminal.bin: $(BUILD)/RiptideTerminal.elf tools/elf2app.py tools/mac_elf.py tools/mac_rsrc.py
-	$(PYTHON) tools/elf2app.py $< --name "Riptide Terminal" --creator RTTM --size 1024 -o $@
+	$(PYTHON) tools/elf2app.py $< --name "Riptide Command Terminal" --creator RTTM --size 1024 -o $@
 
 # ---- tests/mac: a MacTCP program that tests Riptide against the Aurora68 testbed peer ----
 TEST_OBJ := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o $(APP)/tests/mac/mactcp_test.o \
@@ -172,7 +172,14 @@ $(BUILD)/mactcp_test.elf: $(TEST_OBJ) src/mac/app/app.ld
 	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ $(TEST_OBJ) $(LIBGCC)
 $(BUILD)/MacTCPTest.bin: $(BUILD)/mactcp_test.elf tools/elf2app.py
 	$(PYTHON) tools/elf2app.py $< --name "MacTCP test" --creator RTMT --size 256 -o $@
-test: $(BUILD)/MacTCPTest.bin
+# the browser test (tests/mac/http_test.c): MacTCP used as a web browser uses it, against pinet's HTTP server
+HTTP_OBJ := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o $(APP)/tests/mac/http_test.o \
+            $(APP)/core/printf.o $(APP)/amiga/libc.o $(APP)/mac/app/mac_alert.o
+$(BUILD)/http_test.elf: $(HTTP_OBJ) src/mac/app/app.ld
+	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ $(HTTP_OBJ) $(LIBGCC)
+$(BUILD)/BrowserTest.bin: $(BUILD)/http_test.elf tools/elf2app.py
+	$(PYTHON) tools/elf2app.py $< --name "Browser test" --creator RTBT --size 512 -o $@
+test: $(BUILD)/MacTCPTest.bin $(BUILD)/BrowserTest.bin
 
 clean:
 	rm -rf $(BUILD)

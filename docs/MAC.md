@@ -17,16 +17,24 @@ optional development log.
 | Stage | What | State |
 |---|---|---|
 | 1 | The driver installs and starts at boot, the core runs, Ethernet through `.ENET`, `ipctlGetAddr`, `ipctlEchoICMP` | done: PiPing (a MacTCP ping) gets replies through Riptide |
-| 2 | TCP and UDP: TCPCreate ... TCPRelease, the UDP set, ASR notifications, TCPStatus, TCPGlobalInfo | done in the testbed (src/mac/mactcp.c): tests/mac/mactcp_test.c passes 21 of 21 against the Aurora68 peer |
-| 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName; HInfo and MXInfo answer noAnsErr) | done in the testbed: the Riptide DNR file (src/mac/dnr), an asynchronous DNS client in the driver |
+| 2 | TCP and UDP: TCPCreate ... TCPRelease, the UDP set, ASR notifications, TCPStatus, TCPGlobalInfo | done in the testbed (src/mac/mactcp.c); corrected 19 November 2026 for browsers: tests/mac/http_test.c ("TCP, UDP and the resolver") |
+| 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName; HInfo and MXInfo answer noAnsErr) | done in the testbed: the Riptide DNR file (src/mac/dnr), an asynchronous DNS client in the driver; since 19 November 2026 with the creator Apple's glue looks for |
 | 4 | Preferences | done: RiptidePrefs, the Amiga's MUI editor built for the Mac (MAC-GUI.md) |
-| 5 | The command-line tools | done: the Riptide Terminal, the Amiga's ip, ifconfig, route, arp, netstat, ping, ping6, traceroute, traceroute6, host, hostname, nc, ftp, sysctl and speedtest in a Mac window ("The Riptide Terminal" below) |
+| 5 | The command-line tools | done: the Riptide Command Terminal, the Amiga's ip, ifconfig, route, arp, netstat, ping, ping6, traceroute, traceroute6, host, hostname, nc, ftp, sysctl and speedtest in a Mac window ("The Riptide Command Terminal" below) |
 
 Also working in the testbed (18 November): DHCP (`dhcp en0`: bound, lease kept), IPv6 (a
 link-local address and one from the router advertisement's prefix, each passing duplicate
 address detection and answering ICMPv6 echo; the IPv6 multicast groups are registered with
 `.ENET`'s EAddMulti), riptide.conf from the Preferences folder with the Amiga's `interface`
 line, and the Status page of RiptidePrefs reading the running stack.
+
+On real hardware (19 November 2026), the user's Raspberry Pi 3B (the solo board, System 7.1, over
+the WiFi):
+- IPv6 confirmed: an IPv6 ping (ping6) through Riptide got its replies.
+- Internet Explorer 4.01 for 68k works on Riptide's MacTCP interface: with the Riptide DNR found
+  (below, "The resolver") it loads pages by name (google.com, frogfind.com) and by number
+  (http://192.168.0.172:8080/, a Python http.server on another computer). Open Transport is not
+  needed for it.
 
 ![RiptidePrefs on the Mac: the Status page with DHCP](mac-gui-status.png)
 
@@ -166,8 +174,8 @@ up, so its route never yields).
 
 The Aurora68 repository's `tools/run-solo.sh` boots a System 7.1 disk image under QEMU with the
 Pi kernel as the whole logic board, and `tools/pinet.py` is an Ethernet peer at 192.168.68.1 on
-the host (ARP, ICMP echo, UDP echo, BOOTP). With Riptide in the image's Extensions folder and
-MacTCP removed:
+the host (ARP, ICMP echo, UDP and TCP echo, DHCP, DNS for `*.testbed`, HTTP on port 80). With
+Riptide in the image's Extensions folder and MacTCP removed:
 
 ```
 python3 tools/pinet.py /tmp/psmac-net peer &
@@ -182,30 +190,151 @@ as `[MAC] Riptide: ...`, written through the Aurora68 card's mailbox.
 `src/mac/mactcp.c` makes each MacTCP stream a socket of the core. A call that cannot finish at
 once (an open, a receive with no data, a send with the send buffer full) stays on its stream and
 is looked at again whenever the stack runs; it completes like every other call, through
-`mac_complete`. The notification routines are called from the stack's context as MacTCP calls
-them: TCPDataArrival when data comes and no receive waits for it, TCPClosing at the other end's
-FIN, TCPTerminate when the connection dies, UDPDataArrival. TCPNoCopyRcv and UDPRead hand out
-the stream's own receive buffer (given back with TCPRcvBfrReturn and UDPBfrReturn); TCPSend
-completes when its data is in the core's send buffer.
+`ipp_result` (ioResult first, then ioCompletion with A0 = the parameter block and D0 = the result).
+The notification routines (ASRs) are called from the stack's context, never from inside one
+another, as the MacTCP Programmer's Guide describes the call: the pascal arguments on the stack
+and A5 = the A5 of the program that created the stream (taken at its TCPCreate or UDPCreate),
+D0 = the event, D1 = the reason, A1 = the ICMP report, A2 = the user data. TCPDataArrival when
+data comes and no receive waits for it (once, until a receive completes), TCPClosing when the
+other end has closed and all it sent has been delivered, TCPTerminate exactly once per connection
+however it ends (TCPULPClose after both ends closed, TCPRemoteAbort, TCPULPAbort after TCPAbort,
+TCPULPTimeoutTerminate), TCPULPTimeout for a stream that asked for "report" and whose sends have
+not moved for the ULP timeout; UDPDataArrival. After TCPTerminate the stream is as TCPCreate left
+it and may be opened again (browsers keep their streams). TCPNoCopyRcv and UDPRead hand out the
+stream's own receive buffer (given back with TCPRcvBfrReturn and UDPBfrReturn); TCPSend completes
+when its data is in the core's send buffer, TCPClose at once (MacTCP waits for the acknowledgement
+of the FIN).
 
-The resolver is the Riptide DNR file: type `'cdev'`, creator `'ztcp'`, in the System Folder,
-holding `'dnrp'` 0 (src/mac/dnr). Apple's DNR glue, which every MacTCP program carries, finds it
-as it finds MacTCP's (MacTCP must be out of the Control Panels folder and the System Folder).
-Dotted addresses are answered at once; names and addresses go to the driver as a private call
-(`RTMAC_DNS`), and the answer reaches the program's result procedure from the call's completion
-routine, StrToAddr having returned cacheFault meanwhile. The lookups are the driver's own small
+What is supported: ipctlGetAddr, ipctlEchoICMP, ipctlLAPStats; UDPCreate, UDPRead, UDPBfrReturn,
+UDPWrite, UDPRelease, UDPMaxMTUSize; TCPCreate, TCPPassiveOpen (with the remote filter and the
+command timeout), TCPActiveOpen (within the ULP timeout, 2 minutes by default), TCPSend (any WDS,
+the push flag), TCPNoCopyRcv (any RDS of one entry or more), TCPRcvBfrReturn, TCPRcv (command
+timeouts), TCPClose, TCPAbort, TCPStatus, TCPRelease, TCPGlobalInfo (with the stream table); the
+validity bits, the guide's result codes, Gestalt `'mtcp'` (3, MacTCP 2.0). Not yet: urgent data
+(sent as ordinary data, never reported), TCPExtendedStat, UDPStatus, UDPMultiCreate,
+UDPMultiSend, UDPMultiRead, the ICMP reports of the notification routines, IP options, type of
+service and time to live.
+
+**Corrected on 19 November 2026**, when Internet Explorer 4.01 failed on the user's Mac with "A
+read/write error has occurred (-28)": TCPStatus wrote its fields two bytes early (the guide's
+TCPStatusPB has a long after the two ULP bytes, so remoteHost is at 38 and connectionState at 52;
+a program reading the state saw nonsense); TCPNoCopyRcv refused an RDS of one entry, which the
+guide calls "the simplest possible RDS"; the notification routines ran with whatever A5 was
+current, so a program's globals were not its own there; a stream whose connection had ended could
+not be opened again, and a graceful close never gave TCPTerminate; TCPActiveOpen took its timeout
+from the passive open's command timeout byte; TCPGlobalInfo gave no stream table; zero-length
+sends, receives into no buffer and returning a buffer twice gave no error.
+
+**The resolver.** The Riptide DNR file holds `'dnrp'` 0 (src/mac/dnr): type `'cdev'`, creator
+`'mtcp'`, in the System Folder. Apple's DNR glue, which every MacTCP program carries (dnr.c),
+looks for the file holding `'dnrp'` in this order: the Control Panels folder for `'cdev'` `'ztcp'`,
+the System Folder for `'cdev'` `'mtcp'`, the Control Panels folder for `'cdev'` `'mtcp'` (the oldest
+glue, of 1988, only the System Folder for `'mtcp'`, taking the first such file). Until 19 November
+2026 the file was made with creator `'ztcp'`, which no glue looks for in the System Folder: every
+MacTCP program's OpenResolver failed, and StrToAddr answers notOpenErr (-28) when there is no
+resolver, before it looks at the name, so even a dotted address failed, and the driver never heard
+of it. That was Internet Explorer's -28.
+
+The driver now checks these folders at startup, makes sure every version of the glue finds Riptide
+DNR, and logs what it found and did:
+- a Riptide DNR in the System Folder with the old creator is changed to `'mtcp'`;
+- any other file the glue could take first is moved into a folder "Disabled (Riptide)" in the
+  System Folder, which the glue does not search: the "MacTCP DNR" file MacTCP leaves in the System
+  Folder when it has once run (MacTCP's cache: `'cdev'` `'mtcp'`, a data fork only, no `'dnrp'`;
+  the 1991 glue skips it, but it comes before "Riptide DNR" in the folder's order and the 1988
+  glue takes it and fails), and a MacTCP control panel left in the Control Panels folder (its
+  `'dnrp'` would be found first and would talk to Riptide's `.IPP` as to MacTCP's).
+To go back to MacTCP, put the files back from that folder.
+
+A dotted address "is returned immediately" (the guide): noErr, rtnCode noErr, the address, the
+other three zero, the dotted string as the name, the result procedure not called (Apple's own
+sample, TCPDotAddress, polls rtnCode, which works either way). Names and addresses go to the
+driver as a private call (`RTMAC_DNS`), and the answer reaches the program's result procedure from
+the call's completion routine, StrToAddr having returned cacheFault meanwhile. AddrToName of an address the name servers do not know ends in authNameErr as soon as one
+says so, in noAnsErr after about ten seconds if none answers (two servers, each tried twice);
+HInfo, MXInfo and EnumCache answer noAnsErr. CloseResolver withdraws the lookups still waiting
+(`RTMAC_DNSCANCEL`): Apple's glue disposes of the `'dnrp'` code straight afterwards, and their
+completions must not run into it. The lookups are the driver's own small
 DNS client (A and PTR queries over UDP, the configured name servers, the search domain), because
 the core's resolver waits in select, which the deferred task must never do.
 
-Install: Riptide in the Extensions folder, Riptide DNR in the System Folder, MacTCP out of the
-Control Panels folder; RiptidePrefs anywhere. `make -f Makefile.mac test` builds the test program
-(MacTCPTest.bin), which runs against Aurora68's `tools/pinet.py` (TCP and UDP echo on port 7, DNS
-for `*.testbed`).
+**The driver stays open.** Programs open `.IPP` by name; Close is refused with closErr, as MacTCP
+refuses it, so a program that closes the driver on quitting leaves it open (dOpened set) for the
+others and their reference numbers keep working.
 
-## The Riptide Terminal
+**Programs that quit without releasing.** A MacTCP program that quits or crashes without
+TCPRelease leaves streams whose receive buffer, notification routine and waiting calls lie in a
+partition the Process Manager hands to the next program; MacTCP lets data and notifications land
+there. Riptide asks for time (the driver's dNeedTime flag: the Device Manager's SystemTask sends it
+accRun every half second, in a program's context, where the Process Manager may be called), lists
+the partitions of the processes alive, and releases every stream whose creator's A5 was in a
+partition that has gone, and drops the lookups and echoes whose parameter blocks were there,
+without completing their calls (logged: `.IPP: TCP stream ... of a program that quit without
+releasing it: released`).
+
+**Completion and notification routines.** A completion routine is called with the parameter
+block in A0 and the result in D0 (the Device Manager's convention) and also on the stack, because
+MacTCP.h declares TCPIOCompletionProc and UDPIOCompletionProc as C functions of the block; the
+stack comes back either way. A synchronous call made from inside a completion or notification
+routine (which the stack's task is running) would wait for that task for ever if it were queued;
+the ones MacTCP answers at once (ipctlGetAddr, TCPStatus, TCPGlobalInfo, UDPMaxMTUSize,
+TCPRcvBfrReturn, UDPBfrReturn) are answered there and then. Calls made asynchronously from those
+routines are queued as usual and taken in the same round of the stack.
+
+**The log.** Built with `AURORA68=1`, the driver logs to PiLog's Mac tab what programs ask of it,
+so that a photograph of PiLog shows what a failing program wanted: the first call of each kind
+(`.IPP: first TCPCreate (30)`), every call that ends in an error, once per call and result, with
+its stream (`.IPP: TCPRcv (37) on stream 0012ab34: error -23016`), every csCode that is not
+supported, once (`.IPP csCode 41 (TCPExtendedStat) is not supported yet: controlErr`), each
+program's Open of the driver and each refused Close, and at startup the resolver check
+(`resolver: Riptide DNR in the System Folder ('mtcp')`, or what is wrong).
+
+Install: Riptide in the Extensions folder, Riptide DNR in the System Folder, MacTCP out of the
+Control Panels folder; RiptidePrefs anywhere. `make -f Makefile.mac test` builds two test
+programs that run against Aurora68's `tools/pinet.py`: MacTCPTest.bin (TCP and UDP echo on port 7,
+DNS for `*.testbed`) and BrowserTest.bin (below).
+
+**Internet Explorer and Open Transport.** Internet Explorer 4.01, the last version for 68k Macs,
+runs on MacTCP: Microsoft's requirements for Internet Explorer 4 for the Macintosh (Knowledge
+Base 181767) are a 68030 or later and "MacTCP or Open Transport 1.1.1 or later" (archive listings
+of 4.01 give MacTCP 2.0.6). It does not need Open Transport; 4.5 and later are PowerPC only. What
+Open Transport support on Riptide would take is in docs/MAC-OT.md.
+
+### The browser test
+
+tests/mac/http_test.c ("Browser test", BrowserTest.bin) uses MacTCP the way a web browser of 1997
+does, against pinet's HTTP server on port 80 (`/` a page, `/big` 256 KB in lines that can be
+checked, `/slow` the page in pieces a second apart, `/reset` a reset after the headers). It is an
+ordinary Mac application (Human Interface Guidelines, 1992): the tests run at launch and again with
+File > Run Tests (Command-R); the event loop goes on while they run (every call is asynchronous,
+its completion looked for between events), the results window scrolls and redraws; File > Stop
+(Command-period), the close box, File > Close and File > Quit stop the tests with TCPAbort and
+TCPRelease on every stream and CloseResolver, waiting for every call to come back, so nothing is
+left with the driver that points into the program. File > Quit Leaving Streams Open (Command-K)
+quits without releasing, on purpose, to see the driver clean up after it.
+
+What it checks: Gestalt `'mtcp'`; with MacTCP's "MacTCP DNR" left in the System Folder, that it was
+moved aside and what the 1988 glue would take (Riptide DNR); the resolver found exactly as the 1991
+glue finds it; StrToAddr with a dotted address (noErr at once, no result procedure) and with names; AddrToName with a name, without
+one (authNameErr within five seconds) and with a name server that never answers (noAnsErr, the
+result procedure still called); AddrToStr, HInfo, MXInfo, EnumCache; `.IPP` opened by name, closed
+(refused) and still open, the old reference number working; three streams at once, each call
+asynchronous with a completion routine and each stream with a notification routine:
+TCPActiveOpen, TCPSend with a WDS in three pieces, TCPNoCopyRcv with a six-entry RDS and
+TCPRcvBfrReturn, TCPRcv into a locked handle, a TCPRcv that times out and then receives issued
+again from inside the completion routine with no timeout, reading to connectionClosing, TCPStatus,
+TCPClose and TCPTerminate (TCPULPClose); a fourth stream read by polling TCPStatus for
+amtUnreadData and making a synchronous TCPStatus inside its notification routine; a stream opened
+again; a reset (TCPRemoteAbort); TCPAbort; an open refused (openFailed); TCPGlobalInfo;
+TCPRelease. The completion routines check that ioResult was set before they ran and that the block
+is both in A0 and on the stack; the notification routines that A5 is the program's, D0 and A2 as
+the guide says, and that they are never re-entered.
+
+
+## The Riptide Command Terminal
 
 Riptide for the Amiga comes with command-line tools (src/amiga/cmd). The Mac has no command line,
-so the Riptide Terminal (src/mac/term, `build/mac/RiptideTerminal.bin`) is one: a window you can
+so the Riptide Command Terminal (src/mac/term, `build/mac/RiptideTerminal.bin`) is one: a window you can
 move, resize and zoom, a scrolling console in Monaco 9, and a `riptide>` prompt. A line typed
 there runs the tool it names, from the same source files as the Amiga's tools, unchanged
 (compiled as RiptidePrefs' files are, with the Amiga's types and plain prototypes, docs/MAC-GUI.md):
@@ -216,8 +345,9 @@ typed while they run (Command-D or Control-D ends that input, as Ctrl-\ does on 
 and Down bring back earlier lines, File > Clear Window (Command-K) empties it. Built in are
 `help`, `history`, `clear`, `quit` and `conf LINE`, which hands a riptide.conf line to the
 running stack (as the RIPTIDE port's COMMAND: `conf nameserver 192.168.1.1`,
-`conf host printer 192.168.1.9`). The lines of the text file "Terminal Startup" in
-Preferences:Riptide:, if there is one, run at launch as if typed.
+`conf host printer 192.168.1.9`). The lines of the text file "Command Terminal Startup" in
+Preferences:Riptide:, if there is one, run at launch as if typed ("Terminal Startup", the file's
+name before the program was renamed on 19 November 2026, is read when there is no such file).
 
 **The tools wait, and on the Mac nothing else does.** The tools use the BSD socket interface: a
 recv waits for data, select for a socket or a timeout, a name lookup for its answer. MacTCP's
@@ -246,11 +376,11 @@ data is put back before every run: the linker script (src/mac/term/term.ld) gath
 Left out: `rtdiag`, which runs other commands through SystemTagList and writes a packet capture
 (the Mac driver has no capture files). `speedtest` is in, but needs the Internet.
 
-![The Riptide Terminal](mac-terminal.png)
+![The Riptide Command Terminal](mac-terminal.png)
 
 ## Notes for the next stages
 
-- Real programs (Internet Explorer, Fetch, NCSA Telnet) will show what is missing: TCPPassiveOpen
-  with a remote filter, urgent data, TCPExtendedStat, UDPMulti*, HInfo and MXInfo.
-- Unknown csCodes are logged ("csCode N is not supported yet"), which shows what a real program
-  asks for first.
+- Real programs (Internet Explorer 4.01, Fetch, NCSA Telnet) on real hardware will show what is
+  still missing; the candidates are urgent data, TCPExtendedStat, UDPStatus, UDPMulti*, ICMP
+  reports, HInfo and MXInfo. The log names each unsupported csCode and each error once.
+- Open Transport: docs/MAC-OT.md.
