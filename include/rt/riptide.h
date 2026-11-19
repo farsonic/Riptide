@@ -146,6 +146,7 @@ int  rt_resolve_name6(const char *name, rt_in6_addr *addrs, int max, char *canon
  * IPv4 ones IPv4-mapped, unsorted. family RT_AF_UNSPEC, RT_AF_INET or
  * RT_AF_INET6. Count or the error of rt_resolve_name(). No lock held. */
 int  rt_resolve_name46(const char *name, rt_in6_addr *addrs, int max, int family, char *canon, u32 canonlen);
+int  rt_resolve_local46(const char *name, int v6, u32 *a4, rt_in6_addr *a6, int max);   /* no network: hosts, cache */
 
 /* ---- Happy Eyeballs v2 (src/core/happy.c, RFC 8305) ---- */
 extern s32 rt_he_enable, rt_he_attempt_delay, rt_he_resolution_delay, rt_he_prefer, rt_he_aaaa_filter;

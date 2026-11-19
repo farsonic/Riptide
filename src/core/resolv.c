@@ -1807,6 +1807,16 @@ static int resolve_local(const char *name, u16 qtype, u32 *a4, rt_in6_addr *a6, 
 	return disallowed ? -RT_HOST_NOT_FOUND : 0;
 }
 
+/* What a name is without asking the network (the hosts table, localhost,
+ * our own .local name, the cache), for a resolver of its own that must never
+ * wait (the Mac's MacTCP interface, src/mac/mactcp.c): IPv4 addresses into
+ * a4 (v6 0) or IPv6 into a6 (v6 1). Count, 0 for none. */
+int rt_resolve_local46(const char *name, int v6, u32 *a4, rt_in6_addr *a6, int max)
+{
+	int n = resolve_local(name, v6 ? DNS_TYPE_AAAA : DNS_TYPE_A, v6 ? NULL : a4, v6 ? a6 : NULL, max, NULL, 0);
+	return n < 0 ? 0 : n;
+}
+
 /* the names to ask for (ndots:1): the name itself and NAME.DOMAIN for
  * every search domain */
 static int candidates(struct dns_work *w, const char *name)

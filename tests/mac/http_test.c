@@ -36,6 +36,8 @@
  *   - Connections the server closes after 30 idle seconds while the program sits in
  *     WaitNextEvent, once in front and once with the Finder in front: TCPClosing with the
  *     program's A5, then TCPClose and TCPTerminate.
+ *   - IPv6 through a stand-in IPv4 address: a name with only an AAAA record, AddrToName of the
+ *     stand-in, HTTP and UDP echo to it (over IPv6 underneath), a host line with an IPv6 address.
  * Each result goes to the window and, built with AURORA68_LOG, to the Pi's log as
  * "[MAC] Browser test: ...".
  * SPDX-License-Identifier: GPL-2.0-only
@@ -1247,6 +1249,105 @@ static void test_idle(void)
 		idle_one(c, 1);
 }
 
+/* IPv6 for a program that knows only IPv4: v6only.testbed has only an IPv6 address (fd68::80), so
+   the resolver answers with a stand-in from 198.18.0.0/15, and a stream to the stand-in reaches
+   it over IPv6; a riptide.conf host line with an IPv6 address does the same */
+static short riptide_command(const char *line)
+{
+	static unsigned char pb[64];
+	static char text[128], reply[256];
+	rt_snprintf(text, sizeof text, "%s", line);
+	memset(pb, 0, sizeof pb);
+	*(short *)(pb + 24) = ipp;
+	*(short *)(pb + 26) = 0x5251;                           /* RTMAC_PORT */
+	*(u32 *)(pb + 28) = 3;                                  /* RTCMD_COMMAND */
+	*(char **)(pb + 32) = text;
+	*(u32 *)(pb + 36) = sizeof text;
+	*(char **)(pb + 40) = reply;
+	*(u32 *)(pb + 44) = sizeof reply;
+	return pb_control_sync(pb) ? -1 : (short)*(long *)(pb + 48);
+}
+
+static void test_ipv6(void)
+{
+	static struct hostInfo hi;
+	static char ubuf[4096];
+	static const char msg[] = "riptide over ipv6";
+	struct conn *c = &conns[3];
+	unsigned char pb[104], wds[12];
+	const char *mp = msg;
+	char t[160];
+	long r, first_r;
+	u32 ticks, standin, udps;
+	short rr;
+	if (!dnr)
+		return;
+	r = lookup(3L, (long)"v6only.testbed", &hi, &ticks, &first_r);
+	standin = hi.addr[0];
+	rt_snprintf(t, sizeof t, "IPv6: StrToAddr v6only.testbed (AAAA only): stand-in %lu.%lu.%lu.%lu",
+	            standin >> 24, (standin >> 16) & 255, (standin >> 8) & 255, standin & 255);
+	check(r == 0 && (standin & 0xFFFE0000UL) == 0xC6120000UL, t, r);
+	if (r)
+		return;
+	r = lookup(6L, (long)standin, &hi, &ticks, &first_r);
+	rt_snprintf(t, sizeof t, "IPv6: AddrToName of the stand-in: \"%s\"", hi.cname);
+	check(r == 0 && !strcmp(hi.cname, "v6only.testbed"), t, r);
+	/* HTTP to the stand-in: over IPv6 underneath */
+	c->name = "ipv6";
+	c->path = "/";
+	c->expect_error = 0;
+	c->nocopy = c->chain = 0;
+	reset_conn(c);
+	open_to(c, standin, 80);
+	rr = wait_call(&c->c, 600);
+	check(rr == 0 && *(u32 *)(c->c.pb + 36) == standin && *(u32 *)(c->c.pb + 42) == MAC_IP,
+	      "IPv6: TCPActiveOpen to the stand-in, port 80: the stand-in and our IPv4 address", rr);
+	if (rr)
+		return;
+	rr = status(c, pb);
+	check(rr == 0 && pb[52] == 8 && *(u32 *)(pb + 38) == standin && *(u32 *)(pb + 44) == MAC_IP,
+	      "IPv6: TCPStatus shows the stand-in", rr);
+	send_get(c);
+	rcv_start(c, 10);
+	read_all(4, 20 * 60);
+	check(c->eof && find_str(c->body, "It works") != 0, "IPv6: the page, over IPv6 to fd68::80", (long)c->got);
+	memset(pb, 0, sizeof pb);
+	ctl(pb, TCPClose, c->stream);
+	/* UDP echo through the stand-in */
+	memset(pb, 0, sizeof pb);
+	*(char **)(pb + 32) = ubuf;
+	*(u32 *)(pb + 36) = sizeof ubuf;
+	rr = ctl(pb, 20, 0);                                    /* UDPCreate */
+	udps = *(u32 *)(pb + 28);
+	if (rr == 0) {
+		*(unsigned short *)wds = sizeof msg - 1;
+		memcpy(wds + 2, &mp, 4);
+		*(unsigned short *)(wds + 6) = 0;
+		memset(pb + 32, 0, 60);
+		*(u32 *)(pb + 34) = standin;
+		*(unsigned short *)(pb + 38) = 7;
+		*(unsigned char **)(pb + 40) = wds;
+		rr = ctl(pb, 23, udps);                         /* UDPWrite */
+		memset(pb + 32, 0, 60);
+		*(unsigned short *)(pb + 32) = 5;
+		if (rr == 0)
+			rr = ctl(pb, 21, udps);                 /* UDPRead */
+		check(rr == 0 && *(unsigned short *)(pb + 44) == sizeof msg - 1 && *(u32 *)(pb + 34) == standin &&
+		      !memcmp(*(char **)(pb + 40), msg, sizeof msg - 1), "IPv6: UDP echo through the stand-in", rr);
+		if (rr == 0)
+			ctl(pb, 22, udps);                      /* UDPBfrReturn */
+		memset(pb + 32, 0, 60);
+		ctl(pb, 24, udps);                              /* UDPRelease */
+	} else {
+		check(0, "IPv6: UDPCreate", rr);
+	}
+	/* a host line with an IPv6 address, as `conf host macbook6 ...` in the Command Terminal */
+	rr = riptide_command("host mac6test fd68::80");
+	r = lookup(3L, (long)"mac6test", &hi, &ticks, &first_r);
+	check(rr == 0 && r == 0 && hi.addr[0] == standin, "IPv6: a host line with an IPv6 address: the same stand-in", r);
+	riptide_command("host del mac6test");
+}
+
 /* every stream aborted and released, every call of ours finished, the resolver closed: nothing is
    left with the driver that points into this program */
 static void cleanup(int report)
@@ -1326,6 +1427,8 @@ static void run_tests(void)
 		test_reset_abort();
 	if (ipp && !stopped())
 		test_global();
+	if (ipp && !stopped())
+		test_ipv6();
 	if (ipp && !stopped())
 		test_idle();
 	if (leave_open) {

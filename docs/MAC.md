@@ -306,6 +306,27 @@ Control Panels folder; RiptidePrefs anywhere. `make -f Makefile.mac test` builds
 programs that run against Aurora68's `tools/pinet.py`: MacTCPTest.bin (TCP and UDP echo on port 7,
 DNS for `*.testbed`) and BrowserTest.bin (below).
 
+**IPv6 for MacTCP programs.** MacTCP's interface knows only IPv4 (a host is a 32-bit `ip_addr`
+everywhere), so Riptide gives an IPv6 host a stand-in IPv4 address, as DNS64 and NAT64 do (RFC 6147,
+RFC 6146), but inside the Mac and without translating packets (src/mac/standin.c):
+- a name with no IPv4 address but an IPv6 one (a DNS AAAA record, or a riptide.conf `host` line
+  with an IPv6 address) is answered with a stand-in from 198.18.0.0/15, RFC 2544's benchmarking
+  range, which never appears on the Internet (`mactcp standin A.B.C.D[/N]` picks another);
+- a stream that opens a stand-in gets a core socket of family IPv6 to the real address; the program
+  sees the stand-in as the remote address (its open, TCPStatus) and its own IPv4 address as the
+  local one; a UDP stream sends to a stand-in through a second socket, IPv6, on the same port, and
+  datagrams from IPv6 hosts come with their stand-in as the sender;
+- AddrToName of a stand-in answers the name it was made for;
+- `mactcp ipv6 prefer` makes names with both kinds of address answer with a stand-in too, so MacTCP
+  programs use IPv6 where they can (off by default: `mactcp ipv6 on`).
+The table has 64 stand-ins; one in use by a stream keeps its address, and an idle one goes to a new
+address only when all are taken, the one used longest ago first. The driver's lookups now also look
+in the hosts table and the core's cache first (rt_resolve_local46), so `host` lines, IPv4 or IPv6,
+reach MacTCP programs. For example, in the Command Terminal `conf host macbook6
+2001:db8:7501:0:e3:5d43:1982:7c14`, then `http://macbook6:8080/` in Internet Explorer. An IPv6
+literal in a URL (`http://[2001:db8::1]/`) cannot work in Internet Explorer 4: it does not parse
+them, and MacTCP has no way to carry one; names are the way in.
+
 **Internet Explorer and Open Transport.** Internet Explorer 4.01, the last version for 68k Macs,
 runs on MacTCP: Microsoft's requirements for Internet Explorer 4 for the Macintosh (Knowledge
 Base 181767) are a 68030 or later and "MacTCP or Open Transport 1.1.1 or later" (archive listings
@@ -342,6 +363,16 @@ TCPRelease. The completion routines check that ioResult was set before they ran 
 is both in A0 and on the stack; the notification routines that A5 is the program's, D0 and A2 as
 the guide says, and that they are never re-entered.
 
+
+Results in the testbed (Aurora68's solo board under QEMU, System 7.1, `tools/pinet.py` as the
+peer, 19 November 2026): the first run, 70 of 77, showed four things, all fixed the same day: the
+startup move of "MacTCP DNR" did nothing (the driver's File Manager glue, above); pinet stalled the
+256 KB file (it sent a whole window at once and never resent a frame the Mac's receive ring had no
+room for; it now paces and goes back N); a reset could arrive before the receive was made (the
+test accepts connectionDoesntExist too); and Quit Leaving Streams Open, with transfers running,
+crashed the Finder with "bad F-Line instruction" (programs that quit, above). Then 83 of 83, with
+IPv6: Stop (Command-period) in the middle of a run released everything; Run Tests again ran
+cleanly; Quit Leaving Streams Open had its three streams released by the driver's check.
 
 ## The Riptide Command Terminal
 

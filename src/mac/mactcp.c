@@ -25,10 +25,17 @@
  * be reused from then on, which is earlier than MacTCP allows and so asks nothing more of the
  * caller. TCPClose completes at once (MacTCP waits for the FIN's acknowledgement).
  *
- * The lookups (RTMAC_DNS, from the 'dnrp' code of the Riptide DNR file): a small DNS client of
- * its own, asynchronous like everything else here (the core's resolver waits in select, which the
- * Mac's deferred task must never do): A and PTR queries over UDP to the configured name servers,
- * each tried twice, with the search domain for names without a dot.
+ * The lookups (RTMAC_DNS, from the 'dnrp' code of the Riptide DNR file): the hosts table and the
+ * core's cache first (rt_resolve_local46), then a small DNS client of its own, asynchronous like
+ * everything else here (the core's resolver waits in select, which the Mac's deferred task must
+ * never do): A, AAAA and PTR queries over UDP to the configured name servers, each tried twice,
+ * with the search domain for names without a dot.
+ *
+ * IPv6 for programs that know only IPv4 (standin.c): a name with no IPv4 address but an IPv6 one
+ * is answered with a stand-in IPv4 address; a stream that opens a stand-in gets a socket of
+ * family IPv6 to the real address, and the program sees the stand-in as the remote address and
+ * its own IPv4 address as the local one; a UDP stream sends to a stand-in through a second,
+ * IPv6 socket on the same port. AddrToName of a stand-in answers the name it was made for.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <string.h>
@@ -42,6 +49,8 @@
 #include "riptide.h"
 #include "mac.h"
 #include "ipp.h"
+#include "standin.h"
+#include "rt_ip6.h"
 #include "prefs/mac_ipp_private.h"
 
 /* csCodes */
@@ -113,6 +122,8 @@ struct mstream {
 	int peer_fin, told_fin, told_data, closed, nodelay;
 	int graceful;                   /* the last connection ended with both ends closing */
 	int loaned;                     /* rbuf is out (TCPNoCopyRcv, UDPRead) */
+	int v6;                         /* TCP: the socket is IPv6, to the stand-in rhost's address */
+	int fd6;                        /* UDP: a second socket, IPv6, for stand-ins (-1 until needed) */
 	u32 own_lo, own_hi;             /* the creator's partition (mactcp_reap); 1: not a program's */
 	u32 rhost;
 	u16 rport, lport;
@@ -222,6 +233,42 @@ static void stream_close(struct rt_sockctx *c, struct mstream *s)
 	if (s->fd >= 0)
 		rt_api_close(c, s->fd);
 	s->fd = -1;
+	if (s->v6)
+		standin_hold(s->rhost, 0);
+	s->v6 = 0;
+	if (s->fd6 >= 0)
+		rt_api_close(c, s->fd6);
+	s->fd6 = -1;
+}
+
+static void fill_addr6(struct rt_sockaddr_in6 *a, const rt_in6_addr *host, u16 port)
+{
+	memset(a, 0, sizeof *a);
+	a->sin6_len = sizeof *a;
+	a->sin6_family = RT_AF_INET6;
+	a->sin6_port = port;
+	if (host)
+		a->sin6_addr = *host;
+}
+
+/* one end of a socket (peer 1: the remote one) as MacTCP shows it: the port, and the IPv4 address
+   (an IPv6 one, which only a stand-in's socket has, leaves *addr alone: the caller knows it) */
+static int sock_end(struct rt_sockctx *c, int fd, int peer, u32 *addr, u16 *port)
+{
+	union { struct rt_sockaddr_in a4; struct rt_sockaddr_in6 a6; } u;
+	u32 l = sizeof u;
+	int r = peer ? rt_api_getpeername(c, fd, &u, &l) : rt_api_getsockname(c, fd, &u, &l);
+	if (r < 0)
+		return r;
+	if (u.a4.sin_family == RT_AF_INET) {
+		*addr = u.a4.sin_addr;
+		*port = u.a4.sin_port;
+	} else {
+		if (rt_in6_is_v4mapped(&u.a6.sin6_addr))
+			*addr = rt_in6_v4(&u.a6.sin6_addr);
+		*port = u.a6.sin6_port;
+	}
+	return 0;
 }
 
 /* the ULP timeout and action of an open, send or close: bytes 32, 33 and the validity bits at 34 */
@@ -259,6 +306,7 @@ static int tcp_create(void *pb, struct rt_sockctx *c)
 			s->magic = S_MAGIC;
 			s->tcp = 1;
 			s->fd = -1;
+			s->fd6 = -1;
 			s->rbuf = PB_P(pb, 32);
 			s->rlen = PB_L(pb, 36);
 			s->notify = PB_P(pb, 40);
@@ -268,6 +316,52 @@ static int tcp_create(void *pb, struct rt_sockctx *c)
 			return 0;
 		}
 	return insufficientResources;
+}
+
+static void tcp_reset_conn(struct mstream *s, void *pb)
+{
+	s->conn = s->peer_fin = s->told_fin = s->told_data = s->closed = s->loaned = s->nodelay = s->graceful = 0;
+	s->snd_off = 0;
+	s->ulp_secs = 0;
+	s->ulp_report = 0;                              /* the default action is abort */
+	take_ulp(s, pb);
+}
+
+/* TCPActiveOpen to a stand-in address: a socket of family IPv6 to the real address */
+static int tcp_open6(void *pb, struct rt_sockctx *c, struct mstream *s, const rt_in6_addr *a6)
+{
+	struct rt_sockaddr_in6 a;
+	int fd = rt_api_socket(c, RT_AF_INET6, RT_SOCK_STREAM, RT_IPPROTO_TCP), r;
+	if (fd < 0)
+		return insufficientResources;
+	nonblock(c, fd);
+	s->fd = fd;
+	tcp_reset_conn(s, pb);
+	s->lport = PB_W(pb, 46);
+	if (s->lport) {
+		int one = 1;
+		rt_api_setsockopt(c, fd, RT_SOL_SOCKET, RT_SO_REUSEADDR, &one, sizeof one);
+		fill_addr6(&a, NULL, s->lport);
+		if (rt_api_bind(c, fd, &a, sizeof a) < 0) {
+			stream_close(c, s);
+			return duplicateSocket;
+		}
+	}
+	s->passive = 0;
+	s->open_deadline = secs_deadline(ulp_secs(s));
+	s->rhost = PB_L(pb, 36);
+	s->rport = PB_W(pb, 40);
+	s->v6 = 1;
+	standin_hold(s->rhost, 1);
+	fill_addr6(&a, a6, s->rport);
+	r = rt_api_connect(c, fd, &a, sizeof a);
+	if (r < 0 && r != -RT_EINPROGRESS && r != -RT_EALREADY) {
+		stream_close(c, s);
+		return r == -RT_ENETUNREACH || r == -RT_EHOSTUNREACH ? ipDestDeadErr : openFailed;
+	}
+	s->state = stSynSent;
+	s->open_pb = pb;
+	return 1;
 }
 
 static int tcp_open(void *pb, struct rt_sockctx *c, int passive)
@@ -281,16 +375,18 @@ static int tcp_open(void *pb, struct rt_sockctx *c, int passive)
 		return connectionExists;
 	if (!passive && (!PB_L(pb, 36) || !PB_W(pb, 40)))
 		return invalidLength;                   /* "remote IP address; cannot be 0" */
+	{
+		/* a stand-in: the socket is IPv6, to the address it stands for */
+		rt_in6_addr a6;
+		if (!passive && standin_lookup(PB_L(pb, 36), &a6, NULL, 0))
+			return tcp_open6(pb, c, s, &a6);
+	}
 	fd = rt_api_socket(c, RT_AF_INET, RT_SOCK_STREAM, RT_IPPROTO_TCP);
 	if (fd < 0)
 		return insufficientResources;
 	nonblock(c, fd);
 	s->fd = fd;
-	s->conn = s->peer_fin = s->told_fin = s->told_data = s->closed = s->loaned = s->nodelay = s->graceful = 0;
-	s->snd_off = 0;
-	s->ulp_secs = 0;
-	s->ulp_report = 0;                              /* the default action is abort */
-	take_ulp(s, pb);
+	tcp_reset_conn(s, pb);
 	s->lport = PB_W(pb, 46);
 	if (s->lport || passive) {
 		int one = 1;
@@ -330,19 +426,19 @@ static int tcp_open(void *pb, struct rt_sockctx *c, int passive)
 	return 1;
 }
 
+/* the two ends into the open's block (a stand-in's socket: the stand-in, and our IPv4 address) */
 static void tcp_fill_ends(struct rt_sockctx *c, struct mstream *s, void *pb)
 {
-	struct rt_sockaddr_in a;
-	u32 l = sizeof a;
-	if (rt_api_getpeername(c, s->fd, &a, &l) == 0) {
-		s->rhost = a.sin_addr;
-		s->rport = a.sin_port;
+	u32 host = s->rhost, local = mac_nif ? mac_nif->addr : 0;
+	u16 port;
+	if (sock_end(c, s->fd, 1, &host, &port) == 0) {
+		s->rhost = host;
+		s->rport = port;
 	}
-	l = sizeof a;
-	if (rt_api_getsockname(c, s->fd, &a, &l) == 0) {
-		PB_L(pb, 42) = a.sin_addr;
-		PB_W(pb, 46) = a.sin_port;
-		s->lport = a.sin_port;
+	if (sock_end(c, s->fd, 0, &local, &port) == 0) {
+		PB_L(pb, 42) = local;
+		PB_W(pb, 46) = port;
+		s->lport = port;
 	}
 	PB_L(pb, 36) = s->rhost;
 	PB_W(pb, 40) = s->rport;
@@ -580,8 +676,8 @@ static int tcp_status(void *pb, struct rt_sockctx *c)
 {
 	static u8 connstats[96];        /* TCPConnectionStats, zero */
 	struct mstream *s = stream_of(pb);
-	struct rt_sockaddr_in a;
-	u32 l = sizeof a, unread;
+	u32 unread, local = mac_nif ? mac_nif->addr : 0;
+	u16 port;
 	if (!s || !s->tcp)
 		return invalidStreamPtr;
 	memset((u8 *)pb + 32, 0, 66);                           /* up to userDataPtr at 98 */
@@ -589,9 +685,9 @@ static int tcp_status(void *pb, struct rt_sockctx *c)
 	((u8 *)pb)[33] = s->ulp_report ? 0 : 1;
 	PB_L(pb, 38) = s->rhost;
 	PB_W(pb, 42) = s->rport;
-	if (s->fd >= 0 && rt_api_getsockname(c, s->fd, &a, &l) == 0) {
-		PB_L(pb, 44) = a.sin_addr;
-		PB_W(pb, 48) = a.sin_port;
+	if (s->fd >= 0 && sock_end(c, s->fd, 0, &local, &port) == 0) {
+		PB_L(pb, 44) = local;
+		PB_W(pb, 48) = port;
 	} else {
 		PB_L(pb, 44) = mac_nif ? mac_nif->addr : 0;
 		PB_W(pb, 48) = s->lport;
@@ -666,6 +762,7 @@ static int udp_create(void *pb, struct rt_sockctx *c)
 		memset(s, 0, sizeof *s);
 		s->magic = S_MAGIC;
 		s->fd = fd;
+		s->fd6 = -1;
 		s->rbuf = PB_P(pb, 32);
 		s->rlen = PB_L(pb, 36);
 		s->notify = PB_P(pb, 40);
@@ -678,16 +775,40 @@ static int udp_create(void *pb, struct rt_sockctx *c)
 	return 0;
 }
 
+/* a datagram from either socket into rbuf; the sender's IPv4 address (a stand-in for an IPv6 one) */
+static int udp_recv(struct rt_sockctx *c, struct mstream *s, u32 *host, u16 *port)
+{
+	u32 len = s->rlen > 65535 ? 65535 : s->rlen;
+	struct rt_sockaddr_in from;
+	struct rt_sockaddr_in6 from6;
+	u32 fl = sizeof from;
+	int r = rt_api_recvfrom(c, s->fd, s->rbuf, len, RT_MSG_DONTWAIT, &from, &fl);
+	if (r >= 0) {
+		*host = from.sin_addr;
+		*port = from.sin_port;
+		return r;
+	}
+	if (s->fd6 < 0)
+		return r;
+	fl = sizeof from6;
+	r = rt_api_recvfrom(c, s->fd6, s->rbuf, len, RT_MSG_DONTWAIT, &from6, &fl);
+	if (r >= 0) {
+		*host = standin_for(&from6.sin6_addr, NULL);
+		*port = from6.sin6_port;
+	}
+	return r;
+}
+
 static void udp_poll(struct rt_sockctx *c, struct mstream *s)
 {
 	void *pb;
 	while ((pb = s->rcv_q) != NULL) {
-		struct rt_sockaddr_in from;
-		u32 fl = sizeof from;
+		u32 host = 0;
+		u16 port = 0;
 		int r;
 		if (s->loaned)
 			return;
-		r = rt_api_recvfrom(c, s->fd, s->rbuf, s->rlen > 65535 ? 65535 : s->rlen, RT_MSG_DONTWAIT, &from, &fl);
+		r = udp_recv(c, s, &host, &port);
 		if (r < 0) {
 			if (expired(s->rcv_deadline)) {
 				q_pop(&s->rcv_q);
@@ -697,8 +818,8 @@ static void udp_poll(struct rt_sockctx *c, struct mstream *s)
 			}
 			return;
 		}
-		PB_L(pb, 34) = from.sin_addr;
-		PB_W(pb, 38) = from.sin_port;
+		PB_L(pb, 34) = host;
+		PB_W(pb, 38) = port;
 		PB_P(pb, 40) = s->rbuf;
 		PB_W(pb, 44) = (u16)r;
 		PB_L(pb, 52) = mac_nif ? mac_nif->addr : 0;     /* destHost */
@@ -709,10 +830,30 @@ static void udp_poll(struct rt_sockctx *c, struct mstream *s)
 		ipp_result(pb, 0);
 		s->rcv_deadline = s->rcv_q ? secs_deadline(PB_W(s->rcv_q, 32)) : 0;
 	}
-	if (!s->told_data && !s->loaned && ready(c, s->fd, 0)) {
+	if (!s->told_data && !s->loaned && (ready(c, s->fd, 0) || ready(c, s->fd6, 0))) {
 		s->told_data = 1;
 		asr(s, UDPDataArrival, 0);
 	}
+}
+
+/* the IPv6 socket of a UDP stream, on the same port, made when it first sends to a stand-in */
+static int udp_fd6(struct rt_sockctx *c, struct mstream *s)
+{
+	struct rt_sockaddr_in6 a;
+	int one = 1;
+	if (s->fd6 >= 0)
+		return s->fd6;
+	s->fd6 = rt_api_socket(c, RT_AF_INET6, RT_SOCK_DGRAM, RT_IPPROTO_UDP);
+	if (s->fd6 < 0)
+		return -1;
+	nonblock(c, s->fd6);
+	rt_api_setsockopt(c, s->fd6, RT_IPPROTO_IPV6, RT_IPV6_V6ONLY, &one, sizeof one);
+	fill_addr6(&a, NULL, s->lport);
+	if (rt_api_bind(c, s->fd6, &a, sizeof a) < 0) {
+		rt_api_close(c, s->fd6);
+		s->fd6 = -1;
+	}
+	return s->fd6;
 }
 
 static int udp_write(void *pb, struct rt_sockctx *c)
@@ -736,6 +877,18 @@ static int udp_write(void *pb, struct rt_sockctx *c)
 		memcpy(buf + n, p, len);
 		n += len;
 	}
+	{
+		rt_in6_addr a6;
+		if (standin_lookup(PB_L(pb, 34), &a6, NULL, 0)) {
+			struct rt_sockaddr_in6 to6;
+			int fd6 = udp_fd6(c, s);
+			if (fd6 < 0)
+				return insufficientResources;
+			fill_addr6(&to6, &a6, PB_W(pb, 38));
+			r = rt_api_sendto(c, fd6, buf, n, RT_MSG_DONTWAIT, &to6, sizeof to6);
+			return r < 0 ? ipDestDeadErr : 0;
+		}
+	}
 	fill_addr(&to, PB_L(pb, 34), PB_W(pb, 38));
 	r = rt_api_sendto(c, s->fd, buf, n, RT_MSG_DONTWAIT, &to, sizeof to);
 	return r < 0 ? ipDestDeadErr : 0;
@@ -747,7 +900,8 @@ struct dnsq {
 	void *pb;
 	u32 own_lo, own_hi;             /* the partition of the parameter block (mactcp_reap) */
 	int fd, server, tries, ptr;
-	u16 id;
+	u16 id, qtype;                  /* A (1), AAAA (28) or PTR (12) */
+	int other_tried;                /* the other of A and AAAA asked for already */
 	u32 deadline;
 	char name[256];
 	int searched;
@@ -806,7 +960,7 @@ static int dns_send(struct rt_sockctx *c, struct dnsq *q)
 		nm = *dot ? dot + 1 : dot;
 	}
 	pkt[len++] = 0;
-	rt_put_be16(pkt + len, q->ptr ? 12 : 1);        /* PTR or A */
+	rt_put_be16(pkt + len, q->qtype);               /* A, AAAA or PTR */
 	rt_put_be16(pkt + len + 2, 1);                  /* IN */
 	len += 4;
 	fill_addr(&to, servers[q->server % n], rt_htons(53));
@@ -862,6 +1016,30 @@ static void dns_done(struct rt_sockctx *c, struct dnsq *q, int r)
 	q->fd = -1;
 }
 
+/* a name's answer as an IPv6 address: its stand-in (standin.c) */
+static int dns_answer6(struct rtmac_dns_pb *d, const rt_in6_addr *a6, const char *name)
+{
+	u32 v4 = standin_for(a6, name);
+	if (!v4)
+		return 0;
+	d->addrs[0] = v4;
+	d->count = 1;
+	rt_strlcpy(d->cname, name, sizeof d->cname);
+	return 1;
+}
+
+/* the other of A and AAAA, once: for a name with no record of the kind asked for first */
+static int dns_other(struct rt_sockctx *c, struct dnsq *q)
+{
+	if (q->ptr || q->other_tried)
+		return 0;
+	q->other_tried = 1;
+	q->qtype = q->qtype == 1 ? 28 : 1;
+	q->id = ++dns_id;
+	q->tries = 0;
+	return dns_send(c, q) == 1;
+}
+
 static void dns_poll(struct rt_sockctx *c)
 {
 	for (int i = 0; i < NDNS; i++) {
@@ -878,6 +1056,7 @@ static void dns_poll(struct rt_sockctx *c)
 			if (rcode == 3) {                       /* no such name: with the search domain, once */
 				const char *dom = rt_dns_search_list();
 				if (!q->ptr && !q->searched && dom && *dom && !strchr(q->name, '.')) {
+					q->other_tried = 0;
 					char *e = q->name + strlen(q->name);
 					u32 k = 0;
 					*e++ = '.';
@@ -910,11 +1089,15 @@ static void dns_poll(struct rt_sockctx *c)
 				rdlen = rt_get_be16(m + e + 8);
 				if (e + 10 + rdlen > n)
 					break;
-				if (!q->ptr && type == 1 && rdlen == 4 && got < 4) {
+				if (q->qtype == 1 && type == 1 && rdlen == 4 && got < 4) {
 					memcpy(&d->addrs[got], m + e + 10, 4);
 					if (!got)
 						rt_strlcpy(d->cname, nm, sizeof d->cname);
 					got++;
+				} else if (q->qtype == 28 && type == 28 && rdlen == 16 && !got) {
+					rt_in6_addr a6;
+					memcpy(&a6, m + e + 10, 16);
+					got = dns_answer6(d, &a6, q->name);
 				} else if (q->ptr && type == 12) {
 					dns_name(m, n, e + 10, d->cname, sizeof d->cname);
 					got = 1;
@@ -922,6 +1105,8 @@ static void dns_poll(struct rt_sockctx *c)
 				p = e + 10 + rdlen;
 			}
 			d->count = (u32)got;
+			if (!got && dns_other(c, q))
+				continue;                       /* no A: perhaps an AAAA (or the other way) */
 			dns_done(c, q, got ? 0 : noAnsErr);
 			break;
 		}
@@ -942,6 +1127,7 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 {
 	struct rtmac_dns_pb *d = pb;
 	struct dnsq *q = NULL;
+	rt_in6_addr a6;
 	u32 a;
 	int r;
 	d->count = 0;
@@ -951,6 +1137,29 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 		d->count = 1;
 		rt_strlcpy(d->cname, d->name, sizeof d->cname);
 		return 0;
+	}
+	if (d->ptr && standin_lookup(d->addrs[0], &a6, d->cname, sizeof d->cname)) {
+		/* a stand-in: the name it was made for (or its IPv6 address, for one seen on its own) */
+		if (!d->cname[0])
+			rt_inet6_ntop(&a6, d->cname, sizeof d->cname);
+		d->count = 1;
+		return 0;
+	}
+	if (!d->ptr) {
+		/* the hosts table and the cache: IPv4 addresses, else an IPv6 one as a stand-in
+		   (with `mactcp ipv6 prefer`, the IPv6 one first) */
+		u32 a4[4];
+		int n4 = rt_resolve_local46(d->name, 0, a4, NULL, 4);
+		int n6 = rt_resolve_local46(d->name, 1, NULL, &a6, 1);
+		if (n4 && !(standin_prefer6 && n6)) {
+			for (int i = 0; i < n4; i++)
+				d->addrs[i] = a4[i];
+			d->count = (u32)n4;
+			rt_strlcpy(d->cname, d->name, sizeof d->cname);
+			return 0;
+		}
+		if (n6 && dns_answer6(d, &a6, d->name))
+			return 0;
 	}
 	for (int i = 0; i < NDNS; i++)
 		if (!dnsq[i].pb) {
@@ -969,8 +1178,10 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 		rt_snprintf(q->name, sizeof q->name, "%u.%u.%u.%u.in-addr.arpa", (unsigned)(x & 255),
 		            (unsigned)((x >> 8) & 255), (unsigned)((x >> 16) & 255), (unsigned)(x >> 24));
 		q->ptr = 1;
+		q->qtype = 12;
 	} else {
 		rt_strlcpy(q->name, d->name, sizeof q->name);
+		q->qtype = standin_prefer6 ? 28 : 1;
 		/* a trailing dot: the name as it is */
 		if (q->name[0] && q->name[strlen(q->name) - 1] == '.') {
 			q->name[strlen(q->name) - 1] = 0;
