@@ -21,18 +21,23 @@ void  mac_releaseresource(void **h);
 void  mac_complete(void *pb, int result);
 void  mac_call_pascal1(void *proc, u32 arg, void *a0);
 void  mac_call_asr(void *proc, void *stream, u32 event, void *udata, u32 reason, void *icmp, int tcp);
-void  mac_enet_ph(void);
+void  mac_enet_ph0(void), mac_enet_ph1(void), mac_enet_ph2(void), mac_enet_ph3(void);
 void  mac_tx_done(void);
 void  mac_dt_entry(void);
 void  mac_tm_entry(void);
 short mac_pb(void *pb, long trap);
 short mac_findfolder(int vref, long type, int create, short *vrefout, long *dirout);
 
-/* the receive ring the protocol handler fills (net_mac.c owns it) */
-extern u8 *mac_rx_ring;
-extern volatile u16 mac_rx_head, mac_rx_tail;
-extern u16 mac_rx_slots, mac_rx_mask;
-extern volatile u32 mac_rx_dropped;
+/* the receive rings the protocol handlers fill, one per card (net_mac.c owns them; drvr.S's
+   mac_enet_phN fills mac_rx[N], and knows this layout: 16 bytes) */
+#define MAC_CARDS 4
+struct mac_rxring {
+	u8 *ring;
+	volatile u16 head, tail;
+	u16 slots, mask;
+	volatile u32 dropped;
+};
+extern struct mac_rxring mac_rx[MAC_CARDS];
 #define MAC_RX_SLOT 1536
 
 /* os_mac.c */
@@ -61,11 +66,19 @@ void mac_core_enter(struct mac_client *c);     /* the core is the program's (the
 void mac_core_leave(void);
 extern const struct rtmac_api mac_api;
 
-/* net_mac.c */
-int  net_mac_open(const char *name, unsigned unit, int mtu);
+/* net_mac.c: every Ethernet card the Slot Manager lists can be an interface of its own */
+struct mac_cardsel {
+	int unit;                                  /* -1: not by its place in the Slot Manager's list */
+	int slot, id;                              /* -1: any */
+	const char *name;                          /* "ethernet", "wifi" or part of the driver's name; NULL: any */
+	int metric;                                /* -1: the card's default (wired 10, WiFi 20) */
+};
+int  net_mac_open(const char *name, const struct mac_cardsel *sel, int mtu);
+int  net_mac_cards(void);                      /* cards found (the Slot Manager's catNetwork/typeEtherNet list) */
+int  net_mac_card_info(int i, char *buf, u32 len);   /* "slot 9 id $83 .Network_WiFi_PiStorm (wifi)" */
 void net_mac_poll(void);                       /* stack context: the received frames into the core */
 void net_mac_tx_done(void *pb);
-extern struct rt_netif *mac_nif;
+extern struct rt_netif *mac_nif;               /* the interface MacTCP's calls report (the preferred one) */
 extern char mac_net_why[64];
 
 /* ipp.c: the MacTCP interface */

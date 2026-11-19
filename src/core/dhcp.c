@@ -493,14 +493,14 @@ static void bind_lease(struct dhcp_client *c, u32 yiaddr, const struct dhcp_opts
 		 * hand. A static default route still wins (route.c orders DHCP
 		 * routes last), and one with the same gateway makes this fail. */
 		c->router = router;
-		rt_route_add(0, 0, router, nif, RT_RTF_UP | RT_RTF_DHCP, 0);
+		rt_route_add(0, 0, router, nif, RT_RTF_UP | RT_RTF_DHCP, nif->metric);   /* the interface's metric: the preferred link wins */
 	}
 	/* classless routes: drop those that went away, (re)add the rest in
 	 * option order (a router may be reachable only through an earlier
 	 * one); router 0.0.0.0 means on-link */
 	routes_remove(c, cls, nr);
 	for (i = 0; i < nr; i++) {
-		int r = rt_route_add(cls[i].dst, cls[i].mask, cls[i].gw, nif, RT_RTF_UP | RT_RTF_DHCP, 0);
+		int r = rt_route_add(cls[i].dst, cls[i].mask, cls[i].gw, nif, RT_RTF_UP | RT_RTF_DHCP, nif->metric);
 		if (r < 0 && r != -RT_EEXIST)
 			rt_log(RT_LOG_WARN, "dhcp: %s: cannot add route to %s", nif->name,
 			       rt_format_ipv4(cls[i].dst, a));

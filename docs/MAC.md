@@ -95,16 +95,72 @@ Needs `gcc-m68k-linux-gnu` and `binutils-m68k-linux-gnu` (Debian, Ubuntu) and Py
 MacBinary tool), take MacTCP out of the Control Panels folder, and restart.
 
 The configuration is riptide.conf, the same generic keywords as on the Amiga (AMIGA.md,
-"Configuration file"), on the interface `en0`. Riptide reads the one RiptidePrefs saves (the
-Riptide folder in the Preferences folder), else the Riptide file's `'TEXT'` 128 resource (make
-`CONF=`), else `dhcp en0`. The card line is the Amiga's, with the Mac's driver:
-`interface en0 device=.ENET unit=0` (without one the card is en0). A static setup:
+"Configuration file"). Riptide reads the one RiptidePrefs saves (the Riptide folder in the
+Preferences folder), else the Riptide file's `'TEXT'` 128 resource (make `CONF=`), else it opens
+every Ethernet card with DHCP on each. The card line is the Amiga's, with the Mac's driver:
+`interface en0 device=.ENET unit=0` (without any, every card is opened: en0, en1 ... in the Slot
+Manager's order; "Several cards" below). A static setup:
 
 ```
 ifconfig en0 192.168.1.20/24
 route add default gw 192.168.1.1
 nameserver 192.168.1.1
 ```
+
+## Several cards
+
+Every card the Slot Manager lists as catNetwork/typeEtherNet can be an interface of its own
+(src/mac/net_mac.c, up to four): its own refnum from OpenSlot on its slot and sResource id, its
+own protocol handlers (drvr.S has an entry point per card, `mac_enet_ph0` to `3`, because a
+driver does not tell its handler which card it is), its own receive ring and transmit slots. One
+NuBus card may hold several: Aurora68's slot-9 card carries its wired port (sResource $81,
+`.Network_EtherNet_PiStorm`) and its WiFi ($83, `.Network_WiFi_PiStorm`), two drivers with two
+unit-table entries. So a card is named by its slot and sResource id, by its kind, by part of its
+driver's name, or by its place in the list:
+
+```
+interface en0 device=.ENET card=ethernet      # or slot=9 id=0x81, or unit=0
+interface en1 device=.ENET card=wifi          # or slot=9 id=0x83, or unit=1, or card=Network_WiFi
+dhcp en0
+dhcp en1
+```
+
+`card=wifi` is a card whose driver's name has "WiFi", "Wireless" or "AirPort" in it;
+`card=ethernet` any other. With `card=`, `slot=` or `id=`, a `unit=` on the same line (RiptidePrefs
+always writes one) is ignored. A line that names a card the Mac does not have is logged and
+skipped, so the same riptide.conf serves a Mac with only one of them. RiptidePrefs' first run
+writes exactly the four lines above (with `unit=`).
+
+**Which way out.** Each interface has a metric, 10 for a wired card and 20 for a WiFi card
+(`metric=N` on the interface line changes it), and DHCP gives its routes that metric, so with both
+cards on DHCP the default route goes through the wired card. The core keeps both default routes
+even when both DHCP servers name the same router (src/core/route.c: the same route through
+another interface is another route). A driver that can say whether its link is up is asked once a
+second: Aurora68's answer csLinkStatus (230), a Control call of their own, with 'A68L' in the
+answer so that it cannot be mistaken; other drivers are taken as always up. When the wired link
+goes down the core stops using it (`rt_netif_link_change`) and the WiFi's route takes over; when
+it comes back, DHCP confirms the lease and the wired route wins again. MacTCP's calls
+(ipctlGetAddr, the MTU) report the interface the default route uses, which changes with it.
+
+**mDNS** answers on every interface with that interface's addresses (src/core/mdns.c already
+did); the host name is one, and the Mac's own answers heard back through the other card are
+recognised as its own, so "macse.local" does not conflict with itself when both cards are on one
+network.
+
+**The Amiga build** shares only the two core changes (DHCP's routes take the interface's metric,
+which is 0 there unless set; the same route through two interfaces is allowed); its own files are
+unchanged.
+
+**Tested** (19 November) on Aurora68's solo testbed, the wired card being the kernel's file bridge
+or QEMU's USB network device, the WiFi a simulated radio, each with its own host peer: both cards
+listed, opened with refnums -53 and -54 and their own addresses, DHCP bound on both (two networks),
+pings out of each, two default routes with metrics 10 and 20; with the wired cable "pulled"
+(`mac.netdown=`) a running ping moved to the WiFi within a second and back when the link returned,
+one echo lost at the change (Aurora68's docs/08 item 49 and its docs/img/system71-riptide-*.png).
+Once, after a 100-second outage, the Mac stopped with a system error just after the link came
+back; a second run with a 40-second outage did not, and the cause is not known yet. Not tested:
+a Mac with two real cards in two slots, and a driver without csLinkStatus (it is taken as always
+up, so its route never yields).
 
 ## Testing on Aurora68
 

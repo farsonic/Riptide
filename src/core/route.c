@@ -162,9 +162,13 @@ int rt_route_add(u32 dst, u32 mask, u32 gateway, struct rt_netif *nif, u32 flags
 	}
 	if (mask == 0xffffffffu)
 		flags |= RT_RTF_HOST;
+	/* The same route through another interface is another route: a Mac with its wired port and
+	 * its WiFi on one network gets the same router from both DHCP servers' answers, and keeps both
+	 * default routes, the interfaces' metrics deciding (the WiFi's takes over while the wired
+	 * link is down). */
 	for (r = route_head; r; r = r->next) {
 		if (r->dst == dst && r->mask == mask && r->gateway == gateway &&
-		    !((r->flags ^ flags) & RT_RTF_PMTU) && (gateway || r->netif == nif))
+		    !((r->flags ^ flags) & RT_RTF_PMTU) && r->netif == nif)
 			return -RT_EEXIST;
 	}
 	if ((flags & (RT_RTF_PMTU | RT_RTF_DYNAMIC)) && route_ndyn >= ROUTE_MAX_DYN)

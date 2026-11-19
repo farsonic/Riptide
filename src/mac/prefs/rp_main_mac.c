@@ -15,12 +15,14 @@ void mm_screen_init(void *qd_thePort_addr);
 void mm_paths_init(void);
 
 /* The first run: no riptide.conf yet. On the Amiga the Installer writes one before the editor
- * ever runs (a card and DHCP); the Mac has no installer, so the editor writes the same start, the
- * Mac's card on DHCP, which is also what the driver does without a file. */
+ * ever runs (a card and DHCP); the Mac has no installer, so the editor writes the same start: the
+ * wired card as en0 and a WiFi card as en1, each on DHCP, which is also what the driver does
+ * without a file (every card). A Mac without one of them logs that it has no such card. */
 static void first_run(void)
 {
 	static const char start[] = "# Riptide for the Mac (RiptidePrefs wrote this start)\n"
-	                            "interface en0 device=.ENET unit=0\ndhcp en0\n";
+	                            "interface en0 device=.ENET unit=0 card=ethernet\ndhcp en0\n"
+	                            "interface en1 device=.ENET unit=1 card=wifi\ndhcp en1\n";
 	BPTR l = Lock((CONST_STRPTR)RP_ENVARC_CONF, ACCESS_READ), f;
 	if (l) {
 		UnLock(l);

@@ -3,8 +3,9 @@
  *
  * Open (the INIT at startup, or the first application's OpenDriver): the OS layer and its memory
  * pool, the protocol core, then riptide.conf: the one RiptidePrefs saves in the Preferences folder,
- * else the 'TEXT' 128 resource of the Riptide file, else DHCP on en0. Its "interface" line opens the
- * card on .ENET (without one the card is en0). The stack then runs from its deferred task.
+ * else the 'TEXT' 128 resource of the Riptide file, else DHCP on every card. Its "interface" lines
+ * open the cards on .ENET (without one every card is opened: en0, en1 ... in the Slot Manager's
+ * order). The stack then runs from its deferred task.
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <string.h>
@@ -29,22 +30,26 @@ static const char *kv(const char *a, const char *key)
 	return !rt_strncasecmp(a, key, n) && a[n] == '=' ? a + n + 1 : NULL;
 }
 
-/* "interface NAME device=.ENET [unit=N] [mtu=N] [tcpwindow=N] [ipv4=on|off] [ipv6=on|off]
- * [qos=on|off] [reads=N] [disabled]": the card (the Amiga's form of the line, which RiptidePrefs
- * writes; device= is the Mac's .ENET, and reads= is the Amiga's and does nothing here) */
+/* "interface NAME device=.ENET [unit=N] [slot=S] [id=N] [card=ethernet|wifi|NAME] [metric=N]
+ * [mtu=N] [tcpwindow=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [reads=N] [disabled]": a card (the
+ * Amiga's form of the line, which RiptidePrefs writes; device= is the Mac's .ENET, and reads= is the
+ * Amiga's and does nothing here). Which card: unit=N is the Nth Ethernet card the Slot Manager
+ * lists; slot= and id= name one by its slot and sResource id (Aurora68's slot-9 card has its wired
+ * port at id=0x81 and its WiFi at id=0x83); card= by its kind or part of its driver's name. */
 static int interface_line(int argc, char **argv, char *err, u32 errlen)
 {
 	const char *dev = NULL, *v;
-	unsigned unit = 0;
+	struct mac_cardsel sel = { -1, -1, -1, NULL, -1 };
 	int mtu = 0, ip4 = -1, ip6 = -1, qos = -1, i, r;
 	long tcpwin = -1;
+	struct rt_netif *nif;
 	if (argc == 3 && (!rt_strcasecmp(argv[2], "delete") || !rt_strcasecmp(argv[2], "remove"))) {
 		rt_snprintf(err, errlen, "interface %s cannot be removed while the Mac runs", argv[1]);
 		return -RT_EBUSY;
 	}
 	if (argc < 3) {
-		rt_snprintf(err, errlen, "usage: interface NAME device=.ENET [unit=N] [mtu=N] [tcpwindow=N] "
-		            "[ipv4=on|off] [ipv6=on|off] [qos=on|off] [disabled]");
+		rt_snprintf(err, errlen, "usage: interface NAME device=.ENET [unit=N] [slot=S id=N] [card=ethernet|wifi] "
+		            "[metric=N] [mtu=N] [tcpwindow=N] [ipv4=on|off] [ipv6=on|off] [qos=on|off] [disabled]");
 		return -RT_EINVAL;
 	}
 	for (i = 2; i < argc; i++)
@@ -54,7 +59,15 @@ static int interface_line(int argc, char **argv, char *err, u32 errlen)
 		if ((v = kv(argv[i], "device")) != NULL || (v = kv(argv[i], "netdev")) != NULL)
 			dev = v;
 		else if ((v = kv(argv[i], "unit")) != NULL)
-			unit = (unsigned)rt_strtoul(v, NULL, 0);
+			sel.unit = (int)rt_strtoul(v, NULL, 0);
+		else if ((v = kv(argv[i], "slot")) != NULL)
+			sel.slot = (int)rt_strtoul(v, NULL, 0);
+		else if ((v = kv(argv[i], "id")) != NULL)
+			sel.id = (int)rt_strtoul(v, NULL, 0);
+		else if ((v = kv(argv[i], "card")) != NULL)
+			sel.name = v;
+		else if ((v = kv(argv[i], "metric")) != NULL)
+			sel.metric = (int)rt_strtoul(v, NULL, 0);
 		else if ((v = kv(argv[i], "mtu")) != NULL)
 			mtu = (int)rt_strtoul(v, NULL, 0);
 		else if ((v = kv(argv[i], "tcpwindow")) != NULL)
@@ -75,21 +88,26 @@ static int interface_line(int argc, char **argv, char *err, u32 errlen)
 		rt_snprintf(err, errlen, "interface: the Mac's driver is device=.ENET");
 		return -RT_EINVAL;
 	}
-	if (mac_nif && !rt_strcasecmp(mac_nif->name, argv[1]))
+	if (rt_netif_find(argv[1]))
 		return 0;                   /* the card is up already (a second Open) */
+	if (sel.unit < 0 && sel.slot < 0 && sel.id < 0 && !sel.name)
+		sel.unit = 0;               /* a line naming no card: the first, as before */
 	rt_unlock();
-	r = net_mac_open(argv[1], unit, mtu);
+	r = net_mac_open(argv[1], &sel, mtu);
 	rt_lock();
 	if (r < 0) {
 		rt_snprintf(err, errlen, "%s", mac_net_why);
 		return r;
 	}
 	net_up = 1;
-	if (tcpwin >= 0) mac_nif->tcp_window = (u32)tcpwin;
-	if (ip4 >= 0) rt_netif_ip4_enable(mac_nif, ip4);
-	if (ip6 == 0) rt_ip6_ifenable(mac_nif, 0);
-	else if (ip6 == 1) mac_nif->ip6_disabled = 2;
-	if (qos >= 0) rt_qos_enable(mac_nif, qos);
+	nif = rt_netif_find(argv[1]);
+	if (!nif)
+		return 0;
+	if (tcpwin >= 0) nif->tcp_window = (u32)tcpwin;
+	if (ip4 >= 0) rt_netif_ip4_enable(nif, ip4);
+	if (ip6 == 0) rt_ip6_ifenable(nif, 0);
+	else if (ip6 == 1) nif->ip6_disabled = 2;
+	if (qos >= 0) rt_qos_enable(nif, qos);
 	return 0;
 }
 
@@ -224,13 +242,34 @@ static void default_hostname(void)
 }
 
 /* riptide.conf: the Preferences folder's (RiptidePrefs saves it), else the 'TEXT' 128 resource of
- * the Riptide file (make CONF=), else DHCP on en0. Without an interface line the card is en0. */
+ * the Riptide file (make CONF=), else DHCP on every card. Without an interface line every card is opened (en0, en1 ...). */
+/* without an interface line: every Ethernet card the Slot Manager lists, en0, en1 ... in its order
+   (on Aurora68 the wired port, then the WiFi), with DHCP on each unless the text says otherwise */
+static char deflt[64];
+static void open_all_cards(void)
+{
+	int n = net_mac_cards(), k;
+	u32 o = 0;
+	if (!n)
+		n = 1;                      /* no card in a slot: a built-in .ENET, if there is one */
+	for (k = 0; k < n && k < MAC_CARDS; k++) {
+		char name[8];
+		struct mac_cardsel sel = { k, -1, -1, NULL, -1 };
+		rt_snprintf(name, sizeof name, "en%d", k);
+		int r = net_mac_open(name, &sel, 0);
+		if (r < 0)
+			rt_log(RT_LOG_ERR, "%s: no network (%d): %s", name, r, mac_net_why);
+		else
+			net_up = 1;
+		o += (u32)rt_snprintf(deflt + o, sizeof deflt - o, "dhcp %s\n", name);
+	}
+}
+
 static void configure(void)
 {
-	static const char deflt[] = "dhcp en0\n";
 	void **h = NULL;
-	const char *text = deflt;
-	u32 len = sizeof deflt - 1;
+	const char *text = "";
+	u32 len = 0;
 	char *file;
 	u8 pb[80];
 	unsigned char pname[64];
@@ -243,7 +282,6 @@ static void configure(void)
 	if (file && !len) {                             /* an empty file says nothing: as none */
 		rt_free(file);
 		file = NULL;
-		len = sizeof deflt - 1;
 	}
 	if (file) {
 		text = file;
@@ -255,9 +293,11 @@ static void configure(void)
 		len = sz;
 	}
 	if (!names_card(text, len)) {
-		int r = net_mac_open("en0", 0, 0);
-		if (r < 0) rt_log(RT_LOG_ERR, "no network (%d): %s", r, mac_net_why);
-		else net_up = 1;
+		open_all_cards();
+		if (!len) {                                 /* no configuration at all: DHCP on every card */
+			text = deflt;
+			len = (u32)strlen(deflt);
+		}
 	}
 	/* the mDNS responder (name.local) is on unless riptide.conf says "mdns off", as on the Amiga */
 	config_text("mdns on\n", 8);

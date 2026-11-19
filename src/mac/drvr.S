@@ -336,31 +336,59 @@ mac_tm_entry:				| A1 = the TMTask: ask for the deferred task
 	movem.l	(%sp)+,%d0-%d2/%a0-%a1
 	rts
 
-/* ---- the .ENET protocol handler (Inside Macintosh: Networking, "Ethernet Protocol Handlers") --
+/* ---- the .ENET protocol handlers (Inside Macintosh: Networking, "Ethernet Protocol Handlers") --
    On entry: A3 -> the first byte after the 14-byte header (which is at -14(A3)), D1 = bytes left
    to read, A4 -> ReadPacket, 2(A4) = ReadRest; A0 and A1 belong to the driver until ReadRest.
-   The frame is copied into the next slot of the receive ring (C: net_mac.c), which the stack's
-   deferred task drains; a full ring drops the frame (ReadRest with an empty buffer). */
+   The frame is copied into the next slot of its card's receive ring (C: net_mac.c, struct
+   mac_rxring), which the stack's deferred task drains; a full ring drops the frame (ReadRest with
+   an empty buffer). A driver calls the handler without saying which card it is, so every card
+   gets its own entry point (mac_enet_ph0 ... 3), which picks the card's ring and goes on to the
+   common code: two cards on one NuBus card (Aurora68's wired port and WiFi in slot 9) are two
+   drivers, each with its own protocol table. */
 	.equ	RX_SLOT, 1536
 	.equ	RX_DATA, 1500
-	.globl	mac_enet_ph
-mac_enet_ph:
+	.equ	RXR_RING, 0		| struct mac_rxring (mac.h): u8 *ring
+	.equ	RXR_HEAD, 4		| volatile u16 head, tail
+	.equ	RXR_TAIL, 6
+	.equ	RXR_SLOTS, 8		| u16 slots, mask
+	.equ	RXR_MASK, 10
+	.equ	RXR_DROPPED, 12		| volatile u32 dropped
+	.equ	RXR_SIZE, 16
+	.globl	mac_enet_ph0
+	.globl	mac_enet_ph1
+	.globl	mac_enet_ph2
+	.globl	mac_enet_ph3
+mac_enet_ph0:
 	movem.l	%d4-%d7/%a2/%a5/%a6,-(%sp)
-	move.l	mac_rx_ring,%d4
+	lea	mac_rx,%a6
+	bra.s	enet_ph
+mac_enet_ph1:
+	movem.l	%d4-%d7/%a2/%a5/%a6,-(%sp)
+	lea	mac_rx+RXR_SIZE,%a6
+	bra.s	enet_ph
+mac_enet_ph2:
+	movem.l	%d4-%d7/%a2/%a5/%a6,-(%sp)
+	lea	mac_rx+2*RXR_SIZE,%a6
+	bra.s	enet_ph
+mac_enet_ph3:
+	movem.l	%d4-%d7/%a2/%a5/%a6,-(%sp)
+	lea	mac_rx+3*RXR_SIZE,%a6
+enet_ph:				| A6 = the card's ring
+	move.l	RXR_RING(%a6),%d4
 	beq.s	drop
-	move.w	mac_rx_head,%d4
+	move.w	RXR_HEAD(%a6),%d4
 	move.w	%d4,%d5
-	sub.w	mac_rx_tail,%d5
-	cmp.w	mac_rx_slots,%d5
+	sub.w	RXR_TAIL(%a6),%d5
+	cmp.w	RXR_SLOTS(%a6),%d5
 	bcc.s	drop
-	and.w	mac_rx_mask,%d4
+	and.w	RXR_MASK(%a6),%d4
 	mulu.w	#RX_SLOT,%d4
-	move.l	mac_rx_ring,%a2
+	move.l	RXR_RING(%a6),%a2
 	add.l	%d4,%a2			| slot: length word, the 14-byte header, the data
 	lea	-14(%a3),%a5
-	lea	2(%a2),%a6
+	lea	2(%a2),%a3
 	moveq	#13,%d5
-1:	move.b	(%a5)+,(%a6)+
+1:	move.b	(%a5)+,(%a3)+
 	dbf	%d5,1b
 	move.w	%d1,%d6
 	cmp.w	#RX_DATA,%d6
@@ -372,12 +400,12 @@ mac_enet_ph:
 	jsr	2(%a4)			| ReadRest: A3 = buffer, D3 = its size
 	add.w	#14,%d6
 	move.w	%d6,(%a2)
-	addq.w	#1,mac_rx_head
+	addq.w	#1,RXR_HEAD(%a6)
 	jsr	mac_schedule		| A0/A1 are free after ReadRest
 	movem.l	(%sp)+,%d4-%d7/%a2/%a5/%a6
 	rts
 drop:
-	addq.l	#1,mac_rx_dropped
+	addq.l	#1,RXR_DROPPED(%a6)
 	moveq	#0,%d3
 	jsr	2(%a4)
 	movem.l	(%sp)+,%d4-%d7/%a2/%a5/%a6
