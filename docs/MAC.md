@@ -318,7 +318,10 @@ everywhere), so Riptide gives an IPv6 host a stand-in IPv4 address, as DNS64 and
 RFC 6146), but inside the Mac and without translating packets (src/mac/standin.c). It is the
 "Bump-in-the-Host" of RFC 6535 in its function-mapping form: the resolver extension and the address
 mapper sit where MacTCP's StrToAddr and TCPActiveOpen arrive, so unmodified programs (Internet
-Explorer, Fetch, Netscape 2 and 3) reach IPv6-only hosts by name:
+Explorer, Fetch, Netscape 2 and 3) reach IPv6-only hosts by name. Seen working on real hardware on
+19 November 2026: Internet Explorer 4.01 on System 7.1, on a Raspberry Pi 3B running Aurora68's solo
+board, loaded http://ip6only.me/, a site with no IPv4 address, over the user's IPv6 Internet link,
+and the page reported that it was reached over IPv6. How it works:
 - a name with no IPv4 address but an IPv6 one (a DNS AAAA record, or a riptide.conf `host` line
   with an IPv6 address) is answered with a stand-in from 198.18.0.0/15, RFC 2544's benchmarking
   range, which never appears on the Internet (`mactcp standin A.B.C.D[/N]` picks another);
