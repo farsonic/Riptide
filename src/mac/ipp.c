@@ -375,11 +375,17 @@ static int quick(int cs)
 /* A MacTCP program that quits (or crashes) without TCPRelease leaves streams whose receive buffer,
    notification routine and waiting parameter blocks are in a partition the Process Manager gives
    to the next program: data or a notification would then land in that program's memory. MacTCP
-   lets that happen; Riptide does not. The driver asks for time (dNeedTime: the Device Manager's
-   SystemTask sends accRun every half second, in a program's context, where the Process Manager
-   may be called), lists the partitions of the processes alive, and releases what belongs to a
-   partition that is gone: streams (by their creator's A5), lookups and echoes (by their
-   parameter block), never completing their calls. */
+   lets that happen. Riptide asks for time (dNeedTime: the Device Manager's SystemTask sends accRun
+   every sixth of a second, in a program's context, where the Process Manager may be called), lists
+   the partitions of the processes alive, and releases what belongs to a partition that is gone:
+   streams (by their creator's A5), lookups and echoes (by their parameter block), never completing
+   their calls. A completion or notification that falls due between the program's death and that
+   check can still run in the freed partition (the testbed's Finder once stopped with "bad F-Line
+   instruction" that way): programs must release their streams, as with MacTCP. Patching
+   _ExitToShell to release them at the quit was tried on 19 November 2026 and left out: a patch made
+   at startup is replaced by the Process Manager's, one made at the first accRun is not there for
+   the other programs (System 7.1 keeps the trap table per program), and one made in every program
+   stopped the Finder with "bad F-Line instruction". */
 #define accRun 65
 static struct mac_client reaper;                  /* the core, taken in a program's context */
 static void reap(void)
@@ -485,9 +491,11 @@ int ipp_close(void *pb, void *dce)
      in the System Folder (OpenResolver failed, and StrToAddr answers notOpenErr, -28, even for a
      dotted address): changed to 'mtcp' here;
    - any other file the glue could take first is moved into the System Folder's "Disabled
-     (Riptide)" folder, which the glue does not search: MacTCP's "MacTCP DNR" (its cache, with no
-     'dnrp': the 1988 glue takes it and fails), a MacTCP control panel left in the Control Panels
-     folder (its own 'dnrp' would talk to Riptide's .IPP as to MacTCP's).
+     (Riptide)" folder, which the glue does not search: MacTCP's "MacTCP DNR", which MacTCP leaves
+     in the System Folder and which holds MacTCP's own 'dnrp' (it comes before "Riptide DNR", so
+     every glue loads it; it then asks .IPP for MacTCP's private settings, csCode 16, gets
+     controlErr, and OpenResolver fails: notOpenErr, -28, from StrToAddr), and a MacTCP control
+     panel left in the Control Panels folder (the same resolver, found first).
    Everything done is logged. */
 #define T_CDEV 0x63646576UL
 #define C_ZTCP 0x7A746370UL

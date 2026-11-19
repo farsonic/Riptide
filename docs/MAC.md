@@ -240,10 +240,14 @@ DNR, and logs what it found and did:
 - a Riptide DNR in the System Folder with the old creator is changed to `'mtcp'`;
 - any other file the glue could take first is moved into a folder "Disabled (Riptide)" in the
   System Folder, which the glue does not search: the "MacTCP DNR" file MacTCP leaves in the System
-  Folder when it has once run (MacTCP's cache: `'cdev'` `'mtcp'`, a data fork only, no `'dnrp'`;
-  the 1991 glue skips it, but it comes before "Riptide DNR" in the folder's order and the 1988
-  glue takes it and fails), and a MacTCP control panel left in the Control Panels folder (its
-  `'dnrp'` would be found first and would talk to Riptide's `.IPP` as to MacTCP's).
+  Folder when it has once run (`'cdev'` `'mtcp'`, a resource fork holding MacTCP's own `'dnrp'`),
+  and a MacTCP control panel left in the Control Panels folder. "MacTCP DNR" comes before
+  "Riptide DNR" in the folder's order, so every glue loads MacTCP's resolver from it; that asks
+  `.IPP` for MacTCP's private settings (csCode 16), gets controlErr, and OpenResolver fails. That
+  was the user's -28 together with the old creator, and why moving "MacTCP DNR" out of the System
+  Folder by hand made Internet Explorer work. (The first version of this move, pushed in 3b80f79,
+  logged the move without making it: the driver's File Manager glue did not pass
+  `_HFSDispatch`'s selector; fixed the same day.)
 To go back to MacTCP, put the files back from that folder.
 
 A dotted address "is returned immediately" (the guide): noErr, rtnCode noErr, the address, the
@@ -264,13 +268,21 @@ others and their reference numbers keep working.
 
 **Programs that quit without releasing.** A MacTCP program that quits or crashes without
 TCPRelease leaves streams whose receive buffer, notification routine and waiting calls lie in a
-partition the Process Manager hands to the next program; MacTCP lets data and notifications land
-there. Riptide asks for time (the driver's dNeedTime flag: the Device Manager's SystemTask sends it
-accRun every half second, in a program's context, where the Process Manager may be called), lists
-the partitions of the processes alive, and releases every stream whose creator's A5 was in a
-partition that has gone, and drops the lookups and echoes whose parameter blocks were there,
-without completing their calls (logged: `.IPP: TCP stream ... of a program that quit without
-releasing it: released`).
+partition the Process Manager frees and hands to the next program; MacTCP lets data, completions
+and notifications land there. Riptide asks for time (the driver's dNeedTime flag: the Device
+Manager's SystemTask sends it accRun every sixth of a second, in a program's context, where the
+Process Manager may be called), lists the partitions of the processes alive, and releases every
+stream whose creator's A5 was in a partition that has gone, and drops the lookups and echoes whose
+parameter blocks were there, without completing their calls (logged: `.IPP: TCP stream ... of a
+program that quit without releasing it: released`). A completion or notification that falls due
+between the program's death and that check can still run in the freed partition: in the testbed,
+the Browser test's Quit Leaving Streams Open with three transfers running once stopped the Finder
+with "bad F-Line instruction" that way (the check then ran every half second; twice afterwards the
+streams were released cleanly). Programs must release their streams, as with MacTCP. Patching
+`_ExitToShell` to release them at the quit itself was tried and left out (19 November 2026): a
+patch made at startup is replaced by the Process Manager's own, one made at the first accRun is
+not there for the other programs (System 7.1's Process Manager keeps the trap table per program),
+and one made in every program stopped the Finder with "bad F-Line instruction".
 
 **Completion and notification routines.** A completion routine is called with the parameter
 block in A0 and the result in D0 (the Device Manager's convention) and also on the stack, because

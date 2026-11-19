@@ -484,11 +484,11 @@ static short tcp_create(struct conn *k)
 	return r;
 }
 
-static void open_start(struct conn *k, unsigned short port)
+static void open_to(struct conn *k, u32 host, unsigned short port)
 {
 	int keep = k->st.status_in_asr;
 	memset(k->c.pb + 32, 0, 72);
-	*(u32 *)(k->c.pb + 36) = PEER;
+	*(u32 *)(k->c.pb + 36) = host;
 	*(unsigned short *)(k->c.pb + 40) = port;
 	k->c.pb[32] = 20;                                       /* ULP timeout 20 s ... */
 	k->c.pb[34] = 0x80;                                     /* ... valid */
@@ -497,6 +497,7 @@ static void open_start(struct conn *k, unsigned short port)
 	k->st.stream = k->stream;
 	start(&k->c, TCPActiveOpen, k->stream);
 }
+static void open_start(struct conn *k, unsigned short port) { open_to(k, PEER, port); }
 
 /* GET path HTTP/1.0, in three pieces of one WDS */
 static short send_get(struct conn *k)
@@ -831,7 +832,7 @@ static void test_resolver(void)
 	int any;
 	r = mac_gestalt(MAC_TYPE('m', 't', 'c', 'p'), &resp);
 	check(r == 0 && resp == 3, "Gestalt 'mtcp' answers 3 (MacTCP 2.0)", r ? r : resp);
-	/* the image keeps the "MacTCP DNR" MacTCP left in the System Folder ('cdev' 'mtcp', its cache, no
+	/* the image keeps the "MacTCP DNR" MacTCP left in the System Folder ('cdev' 'mtcp', MacTCP's own
 	   'dnrp'), which comes before Riptide DNR: Riptide moves it aside at startup */
 	any = first_mtcp(first);
 	rt_snprintf(t, sizeof t, "the 1988 glue's choice, the System Folder's first 'cdev' 'mtcp': \"%s\"", any ? first : "none");
@@ -1113,8 +1114,11 @@ static void test_reset_abort(void)
 		t0 = TickCount();
 		while (!c->st.terminate && TickCount() - t0 < 300 && !stopped())
 			pump(1);
-		check(c->failed && c->c.result == connectionTerminated && c->st.terminate == 1 && c->st.reason == TCPRemoteAbort,
-		      "reset: the receive ends in connectionTerminated, TCPTerminate (TCPRemoteAbort)", c->c.result);
+		/* the reset may come before the receive is made (connectionDoesntExist) or while it waits
+		   (connectionTerminated); either way TCPTerminate tells why */
+		check(c->failed && (c->c.result == connectionTerminated || c->c.result == connectionDoesntExist) &&
+		      c->st.terminate == 1 && c->st.reason == TCPRemoteAbort,
+		      "reset: the receive ends, TCPTerminate (TCPRemoteAbort)", c->c.result);
 	} else {
 		check(0, "reset: TCPActiveOpen", r);
 	}

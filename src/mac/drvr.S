@@ -15,7 +15,7 @@
 	.globl	_drvr_start
 _drvr_start:
 	.short	0x6C00			| dNeedLock, dNeedTime, dStatEnable, dCtlEnable
-	.short	30			| drvrDelay: accRun every half second (ipp.c: programs that quit)
+	.short	10			| drvrDelay: accRun every sixth of a second (ipp.c: programs that quit)
 	.short	0			| drvrEMask
 	.short	0			| drvrMenu
 	.short	drv_open-_drvr_start
@@ -203,14 +203,17 @@ mac_pbopen:				| int (void *pb, int slot): _Open, or _OpenSlot
 
 	.globl	mac_pb
 mac_pb:					| short (void *pb, long trap): a synchronous File Manager call
-	move.l	4(%sp),%a0		| (_HOpen A200, _Read A002, _Close A001, _GetEOF A011, _HDelete A209);
-	move.l	8(%sp),%d0		| the trap word is written into the code below, the cache flushed
-	lea	2f(%pc),%a1
-	move.w	%d0,(%a1)
-	move.l	%a0,-(%sp)
+	move.l	4(%sp),%a0		| (_HOpen A200, _Read A002, _Close A001, _GetEOF A011, _HDelete A209,
+	move.l	8(%sp),%d0		| _HGetFileInfo A20C, _HSetFileInfo A20D; _HFSDispatch A260 with its
+	lea	2f(%pc),%a1		| selector in the high word: 0x0005A260 _CatMove, 0x0006A260
+	move.w	%d0,(%a1)		| _DirCreate, 0x0009A260 _GetCatInfo); the trap word is written
+	move.l	%a0,-(%sp)		| into the code below, the cache flushed
 	moveq	#1,%d0
 	.short	0xA198			| _HWPriv: FlushInstructionCache
 	move.l	(%sp)+,%a0
+	move.l	8(%sp),%d0		| _HFSDispatch's selector in D0 (until 19 November 2026 D0 was
+	swap	%d0			| still HWPriv's 1, _OpenWD: _CatMove and _DirCreate did nothing)
+	and.l	#0xFFFF,%d0
 	nop
 2:	.short	0xA000
 	ext.l	%d0
