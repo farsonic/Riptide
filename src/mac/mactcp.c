@@ -31,7 +31,7 @@
  * never do): A, AAAA and PTR queries over UDP to the configured name servers, each tried twice,
  * with the search domain for names without a dot.
  *
- * IPv6 for programs that know only IPv4 (standin.c): a name with no IPv4 address but an IPv6 one
+ * IPv6 for programs that know only IPv4 (src/core/standin.c): a name with no IPv4 address but an IPv6 one
  * is answered with a stand-in IPv4 address; a stream that opens a stand-in gets a socket of
  * family IPv6 to the real address, and the program sees the stand-in as the remote address and
  * its own IPv4 address as the local one; a UDP stream sends to a stand-in through a second,
@@ -49,7 +49,6 @@
 #include "riptide.h"
 #include "mac.h"
 #include "ipp.h"
-#include "standin.h"
 #include "rt_ip6.h"
 #include "prefs/mac_ipp_private.h"
 
@@ -234,7 +233,7 @@ static void stream_close(struct rt_sockctx *c, struct mstream *s)
 		rt_api_close(c, s->fd);
 	s->fd = -1;
 	if (s->v6)
-		standin_hold(s->rhost, 0);
+		rt_standin_hold(s->rhost, 0);
 	s->v6 = 0;
 	if (s->fd6 >= 0)
 		rt_api_close(c, s->fd6);
@@ -352,7 +351,7 @@ static int tcp_open6(void *pb, struct rt_sockctx *c, struct mstream *s, const rt
 	s->rhost = PB_L(pb, 36);
 	s->rport = PB_W(pb, 40);
 	s->v6 = 1;
-	standin_hold(s->rhost, 1);
+	rt_standin_hold(s->rhost, 1);
 	fill_addr6(&a, a6, s->rport);
 	r = rt_api_connect(c, fd, &a, sizeof a);
 	if (r < 0 && r != -RT_EINPROGRESS && r != -RT_EALREADY) {
@@ -378,7 +377,7 @@ static int tcp_open(void *pb, struct rt_sockctx *c, int passive)
 	{
 		/* a stand-in: the socket is IPv6, to the address it stands for */
 		rt_in6_addr a6;
-		if (!passive && standin_lookup(PB_L(pb, 36), &a6, NULL, 0))
+		if (!passive && rt_standin_lookup(PB_L(pb, 36), &a6, NULL, 0))
 			return tcp_open6(pb, c, s, &a6);
 	}
 	fd = rt_api_socket(c, RT_AF_INET, RT_SOCK_STREAM, RT_IPPROTO_TCP);
@@ -793,7 +792,7 @@ static int udp_recv(struct rt_sockctx *c, struct mstream *s, u32 *host, u16 *por
 	fl = sizeof from6;
 	r = rt_api_recvfrom(c, s->fd6, s->rbuf, len, RT_MSG_DONTWAIT, &from6, &fl);
 	if (r >= 0) {
-		*host = standin_for(&from6.sin6_addr, NULL);
+		*host = rt_standin_for(&from6.sin6_addr, NULL);
 		*port = from6.sin6_port;
 	}
 	return r;
@@ -879,7 +878,7 @@ static int udp_write(void *pb, struct rt_sockctx *c)
 	}
 	{
 		rt_in6_addr a6;
-		if (standin_lookup(PB_L(pb, 34), &a6, NULL, 0)) {
+		if (rt_standin_lookup(PB_L(pb, 34), &a6, NULL, 0)) {
 			struct rt_sockaddr_in6 to6;
 			int fd6 = udp_fd6(c, s);
 			if (fd6 < 0)
@@ -1016,10 +1015,10 @@ static void dns_done(struct rt_sockctx *c, struct dnsq *q, int r)
 	q->fd = -1;
 }
 
-/* a name's answer as an IPv6 address: its stand-in (standin.c) */
+/* a name's answer as an IPv6 address: its stand-in (src/core/standin.c) */
 static int dns_answer6(struct rtmac_dns_pb *d, const rt_in6_addr *a6, const char *name)
 {
-	u32 v4 = standin_for(a6, name);
+	u32 v4 = rt_standin_for(a6, name);
 	if (!v4)
 		return 0;
 	d->addrs[0] = v4;
@@ -1138,7 +1137,7 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 		rt_strlcpy(d->cname, d->name, sizeof d->cname);
 		return 0;
 	}
-	if (d->ptr && standin_lookup(d->addrs[0], &a6, d->cname, sizeof d->cname)) {
+	if (d->ptr && rt_standin_lookup(d->addrs[0], &a6, d->cname, sizeof d->cname)) {
 		/* a stand-in: the name it was made for (or its IPv6 address, for one seen on its own) */
 		if (!d->cname[0])
 			rt_inet6_ntop(&a6, d->cname, sizeof d->cname);
@@ -1151,7 +1150,7 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 		u32 a4[4];
 		int n4 = rt_resolve_local46(d->name, 0, a4, NULL, 4);
 		int n6 = rt_resolve_local46(d->name, 1, NULL, &a6, 1);
-		if (n4 && !(standin_prefer6 && n6)) {
+		if (n4 && !(rt_standin_prefer6 && n6)) {
 			for (int i = 0; i < n4; i++)
 				d->addrs[i] = a4[i];
 			d->count = (u32)n4;
@@ -1181,7 +1180,7 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 		q->qtype = 12;
 	} else {
 		rt_strlcpy(q->name, d->name, sizeof q->name);
-		q->qtype = standin_prefer6 ? 28 : 1;
+		q->qtype = rt_standin_prefer6 ? 28 : 1;
 		/* a trailing dot: the name as it is */
 		if (q->name[0] && q->name[strlen(q->name) - 1] == '.') {
 			q->name[strlen(q->name) - 1] = 0;

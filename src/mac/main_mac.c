@@ -14,7 +14,6 @@
 #include "rt_errno.h"
 #include "riptide.h"
 #include "mac.h"
-#include "standin.h"
 #include "rt_netif.h"
 #include "rt_ip6.h"
 #include "rt_qos.h"
@@ -117,7 +116,7 @@ int mac_config_unknown(int argc, char **argv, char *err, u32 errlen)
 	if (!rt_strcasecmp(argv[0], "interface"))
 		return interface_line(argc, argv, err, errlen);
 	if (!rt_strcasecmp(argv[0], "mactcp"))
-		return standin_config(argc, argv, err, errlen);      /* IPv6 for MacTCP programs (standin.c) */
+		return rt_standin_command(argc, argv, err, errlen);  /* IPv6 for MacTCP programs (src/core/standin.c) */
 	rt_snprintf(err, errlen, "unknown keyword '%s'", argv[0]);
 	return -RT_EINVAL;
 }

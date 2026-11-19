@@ -26,7 +26,7 @@ CFLAGS  += -DAURORA68_LOG
 endif
 LDFLAGS := -T src/mac/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack
 CORE_SRC := $(wildcard src/core/*.c)
-MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/mactcp.c src/mac/standin.c src/mac/api_mac.c src/mac/main_mac.c src/amiga/libc.c
+MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/mactcp.c src/mac/api_mac.c src/mac/main_mac.c src/amiga/libc.c
 OBJ      := $(BUILD)/mac/drvr.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(MAC_SRC))
 HDRS     := $(wildcard include/rt/*.h src/core/*.h src/mac/*.h)
 

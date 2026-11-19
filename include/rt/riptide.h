@@ -147,6 +147,25 @@ int  rt_resolve_name6(const char *name, rt_in6_addr *addrs, int max, char *canon
  * RT_AF_INET6. Count or the error of rt_resolve_name(). No lock held. */
 int  rt_resolve_name46(const char *name, rt_in6_addr *addrs, int max, int family, char *canon, u32 canonlen);
 int  rt_resolve_local46(const char *name, int v6, u32 *a4, rt_in6_addr *a6, int max);   /* no network: hosts, cache */
+/* For programs that know only IPv4 (gethostbyname() & co.): rt_resolve_name(), but a name with
+ * an IPv6 address and no IPv4 one is answered with stand-ins (src/core/standin.c, RFC 6535).
+ * No lock held. */
+int  rt_resolve_name4(const char *name, u32 *addrs, int max, char *canon, u32 canonlen);
+
+/* ---- Stand-in IPv4 addresses for IPv6 hosts (src/core/standin.c, RFC 6535) ----
+ * Addresses in network order; every call with the lock held. */
+#define RT_STANDIN_SLOTS 64
+extern s32 rt_standin_enable;     /* net.inet.standin.enable, `standin on|off` */
+extern s32 rt_standin_prefer6;    /* net.inet.standin.prefer6, `standin prefer` */
+int  rt_standin_is(u32 v4);                                       /* in the stand-in range */
+u32  rt_standin_for(const rt_in6_addr *a6, const char *name);     /* 0: off, or none free */
+int  rt_standin_lookup(u32 v4, rt_in6_addr *a6, char *name, u32 namelen);
+void rt_standin_hold(u32 v4, int hold);
+void rt_standin_count(int *taken, int *held);
+/* "standin on|off|prefer|status|A.B.C.D[/N]", and the Mac's "mactcp ipv6|standin ..." */
+int  rt_standin_command(int argc, char **argv, char *err, u32 errlen);
+void rt_standin_init(void);
+void rt_standin_reset(void);
 
 /* ---- Happy Eyeballs v2 (src/core/happy.c, RFC 8305) ---- */
 extern s32 rt_he_enable, rt_he_attempt_delay, rt_he_resolution_delay, rt_he_prefer, rt_he_aaaa_filter;

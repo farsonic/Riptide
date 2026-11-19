@@ -315,7 +315,8 @@ DNS for `*.testbed`) and BrowserTest.bin (below).
 
 **IPv6 for MacTCP programs.** MacTCP's interface knows only IPv4 (a host is a 32-bit `ip_addr`
 everywhere), so Riptide gives an IPv6 host a stand-in IPv4 address, as DNS64 and NAT64 do (RFC 6147,
-RFC 6146), but inside the Mac and without translating packets (src/mac/standin.c). It is the
+RFC 6146), but inside the Mac and without translating packets (src/core/standin.c, shared with the
+Amiga, where bsdsocket.library programs get the same: docs/AMIGA.md). It is the
 "Bump-in-the-Host" of RFC 6535 in its function-mapping form: the resolver extension and the address
 mapper sit where MacTCP's StrToAddr and TCPActiveOpen arrive, so unmodified programs (Internet
 Explorer, Fetch, Netscape 2 and 3) reach IPv6-only hosts by name. Seen working on real hardware on
@@ -324,14 +325,17 @@ board, loaded http://ip6only.me/, a site with no IPv4 address, over the user's I
 and the page reported that it was reached over IPv6. How it works:
 - a name with no IPv4 address but an IPv6 one (a DNS AAAA record, or a riptide.conf `host` line
   with an IPv6 address) is answered with a stand-in from 198.18.0.0/15, RFC 2544's benchmarking
-  range, which never appears on the Internet (`mactcp standin A.B.C.D[/N]` picks another);
+  range, which never appears on the Internet (`mactcp standin A.B.C.D[/N]`, or `standin
+  A.B.C.D[/N]` as on the Amiga, picks another; `standin off` or `sysctl net.inet.standin.enable=0`
+  switches stand-ins off);
 - a stream that opens a stand-in gets a core socket of family IPv6 to the real address; the program
   sees the stand-in as the remote address (its open, TCPStatus) and its own IPv4 address as the
   local one; a UDP stream sends to a stand-in through a second socket, IPv6, on the same port, and
   datagrams from IPv6 hosts come with their stand-in as the sender;
 - AddrToName of a stand-in answers the name it was made for;
 - `mactcp ipv6 prefer` makes names with both kinds of address answer with a stand-in too, so MacTCP
-  programs use IPv6 where they can (off by default: `mactcp ipv6 on`).
+  programs use IPv6 where they can (off by default: `mactcp ipv6 on`; the same as `standin prefer`
+  and `net.inet.standin.prefer6`).
 The table has 64 stand-ins; one in use by a stream keeps its address, and an idle one goes to a new
 address only when all are taken, the one used longest ago first. The driver's lookups now also look
 in the hosts table and the core's cache first (rt_resolve_local46), so `host` lines, IPv4 or IPv6,

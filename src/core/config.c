@@ -1136,6 +1136,8 @@ static int cfg_dispatch(int argc, char **argv, char *err, u32 errlen,
 		return rt_qos_command(argc, argv, err, errlen);
 	if (!strcmp(k, "happy_eyeballs") || !strcmp(k, "happyeyeballs"))
 		return rt_he_command(argc, argv, err, errlen);
+	if (!strcmp(k, "standin"))
+		return rt_standin_command(argc, argv, err, errlen);
 	if (!strcmp(k, "ntp"))
 		return rt_ntp_command(argc, argv, err, errlen);
 	if (!strcmp(k, "timezone"))
@@ -1256,6 +1258,7 @@ void rt_config_reset(void)
 	route_flush(NULL, 1);
 	route6_flush(NULL);
 	rt_resolv_reset();
+	rt_standin_reset();
 	rt_ip4_auto_enable = 1;
 	rt_qos_reset();
 	rt_netsvc_reset();
