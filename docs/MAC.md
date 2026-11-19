@@ -315,7 +315,10 @@ DNS for `*.testbed`) and BrowserTest.bin (below).
 
 **IPv6 for MacTCP programs.** MacTCP's interface knows only IPv4 (a host is a 32-bit `ip_addr`
 everywhere), so Riptide gives an IPv6 host a stand-in IPv4 address, as DNS64 and NAT64 do (RFC 6147,
-RFC 6146), but inside the Mac and without translating packets (src/mac/standin.c):
+RFC 6146), but inside the Mac and without translating packets (src/mac/standin.c). It is the
+"Bump-in-the-Host" of RFC 6535 in its function-mapping form: the resolver extension and the address
+mapper sit where MacTCP's StrToAddr and TCPActiveOpen arrive, so unmodified programs (Internet
+Explorer, Fetch, Netscape 2 and 3) reach IPv6-only hosts by name:
 - a name with no IPv4 address but an IPv6 one (a DNS AAAA record, or a riptide.conf `host` line
   with an IPv6 address) is answered with a stand-in from 198.18.0.0/15, RFC 2544's benchmarking
   range, which never appears on the Internet (`mactcp standin A.B.C.D[/N]` picks another);
