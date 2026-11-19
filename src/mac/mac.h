@@ -52,7 +52,11 @@ static inline void mac_irq_restore(u16 sr) { __asm__ volatile("move.w %0,%%sr" :
 static inline u32 mac_ticks(void) { return *(volatile u32 *)0x16A; }
 
 /* os_mac.c and api_mac.c: a program calling the core in its own context (RTMAC_API) */
-struct rt_sleeper { int woken; };
+/* a sleeper: 'woken' set by a waker; a program's (api_mac.c) carries its process too, so the
+   waker can end its WaitNextEvent at once (WakeUpProcess) instead of at its next tick */
+struct rt_sleeper { int woken; int has_psn; u32 psn[2]; };
+short mac_current_process(u32 psn[2]);
+short mac_wakeup_process(const u32 psn[2]);
 struct mac_client {
 	struct mac_client *next;
 	void (*yield)(void *arg);                    /* the program's: take its events */

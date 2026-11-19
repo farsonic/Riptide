@@ -57,6 +57,9 @@ static void *api_attach(void (*yield)(void *), int (*brk)(void *), void *arg)
 	c->yield = yield;
 	c->brk = brk;
 	c->arg = arg;
+	/* the program's process: a waker ends its WaitNextEvent at once (os_mac.c rt_waitq_wake), so a
+	   reply waits no tick (a ping's 17 ms on the Mac's side, 19 November) */
+	c->sl.has_psn = mac_current_process(c->sl.psn) == 0;
 	if (rt_ctx_init(&c->sc, 64, c) < 0) {
 		rt_free(c);
 		return NULL;

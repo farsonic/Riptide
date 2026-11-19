@@ -170,6 +170,13 @@ back; a second run with a 40-second outage did not, and the cause is not known y
 a Mac with two real cards in two slots, and a driver without csLinkStatus (it is taken as always
 up, so its route never yields).
 
+**A waiting program is woken at once.** A program that waits in the core (the Terminal's ping in
+recv, nc, ftp) sits in WaitNextEvent with a sleep of a tick; a reply used to set its sleeper's flag
+and wait for that tick, 16.7 ms on top of every round trip. The waker now also calls WakeUpProcess
+for the program's process (api_mac.c records it at attach; the call is allowed at interrupt time).
+On Aurora68's testbed the Mac's side of a ping went from about 5 or about 16 ms (bimodal: the tick)
+to 4 to 8 ms for most echoes under QEMU's slow emulated 68k (19 November).
+
 ## Testing on Aurora68
 
 The Aurora68 repository's `tools/run-solo.sh` boots a System 7.1 disk image under QEMU with the

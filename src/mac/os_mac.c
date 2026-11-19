@@ -235,9 +235,17 @@ void rt_waitq_remove(struct rt_waitq *wq, struct rt_wait_entry *e)
 	if (e->next) e->next->prev = e->prev;
 	e->next = e->prev = NULL;
 }
+/* A program waiting in the core sits in WaitNextEvent with a sleep of a tick or more; setting
+   'woken' alone left it there until the tick (16.7 ms of every ping on the Mac's side, measured on
+   Aurora68 on 19 November). WakeUpProcess ends that sleep now. */
 void rt_waitq_wake(struct rt_waitq *wq)
 {
-	for (struct rt_wait_entry *e = wq->head; e; e = e->next) if (e->sleeper) e->sleeper->woken = 1;
+	for (struct rt_wait_entry *e = wq->head; e; e = e->next)
+		if (e->sleeper) {
+			e->sleeper->woken = 1;
+			if (e->sleeper->has_psn)
+				mac_wakeup_process(e->sleeper->psn);
+		}
 	mac_wakeups++;
 }
 int rt_sleeper_wait(struct rt_sleeper *s, s32 timeout_ms, u32 *extra_signals)

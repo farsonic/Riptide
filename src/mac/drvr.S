@@ -387,6 +387,32 @@ mac_next_process:			| short (ProcessSerialNumber *psn): GetNextProcess (Process 
 	move.l	(%sp)+,%d2
 	rts
 
+	.globl	mac_current_process
+mac_current_process:			| short (ProcessSerialNumber *psn): GetCurrentProcess
+	move.l	%d2,-(%sp)
+	move.l	8(%sp),%a0
+	clr.w	-(%sp)
+	move.l	%a0,-(%sp)
+	move.w	#0x37,-(%sp)
+	.short	0xA88F			| _OSDispatch
+	move.w	(%sp)+,%d0
+	ext.l	%d0
+	move.l	(%sp)+,%d2
+	rts
+
+	.globl	mac_wakeup_process
+mac_wakeup_process:			| short (const ProcessSerialNumber *psn): WakeUpProcess, which may
+	movem.l	%d1-%d2/%a0-%a1,-(%sp)	| be called at interrupt time (Inside Macintosh: Processes 2-18);
+	move.l	20(%sp),%a0		| from the deferred task, which keeps D1/A0/A1 too
+	clr.w	-(%sp)
+	move.l	%a0,-(%sp)
+	move.w	#0x3C,-(%sp)
+	.short	0xA88F			| _OSDispatch
+	move.w	(%sp)+,%d0
+	ext.l	%d0
+	movem.l	(%sp)+,%d1-%d2/%a0-%a1
+	rts
+
 	.globl	mac_process_info
 mac_process_info:			| short (const ProcessSerialNumber *psn, ProcessInfoRec *info):
 	move.l	%d2,-(%sp)		| GetProcessInformation
