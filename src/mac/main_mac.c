@@ -14,6 +14,7 @@
 #include "rt_errno.h"
 #include "riptide.h"
 #include "mac.h"
+#include "ipp.h"
 #include "standin.h"
 #include "rt_netif.h"
 #include "rt_ip6.h"
@@ -118,6 +119,8 @@ int mac_config_unknown(int argc, char **argv, char *err, u32 errlen)
 		return interface_line(argc, argv, err, errlen);
 	if (!rt_strcasecmp(argv[0], "mactcp"))
 		return standin_config(argc, argv, err, errlen);      /* IPv6 for MacTCP programs (standin.c) */
+	if (!rt_strcasecmp(argv[0], "ipp6"))
+		return ipp6_config(argc, argv, err, errlen);         /* .IPP6's lookups (ipp6.c) */
 	rt_snprintf(err, errlen, "unknown keyword '%s'", argv[0]);
 	return -RT_EINVAL;
 }

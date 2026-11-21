@@ -21,6 +21,7 @@ optional development log.
 | 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName; HInfo and MXInfo answer noAnsErr) | done in the testbed: the Riptide DNR file (src/mac/dnr), an asynchronous DNS client in the driver; since 19 November 2026 with the creator Apple's glue looks for |
 | 4 | Preferences | done: RiptidePrefs, the Amiga's MUI editor built for the Mac (MAC-GUI.md) |
 | 5 | The command-line tools | done: the Riptide Command Terminal, the Amiga's ip, ifconfig, route, arp, netstat, ping, ping6, traceroute, traceroute6, host, hostname, nc, ftp, sysctl and speedtest in a Mac window ("The Riptide Command Terminal" below) |
+| 6 | `.IPP6`: a public IPv6 interface in MacTCP's style, for programs written for it | done in the testbed (21 November 2026): docs/IPP6.md, sdk/mac/IPP6.h, src/mac/ipp6.c ("The .IPP6 interface" below) |
 
 Also working in the testbed (18 November): DHCP (`dhcp en0`: bound, lease kept), IPv6 (a
 link-local address and one from the router advertisement's prefix, each passing duplicate
@@ -43,10 +44,11 @@ the WiFi):
 ## How it fits together
 
 ```
- application (MacTCP API: PBControl on .IPP)
+ application (MacTCP API: PBControl on .IPP)          a program written for IPv6 (PBControl on .IPP6)
    |  drvr.S: Control entry; the call leaves the Device Manager's queue (a concurrent driver)
-   v
- ipp.c ------ queued, handled by the stack's deferred task, completed with ioResult + ioCompletion
+   v                                                        v
+ ipp.c ------ queued, handled by the stack's deferred task ------ ipp6.c (docs/IPP6.md)
+              completed with ioResult + ioCompletion
    |  Riptide's descriptor socket API (non-blocking)
    v
  src/core (unchanged: the same files as the Amiga build)
@@ -340,6 +342,9 @@ reach MacTCP programs. For example, in the Command Terminal `conf host macbook6
 literal in a URL (`http://[2001:db8::1]/`) cannot work in Internet Explorer 4: it does not parse
 them, and MacTCP has no way to carry one; names are the way in.
 
+Programs written or changed today can name IPv6 addresses themselves through `.IPP6` ("The .IPP6
+interface" below), which needs no stand-ins.
+
 **Internet Explorer and Open Transport.** Internet Explorer 4.01, the last version for 68k Macs,
 runs on MacTCP: Microsoft's requirements for Internet Explorer 4 for the Macintosh (Knowledge
 Base 181767) are a 68030 or later and "MacTCP or Open Transport 1.1.1 or later" (archive listings
@@ -386,6 +391,71 @@ test accepts connectionDoesntExist too); and Quit Leaving Streams Open, with tra
 crashed the Finder with "bad F-Line instruction" (programs that quit, above). Then 83 of 83, with
 IPv6: Stop (Command-period) in the middle of a run released everything; Run Tests again ran
 cleanly; Quit Leaving Streams Open had its three streams released by the driver's check.
+
+## The .IPP6 interface
+
+MacTCP's interface knows only IPv4, and the stand-ins above are the way in for the programs of the
+1990s, which cannot change. A program written or changed today can use `.IPP6`, the second driver
+Riptide installs beside `.IPP`: MacTCP's model (PBControl with MacTCP's csCodes and parameter blocks,
+synchronous or asynchronous with ioCompletion, notification routines, MacTCP's result codes, the same
+interrupt-time rules) with a 20-byte `IP6Address` (16-byte address, port, scope) wherever MacTCP has
+an `ip_addr` and a port. IPv4 hosts are IPv4-mapped addresses, so one stream type covers both
+families; names are resolved by the driver itself (`ip6Resolve`: AAAA and A, RFC 6724's order, or
+IPv6 or IPv4 first), with no `'dnrp'` resource. A program finds it with Gestalt `'ipp6'` (the
+interface version, 1) or OpenDriver(".IPP6"), and falls back to `.IPP` when it is not there. The
+first program written for it is Aurora68 Play, Aurora68's internet radio, which reads its stream
+with TCPRcv calls chained from their completion routines into the audio ring.
+
+- The specification, for anyone writing a program: **docs/IPP6.md** (every call, every field's
+  offset, the address structure, detection and the MacTCP fallback, completion and notification
+  rules, the result codes, versions, examples).
+- The header for programs: `sdk/mac/IPP6.h` (standalone, C89, MPW C, THINK C, CodeWarrior 68k, GCC);
+  an example: `sdk/mac/examples/ipp6get.c` (looks `.IPP6` up, resolves names, connects to the
+  addresses in order, IPv6 first, falling back to IPv4, fetches a page; on a Mac without `.IPP6` it
+  uses `.IPP`). `make -f Makefile.mac examples` builds it as `build/mac/ipp6get.bin`.
+- The driver: drvr.S has a second driver header (`_drvr6_start`) and entry points, which share
+  `.IPP`'s IODone and concurrent-driver code; `src/mac/ipp6.c` installs it with `_DrvrInstall` in a
+  free unit table entry (48 and up, as the INIT's rule) when `.IPP` first opens, registers Gestalt
+  `'ipp6'`, and keeps its own queue, streams and lookups, polled by ipp.c's `ipp_poll` in the same
+  round of the stack's deferred task. `.IPP` is unchanged; the two share the stack, ipp.c's table of
+  creators' A5 and its check for programs that quit.
+- riptide.conf: `ipp6 order rfc6724|ipv6|ipv4`, the order of `ip6Resolve`'s answers when the program
+  does not ask for one (RFC 6724 by default; its policy table puts IPv4 before a unique local IPv6
+  address, fd00::/8, and a global IPv6 address before IPv4).
+- tests/t_ipp6_layout.c checks every offset of the header against the specification (on the host
+  with 68k sizes; `make -f Makefile.mac build/mac/t_ipp6_layout` builds it for the m68k and runs it
+  under qemu-m68k).
+
+### The .IPP6 test
+
+tests/mac/ipp6_test.c ("IPP6 test", `make -f Makefile.mac test`: build/mac/IPP6Test.bin) runs at
+launch against pinet (peer.testbed has an A and an AAAA record, v6only.testbed only AAAA, www.testbed
+only A; HTTP and UDP echo over both families), every call asynchronous with a completion routine that
+checks ioResult and the block in A0 and on the stack, every stream with a notification routine that
+checks A5, D0, A2 and re-entry. The run's riptide.conf adds `host h6.lan fd68::80` and `host h6.lan
+192.168.68.1`. What it does is listed at the top of the file.
+
+Results in the testbed (Aurora68's solo board under QEMU, System 7.1, `tools/pinet.py` as the peer,
+21 November 2026): `.IPP6 installed (unit 53, reference number -54)` at startup, then 95 of 95, the
+example program in the same boot (Gestalt, ip6GetInfo, its addresses, then peer.testbed and
+v6only.testbed fetched over IPv6 and www.testbed over IPv4). Among them: AAAA and A answered together,
+each order (with fd68::/64, a unique local prefix, RFC 6724 puts IPv4 first, as its policy table
+says), the hosts table's IPv6 and IPv4 lines, a server that never answers ending in noAnsErr after
+the 3-second timeout, ip6ResolveCancel; TCP over IPv6 with both ends' addresses in TCPStatus, 256 KB
+read by a TCPRcv chain issued from its own completion routine at interrupt time, TCPClosing on the
+server's close and TCPTerminate (TCPULPClose) after TCPClose, TCPRemoteAbort on a reset; the fallback
+from fd68::99, which nothing answers (ipDestDeadErr after about three seconds), to 192.168.68.1;
+UDP echo over IPv6 and IPv4 on one stream with UDPDataArrival; 85 completion routines with ioResult
+set first and the block in A0 and on the stack, the notification routines with the program's A5,
+D0 and A2 and never re-entered. The first run, 92 of 95, found three things, fixed the same day:
+ip6AddrToStr wrote an IPv4-mapped address as `::ffff:192.168.68.1` instead of dotted decimal; the
+calls answered in the Control call, when made asynchronously, completed through the Device Manager's
+IODone, whose completion routine gets the block in A0 but not on the stack (they are now queued when
+asynchronous); and the test did not allow for a reset that arrives before the chained receive is
+made (connectionDoesntExist, as the Browser test allows). The Browser test (`.IPP`, the stand-ins)
+on the same Riptide: 83 of 83, as before. The example program on the same System 7.1 with Apple's
+MacTCP instead of Riptide found no Gestalt `'ipp6'`, fell back to `.IPP` and fetched the page from
+192.168.68.1 over MacTCP.
 
 ## The Riptide Command Terminal
 

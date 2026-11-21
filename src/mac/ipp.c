@@ -6,7 +6,7 @@
  * caller's ioCompletion. Synchronous callers spin on ioResult as they do with MacTCP.
  *
  * ipctlGetAddr, ipctlEchoICMP and ipctlLAPStats are here; TCP, UDP and the resolver's lookups are
- * in mactcp.c; RiptidePrefs' private calls (RTMAC_*) too, and RTMAC_API, the address of the calls
+ * in mactcp.c; .IPP6, the IPv6 interface of the same model, in ipp6.c (installed and polled from here); RiptidePrefs' private calls (RTMAC_*) too, and RTMAC_API, the address of the calls
  * programs make directly (api_mac.c: the Riptide Command Terminal's socket interface).
  *
  * What a program asks for shows in the log (PiLog's Mac tab on Aurora68), so that a photograph of
@@ -111,7 +111,7 @@ void ipp_result(void *pb, int r)
    which runs in the caller's context, until the stack's task takes the call. */
 #define A5_SLOTS 16
 static struct { void *pb, *a5; } a5_of[A5_SLOTS];
-static void keep_a5(void *pb, void *a5)
+void ipp_keep_a5(void *pb, void *a5)
 {
 	unsigned i;
 	u16 sr;
@@ -365,6 +365,7 @@ static int handle(void *pb)
 }
 /* the calls answered at once when they come from the stack's own context (ipp_control_a5) */
 static int in_poll;
+int ipp_in_poll(void) { return in_poll; }       /* ipp6.c: the same rule for .IPP6's immediate calls */
 static int quick(int cs)
 {
 	return cs == ipctlGetAddr || cs == 40 || cs == 43 || cs == 25 || cs == 36 || cs == 22;   /* TCPStatus,
@@ -407,6 +408,7 @@ static void reap(void)
 		return;                                   /* no Process Manager yet */
 	mac_core_enter(&reaper);
 	mactcp_reap(&ctx, lo, hi, n);
+	ipp6_reap(lo, hi, n);                         /* .IPP6's streams and lookups: the same check */
 	for (i = 0; i < ECHOES; i++) {
 		struct echo *e = &echoes[i];
 		u32 a = (u32)e->a5;
@@ -457,7 +459,7 @@ int ipp_control_a5(void *pb, void *dce, void *a5)
 	if (PB_IOTRAP(pb) & 0x200)
 		return controlErr;                        /* immediate calls cannot wait for the stack */
 	if (cs == ipctlEchoICMP || cs == 20 || cs == 27 || cs == 30)
-		keep_a5(pb, a5);
+		ipp_keep_a5(pb, a5);
 	u16 sr = mac_irq_off();
 	PB_QLINK(pb) = NULL;
 	void **pp = (void **)&incoming;
@@ -618,6 +620,7 @@ void ipp_opened(void)
 		if (r)
 			rt_log(RT_LOG_WARN, "Gestalt 'mtcp' not installed (%d)", r);
 		dnr_check();
+		ipp6_install();                               /* .IPP6 beside .IPP (docs/IPP6.md) */
 	} else if (opens <= 16) {
 		rt_log(RT_LOG_INFO, ".IPP: opened by a program (open %lu)", (unsigned long)opens);
 	}
@@ -644,5 +647,6 @@ void ipp_poll(void)
 	}
 	echo_poll();
 	mactcp_poll(&ctx);
+	ipp6_poll();                                  /* .IPP6's calls, in the same round (ipp6.c) */
 	in_poll = 0;
 }

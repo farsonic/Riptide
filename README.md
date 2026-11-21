@@ -42,6 +42,10 @@ if you want stability etc.
   routing/ARP ioctls, the `net.riptide.*` tables via `MiamiSysCtl()` and
   the `RIPTIDE` command port (see `docs/AMIGA.md`).
 
+* **Classic Mac OS:** the `mac-port` branch also builds Riptide as a MacTCP replacement for
+  System 7 on 68020 and later Macs (docs/MAC.md), with `.IPP6`, a public IPv6 interface in MacTCP's
+  style for programs written for it (docs/IPP6.md, sdk/mac/IPP6.h).
+
 ## Installing
 
 Unpack `riptide-<version>.lha` (or use the floppy image
@@ -64,6 +68,9 @@ package` builds the package.
 * `docs/DESIGN.md`: architecture and coding rules.
 * `docs/AMIGA.md`: installing and configuring Riptide on an Amiga, the network tools, and the
   interfaces for tools (tables, ioctls, the `RIPTIDE` port).
+* `docs/MAC.md`: Riptide on the classic Mac OS (the MacTCP driver, the resolver, the tools, testing
+  on Aurora68).
+* `docs/IPP6.md`: the `.IPP6` interface for Mac programs, its specification.
 
 ## Building
 
@@ -71,6 +78,8 @@ package` builds the package.
 make && ./tests/run_tests.sh build/host       # Linux host build + tests
 make CROSS=m68k-linux-gnu-                     # big-endian 68020 build (run tests under qemu-m68k)
 make -f Makefile.amiga                         # AmigaOS: build/amiga/{Riptide,rtcheck,ip,ping,...} (vbcc + NDK 3.2)
+make -f Makefile.mac                           # classic Mac OS: build/mac/Riptide.bin and the programs (docs/MAC.md)
+make -f Makefile.mac test examples             # the Mac test programs and sdk/mac/examples (.IPP6)
 make -f Makefile.amiga check                   # hunk checks + vamos self test
 make -f Makefile.amiga package                 # Installer package: build/riptide-<version>.lha (.zip) and .adf
 tests/amiga/run_fsuae.sh build/amiga           # full-system test on FS-UAE + AROS ROM

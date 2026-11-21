@@ -82,6 +82,7 @@ drv_control:
 	jsr	ipp_control_a5		| 1 = in progress (completed later by mac_complete), else the result
 	lea	12(%sp),%sp
 	movem.l	(%sp)+,%d1-%d7/%a0-%a6
+ctl_result:				| .IPP6's Control comes here too (drv6_control)
 	cmp.l	#1,%d0
 	beq.s	pending
 iodone:
@@ -101,6 +102,65 @@ pending:
 	bclr	#7,5(%a1)		| drvrActive
 	moveq	#0,%d0
 	rts
+
+/* ---- .IPP6: the second driver of the same stack (docs/IPP6.md, src/mac/ipp6.c) -------------
+   Its own header, so that the Device Manager knows it by name and gives it a unit table entry and
+   a queue of its own; src/mac/ipp6.c installs it (DrvrInstall) once .IPP has started the stack,
+   with dCtlDriver pointing here. The header's offsets are from _drvr6_start, and the entries
+   follow it so that they are small and positive. The image is relocated by then: nothing here
+   needs relocate. No dNeedTime: .IPP's accRun looks after the programs that quit for both. */
+	.even
+	.globl	_drvr6_start
+_drvr6_start:
+	.short	0x4C00			| dNeedLock, dStatEnable, dCtlEnable
+	.short	0			| drvrDelay
+	.short	0			| drvrEMask
+	.short	0			| drvrMenu
+	.short	drv6_open-_drvr6_start
+	.short	drv6_prime-_drvr6_start
+	.short	drv6_control-_drvr6_start
+	.short	drv6_status-_drvr6_start
+	.short	drv6_close-_drvr6_start
+	.byte	5
+	.ascii	".IPP6"
+	.even
+	.short	0x0100			| version 1.0 (the interface's version is ipp6.c's IPP6_VERSION)
+
+drv6_open:
+	movem.l	%d1-%d7/%a0-%a6,-(%sp)
+	move.l	%a1,-(%sp)
+	move.l	%a0,-(%sp)
+	jsr	ipp6_open
+	addq.l	#8,%sp
+	movem.l	(%sp)+,%d1-%d7/%a0-%a6
+	rts
+
+drv6_close:				| closErr, as .IPP's
+	movem.l	%d1-%d7/%a0-%a6,-(%sp)
+	move.l	%a1,-(%sp)
+	move.l	%a0,-(%sp)
+	jsr	ipp6_close
+	addq.l	#8,%sp
+	movem.l	(%sp)+,%d1-%d7/%a0-%a6
+	rts
+
+drv6_prime:
+	moveq	#-17,%d0		| controlErr: no Read/Write on .IPP6
+	bra	iodone
+
+drv6_status:
+	moveq	#-18,%d0		| statusErr: everything is a Control call
+	bra	iodone
+
+drv6_control:
+	movem.l	%d1-%d7/%a0-%a6,-(%sp)
+	move.l	%a5,-(%sp)		| the caller's A5: its notification routines get it back
+	move.l	%a1,-(%sp)
+	move.l	%a0,-(%sp)
+	jsr	ipp6_control_a5		| 1 = in progress, else the result (answered now)
+	lea	12(%sp),%sp
+	movem.l	(%sp)+,%d1-%d7/%a0-%a6
+	bra	ctl_result		| .IPP's: IODone now, or off the queue and idle (a concurrent driver)
 
 #ifdef AURORA68_LOG
 open_msg:
@@ -433,6 +493,23 @@ mac_newgestalt:				| short (u32 selector, void *proc): _NewGestalt
 	move.l	4(%sp),%d0
 	move.l	8(%sp),%a0
 	.short	0xA3AD
+	ext.l	%d0
+	rts
+
+	.globl	mac_gestalt_ipp6
+mac_gestalt_ipp6:			| pascal OSErr (OSType selector, long *response): the .IPP6 interface
+	move.l	4(%sp),%a0		| version (docs/IPP6.md, section 11; ipp6.c's IPP6_VERSION)
+	move.l	#1,(%a0)
+	move.l	(%sp)+,%a0
+	addq.l	#8,%sp
+	clr.w	(%sp)			| noErr
+	jmp	(%a0)
+
+	.globl	mac_drvrinstall
+mac_drvrinstall:			| short (void *driver, short refnum): _DrvrInstall, which makes the
+	move.l	4(%sp),%a0		| device control entry (ipp6.c fills in the rest, as init.S does)
+	move.l	8(%sp),%d0
+	.short	0xA03D			| _DrvrInstall: A0 = the driver, D0 = the reference number
 	ext.l	%d0
 	rts
 

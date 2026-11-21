@@ -26,9 +26,9 @@ CFLAGS  += -DAURORA68_LOG
 endif
 LDFLAGS := -T src/mac/link.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack
 CORE_SRC := $(wildcard src/core/*.c)
-MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/mactcp.c src/mac/standin.c src/mac/api_mac.c src/mac/main_mac.c src/amiga/libc.c
+MAC_SRC  := src/mac/os_mac.c src/mac/net_mac.c src/mac/ipp.c src/mac/ipp6.c src/mac/mactcp.c src/mac/standin.c src/mac/api_mac.c src/mac/main_mac.c src/amiga/libc.c
 OBJ      := $(BUILD)/mac/drvr.o $(patsubst src/%.c,$(BUILD)/%.o,$(CORE_SRC) $(MAC_SRC))
-HDRS     := $(wildcard include/rt/*.h src/core/*.h src/mac/*.h)
+HDRS     := $(wildcard include/rt/*.h src/core/*.h src/mac/*.h) sdk/mac/IPP6.h
 
 all: $(BUILD)/Riptide.bin $(BUILD)/RiptidePrefs.bin $(BUILD)/RiptideDNR.bin $(BUILD)/RiptideTerminal.bin
 
@@ -179,9 +179,36 @@ $(BUILD)/http_test.elf: $(HTTP_OBJ) src/mac/app/app.ld
 	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ $(HTTP_OBJ) $(LIBGCC)
 $(BUILD)/BrowserTest.bin: $(BUILD)/http_test.elf tools/elf2app.py
 	$(PYTHON) tools/elf2app.py $< --name "Browser test" --creator RTBT --size 512 -o $@
-test: $(BUILD)/MacTCPTest.bin $(BUILD)/BrowserTest.bin
+# ---- .IPP6 (docs/IPP6.md): the SDK's example program and the testbed's test, against sdk/mac/IPP6.h ----
+IPP6_CFLAGS := $(APP_CFLAGS) -Isdk/mac
+APP_BASE := $(APP)/mac/app/crt0.o $(APP)/mac/app/ostraps.o $(APP)/gen/toolbox_glue.o $(APP)/core/printf.o \
+            $(APP)/amiga/libc.o $(APP)/mac/app/nocallback.o
+$(APP)/sdk/mac/examples/ipp6get.o: sdk/mac/examples/ipp6get.c sdk/mac/IPP6.h $(APP_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(IPP6_CFLAGS) -DIPP6_EXAMPLE_RIPTIDE -c -o $@ $<
+$(APP)/tests/mac/ipp6_test.o: tests/mac/ipp6_test.c sdk/mac/IPP6.h $(APP_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(IPP6_CFLAGS) -c -o $@ $<
+$(BUILD)/ipp6get.elf: $(APP_BASE) $(APP)/sdk/mac/examples/ipp6get.o src/mac/app/app.ld
+	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ \
+	      $(APP_BASE) $(APP)/sdk/mac/examples/ipp6get.o $(LIBGCC)
+$(BUILD)/ipp6get.bin: $(BUILD)/ipp6get.elf tools/elf2app.py
+	$(PYTHON) tools/elf2app.py $< --name "ipp6get" --creator RT6G --size 256 -o $@
+$(BUILD)/ipp6_test.elf: $(APP_BASE) $(APP)/tests/mac/ipp6_test.o src/mac/app/app.ld
+	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ \
+	      $(APP_BASE) $(APP)/tests/mac/ipp6_test.o $(LIBGCC)
+$(BUILD)/IPP6Test.bin: $(BUILD)/ipp6_test.elf tools/elf2app.py
+	$(PYTHON) tools/elf2app.py $< --name "IPP6 test" --creator RT6T --size 512 -o $@
+examples: $(BUILD)/ipp6get.bin
+# the parameter blocks of sdk/mac/IPP6.h as the m68k compiler lays them out (the host's tests/t_ipp6_layout
+# checks them with 68k sizes; this builds the same test for the m68k: run it with qemu-m68k if there is one)
+$(BUILD)/t_ipp6_layout: tests/t_ipp6_layout.c sdk/mac/IPP6.h
+	@mkdir -p $(BUILD)
+	$(CC) -std=c99 -Wall -static -o $@ $< && (command -v qemu-m68k >/dev/null && qemu-m68k $@ || true)
+
+test: $(BUILD)/MacTCPTest.bin $(BUILD)/BrowserTest.bin $(BUILD)/IPP6Test.bin $(BUILD)/ipp6get.bin
 
 clean:
 	rm -rf $(BUILD)
 FORCE:
-.PHONY: all clean test FORCE
+.PHONY: all clean test examples FORCE
