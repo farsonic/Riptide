@@ -515,7 +515,10 @@ families: kIP6OnlyIPv6 (0x04) no A query, kIP6OnlyIPv4 (0x08) no AAAA query; kIP
 name as it is, without the search domain. A program connects to the results in order, going on to the
 next when one fails (section 13): that is the fallback from IPv6 to IPv4.
 
-Results: noErr (count 1 or more; more than maxResults addresses are cut to maxResults), authNameErr
+Results: noErr (count 1 or more; more than maxResults addresses are cut to maxResults, and when the
+answer has both families the two are first alternated in the chosen order, RFC 8305 section 4, so
+that a short array still holds some of each: a name with eight IPv6 addresses no longer fills an
+eight-entry array with IPv6 alone and leaves the program no IPv4 to fall back to), authNameErr
 (no such name), noAnsErr (the name has no address of the families asked for, or no name server
 answered in time), noNameServer (none configured), nameSyntaxErr (an empty name, a label longer than
 63, a bad literal), invalidBufPtr (no results array or no name), invalidLength (maxResults 0),

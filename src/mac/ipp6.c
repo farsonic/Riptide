@@ -1360,6 +1360,27 @@ static void look_finish(struct look *L)
 			rt_unlock();
 		}
 	}
+	if (n > p->maxResults && L->n6 && L->n4) {
+		/* More addresses than the caller has room for, and both families: alternate them, starting with
+		   the family the order chose first (RFC 8305, section 4), so that the answer holds some of each.
+		   Cut off in plain order, a name with eight IPv6 addresses (NPO's radio streams) filled an
+		   eight-entry array with IPv6 only, and a program on a network whose IPv6 did not reach the
+		   server never tried IPv4. */
+		rt_in6_addr v6[LOOK_ADDRS], v4[LOOK_ADDRS];
+		int c6 = 0, c4 = 0, i6 = 0, i4 = 0, m = 0, six = !rt_in6_is_v4mapped(&all[0]);
+		for (int i = 0; i < n; i++)                 /* each family keeps the order chosen above */
+			if (rt_in6_is_v4mapped(&all[i]))
+				v4[c4++] = all[i];
+			else
+				v6[c6++] = all[i];
+		while (i6 < c6 || i4 < c4) {
+			if ((six && i6 < c6) || i4 >= c4)
+				all[m++] = v6[i6++];
+			else
+				all[m++] = v4[i4++];
+			six = !six;
+		}
+	}
 	if (n > p->maxResults)
 		n = p->maxResults;
 	for (int i = 0; i < n; i++) {
