@@ -96,8 +96,8 @@ NW19, NW34, NW41 and TN1173:
 ### (a) Riptide's own Open Transport libraries, no Apple Open Transport installed
 
 Riptide implements the client API on its core: endpoints are core sockets, as MacTCP streams are
-in src/mac/mactcp.c, run from the stack's deferred task; InetServices is the driver's DNS client
-(RTMAC_DNS). Gestalt `'otan'` answers "present, loaded, TCP present and loaded" (no AppleTalk).
+in src/mac/mactcp.c, run from the stack's deferred task; InetServices is the driver's lookups
+(RTMAC_DNS: the core resolver's asynchronous ones since 23 November 2026). Gestalt `'otan'` answers "present, loaded, TCP present and loaded" (no AppleTalk).
 
 - **For:** one stack for every program (MacTCP and OT ones share Riptide's TCP, its DHCP, IPv6,
   RiptidePrefs); nothing of Apple's to install; works on a 68020 and on System 7.0/7.1, where
@@ -157,7 +157,7 @@ documentation; roughly 2,000 to 3,000 lines in the card's own driver set).
    - **Stage 1, the client API on Riptide's core** (src/mac/ot/): providers and endpoints over
      core sockets, the XTI state machine, synchronous and asynchronous modes, blocking and
      non-blocking, notifiers from the stack's deferred task, `OTLook`, `OTAllocMem` from a pool,
-     `OTInetStringToAddress` and `OTInetAddressToName` through the driver's DNS client. Our own
+     `OTInetStringToAddress` and `OTInetAddressToName` through the driver's lookups. Our own
      declarations, written from *Inside Macintosh: Networking With Open Transport*; reached by
      our own programs through a private `.IPP` call that returns a function table (as RTMAC_API
      does for the Command Terminal). Tested by an OT test program of our own that fetches pages

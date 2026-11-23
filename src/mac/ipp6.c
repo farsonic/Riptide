@@ -20,12 +20,11 @@
  * MacTCP calls them (mac_call_asr5: pascal arguments, A5 the creator's, D0 the event, D1 the
  * reason, A2 the user data).
  *
- * Names: a small DNS client of its own, asynchronous like everything here (the core's resolver
- * waits in select, which the deferred task must never do): an AAAA and an A query at once on one
- * dual-stack socket, to the configured servers of either family, each sent again to the next
- * server every 2.5 seconds; the results ordered by RFC 6724 (rt_inet_sort_dest) unless the call or
- * riptide.conf (`ipp6 order`) asks for IPv6 or IPv4 first. The hosts table and the core's cache are
- * asked first.
+ * Names: the core resolver's asynchronous lookups (rt_dns_lookup_*), polled here: the hosts table
+ * and the cache, AAAA and A at once, EDNS, TCP, the negative cache, as every lookup of the stack;
+ * the results ordered by RFC 6724 (rt_inet_sort_dest) unless the call or riptide.conf (`ipp6
+ * order`) asks for IPv6 or IPv4 first. ip6ConnectName (version 2) connects a stream by name with
+ * the core's asynchronous Happy Eyeballs (rt_he_conn_*).
  *
  * .IPP is not touched: its streams are mactcp.c's, its stand-in addresses standin.c's. The two
  * drivers share the stack, the A5 table of ipp.c (the creator's A5 of a create call) and its check

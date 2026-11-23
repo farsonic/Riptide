@@ -6,7 +6,9 @@ notification routines for TCP and UDP streams, the same csCodes, the same result
 addresses that hold IPv6: a 20-byte `IP6Address` takes the place of MacTCP's 32-bit `ip_addr` and its
 port. IPv4 hosts are IPv4-mapped addresses (`::ffff:a.b.c.d`, RFC 4291 2.5.5.2), so one stream type,
 one call and one address type cover both families, as RFC 3493's sockets do. Names are resolved by the
-driver itself (A and AAAA, ordered by RFC 6724), with no `'dnrp'` code resource and no DNR glue.
+driver itself (A and AAAA, ordered by RFC 6724), with no `'dnrp'` code resource and no DNR glue, and
+since version 2 a TCP stream can be connected by name in one call, IPv6 and IPv4 raced as RFC 8305
+("Happy Eyeballs") describes.
 
 This document is the specification, written for anyone writing a Mac program. The C header is
 `sdk/mac/IPP6.h` (standalone: no Riptide headers, MacTCP-style types); an example program is
@@ -17,7 +19,7 @@ routines fill an audio ring at interrupt time; the interface is made for exactly
 Contents: 1 Why; 2 Detection and falling back to MacTCP; 3 The model (calls, completion,
 notification, interrupt rules); 4 Addresses; 5 Parameter blocks; 6 TCP calls; 7 UDP calls; 8 The
 interface's own calls (information, addresses, names); 9 Notification routines; 10 Result codes;
-11 Versions; 12 Porting a MacTCP program; 13 Examples; 14 What Riptide's version 1 does and does not do.
+11 Versions; 12 Porting a MacTCP program; 13 Examples; 14 What Riptide's version 2 does and does not do.
 
 ## 1 Why
 
@@ -35,8 +37,8 @@ address fields.
 
 Two ways, either is enough:
 
-1. `Gestalt('ipp6', &version)` answers `noErr` and the interface version (1 for this document) when
-   `.IPP6` is installed. A program that needs calls of a later version checks the number (section 11).
+1. `Gestalt('ipp6', &version)` answers `noErr` and the interface version (2 for this document; 1
+   before ip6ConnectName) when `.IPP6` is installed. A program that needs calls of a later version checks the number (section 11).
 2. `OpenDriver("\p.IPP6", &refNum)` answers `noErr` and the driver reference number. Every call
    below goes to that reference number (`ioCRefNum`).
 
@@ -219,6 +221,7 @@ The calls and their csCodes:
 | 74 | ip6ResolveCancel | IP6iopb | | 8 |
 | 75 | ip6AddrToStr | IP6iopb | anywhere | 8 |
 | 76 | ip6StrToAddr | IP6iopb | anywhere | 8 |
+| 77 | ip6ConnectName (version 2) | TCP6iopb | | 6 |
 
 "Immediate": may be made synchronously from a completion or notification routine (section 3);
 "anywhere": made synchronously, answered in the Control call, from any context. Every other csCode answers `controlErr`
@@ -254,7 +257,7 @@ insufficientResources (32 streams of TCP and UDP together).
 | 35 | 1 | commandTimeoutValue | in: passive only, seconds, 0 = for ever |
 | 36 | 20 | remoteAddr | in: active: the host and port (not `::`, not multicast); passive: the one to accept (`::`/0: any). out: the other end |
 | 56 | 20 | localAddr | in: `::` and 0 for the stack's choice, or an address of this Mac and/or a port. out: this end |
-| 76 | 1 | tosFlags | in: ignored in version 1 |
+| 76 | 1 | tosFlags | in: ignored (versions 1 and 2) |
 | 77 | 1 | precedence | in: ignored |
 | 78 | 1 | dontFrag | in: ignored |
 | 79 | 1 | timeToLive | in: ignored (the hop limit) |
@@ -278,6 +281,54 @@ Results: noErr, invalidStreamPtr, connectionExists, invalidLength (active: port 
 duplicateSocket (the local port is in use), ip6NoSourceErr (no address of that family to send from),
 ipDestDeadErr, openFailed, commandTimeout, insufficientResources, connectionTerminated (a TCPAbort
 or TCPRelease during the open).
+
+**ip6ConnectName (77, version 2)**: TCPActiveOpen to a host name, in one call: the name is looked up
+(AAAA and A at once) and the stream connected to whichever of its addresses answers first, the way
+riptide.library's `RiptideConnectName` connects on the Amiga, with the stack's Happy Eyeballs (RFC
+8305): the addresses in RFC 6724's order with the two families alternating (section 4 of RFC 8305:
+one of the first family, then one of the other, and so on), a new attempt every
+`net.inet.he.attempt_delay` ms (250) while the earlier ones are still trying, or at once when one
+fails, the first to connect kept and the others dropped. An A answer waits at most
+`net.inet.he.resolution_delay` ms (50) for a late AAAA one, and with `net.inet.he.aaaa_filter` on (the
+default) no AAAA is asked while this Mac has no IPv6 route to the Internet. With `net.inet.he.enable`
+off the addresses are tried one after the other, each with its share of the time. A program that
+used ip6Resolve and a loop of TCPActiveOpens (section 13) gets the same in one asynchronous call, and
+a dead IPv6 path costs it a quarter of a second instead of a timeout. The block is TCPActiveOpen's,
+with the name in the part of `options` that TCPActiveOpen ignores:
+
+| Offset | Size | Field | |
+|---|---|---|---|
+| 32 | 1 | ulpTimeoutValue | in: seconds for the whole connect, the lookup included (validityFlags 0x80), and the connection's ULP timeout afterwards; 0 = 2 minutes |
+| 33 | 1 | ulpTimeoutAction | in: as TCPActiveOpen (validityFlags 0x40) |
+| 34 | 1 | validityFlags | in |
+| 35 | 1 | commandTimeoutValue | not used |
+| 36 | 20 | remoteAddr | in: the port (52); the address and scope are not used. out: the address that answered, and the port |
+| 56 | 20 | localAddr | out: this end (the stack chooses it; what is in it is not used) |
+| 76 | 6 | tosFlags ... optionCnt | in: ignored, as TCPActiveOpen's |
+| 82 | 4 | hostName | in: the name, a C string: a host name, or an address literal as ip6StrToAddr takes it (`fd68::1`, `fe80::1%en0`, `192.168.68.1`), which is opened at once as by TCPActiveOpen |
+| 86 | 2 | flags | in: as ip6Resolve's: the order (kIP6OrderDefault: the stack's, below; kIP6OrderRFC6724: the first address RFC 6724 picks decides which family goes first; kIP6OrderIPv6First, kIP6OrderIPv4First), kIP6OnlyIPv6, kIP6OnlyIPv4, kIP6NoSearch |
+| 88 | 2 | addrCount | out: the addresses the name had (of the families asked for, at most 16) |
+| 90 | 2 | attempts | out: connection attempts started |
+| 92 | 4 | elapsed | out: milliseconds from the call to the connection, the lookup included |
+| 96 | 26 | reserved | in: 0 |
+| 122 | 4 | userDataPtr | the caller's |
+
+kIP6OrderDefault is `ipp6 order` in riptide.conf when it is there, else `net.inet.he.prefer`
+(RiptidePrefs' Happy Eyeballs page: "Prefer"), as for ip6Resolve. The name is looked up as ip6Resolve
+looks it up (section 8: the hosts table and the cache first, the search domains for a name without
+a dot), except that the connection does not wait for the second answer longer than the resolution
+delay. The stream is then like one opened with TCPActiveOpen: TCPStatus, the sends and receives, the
+notification routine, TCPClose and TCPAbort; a TCPAbort or TCPRelease while the connect is going on
+ends it (connectionTerminated). The out fields are written when the call completes, also when it
+fails (attempts, addrCount).
+
+Results: noErr, invalidStreamPtr, connectionExists, invalidBufPtr (no name), invalidLength (port 0),
+nameSyntaxErr, ip6ScopeErr, ip6BadAddrErr (a literal of the family the flags leave out, `::`, a
+multicast address), authNameErr (no such name), noAnsErr (no address of the families asked for, or no
+name server answered), noNameServer, openFailed (every address refused, or the ULP timeout ran out),
+ipDestDeadErr (the last attempt found no route), ip6NoSourceErr, insufficientResources,
+connectionTerminated. A driver of version 1 answers controlErr (section 11): check the version, or
+fall back to ip6Resolve and TCPActiveOpen.
 
 **TCPSend (34)**: MacTCP's TCPSendPB.
 
@@ -433,13 +484,13 @@ the two for `::`. No stream is needed.
 
 | Offset | Size | Field | |
 |---|---|---|---|
-| 28 | 4 | version | out: the interface version (1); the same as Gestalt `'ipp6'` |
+| 28 | 4 | version | out: the interface version (2); the same as Gestalt `'ipp6'` |
 | 32 | 4 | features | out: bits, below |
 | 36 | 2 | maxTCPStreams | out: streams (TCP and UDP share them: 32) |
 | 38 | 2 | maxUDPStreams | out: the same pool |
-| 40 | 2 | maxLookups | out: ip6Resolve and ip6ResolveAddr calls at once (8) |
+| 40 | 2 | maxLookups | out: ip6Resolve and ip6ResolveAddr calls at once (8; an ip6ConnectName's lookup is its stream's and not counted) |
 | 42 | 2 | order | out: ip6Resolve's default order (kIP6OrderRFC6724, kIP6OrderIPv6First, kIP6OrderIPv4First) |
-| 44 | 4 | implementation | out: a C string, the driver's (read only): "Riptide .IPP6 1" and the build |
+| 44 | 4 | implementation | out: a C string, the driver's (read only): "Riptide .IPP6 2" and the build |
 | 48 | 4 | userDataPtr | the caller's |
 
 `features`: kIP6HasIPv4 (0x01) an interface has an IPv4 address; kIP6HasIPv6 (0x02) an interface
@@ -496,14 +547,22 @@ invalidBufPtr (NULL buffer with a nonzero length).
 | 76 | 4 | userDataPtr | the caller's |
 
 How: an IPv6 literal (`fd68::1`, `fe80::1%en0`) or a dotted IPv4 address is answered at once
-(noErr, one result, completed through ioCompletion like any call). Otherwise the hosts table
-(riptide.conf `host` lines, IPv4 and IPv6) and the stack's cache are asked first, then the name
-servers (IPv4 or IPv6 ones: riptide.conf, DHCP, DHCPv6, router advertisements) with an AAAA and an A
-query at once, each sent again to the next server after 2.5 seconds; a name without a dot is also
-tried with the search domain when the name servers do not know it; a name ending in a dot is taken as
-it is. The call completes when both answers are in (or a query has been sent four times without
-one), or when its timeout runs out, with what has come by then: an answer of one family is not held
-up by the other's for longer than the timeout.
+(noErr, one result, completed through ioCompletion like any call). Otherwise the lookup is the
+stack's resolver, the one every lookup of Riptide uses (src/core/resolv.c, its asynchronous lookups;
+since 23 November 2026, before which `.IPP6` had a small DNS client of its own): the hosts table
+(riptide.conf `host` lines, IPv4 and IPv6), the stack's cache and its negative cache (names that do
+not exist, and names without an address of a family, remembered as long as the answer's SOA record
+allows, at most `dns.cache.neg_maxttl`, an hour by default; a lookup that failed is not repeated for
+a second or more) are asked first, then the name servers (IPv4 or IPv6 ones: riptide.conf, DHCP,
+DHCPv6, router advertisements) with an AAAA and an A query at once, each server in turn for 2
+seconds, two rounds. The queries carry EDNS (`dns.edns_size`, 1232 bytes, less on a path with a
+smaller MTU; a server that does not understand it is asked again without), an answer too large for
+that comes again over TCP (`dns.tcp_fallback`), one that came in IP fragments is not used (RFC 9715),
+and the answers go into the cache, for every program. A name without a dot is also tried with each
+domain of the search list (riptide.conf `domain`, DHCP), in order, when the name servers do not know
+the name itself; a name with a dot, or ending in a dot, is taken as it is. The call completes when
+both answers are in, or when its timeout runs out, with what has come by then: an answer of one
+family is not held up by the other's for longer than the timeout.
 
 `flags`: the order, in the low two bits: kIP6OrderDefault (0) the stack's setting (riptide.conf
 `ipp6 order rfc6724|ipv6|ipv4`, RFC 6724 by default), kIP6OrderRFC6724 (1) RFC 6724's destination
@@ -563,8 +622,8 @@ exactly once per connection, with `terminReason`: TCPRemoteAbort (2) the other e
 TCPNetworkFailure (3), TCPULPTimeoutTerminate (5), TCPULPAbort (6) the program's TCPAbort or
 TCPRelease, TCPULPClose (7) both ends closed; TCPDataArrival (4) data has arrived and no receive is
 waiting for it (once, until a receive completes); TCPUrgent (5) and TCPICMPReceived (6) are never sent
-by version 1. UDP: UDPDataArrival (1) a datagram is waiting and no UDPRead is; UDPICMPReceived (2) is
-never sent by version 1 (so `icmpMsg` is always NULL; ICMP6Report is defined in the header for a
+by versions 1 and 2. UDP: UDPDataArrival (1) a datagram is waiting and no UDPRead is; UDPICMPReceived (2) is
+never sent by versions 1 and 2 (so `icmpMsg` is always NULL; ICMP6Report is defined in the header for a
 later version).
 
 The routine runs at interrupt time with A5 set (section 3). It may make asynchronous calls and the
@@ -620,7 +679,14 @@ Codes -23066 to -23079 are kept for later versions of `.IPP6`.
 ## 11 Versions
 
 The interface version is the number Gestalt `'ipp6'` and ip6GetInfo answer. This document is
-version 1. The rules for later versions:
+version 2:
+
+| Version | Riptide | What came |
+|---|---|---|
+| 1 | 21 November 2026 | every call of sections 6 to 8 but ip6ConnectName |
+| 2 | 23 November 2026 | ip6ConnectName (77): a TCP connection by name, with Happy Eyeballs |
+
+The rules for later versions:
 
 - a block's layout never changes: no field moves or changes its size or meaning, and fields a version
   does not use stay as they are documented (reserved fields: 0 in, not touched);
@@ -644,7 +710,9 @@ version 1. The rules for later versions:
    UDPRelease are unchanged, byte for byte. An IPv4 address goes in as `::ffff:a.b.c.d`
    (`IP6_SET_V4`).
 4. Connect to the addresses ip6Resolve gave in order; on openFailed, ipDestDeadErr, ip6NoSourceErr
-   or ip6BadAddrErr go on to the next (the stream may be opened again after a failed open).
+   or ip6BadAddrErr go on to the next (the stream may be opened again after a failed open). Or, with
+   version 2, make one ip6ConnectName with the name and the port: the lookup, the order and the
+   fallback are the stack's, and the families are raced instead of tried one after the other.
 5. Show addresses with ip6AddrToStr; accept typed ones with ip6StrToAddr (an IPv6 literal in a URL
    is `[fd68::1]`).
 6. ipctlGetAddr becomes ip6GetAddrs. Completion routines, notification routines, the receive
@@ -656,7 +724,9 @@ remotePort at 40), TCPSend, and TCPRcv calls chained from their own completion r
 ring, TCPAbort and TCPRelease. With `.IPP6` it opens `.IPP6`, looks the station up with ip6Resolve
 (asynchronously, results with the port already in them), puts each result into `remoteAddr` at 36 in
 turn until a TCPActiveOpen succeeds, and keeps everything else, the interrupt-time receive chain
-included; on a Mac without `.IPP6` it goes on using `.IPP` as now.
+included; on a Mac without `.IPP6` it goes on using `.IPP` as now. With version 2 the lookup and the
+loop of opens become one ip6ConnectName (the station's host name at 82, its port at 52), and the
+connection's ends are in the block when it completes.
 
 ## 13 Examples
 
@@ -758,12 +828,13 @@ while (!look_done)
     WaitNextEvent(everyEvent, &ev, 1, NULL);        /* the program goes on meanwhile */
 ```
 
-## 14 What Riptide's version 1 does and does not do
+## 14 What Riptide's version 2 does and does not do
 
 Riptide (src/mac/ipp6.c) implements every call above. TCP and UDP streams are the core's dual-stack
-sockets (`AF_INET6` with IPV6_V6ONLY off: an IPv4-mapped address goes over IPv4), the lookups a small
-asynchronous DNS client in the driver (the core's own resolver waits in select, which the deferred
-task must never do). Not in version 1: urgent data (sent as ordinary data, never reported), IP
+sockets (`AF_INET6` with IPV6_V6ONLY off: an IPv4-mapped address goes over IPv4), the lookups the
+core resolver's asynchronous ones (`rt_dns_lookup_*`, which never wait: the deferred task polls them),
+ip6ConnectName the core's asynchronous Happy Eyeballs (`rt_he_conn_*`, src/core/happy.c) on those
+lookups. Not in version 2 (nor in 1): urgent data (sent as ordinary data, never reported), IP
 options, type of service, traffic class and hop limit (the fields are ignored), ICMP reports to the
 notification routines, UDPStatus, UDPMultiCreate/Send/Read, TCPExtendedStat, multicast, an ICMPv6
 echo call. They are left for later versions (section 11).
@@ -773,7 +844,8 @@ Riptide's log (PiLog's Mac tab on Aurora68, built with AURORA68=1) names the fir
 every csCode that is not supported, once.
 
 Tested on Aurora68's testbed (System 7.1 under QEMU with `tools/pinet.py` as the peer: 95 checks of
-tests/mac/ipp6_test.c, and the example program, which also fell back to `.IPP` correctly on Apple's
-MacTCP; docs/MAC.md, "The .IPP6 test"); not yet on real
+tests/mac/ipp6_test.c for version 1, and the example program, which also fell back to `.IPP` correctly
+on Apple's MacTCP; for version 2 the same test with ip6ConnectName and the core resolver's lookups,
+docs/MAC.md, "The .IPP6 test"); not yet on real
 hardware, nor with a program compiled by MPW C, THINK C or CodeWarrior (the header's layout is
 checked by tests/t_ipp6_layout.c on the host and for the m68k).

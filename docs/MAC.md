@@ -18,10 +18,10 @@ optional development log.
 |---|---|---|
 | 1 | The driver installs and starts at boot, the core runs, Ethernet through `.ENET`, `ipctlGetAddr`, `ipctlEchoICMP` | done: PiPing (a MacTCP ping) gets replies through Riptide |
 | 2 | TCP and UDP: TCPCreate ... TCPRelease, the UDP set, ASR notifications, TCPStatus, TCPGlobalInfo | done in the testbed (src/mac/mactcp.c); corrected 19 November 2026 for browsers: tests/mac/http_test.c ("TCP, UDP and the resolver") |
-| 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName; HInfo and MXInfo answer noAnsErr) | done in the testbed: the Riptide DNR file (src/mac/dnr), an asynchronous DNS client in the driver; since 19 November 2026 with the creator Apple's glue looks for |
+| 3 | The resolver: a `'dnrp'` code resource the DNR glue finds (StrToAddr, AddrToName; HInfo and MXInfo answer noAnsErr) | done in the testbed: the Riptide DNR file (src/mac/dnr); since 19 November 2026 with the creator Apple's glue looks for; since 23 November 2026 on the core resolver's asynchronous lookups (EDNS, TCP, the negative cache: "On the core resolver" below) |
 | 4 | Preferences | done: RiptidePrefs, the Amiga's MUI editor built for the Mac (MAC-GUI.md) |
 | 5 | The command-line tools | done: the Riptide Command Terminal, the Amiga's ip, ifconfig, route, arp, netstat, ping, ping6, traceroute, traceroute6, host, hostname, nc, ftp, sysctl and speedtest in a Mac window ("The Riptide Command Terminal" below) |
-| 6 | `.IPP6`: a public IPv6 interface in MacTCP's style, for programs written for it | done in the testbed (21 November 2026): docs/IPP6.md, sdk/mac/IPP6.h, src/mac/ipp6.c ("The .IPP6 interface" below) |
+| 6 | `.IPP6`: a public IPv6 interface in MacTCP's style, for programs written for it | done in the testbed (21 November 2026): docs/IPP6.md, sdk/mac/IPP6.h, src/mac/ipp6.c ("The .IPP6 interface" below); interface version 2 (23 November 2026): ip6ConnectName, a connection by name with Happy Eyeballs |
 
 Also working in the testbed (18 November): DHCP (`dhcp en0`: bound, lease kept), IPv6 (a
 link-local address and one from the router advertisement's prefix, each passing duplicate
@@ -212,6 +212,19 @@ HD=test.image tools/run-solo.sh 200 mac.net=/tmp/psmac-net
 Built with `AURORA68=1`, every Riptide log line and the INIT's milestones show in the kernel log
 as `[MAC] Riptide: ...`, written through the Aurora68 card's mailbox.
 
+pinet's name server answers over UDP only, without EDNS, and its negative answers have no SOA
+record (so nothing may cache them). For the resolver's tests Riptide has a name server of its own
+for the host, tests/mac/dns_peer.py: pinet's names and answers, plus EDNS (an OPT record in every
+answer to a query with one), an SOA in every negative answer, big.testbed (100 A records, more
+than fits in UDP: TC, then TCP) and slow6.testbed (its AAAA answer a second late), over UDP and TCP,
+every query logged. pinet hands the Mac's DNS to it with its UDP and TCP relays, nothing changed in
+pinet:
+
+```
+python3 tests/mac/dns_peer.py 15353 &
+PINET_UDP=53=127.0.0.1:15353 PINET_FORWARD=53=127.0.0.1:15353 python3 tools/pinet.py /tmp/psmac-net peer &
+```
+
 ## TCP, UDP and the resolver (stages 2 and 3)
 
 `src/mac/mactcp.c` makes each MacTCP stream a socket of the core. A call that cannot finish at
@@ -285,9 +298,52 @@ the call's completion routine, StrToAddr having returned cacheFault meanwhile. A
 says so, in noAnsErr after about ten seconds if none answers (two servers, each tried twice);
 HInfo, MXInfo and EnumCache answer noAnsErr. CloseResolver withdraws the lookups still waiting
 (`RTMAC_DNSCANCEL`): Apple's glue disposes of the `'dnrp'` code straight afterwards, and their
-completions must not run into it. The lookups are the driver's own small
+completions must not run into it. Until 23 November 2026 the lookups were the driver's own small
 DNS client (A and PTR queries over UDP, the configured name servers, the search domain), because
-the core's resolver waits in select, which the deferred task must never do.
+the core's resolver waits in select, which the deferred task must never do; now they are the core
+resolver's asynchronous lookups (below).
+
+**On the core resolver** (23 November 2026). The DNR's lookups (mactcp.c) and .IPP6's (ipp6.c) each
+had a DNS client of their own, which ignored the Names page's EDNS size (`dns.edns_size`) and DNS
+over TCP (`dns.tcp_fallback`) and the negative cache (`dns.cache.neg_maxttl`), and read the core's
+cache without filling it. The core resolver (src/core/resolv.c) now has asynchronous lookups for a
+context that must never wait, `rt_dns_lookup_start`/`_poll`/`_get`/`_free` (and
+`rt_dns_lookup_start_addr` for PTR): the same steps in the same order as the blocking
+`rt_resolve_name46` and `rt_resolve_addr6` the Amiga's programs use (the hosts table, localhost, the
+Mac's own .local name and the cache first; the search list; AAAA and A at once with RFC 8305's
+resolution delay; each server in turn, 2 s, two rounds; EDNS with its fallbacks, TCP for a truncated
+or fragmented answer, the negative cache and the failure cache of RFC 9520; multicast DNS for .local
+names; the answers into the cache), but as a state machine on non-blocking sockets of the caller's
+context, with deadlines instead of waits, in one heap block, so that a poll needs little stack (the
+deferred task runs on the stack it interrupted). mactcp.c and ipp6.c start one per call and poll it
+with their streams in each round of the stack's deferred task (`ipp_poll`; an answer arriving wakes
+the stack, and the Time Manager runs it at least every 100 ms); their DNS clients are gone. What
+programs see stays MacTCP's: the result procedure called from the lookup's completion as Apple's
+glue expects, cacheFault from StrToAddr meanwhile; authNameErr for a name that does not exist,
+noAnsErr when no server answers (the DNR gives up after 20 s whatever the servers do), noNameServer
+when none is configured, nameSyntaxErr for a name DNS cannot carry (a label longer than 63),
+outOfMemory beyond eight lookups; up to four IPv4 addresses, else an IPv6 one as a stand-in; and
+MacTCP's search rule, which the core's lookups take as a flag (`RT_DNSL_SHORTSEARCH`): a name without
+a dot is tried as it is, then with each domain of the search list, a name with a dot only as it is
+(the core's own order, resolv.conf's, puts the search domains first and tries them for dotted names
+too). .IPP6 keeps docs/IPP6.md's rules (maxResults, the families, the order, both answers waited for
+up to the block's timeout). tests/t_dns_async.c tests the lookups natively against a DNS server of
+its own on the core's loopback (EDNS, FORMERR, TC and TCP, NXDOMAIN and NODATA cached and not,
+the search rules, the resolution delay, a silent server and the caller's timeout, PTR, the hosts
+table) and the asynchronous Happy Eyeballs .IPP6's connect by name uses ("The .IPP6 interface"). A
+lookup that waits keeps its own copy of the servers: when the list changes (a restart of the network
+empties it and reads riptide.conf again; DHCP; an expiry) it asks the new ones from its next
+server's turn, and with none it fails (noAnsErr) instead of touching what the restart freed.
+
+Tested in Aurora68's testbed (23 November 2026; the solo board under QEMU, System 7.1, pinet with
+tests/mac/dns_peer.py as the name server): the Browser test (below), 86 of 86, with the new checks:
+StrToAddr of nowhere.testbad twice, authNameErr both times, the second from the negative cache in a
+tick (dns_peer's log has the name asked once, A and AAAA with EDNS 1232); `peer`, without a dot,
+found as peer.testbed after `peer` itself (MacTCP's search rule); big.testbed, whose 1,640-byte
+answer comes truncated over UDP, asked again over TCP and answered with four addresses; AddrToName
+answered from in-addr.arpa (peer.testbed), authNameErr in a tick, noAnsErr after 242 ticks for a
+server that never answers; the stand-ins as before. In the same boot ipp6get (sdk/mac/examples,
+now with ip6ConnectName when the interface is version 2) fetched its three pages by name.
 
 **The driver stays open.** Programs open `.IPP` by name; Close is refused with closErr, as MacTCP
 refuses it, so a program that closes the driver on quitting leaves it open (dOpened set) for the
@@ -419,8 +475,10 @@ synchronous or asynchronous with ioCompletion, notification routines, MacTCP's r
 interrupt-time rules) with a 20-byte `IP6Address` (16-byte address, port, scope) wherever MacTCP has
 an `ip_addr` and a port. IPv4 hosts are IPv4-mapped addresses, so one stream type covers both
 families; names are resolved by the driver itself (`ip6Resolve`: AAAA and A, RFC 6724's order, or
-IPv6 or IPv4 first), with no `'dnrp'` resource. A program finds it with Gestalt `'ipp6'` (the
-interface version, 1) or OpenDriver(".IPP6"), and falls back to `.IPP` when it is not there. The
+IPv6 or IPv4 first), with no `'dnrp'` resource, and since interface version 2 a TCP stream is
+connected by name in one call (`ip6ConnectName`, csCode 77: the core's Happy Eyeballs). A program
+finds it with Gestalt `'ipp6'` (the interface version, 2) or OpenDriver(".IPP6"), and falls back to
+`.IPP` when it is not there. The
 first program written for it is Aurora68 Play, Aurora68's internet radio, which reads its stream
 with TCPRcv calls chained from their completion routines into the audio ring.
 
@@ -439,7 +497,19 @@ with TCPRcv calls chained from their completion routines into the audio ring.
   creators' A5 and its check for programs that quit.
 - riptide.conf: `ipp6 order rfc6724|ipv6|ipv4`, the order of `ip6Resolve`'s answers when the program
   does not ask for one (RFC 6724 by default; its policy table puts IPv4 before a unique local IPv6
-  address, fd00::/8, and a global IPv6 address before IPv4).
+  address, fd00::/8, and a global IPv6 address before IPv4), and the first family of
+  `ip6ConnectName`.
+- Connect by name (23 November 2026, interface version 2): `ip6ConnectName` takes TCPActiveOpen's
+  block with a host name in the part of `options` TCPActiveOpen ignores (docs/IPP6.md, section 6),
+  and the stream connects as riptide.library's `RiptideConnectName` connects on the Amiga, but
+  without waiting: the core's asynchronous Happy Eyeballs (`rt_he_conn_start`/`_poll`/`_take`,
+  src/core/happy.c) looks the name up with `rt_dns_lookup_start` (A and AAAA at once, the
+  resolution delay, the IPv6 lookup filter), sorts the addresses by RFC 6724, alternates the
+  families (RFC 8305 4), and starts a non-blocking connect on a dual-stack socket of `.IPP6`'s
+  context every `net.inet.he.attempt_delay` ms, or at once when one fails; ipp6.c polls it with the
+  stream, and the first to connect becomes the stream's socket. The settings are on RiptidePrefs'
+  Happy Eyeballs page again (docs/MAC-GUI.md). The block reports the addresses, the attempts and the
+  time taken.
 - tests/t_ipp6_layout.c checks every offset of the header against the specification (on the host
   with 68k sizes; `make -f Makefile.mac build/mac/t_ipp6_layout` builds it for the m68k and runs it
   under qemu-m68k).
@@ -474,6 +544,21 @@ made (connectionDoesntExist, as the Browser test allows). The Browser test (`.IP
 on the same Riptide: 83 of 83, as before. The example program on the same System 7.1 with Apple's
 MacTCP instead of Riptide found no Gestalt `'ipp6'`, fell back to `.IPP` and fetched the page from
 192.168.68.1 over MacTCP.
+
+**Version 2 and the core resolver** (23 November 2026): the test adds ip6ConnectName and lookups
+that need the core resolver; with tests/mac/dns_peer.py as the name server, 115 of 115. Among them:
+Gestalt and ip6GetInfo answer 2; peer.testbed by name, IPv6 first, connected to [fd68::1]:80 at the
+first attempt (33 ms), and the page fetched over it; in the default order (RFC 6724) to 192.168.68.1;
+v6only.testbed to [fd68::80]; many.testbed, IPv6 first (eight of its nine silent IPv6 addresses
+kept, and its IPv4 one): the IPv4 attempt started the attempt delay after the first IPv6 one and
+connected, 2 attempts, 319 to 447 ms in all, instead of an IPv6 timeout; slow6.testbed, whose AAAA
+answer comes a second late: connected over IPv4 after 135 to 172 ms (the resolution delay), while
+ip6Resolve of it waited and gave both; big.testbed by ip6Resolve: eight addresses, over TCP; a
+literal; a refused port (openFailed after both addresses); a name that does not exist (authNameErr);
+the call's own errors. One expectation changed with the core resolver: ip6ResolveAddr of
+::ffff:192.168.68.1 answers h6.lan, the run's riptide.conf host line, because the hosts table is
+asked first, as for names (the first run of the day, 111 of 114, had also expected ten addresses of
+many.testbed where the resolver keeps eight of a family).
 
 ## The Riptide Command Terminal
 
