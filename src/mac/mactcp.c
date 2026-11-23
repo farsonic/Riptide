@@ -25,11 +25,11 @@
  * be reused from then on, which is earlier than MacTCP allows and so asks nothing more of the
  * caller. TCPClose completes at once (MacTCP waits for the FIN's acknowledgement).
  *
- * The lookups (RTMAC_DNS, from the 'dnrp' code of the Riptide DNR file): the hosts table and the
- * core's cache first (rt_resolve_local46), then a small DNS client of its own, asynchronous like
- * everything else here (the core's resolver waits in select, which the Mac's deferred task must
- * never do): A, AAAA and PTR queries over UDP to the configured name servers, each tried twice,
- * with the search domain for names without a dot.
+ * The lookups (RTMAC_DNS, from the 'dnrp' code of the Riptide DNR file): the core resolver's
+ * asynchronous lookups (rt_dns_lookup_*), polled with the streams: the hosts table and the core's
+ * cache first, then A and AAAA (or PTR) queries with the search list, EDNS, TCP for answers too
+ * large for UDP and the negative cache, as every lookup of the stack makes them, and their answers
+ * go into the core's cache.
  *
  * IPv6 for programs that know only IPv4 (standin.c): a name with no IPv4 address but an IPv6 one
  * is answered with a stand-in IPv4 address; a stream that opens a stand-in gets a socket of
@@ -75,6 +75,7 @@ enum { UDPCreate = 20, UDPRead, UDPBfrReturn, UDPWrite, UDPRelease, UDPMaxMTUSiz
 #define duplicateSocket       -23017
 #define ipDestDeadErr         -23033
 #define noNameServer          -23044
+#define nameSyntaxErr         -23041
 #define authNameErr           -23045
 #define noAnsErr              -23046
 #define dnrErr                -23047
@@ -907,19 +908,17 @@ static int udp_write(void *pb, struct rt_sockctx *c)
 }
 
 /* ==================== the resolver's lookups (RTMAC_DNS) ==================== */
+/* The core resolver's asynchronous lookups (rt_dns_lookup_*, src/core/resolv.c): the hosts table,
+   the cache, the search list, EDNS, TCP for large answers and the negative cache, as for every
+   other lookup of the stack; polled here in the stack's deferred task, never waiting. */
 #define NDNS 8
+#define DNS_LIMIT_MS 20000              /* a lookup gives up after this, whatever the servers do */
 struct dnsq {
 	void *pb;
 	u32 own_lo, own_hi;             /* the partition of the parameter block (mactcp_reap) */
-	int fd, server, tries, ptr;
-	u16 id, qtype;                  /* A (1), AAAA (28) or PTR (12) */
-	int other_tried;                /* the other of A and AAAA asked for already */
-	u32 deadline;
-	char name[256];
-	int searched;
+	struct rt_dns_lookup *l;
 };
 static struct dnsq dnsq[NDNS];
-static u16 dns_id = 0x5200;
 
 static int numeric(const char *s, u32 *a)
 {
@@ -945,87 +944,11 @@ static int numeric(const char *s, u32 *a)
 	return 1;
 }
 
-static int dns_send(struct rt_sockctx *c, struct dnsq *q)
+static void dns_drop(struct dnsq *q)
 {
-	u32 servers[4];
-	int n = rt_dns_get_servers(servers, 4), len = 12, k;
-	u8 pkt[300];
-	const char *nm = q->name;
-	struct rt_sockaddr_in to;
-	if (n <= 0)
-		return noNameServer;
-	memset(pkt, 0, 12);
-	rt_put_be16(pkt, q->id);
-	pkt[2] = 0x01;                                  /* recursion desired */
-	rt_put_be16(pkt + 4, 1);                        /* one question */
-	/* the name in labels */
-	while (*nm) {
-		const char *dot = nm;
-		while (*dot && *dot != '.')
-			dot++;
-		k = (int)(dot - nm);
-		if (k < 1 || k > 63 || len + k + 6 > (int)sizeof pkt)
-			return authNameErr;
-		pkt[len++] = (u8)k;
-		memcpy(pkt + len, nm, (u32)k);
-		len += k;
-		nm = *dot ? dot + 1 : dot;
-	}
-	pkt[len++] = 0;
-	rt_put_be16(pkt + len, q->qtype);               /* A, AAAA or PTR */
-	rt_put_be16(pkt + len + 2, 1);                  /* IN */
-	len += 4;
-	fill_addr(&to, servers[q->server % n], rt_htons(53));
-	if (rt_api_sendto(c, q->fd, pkt, (u32)len, RT_MSG_DONTWAIT, &to, sizeof to) < 0)
-		return noNameServer;
-	q->deadline = rt_now_ms() + 2500;
-	return 1;
-}
-
-/* a name of the answer at p into out (dotted), compressed names followed; the byte after it */
-static int dns_name(const u8 *m, int mlen, int p, char *out, int olen)
-{
-	int o = 0, jumped = 0, end = -1, guard = 0;
-	while (p < mlen && guard++ < 64) {
-		int k = m[p];
-		if (!k) {
-			if (end < 0)
-				end = p + 1;
-			break;
-		}
-		if ((k & 0xC0) == 0xC0) {
-			if (p + 1 >= mlen)
-				return -1;
-			if (end < 0)
-				end = p + 2;
-			p = ((k & 0x3F) << 8) | m[p + 1];
-			jumped = 1;
-			continue;
-		}
-		if (p + 1 + k > mlen)
-			return -1;
-		if (out) {
-			if (o && o < olen - 1)
-				out[o++] = '.';
-			for (int i = 0; i < k && o < olen - 1; i++)
-				out[o++] = (char)m[p + 1 + i];
-		}
-		p += 1 + k;
-	}
-	if (out && olen)
-		out[o < olen ? o : olen - 1] = 0;
-	(void)jumped;
-	return end;
-}
-
-static void dns_done(struct rt_sockctx *c, struct dnsq *q, int r)
-{
-	if (q->pb)
-		ipp_result(q->pb, r);
 	q->pb = NULL;
-	if (q->fd >= 0)
-		rt_api_close(c, q->fd);
-	q->fd = -1;
+	rt_dns_lookup_free(q->l);
+	q->l = NULL;
 }
 
 /* a name's answer as an IPv6 address: its stand-in (standin.c) */
@@ -1040,98 +963,51 @@ static int dns_answer6(struct rtmac_dns_pb *d, const rt_in6_addr *a6, const char
 	return 1;
 }
 
-/* the other of A and AAAA, once: for a name with no record of the kind asked for first */
-static int dns_other(struct rt_sockctx *c, struct dnsq *q)
+/* the lookup's answer into the 'dnrp' code's block, and the result MacTCP's resolver gives */
+static int dns_answer(struct rtmac_dns_pb *d, struct rt_dns_lookup *l, int r)
 {
-	if (q->ptr || q->other_tried)
+	u32 a4[4];
+	rt_in6_addr a6[1];
+	int n4 = 4, n6 = 1;
+	if (r == -RT_HOST_NOT_FOUND)
+		return authNameErr;
+	if (r <= 0)
+		return noAnsErr;                        /* no address, or no server answered */
+	rt_dns_lookup_get(l, a4, &n4, a6, &n6, d->cname, sizeof d->cname);
+	if (d->ptr) {
+		d->count = 1;
 		return 0;
-	q->other_tried = 1;
-	q->qtype = q->qtype == 1 ? 28 : 1;
-	q->id = ++dns_id;
-	q->tries = 0;
-	return dns_send(c, q) == 1;
+	}
+	/* IPv4 addresses, else an IPv6 one as a stand-in (with `mactcp ipv6 prefer`, the IPv6 one first) */
+	if (n4 && !(standin_prefer6 && n6)) {
+		for (int i = 0; i < n4; i++)
+			d->addrs[i] = a4[i];
+		d->count = (u32)n4;
+		return 0;
+	}
+	if (n6 && (d->addrs[0] = standin_for(a6, d->name)) != 0) {
+		d->count = 1;
+		return 0;
+	}
+	d->count = 0;
+	return noAnsErr;
 }
 
 static void dns_poll(struct rt_sockctx *c)
 {
+	(void)c;
 	for (int i = 0; i < NDNS; i++) {
 		struct dnsq *q = &dnsq[i];
-		u8 m[600];
-		int n;
+		int r;
 		if (!q->pb)
 			continue;
-		while ((n = rt_api_recvfrom(c, q->fd, m, sizeof m, RT_MSG_DONTWAIT, NULL, NULL)) >= 12) {
-			int qd = rt_get_be16(m + 4), an = rt_get_be16(m + 6), p = 12, rcode = m[3] & 15, got = 0;
-			struct rtmac_dns_pb *d = q->pb;
-			if (rt_get_be16(m) != q->id || !(m[2] & 0x80))
-				continue;
-			if (rcode == 3) {                       /* no such name: with the search domain, once */
-				const char *dom = rt_dns_search_list();
-				if (!q->ptr && !q->searched && dom && *dom && !strchr(q->name, '.')) {
-					q->other_tried = 0;
-					char *e = q->name + strlen(q->name);
-					u32 k = 0;
-					*e++ = '.';
-					while (dom[k] && dom[k] != ' ' && e < q->name + sizeof q->name - 1)
-						*e++ = dom[k++];
-					*e = 0;
-					q->searched = 1;
-					q->id = ++dns_id;
-					q->tries = 0;
-					if (dns_send(c, q) == 1)
-						continue;
-				}
-				dns_done(c, q, authNameErr);
-				break;
-			}
-			if (rcode) {
-				dns_done(c, q, noAnsErr);
-				break;
-			}
-			for (int k = 0; k < qd && p > 0; k++) {
-				p = dns_name(m, n, p, NULL, 0);
-				p = p > 0 ? p + 4 : -1;
-			}
-			for (int k = 0; k < an && p > 0 && p + 10 <= n; k++) {
-				char nm[256];
-				int e = dns_name(m, n, p, nm, sizeof nm), type, rdlen;
-				if (e < 0 || e + 10 > n)
-					break;
-				type = rt_get_be16(m + e);
-				rdlen = rt_get_be16(m + e + 8);
-				if (e + 10 + rdlen > n)
-					break;
-				if (q->qtype == 1 && type == 1 && rdlen == 4 && got < 4) {
-					memcpy(&d->addrs[got], m + e + 10, 4);
-					if (!got)
-						rt_strlcpy(d->cname, nm, sizeof d->cname);
-					got++;
-				} else if (q->qtype == 28 && type == 28 && rdlen == 16 && !got) {
-					rt_in6_addr a6;
-					memcpy(&a6, m + e + 10, 16);
-					got = dns_answer6(d, &a6, q->name);
-				} else if (q->ptr && type == 12) {
-					dns_name(m, n, e + 10, d->cname, sizeof d->cname);
-					got = 1;
-				}
-				p = e + 10 + rdlen;
-			}
-			d->count = (u32)got;
-			if (!got && dns_other(c, q))
-				continue;                       /* no A: perhaps an AAAA (or the other way) */
-			dns_done(c, q, got ? 0 : noAnsErr);
-			break;
-		}
-		if (q->pb && (s32)(rt_now_ms() - q->deadline) >= 0) {
-			if (++q->tries >= 4) {
-				dns_done(c, q, noAnsErr);
-				continue;
-			}
-			q->server++;
-			q->id = ++dns_id;
-			if (dns_send(c, q) != 1)
-				dns_done(c, q, noNameServer);
-		}
+		r = rt_dns_lookup_poll(q->l);
+		if (r == 0)
+			continue;
+		void *pb = q->pb;
+		r = dns_answer(pb, q->l, r);
+		dns_drop(q);
+		ipp_result(pb, r);
 	}
 }
 
@@ -1141,7 +1017,7 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 	struct dnsq *q = NULL;
 	rt_in6_addr a6;
 	u32 a;
-	int r;
+	int err = 0;
 	d->count = 0;
 	d->cname[0] = 0;
 	if (!d->ptr && numeric(d->name, &a)) {
@@ -1158,8 +1034,8 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 		return 0;
 	}
 	if (!d->ptr) {
-		/* the hosts table and the cache: IPv4 addresses, else an IPv6 one as a stand-in
-		   (with `mactcp ipv6 prefer`, the IPv6 one first) */
+		/* the hosts table and the cache answer at once, as before: IPv4 addresses, else an IPv6 one as a
+		   stand-in (with `mactcp ipv6 prefer`, the IPv6 one first) */
 		u32 a4[4];
 		int n4 = rt_resolve_local46(d->name, 0, a4, NULL, 4);
 		int n6 = rt_resolve_local46(d->name, 1, NULL, &a6, 1);
@@ -1171,7 +1047,7 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 			return 0;
 		}
 		if (n6 && dns_answer6(d, &a6, d->name))
-			return 0;
+			return 0;                       /* only an IPv6 address known (a host line): its stand-in */
 	}
 	for (int i = 0; i < NDNS; i++)
 		if (!dnsq[i].pb) {
@@ -1181,34 +1057,28 @@ static int dns_call(void *pb, struct rt_sockctx *c)
 	if (!q)
 		return outOfMemory;
 	memset(q, 0, sizeof *q);
-	q->fd = rt_api_socket(c, RT_AF_INET, RT_SOCK_DGRAM, RT_IPPROTO_UDP);
-	if (q->fd < 0)
-		return outOfMemory;
-	nonblock(c, q->fd);
 	if (d->ptr) {
-		u32 x = d->addrs[0];
-		rt_snprintf(q->name, sizeof q->name, "%u.%u.%u.%u.in-addr.arpa", (unsigned)(x & 255),
-		            (unsigned)((x >> 8) & 255), (unsigned)((x >> 16) & 255), (unsigned)(x >> 24));
-		q->ptr = 1;
-		q->qtype = 12;
+		rt_in6_set_v4mapped(&a6, d->addrs[0]);
+		q->l = rt_dns_lookup_start_addr(c, &a6, DNS_LIMIT_MS, &err);
 	} else {
-		rt_strlcpy(q->name, d->name, sizeof q->name);
-		q->qtype = standin_prefer6 ? 28 : 1;
-		/* a trailing dot: the name as it is */
-		if (q->name[0] && q->name[strlen(q->name) - 1] == '.') {
-			q->name[strlen(q->name) - 1] = 0;
-			q->searched = 1;
+		/* A and AAAA at once: an AAAA answer counts only without A (a stand-in), unless
+		   `mactcp ipv6 prefer`, which waits for both. MacTCP's search rule: a name without a dot gets
+		   the search list after the name itself; one with a dot is taken as it is */
+		q->l = rt_dns_lookup_start(c, d->name, RT_AF_UNSPEC,
+		                           RT_DNSL_SHORTSEARCH | (standin_prefer6 ? RT_DNSL_BOTH : 0), DNS_LIMIT_MS, &err);
+	}
+	if (!q->l)
+		return err == -RT_ENXIO ? noNameServer : err == -RT_EINVAL ? nameSyntaxErr : outOfMemory;
+	{
+		int r = rt_dns_lookup_poll(q->l);
+		if (r != 0) {                           /* answered at once (the hosts table, the cache) */
+			r = dns_answer(d, q->l, r);
+			rt_dns_lookup_free(q->l);
+			q->l = NULL;
+			return r;
 		}
 	}
-	q->id = ++dns_id;
 	q->pb = pb;
-	r = dns_send(c, q);
-	if (r != 1) {
-		q->pb = NULL;
-		rt_api_close(c, q->fd);
-		q->fd = -1;
-		return r;
-	}
 	return 1;
 }
 
@@ -1216,14 +1086,11 @@ static int dns_call(void *pb, struct rt_sockctx *c)
    the 'dnrp' code's CloseResolver, before Apple's DNR glue disposes of that code */
 static int dns_cancel(struct rt_sockctx *c, u32 lo, u32 hi)
 {
+	(void)c;
 	for (int i = 0; i < NDNS; i++) {
 		struct dnsq *q = &dnsq[i];
-		if (q->pb && (u32)q->pb >= lo && (u32)q->pb < hi) {
-			q->pb = NULL;
-			if (q->fd >= 0)
-				rt_api_close(c, q->fd);
-			q->fd = -1;
-		}
+		if (q->pb && (u32)q->pb >= lo && (u32)q->pb < hi)
+			dns_drop(q);
 	}
 	return 0;
 }
@@ -1280,10 +1147,7 @@ void mactcp_reap(struct rt_sockctx *c, const u32 *lo, const u32 *hi, int n)
 		if (!q->pb || !owner_gone(&q->own_lo, &q->own_hi, (u32)q->pb, lo, hi, n))
 			continue;
 		rt_log(RT_LOG_WARN, ".IPP: a lookup of a program that has quit: dropped");
-		q->pb = NULL;
-		if (q->fd >= 0)
-			rt_api_close(c, q->fd);
-		q->fd = -1;
+		dns_drop(q);
 	}
 }
 

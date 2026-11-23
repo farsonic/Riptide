@@ -143,8 +143,10 @@ for such lines, and the 33-line head on a screen under 560 pixels wide.
 
 ## Every setting and what acts on it on the Mac
 
-Audited 23 November 2026 against mac-port at fed1a6d. Riptide for the Mac reads riptide.conf
-when it starts (src/mac/main_mac.c `configure`: the core's `rt_config_line` with the Mac's own
+Audited 23 November 2026 against mac-port at fed1a6d; the rows of the Names and Happy Eyeballs pages
+brought up to date the same day, when the DNR's and .IPP6's lookups moved onto the core resolver and
+.IPP6 got its connect by name (EDNS size, DNS over TCP, Happy Eyeballs, DNS negative cache).
+Riptide for the Mac reads riptide.conf when it starts (src/mac/main_mac.c `configure`: the core's `rt_config_line` with the Mac's own
 `interface`, `mactcp` and `ipp6` lines), and Save and Apply send the changes as commands to the
 running stack (`rp_live_commands`, conf_edit.c; RTMAC_PORT in src/mac/ipp.c `port_call`, the
 core's `rt_ctl_command`). The core is the Amiga's, so a setting the core acts on works on the Mac
@@ -181,9 +183,9 @@ riptide.conf).
 | IPv6 addresses | the list | `ifconfig IF inet6 A/P` | works | core config.c | |
 | Names | Host name | `hostname` | works | core; without one, main_mac.c `default_hostname` (Sharing Setup) | |
 | Names | Domain | `domain` | works | core resolver's search list (.IPP6 `rt_dns_search_list`) | |
-| Names | DNS server 1-3 | `nameserver` | works | mactcp.c's and ipp6.c's DNS clients ask the core's servers | |
-| Names | EDNS size, DNS over TCP | `sysctl dns.edns_size`, `dns.tcp_fallback` | partly | the core resolver only: NTP's server names and the Riptide Command Terminal (api_mac.c). The DNR (mactcp.c) and .IPP6 (ipp6.c) have DNS clients of their own, without EDNS or TCP | bigger gap below |
-| Hosts | the list | `host NAME ADDR` | works | `rt_resolve_local46` in mactcp.c and ipp6.c | |
+| Names | DNS server 1-3 | `nameserver` | works | the core resolver's servers, for every lookup | |
+| Names | EDNS size, DNS over TCP | `sysctl dns.edns_size`, `dns.tcp_fallback` | works (fixed) | the core resolver only: the Riptide Command Terminal (api_mac.c). The DNR (mactcp.c) and .IPP6 (ipp6.c) had DNS clients of their own, without EDNS or TCP | 23 November 2026: the DNR's and .IPP6's lookups are the core resolver's asynchronous ones (`rt_dns_lookup_*`, resolv.c), polled in the stack's deferred task; their DNS clients are gone (docs/MAC.md, "On the core resolver") |
+| Hosts | the list | `host NAME ADDR` | works | the core resolver's hosts table (`rt_resolve_local46`, `rt_dns_lookup_start`) | |
 | Time | NTP time sync, NTP servers | `ntp ...` | works | core ntp.c; os_mac.c sets the clock (SetDateTime, fed1a6d) | |
 | Time | Time zone | `timezone` | works | os_mac.c (`auto`: the Map control panel) | |
 | Time | mDNS responder | `mdns on/off` | works | core netsvc; on unless `mdns off` (main_mac.c) | |
@@ -196,9 +198,9 @@ riptide.conf).
 | Background | Default TCP algorithm, Background mode, Remote ports, Local ports, LEDBAT target, LEDBAT slowdowns | `sysctl net.inet.tcp.*` | works | core tcp_ledbat.c | |
 | Background | Background programs | `sysctl net.inet.tcp.bg_programs` | works (fixed) | os_mac.c `rt_os_program_name` gave "" | the program that made the stream (CurApName at TCPCreate and UDPCreate, ipp.c `ipp_creator_prog`) is its socket's program (mactcp.c, ipp6.c) |
 | Memory | Low water, Pressure, High water | `sysctl net.inet.tcp.mem_*` | works | core tcp_mem.c | |
-| Happy Eyeballs | Happy Eyeballs, Attempt delay, Resolution delay, IPv6 lookup filter | `sysctl net.inet.he.*` | hidden | core `rt_he_connect` and the filter serve riptide.library's connect by name (src/amiga/riptidelib.c); MacTCP and .IPP6 programs connect to addresses | hidden (FL_AMIGA) |
-| Happy Eyeballs | Prefer | `sysctl net.inet.he.prefer` | works (fixed) | nothing read it on the Mac | .IPP6's default answer order follows it unless riptide.conf has `ipp6 order` (ipp6.c `order_now`) |
-| Happy Eyeballs | DNS negative cache | `sysctl dns.cache.neg_maxttl` | partly | the core's cache: the core resolver's lookups (NTP, the Terminal); the DNR and .IPP6 read the cache but do not fill it | |
+| Happy Eyeballs | Happy Eyeballs, Attempt delay, Resolution delay, IPv6 lookup filter | `sysctl net.inet.he.*` | works (fixed) | core `rt_he_connect` and the filter served riptide.library's connect by name (src/amiga/riptidelib.c) only; MacTCP and .IPP6 programs connected to addresses | .IPP6's ip6ConnectName (csCode 77, interface version 2; docs/IPP6.md) connects by name with the core's asynchronous Happy Eyeballs (`rt_he_conn_*`, happy.c): all four apply to it, and Resolution delay to the DNR's lookups too. Shown on the Mac again (no FL_AMIGA; the Amiga's RiptidePrefs differs only in those four flag bytes), page help in mac_lang.c |
+| Happy Eyeballs | Prefer | `sysctl net.inet.he.prefer` | works (fixed) | nothing read it on the Mac | .IPP6's default answer order and ip6ConnectName's first family follow it unless riptide.conf has `ipp6 order` (ipp6.c `order_now`) |
+| Happy Eyeballs | DNS negative cache | `sysctl dns.cache.neg_maxttl` | works (fixed) | the core's cache: the core resolver's lookups (the Terminal); the DNR and .IPP6 read the cache but did not fill it | the DNR's and .IPP6's lookups are the core's: they fill the cache and the negative cache and are answered from them |
 | QoS | QoS bands, Frames in flight, Band limit | `qos on/off`, `sysctl net.inet.ip.qos_*` | hidden | core qos.c queues a frame only while the driver has frames in flight (`nif->drv->tx_inflight`); net_mac.c reports none, so every frame passes the bands | hidden until net_mac.c counts them; bigger gap below |
 | QoS | Priority sets DSCP | `sysctl net.inet.ip.qos_prio_dscp` | works | core qos.c marks the socket's packets | |
 | QoS rules | the list | `qos rule ...` | partly | a rule's priority picks a band, which the Mac does not have (above); its DSCP mark works, by port and now by program | program names: as Background programs; QoS's program hook set (main_mac.c) |
@@ -218,12 +220,6 @@ riptide.conf).
   `tx_inflight` (counted at the write and at its completion, which runs at interrupt time) and the
   stack's poll would run `rt_qos_run` when a slot comes free; then the bands, Frames in flight and
   Band limit can come back on the Mac.
-- **DNS for MacTCP programs**: the DNR's and .IPP6's own DNS clients ignore EDNS size, DNS over TCP
-  and the negative cache, and do not fill the core's cache; moving them onto the core resolver's
-  asynchronous lookups would make the Names page's settings and the cache apply to every program.
-- **Happy Eyeballs for .IPP6**: a .IPP6 call that connects by name (like riptide.library's
-  `RiptideConnectName`) would let Happy Eyeballs, its delays and the lookup filter come back on
-  the Mac.
 - **The SE's screen**: see "Known gaps".
 
 ## Keeping both versions in step

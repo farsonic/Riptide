@@ -48,11 +48,18 @@ static const struct rule rules[] = {
 	{ "Apply removes it with its routes, addresses and DHCP",
 	  "Keep the card's settings but don't use it: from the Mac's next start Riptide leaves it closed.", 1 },
 	{ "Trying IPv6 and IPv4 side by side when a name has both",
-	  "Which kind of address .IPP6 programs get first, and how long a name that does not exist is "
-	  "remembered.", 1 },
+	  "Trying IPv6 and IPv4 side by side when a name has both (.IPP6 programs that connect by name), "
+	  "which kind of address .IPP6 programs get first, and how long a name that does not exist is "
+	  "remembered (every program's lookups).", 1 },
+	{ "Try a name's IPv6 and IPv4 addresses side by side",
+	  "Try a name's IPv6 and IPv4 addresses side by side and keep the first that connects: .IPP6 programs "
+	  "that connect by name (ip6ConnectName). MacTCP programs connect to the one address they got.", 1 },
 	{ "Which kind of address is tried first",
-	  "Which kind of address .IPP6 programs get first when they do not say (riptide.conf's \"ipp6 order\" "
-	  "comes before it).", 1 },
+	  "Which kind of address .IPP6 programs get and try first when they do not say (riptide.conf's \"ipp6 "
+	  "order\" comes before it).", 1 },
+	{ "Do not ask for IPv6 addresses while the Amiga has no IPv6 route",
+	  "For a connection by name (.IPP6), do not ask for IPv6 addresses while the Mac has no IPv6 route to "
+	  "the Internet.", 1 },
 	{ "Rules that give connections a priority by port or program",
 	  "Rules that give connections a priority by port or program (its name in the Finder).", 1 },
 	{ "e.g. AmiFTP or wget*", "e.g. Fetch, or Internet* for a name with spaces", 0 },

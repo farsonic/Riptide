@@ -353,3 +353,323 @@ int rt_he_connect(struct rt_sockctx *c, const char *host, u16 port, int family, 
 	}
 	return fds[winner];
 }
+
+/* ======================================================================
+ * Asynchronous Happy Eyeballs (rt_he_conn_*): rt_he_connect() for a
+ * context that must never wait (the Mac's deferred task: .IPP6's connect
+ * by name). The lookup is rt_dns_lookup_start() (A and AAAA at once, the
+ * resolution delay, the IPv6 lookup filter); the attempts the same as
+ * above, each poll starting what is due and looking at what has connected.
+ * ====================================================================== */
+
+enum { HE_RESOLVING = 0, HE_CONNECTING, HE_DONE };
+
+struct rt_he_conn {
+	struct rt_sockctx *c;
+	struct rt_dns_lookup *look;
+	int state, result, dns_err, flags, prefer, type;
+	u16 port;
+	u32 start, timeout, next_at, delay;
+	int n, started, pending, winner, last_err;
+	int fds[HE_MAXADDR];
+	rt_in6_addr a[HE_MAXADDR];
+	struct rt_he_result res;
+};
+
+static int he_writable(struct rt_sockctx *c, int fd)
+{
+	u32 set[8];
+
+	if (fd < 0 || fd >= 256)
+		return 0;
+	memset(set, 0, sizeof(set));
+	set[fd >> 5] = 1u << (fd & 31);
+	return rt_api_select(c, fd + 1, NULL, set, NULL, 0, NULL) > 0;
+}
+
+/* a non-blocking connect to a; with RT_HE_V6SOCK on a dual-stack IPv6
+ * socket (IPv4 through its IPv4-mapped address) */
+static int he_start_async(struct rt_he_conn *h, const rt_in6_addr *a, int *done)
+{
+	struct rt_sockaddr_in6 sa;
+	u32 len;
+	s32 on = 1, off = 0;
+	int fd, r, v6sock = (h->flags & RT_HE_V6SOCK) != 0;
+
+	*done = 0;
+	fd = rt_api_socket(h->c, v6sock || !rt_in6_is_v4mapped(a) ? RT_AF_INET6 : RT_AF_INET, h->type, 0);
+	if (fd < 0)
+		return fd;
+	rt_api_ioctl(h->c, fd, RT_FIONBIO, &on);
+	if (v6sock) {
+		rt_api_setsockopt(h->c, fd, RT_IPPROTO_IPV6, RT_IPV6_V6ONLY, &off, sizeof(off));
+		memset(&sa, 0, sizeof(sa));
+		sa.sin6_len = sizeof(sa);
+		sa.sin6_family = RT_AF_INET6;
+		sa.sin6_port = rt_htons(h->port);
+		sa.sin6_addr = *a;
+		len = sizeof(sa);
+	} else {
+		he_sockaddr(a, h->port, &sa, &len);
+	}
+	r = rt_api_connect(h->c, fd, &sa, len);
+	if (r == 0) {
+		*done = 1;
+		return fd;
+	}
+	if (r == -RT_EINPROGRESS || r == -RT_EALREADY || r == -RT_EWOULDBLOCK)
+		return fd;
+	rt_api_close(h->c, fd);
+	return r;
+}
+
+static void he_addresses(struct rt_he_conn *h)
+{
+	int prefer = h->prefer < 0 ? (int)rt_he_prefer : h->prefer;
+
+	if (h->n > 1) {
+		rt_lock();
+		rt_inet_sort_dest(h->a, h->n);
+		rt_unlock();
+	}
+	interleave(h->a, h->n, prefer);
+	h->res.naddrs = (u16)h->n;
+	h->delay = rt_he_enable ? (u32)rt_he_attempt_delay : h->timeout / (u32)h->n;
+	h->next_at = rt_now_ms();
+	h->state = HE_CONNECTING;
+}
+
+struct rt_he_conn *rt_he_conn_start(struct rt_sockctx *c, const char *host, u16 port, int family, int flags,
+                                    int prefer, u32 timeout_ms, int *err)
+{
+	struct rt_he_conn *h;
+	u32 v4;
+	int plen, i;
+
+	if (err)
+		*err = 0;
+	if (!c || !host || !port) {
+		if (err)
+			*err = -RT_EINVAL;
+		return NULL;
+	}
+	if (!(h = rt_zalloc(sizeof(*h)))) {
+		if (err)
+			*err = -RT_ENOMEM;
+		return NULL;
+	}
+	h->c = c;
+	h->port = port;
+	h->flags = flags;
+	h->prefer = prefer;
+	h->type = RT_SOCK_STREAM;
+	h->timeout = timeout_ms ? timeout_ms : 75000;
+	h->start = rt_now_ms();
+	h->winner = -1;
+	h->last_err = -RT_ETIMEDOUT;
+	for (i = 0; i < HE_MAXADDR; i++)
+		h->fds[i] = -1;
+	/* literals, then the lookup */
+	if (rt_parse_ipv4(host, &v4) == 0) {
+		if (family == RT_AF_INET6)
+			goto nofamily;
+		rt_in6_set_v4mapped(&h->a[0], v4);
+		h->n = 1;
+		he_addresses(h);
+		return h;
+	}
+	if (rt_inet6_parse_prefix(host, &h->a[0], &plen, NULL, 0) == 0 && plen < 0) {
+		if (family == RT_AF_INET)
+			goto nofamily;
+		h->n = 1;
+		he_addresses(h);
+		return h;
+	}
+	{
+		int fam = family, lf = rt_he_enable ? 0 : RT_DNSL_BOTH;
+		if (fam == RT_AF_UNSPEC && rt_he_aaaa_filter) {
+			rt_lock();
+			if (!rt_he_v6_usable())
+				fam = RT_AF_INET;
+			rt_unlock();
+		}
+		if (flags & RT_HE_NOSEARCH)
+			lf |= RT_DNSL_NOSEARCH;
+		if (flags & RT_HE_SHORTSEARCH)
+			lf |= RT_DNSL_SHORTSEARCH;
+		h->look = rt_dns_lookup_start(c, host, fam, lf, h->timeout, err);
+		if (!h->look) {
+			rt_free(h);
+			return NULL;
+		}
+	}
+	return h;
+nofamily:
+	rt_free(h);
+	if (err)
+		*err = -RT_EAFNOSUPPORT;
+	return NULL;
+}
+
+static void he_fail(struct rt_he_conn *h, int r)
+{
+	int i;
+
+	for (i = 0; i < h->started; i++)
+		if (h->fds[i] >= 0) {
+			rt_api_close(h->c, h->fds[i]);
+			h->fds[i] = -1;
+		}
+	h->pending = 0;
+	h->state = HE_DONE;
+	h->result = r;
+}
+
+int rt_he_conn_poll(struct rt_he_conn *h)
+{
+	int i, guard;
+
+	if (!h)
+		return -RT_EINVAL;
+	if (h->state == HE_RESOLVING) {
+		int r = rt_dns_lookup_poll(h->look), n4 = HE_MAXADDR, n6 = HE_MAXADDR;
+		u32 a4[HE_MAXADDR];
+		if (r == 0)
+			return 1;
+		if (r < 0) {
+			h->dns_err = r;
+			rt_dns_lookup_free(h->look);
+			h->look = NULL;
+			he_fail(h, RT_HE_LOOKUP_FAILED);
+			return h->result;
+		}
+		/* AAAA first, then A, as rt_resolve_name46() */
+		rt_dns_lookup_get(h->look, a4, &n4, h->a, &n6, NULL, 0);
+		rt_dns_lookup_free(h->look);
+		h->look = NULL;
+		h->n = n6;
+		for (i = 0; i < n4 && h->n < HE_MAXADDR; i++)
+			rt_in6_set_v4mapped(&h->a[h->n++], a4[i]);
+		if (!h->n) {
+			h->dns_err = -RT_NO_DATA;
+			he_fail(h, RT_HE_LOOKUP_FAILED);
+			return h->result;
+		}
+		he_addresses(h);
+	}
+	if (h->state == HE_DONE)
+		return h->result;
+	for (guard = 0; guard < 2 * HE_MAXADDR + 2; guard++) {
+		u32 now = rt_now_ms();
+		int progress = 0;
+		if ((s32)(now - h->start) >= (s32)h->timeout) {
+			he_fail(h, h->last_err);
+			return h->result;
+		}
+		/* the next attempt: on time, or now when nothing is pending */
+		if (h->started < h->n && (h->pending == 0 || (s32)(now - h->next_at) >= 0)) {
+			int r, done;
+			if (!rt_he_enable) {
+				/* one after the other: the previous attempt gives up */
+				for (i = 0; i < h->started; i++)
+					if (h->fds[i] >= 0) {
+						rt_api_close(h->c, h->fds[i]);
+						h->fds[i] = -1;
+						h->pending--;
+						h->last_err = -RT_ETIMEDOUT;
+					}
+			}
+			r = he_start_async(h, &h->a[h->started], &done);
+			h->started++;
+			h->res.attempts = (u16)h->started;
+			progress = 1;
+			if (r < 0) {
+				h->last_err = r;
+			} else {
+				h->fds[h->started - 1] = r;
+				h->pending++;
+				h->next_at = rt_now_ms() + h->delay;
+				if (done) {
+					h->winner = h->started - 1;
+					break;
+				}
+			}
+		}
+		/* the attempts that have come back */
+		for (i = 0; i < h->started && h->winner < 0; i++) {
+			s32 err = 0;
+			u32 el = sizeof(err);
+			if (h->fds[i] < 0 || !he_writable(h->c, h->fds[i]))
+				continue;
+			rt_api_getsockopt(h->c, h->fds[i], RT_SOL_SOCKET, RT_SO_ERROR, &err, &el);
+			if (err == 0) {
+				h->winner = i;
+				break;
+			}
+			h->last_err = -err;
+			rt_api_close(h->c, h->fds[i]);
+			h->fds[i] = -1;
+			h->pending--;
+			h->next_at = rt_now_ms();     /* a failure starts the next one now */
+			progress = 1;
+		}
+		if (h->winner >= 0)
+			break;
+		if (!h->pending && h->started >= h->n) {
+			he_fail(h, h->last_err);
+			return h->result;
+		}
+		if (!progress)
+			return 1;
+	}
+	if (h->winner < 0)
+		return 1;
+	for (i = 0; i < h->started; i++)
+		if (h->fds[i] >= 0 && i != h->winner) {
+			rt_api_close(h->c, h->fds[i]);
+			h->fds[i] = -1;
+		}
+	h->res.addr = h->a[h->winner];
+	h->res.ms = rt_now_ms() - h->start;
+	h->res.index = (u16)h->winner;
+	h->state = HE_DONE;
+	h->result = 0;
+	return 0;
+}
+
+int rt_he_conn_take(struct rt_he_conn *h, struct rt_he_result *res)
+{
+	int fd;
+
+	if (!h || h->state != HE_DONE || h->result != 0 || h->winner < 0)
+		return -RT_EINVAL;
+	fd = h->fds[h->winner];
+	h->fds[h->winner] = -1;
+	if (res)
+		*res = h->res;
+	return fd;
+}
+
+int rt_he_conn_dns_error(const struct rt_he_conn *h)
+{
+	return h ? h->dns_err : 0;
+}
+
+void rt_he_conn_info(const struct rt_he_conn *h, struct rt_he_result *res)
+{
+	if (h && res)
+		*res = h->res;
+}
+
+void rt_he_conn_free(struct rt_he_conn *h)
+{
+	int i;
+
+	if (!h)
+		return;
+	rt_dns_lookup_free(h->look);
+	for (i = 0; i < HE_MAXADDR; i++)
+		if (h->fds[i] >= 0)
+			rt_api_close(h->c, h->fds[i]);
+	rt_free(h);
+}

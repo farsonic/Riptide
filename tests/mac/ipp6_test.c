@@ -22,7 +22,9 @@
  * an IPv4-mapped address, a reset (TCPTerminate, TCPRemoteAbort), an open refused, falling back from
  * an IPv6 address that does not answer to the IPv4 one; immediate synchronous calls from a completion
  * routine; UDP echo over IPv6 and IPv4 on one stream, UDPDataArrival, UDPMaxMTUSize; TCPPassiveOpen
- * timing out; TCPGlobalInfo; the error results; TCPRelease and UDPRelease.
+ * timing out; TCPGlobalInfo; the error results; TCPRelease and UDPRelease. Version 2: ip6ConnectName
+ * (a connection by name with the core's Happy Eyeballs: each order, an IPv6-only name, a literal,
+ * many.testbed's nine silent IPv6 addresses before IPv4, a refused port, the errors).
  *
  * Results go to the window and, built with AURORA68_LOG, to the Pi's log as "[MAC] IPP6 test: ...".
  * The riptide.conf of the run has `host h6.lan fd68::80` and `host h6.lan 192.168.68.1`.
@@ -320,7 +322,7 @@ static void test_detect(void)
 	short r, ipp;
 	char t[160];
 	r = (short)mac_gestalt(gestaltIPP6, &v);
-	check(r == 0 && v == IPP6_VERSION, "Gestalt 'ipp6' answers the interface version 1", v);
+	check(r == 0 && v == IPP6_VERSION, "Gestalt 'ipp6' answers the interface version 2", v);
 	memset(pb, 0, sizeof pb);
 	*(unsigned char **)(pb + 18) = mac_pstr(p, ".IPP6");
 	r = mac_pb(pb, TRAP_OPEN);
@@ -333,9 +335,9 @@ static void test_detect(void)
 	check(r == 0 && ipp != ipp6, ".IPP is there too, another driver", ipp);
 	clear(&c);
 	r = run(&c, ip6GetInfo);
-	rt_snprintf(t, sizeof t, "ip6GetInfo: version 1, 32 streams, 8 lookups (%s)",
+	rt_snprintf(t, sizeof t, "ip6GetInfo: version 2, 32 streams, 8 lookups (%s)",
 	            c.pb.i.csParam.info.implementation ? c.pb.i.csParam.info.implementation : "?");
-	check(r == 0 && c.pb.i.csParam.info.version == 1 && c.pb.i.csParam.info.maxTCPStreams == 32 &&
+	check(r == 0 && c.pb.i.csParam.info.version == 2 && c.pb.i.csParam.info.maxTCPStreams == 32 &&
 	      c.pb.i.csParam.info.maxLookups == 8, t, r);
 	/* the addresses come with DHCP and the router advertisement: wait for both */
 	{
@@ -545,13 +547,21 @@ static void test_resolve(void)
 	c.pb.i.csParam.resolve.hostName = canon;
 	c.pb.i.csParam.resolve.hostNameLen = sizeof canon;
 	r = run(&c, ip6ResolveAddr);
-	check(r == 0 && !strcmp(canon, "peer.testbed"), "ip6ResolveAddr ::ffff:192.168.68.1: peer.testbed (in-addr.arpa)", r);
+	/* the core resolver asks the hosts table first, as for names: riptide.conf's `host h6.lan 192.168.68.1`
+	   (before 23 November 2026 .IPP6 asked the name servers only, which say peer.testbed) */
+	check(r == 0 && !strcmp(canon, "h6.lan"), "ip6ResolveAddr ::ffff:192.168.68.1: h6.lan (the hosts table first)", r);
 	clear(&c);
 	a4(&c.pb.i.csParam.resolve.addr, PEER4, 0);
 	c.pb.i.csParam.resolve.hostName = canon;
 	c.pb.i.csParam.resolve.hostNameLen = 5;
 	r = run(&c, ip6ResolveAddr);
-	check(r == ip6TruncatedErr && !strcmp(canon, "peer"), "... into 5 bytes: ip6TruncatedErr, \"peer\"", r);
+	check(r == ip6TruncatedErr && !strcmp(canon, "h6.l"), "... into 5 bytes: ip6TruncatedErr, \"h6.l\"", r);
+	clear(&c);
+	a4(&c.pb.i.csParam.resolve.addr, 0xC0A84409UL, 0);
+	c.pb.i.csParam.resolve.hostName = canon;
+	c.pb.i.csParam.resolve.hostNameLen = sizeof canon;
+	r = run(&c, ip6ResolveAddr);
+	check(r == authNameErr, "ip6ResolveAddr ::ffff:192.168.68.9: authNameErr (in-addr.arpa, no name)", r);
 	clear(&c);
 	a6(&c.pb.i.csParam.resolve.addr, PEER6, 0);
 	c.pb.i.csParam.resolve.hostName = canon;
@@ -856,6 +866,117 @@ static void test_fallback(void)
 	}
 }
 
+/* ---- 4b. ip6ConnectName (version 2): a connection by name, with the core's Happy Eyeballs ----- */
+static void connect_name(struct conn *k, const char *name, unsigned short port, unsigned short flags,
+                         unsigned char ulp)
+{
+	int keep = k->st.status_in_asr;
+	clear(&k->c);
+	k->c.pb.t.tcpStream = k->stream;
+	k->c.pb.t.csParam.connectName.ulpTimeoutValue = ulp;
+	k->c.pb.t.csParam.connectName.validityFlags = timeoutValue;
+	k->c.pb.t.csParam.connectName.remoteAddr.port = port;
+	k->c.pb.t.csParam.connectName.hostName = (char *)name;
+	k->c.pb.t.csParam.connectName.flags = flags;
+	memset(&k->st, 0, sizeof k->st);
+	k->st.status_in_asr = keep;
+	start(&k->c, ip6ConnectName);
+}
+static short connect_wait(struct conn *k, const char *what)
+{
+	char t[200];
+	TCP6ConnectNamePB *p = &k->c.pb.t.csParam.connectName;
+	short r = wait_call(&k->c, 30 * 60);
+	rt_snprintf(t, sizeof t, "  %s: %d, %s port %u, %u addresses, %u attempts, %lu ms", what, r, text(&p->remoteAddr),
+	            (unsigned)p->remoteAddr.port, (unsigned)p->addrCount, (unsigned)p->attempts, (unsigned long)p->elapsed);
+	out(t);
+	return r;
+}
+static void test_connect_name(void)
+{
+	struct conn *D = &conns[3];
+	TCP6ConnectNamePB *p = &D->c.pb.t.csParam.connectName;
+	struct call c;
+	short r;
+	/* D was made by test_fallback, and is not connected */
+	connect_name(D, "peer.testbed", 80, kIP6OrderIPv6First, 20);
+	r = connect_wait(D, "peer.testbed:80, IPv6 first");
+	check(r == 0 && is6(&p->remoteAddr, PEER6) && p->remoteAddr.port == 80 && p->addrCount == 2 && p->attempts == 1,
+	      "ip6ConnectName peer.testbed (AAAA and A), IPv6 first: [fd68::1]:80 at the first attempt", r);
+	if (r == 0) {
+		check(!IP6_IS_V4(&p->localAddr) && p->localAddr.port, "... the local end is IPv6, with a port", p->localAddr.port);
+		clear(&c);
+		c.pb.t.tcpStream = D->stream;
+		c.pb.t.csParam.connectName.remoteAddr.port = 80;
+		c.pb.t.csParam.connectName.hostName = "peer.testbed";
+		r = run(&c, ip6ConnectName);
+		check(r == connectionExists, "... ip6ConnectName on a stream with a connection: connectionExists", r);
+		send_get(D, "/", "peer.testbed");
+		r = read_nocopy(D);
+		check(r == connectionClosing && find_page(D->body), "... and the page comes over IPv6", D->got);
+		close_and_terminate(D, "peer.testbed by name");
+	}
+	connect_name(D, "peer.testbed", 80, 0, 20);
+	r = connect_wait(D, "peer.testbed:80, the default order");
+	check(r == 0 && is4(&p->remoteAddr, PEER4) && p->attempts == 1,
+	      "... in the default order (RFC 6724: IPv4 before a unique local address): 192.168.68.1", r);
+	if (r == 0)
+		tcp_simple(D, TCPAbort);
+	connect_name(D, "v6only.testbed", 80, 0, 20);
+	r = connect_wait(D, "v6only.testbed:80");
+	check(r == 0 && is6(&p->remoteAddr, V6ONLY) && p->addrCount == 1, "ip6ConnectName v6only.testbed: [fd68::80]:80", r);
+	if (r == 0) {
+		send_get(D, "/", "v6only.testbed");
+		r = read_nocopy(D);
+		check(r == connectionClosing && find_page(D->body), "... and its page", D->got);
+		tcp_simple(D, TCPAbort);
+	}
+	/* Happy Eyeballs: nine IPv6 addresses that nothing answers and one IPv4 address; IPv6 first, the
+	   IPv4 attempt starts the attempt delay (250 ms) after the first, not when IPv6 has given up */
+	connect_name(D, "many.testbed", 80, kIP6OrderIPv6First, 20);
+	r = connect_wait(D, "many.testbed:80, IPv6 first");
+	/* (the resolver keeps eight addresses of a family: 8 IPv6 and 1 IPv4) */
+	check(r == 0 && is4(&p->remoteAddr, PEER4) && p->addrCount == 9 && p->attempts == 2 && p->elapsed >= 200 &&
+	      p->elapsed < 2500, "ip6ConnectName many.testbed: IPv4 connects at the second attempt, about 250 ms on", r);
+	if (r == 0)
+		tcp_simple(D, TCPAbort);
+	/* the resolution delay: slow6.testbed's AAAA answer comes a second after the A one (tests/mac/dns_peer.py);
+	   the connection does not wait for it (RFC 8305 3), ip6Resolve does (it gives both families) */
+	connect_name(D, "slow6.testbed", 80, kIP6OrderIPv6First, 20);
+	r = connect_wait(D, "slow6.testbed:80, IPv6 first");
+	check(r == 0 && is4(&p->remoteAddr, PEER4) && p->elapsed < 800,
+	      "ip6ConnectName slow6.testbed (AAAA a second late): IPv4 at once, the resolution delay (dns_peer.py)", r);
+	if (r == 0)
+		tcp_simple(D, TCPAbort);
+	{
+		u32 t0 = TickCount();
+		r = resolve("slow6.testbed", kIP6OrderIPv6First, 0, &c);
+		show("slow6.testbed", &c, r);
+		check(r == 0 && c.pb.i.csParam.resolve.count == 2 && is6(&res[0], PEER6) && TickCount() - t0 >= 50,
+		      "... ip6Resolve waits for the late AAAA answer: fd68::1, then 192.168.68.1", (long)(TickCount() - t0));
+	}
+	/* an answer too large for UDP: truncated, then over TCP (dns.tcp_fallback; tests/mac/dns_peer.py) */
+	r = resolve("big.testbed", kIP6OnlyIPv4, 0, &c);
+	show("big.testbed", &c, r);
+	check(r == 0 && c.pb.i.csParam.resolve.count == 8 && is4(&res[0], PEER4) && is4(&res[7], 0xC6336407UL),
+	      "ip6Resolve big.testbed (100 A records, 1,612 bytes): 8 of them, over TCP (dns_peer.py)", r);
+	connect_name(D, "fd68::1", 80, 0, 20);
+	r = connect_wait(D, "fd68::1:80");
+	check(r == 0 && is6(&p->remoteAddr, PEER6), "ip6ConnectName of a literal: [fd68::1]:80", r);
+	if (r == 0)
+		tcp_simple(D, TCPAbort);
+	connect_name(D, "peer.testbed", 81, 0, 20);
+	r = connect_wait(D, "peer.testbed:81");
+	check(r == openFailed && p->attempts == 2, "ip6ConnectName to a port nobody listens on: openFailed, both addresses tried", r);
+	connect_name(D, "nosuch.example", 80, 0, 20);
+	r = connect_wait(D, "nosuch.example:80");
+	check(r == authNameErr, "ip6ConnectName to a name that does not exist: authNameErr", r);
+	connect_name(D, "peer.testbed", 0, 0, 20);
+	check(wait_call(&D->c, 5 * 60) == invalidLength, "ip6ConnectName with port 0: invalidLength", D->c.result);
+	connect_name(D, NULL, 80, 0, 20);
+	check(wait_call(&D->c, 5 * 60) == invalidBufPtr, "ip6ConnectName without a name: invalidBufPtr", D->c.result);
+}
+
 /* ---- 5. UDP ----------------------------------------------------------------------------------- */
 static void test_udp(void)
 {
@@ -1071,6 +1192,7 @@ static void run_tests(void)
 	test_resolve();
 	test_tcp();
 	test_fallback();
+	test_connect_name();
 	test_udp();
 	test_misc();
 	for (k = 0; k < 4; k++) {

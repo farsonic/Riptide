@@ -1621,7 +1621,7 @@ static void test_mac(void)
 			CHECK(rp_fields[i].page != P_TIME && rp_fields[i].page != P_NAMES);
 		}
 	}
-	CHECK(hidden == 6);
+	CHECK(hidden == 2);                     /* device and reads */
 	/* the QoS bands are the Mac's too (net_mac.c counts its frames in flight) */
 	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.qos), 1));
 	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.sc[RP_SC_QOS_INFLIGHT]), 1));
@@ -1630,7 +1630,9 @@ static void test_mac(void)
 	CHECK(!rp_fshown_on(rp_find(&c.cur, &c.cur.ifc[0].device), 1));
 	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.ifc[0].unit), 1));
 	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.sc[RP_SC_HE_PREFER]), 1));
-	CHECK(!rp_fshown_on(rp_find(&c.cur, &c.cur.sc[RP_SC_HE_ENABLE]), 1));
+	/* Happy Eyeballs: on the Mac too since .IPP6's connect by name (ip6ConnectName) */
+	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.sc[RP_SC_HE_ENABLE]), 1));
+	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.sc[RP_SC_HE_AAAA]), 1));
 	for (i = 0; i < rp_nlfields; i++)
 		CHECK(rp_lfshown_on(i, 0) && rp_lfshown_on(i, 1));
 

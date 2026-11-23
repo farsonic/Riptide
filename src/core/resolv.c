@@ -74,6 +74,7 @@ struct dns_server {
 };
 static struct dns_server dns_servers[DNS_MAX_SERVERS];
 static int dns_nservers;
+static u32 dns_servers_gen;     /* changes with the list (the asynchronous lookups look again) */
 /* The search list, space separated ("lan example.org"); its first domain
  * is the one rt_dns_search_domain() returns. */
 #define DNS_SEARCH_MAX   6
@@ -184,6 +185,7 @@ static void servers_expire(void)
 			for (j = i; j + 1 < dns_nservers; j++)
 				dns_servers[j] = dns_servers[j + 1];
 			dns_nservers--;
+			dns_servers_gen++;
 			continue;
 		}
 		i++;
@@ -230,6 +232,7 @@ int rt_dns_add_server6(const rt_in6_addr *a, u32 ifindex, u32 lifetime_s, int so
 	                                      0 : rt_ip6_seconds() + lifetime_s;
 	dns_servers[dns_nservers].noedns = 0;
 	dns_nservers++;
+	dns_servers_gen++;
 	neg_flush(1);                     /* a new server may answer */
 	return 0;
 }
@@ -254,6 +257,7 @@ void rt_dns_remove_server6(const rt_in6_addr *a)
 		for (j = i; j + 1 < dns_nservers; j++)
 			dns_servers[j] = dns_servers[j + 1];
 		dns_nservers--;
+		dns_servers_gen++;
 		neg_flush(1);
 		return;
 	}
@@ -270,6 +274,7 @@ void rt_dns_remove_server(u32 addr)
 void rt_dns_clear_servers(void)
 {
 	dns_nservers = 0;
+	dns_servers_gen++;
 	neg_flush(1);
 }
 
@@ -921,17 +926,17 @@ static void work_free(struct dns_work *w)
 
 /* Server s answered FORMERR/NOTIMP to EDNS, or without an OPT record:
  * no EDNS to it for a while (also for later lookups). */
-static void server_noedns(struct dns_work *w, int s)
+static void noedns_mark(struct dns_server *sv, int s)
 {
 	u32 until = rt_now_ms() + DNS_NOEDNS_MS;
 	int i;
 
-	if (w->servers[s].noedns)
+	if (sv->noedns)
 		return;
-	w->servers[s].noedns = 1;
+	sv->noedns = 1;
 	rt_lock();
 	for (i = 0; i < dns_nservers; i++)
-		if (rt_in6_eq(&dns_servers[i].addr, &w->servers[s].addr)) {
+		if (rt_in6_eq(&dns_servers[i].addr, &sv->addr)) {
 			dns_servers[i].noedns = 1;
 			dns_servers[i].noedns_until = until;
 		}
@@ -940,13 +945,18 @@ static void server_noedns(struct dns_work *w, int s)
 	RT_DBG(RT_DBG_DNS, "server %d: no EDNS for %lu s", s + 1, (unsigned long)(DNS_NOEDNS_MS / 1000u));
 }
 
+static void server_noedns(struct dns_work *w, int s)
+{
+	noedns_mark(&w->servers[s], s);
+}
+
 /* The UDP size to advertise to server sv (EDNS on): w->edns, but no more
  * than a datagram the route to the server carries without fragments
  * (RFC 9715 3.1: the MTU, smaller for a known path MTU, minus the IP and
  * UDP headers), and never below 512. */
-static u16 edns_for(struct dns_work *w, const struct dns_server *sv)
+static u16 edns_size_for(u16 edns, const struct dns_server *sv)
 {
-	u32 size = w->edns, mtu = 0, hdr;
+	u32 size = edns, mtu = 0, hdr;
 
 	rt_lock();
 	if (rt_in6_is_v4mapped(&sv->addr)) {
@@ -966,6 +976,11 @@ static u16 edns_for(struct dns_work *w, const struct dns_server *sv)
 	return (u16)(size < DNS_UDP_MIN ? DNS_UDP_MIN : size);
 }
 
+static u16 edns_for(struct dns_work *w, const struct dns_server *sv)
+{
+	return edns_size_for(w->edns, sv);
+}
+
 /* A query built without OPT (length len) followed by our OPT record:
  * the length to send with EDNS (our UDP size 'size') or without (size 0);
  * ARCOUNT set to match. */
@@ -980,13 +995,18 @@ static u32 q_edns(u8 *q, u32 len, u16 size)
 
 /* Build our query for name into q (DNS_QBUF): the plain length, with the
  * OPT record after it when EDNS is on; -1 if the name does not fit. */
-static int build_q(struct dns_work *w, u8 *q, u16 id, const char *name, u16 qtype)
+static int build_q_size(u16 edns, u8 *q, u16 id, const char *name, u16 qtype)
 {
 	int len = dns_build_query(q, DNS_QBUF, id, name, qtype);
 
-	if (len < 0 || (w->edns && dns_add_opt(q, (u32)len, DNS_QBUF, w->edns) < 0))
+	if (len < 0 || (edns && dns_add_opt(q, (u32)len, DNS_QBUF, edns) < 0))
 		return -1;
 	return len;
+}
+
+static int build_q(struct dns_work *w, u8 *q, u16 id, const char *name, u16 qtype)
+{
+	return build_q_size(w->edns, q, id, name, qtype);
 }
 
 static int sock_wait(struct dns_work *w, int fd, int wr, u32 deadline)
@@ -1818,16 +1838,21 @@ int rt_resolve_local46(const char *name, int v6, u32 *a4, rt_in6_addr *a6, int m
 }
 
 /* the names to ask for (ndots:1): the name itself and NAME.DOMAIN for
- * every search domain */
-static int candidates(struct dns_work *w, const char *name)
+ * every domain of the search list */
+static int cand_count(const char *search, const char *name)
 {
 	u32 nl = (u32)strlen(name);
 
-	return name[nl - 1] == '.' ? 1 : 1 + search_count(w->search);
+	return name[nl - 1] == '.' ? 1 : 1 + search_count(search);
 }
 
-/* candidate i of name into w->qname; 0, or -1 when it does not fit */
-static int candidate(struct dns_work *w, const char *name, int i, int ncand)
+static int candidates(struct dns_work *w, const char *name)
+{
+	return cand_count(w->search, name);
+}
+
+/* candidate i of name into out (DNS_NAMEBUF); 0, or -1 when it does not fit */
+static int cand_name(const char *search, const char *name, int i, int ncand, char *out)
 {
 	u32 nl = (u32)strlen(name), dots = 0, k;
 	int dom;
@@ -1838,13 +1863,18 @@ static int candidate(struct dns_work *w, const char *name, int i, int ncand)
 	/* with a dot the name itself first, else the search domains first */
 	dom = ncand == 1 ? -1 : dots ? i - 1 : (i < ncand - 1 ? i : -1);
 	if (dom >= 0) {
-		if (!search_nth(w->search, dom, d, sizeof(d)) || nl + 1 + strlen(d) >= DNS_NAMEBUF)
+		if (!search_nth(search, dom, d, sizeof(d)) || nl + 1 + strlen(d) >= DNS_NAMEBUF)
 			return -1;
-		rt_snprintf(w->qname, sizeof(w->qname), "%s.%s", name, d);
+		rt_snprintf(out, DNS_NAMEBUF, "%s.%s", name, d);
 	} else {
-		rt_strlcpy(w->qname, name, sizeof(w->qname));
+		rt_strlcpy(out, name, DNS_NAMEBUF);
 	}
 	return 0;
+}
+
+static int candidate(struct dns_work *w, const char *name, int i, int ncand)
+{
+	return cand_name(w->search, name, i, ncand, w->qname);
 }
 
 /* Forward lookup of qtype A (a4) or AAAA (a6). */
@@ -2279,6 +2309,1005 @@ int rt_resolve_addr6(const rt_in6_addr *addr, char *name, u32 namelen)
 	r = resolve_ptr(q, name, namelen);
 	rt_free(q);
 	return r;
+}
+
+/* ======================================================================
+ * Asynchronous lookups (rt_dns_lookup_*): the lookups above for a context
+ * that must never wait, such as the Mac's deferred task, which every
+ * MacTCP and .IPP6 call runs in. The same steps in the same order as
+ * rt_resolve_name46() and rt_resolve_addr6() (the hosts table, localhost,
+ * our own .local name and the cache first; the search list; A and AAAA at
+ * once with RFC 8305's resolution delay; each server in turn, two rounds;
+ * EDNS with its fallbacks, TCP for truncated and fragmented answers, the
+ * negative cache; multicast DNS for .local names; answers into the
+ * cache), but as a state machine: its sockets are non-blocking, its
+ * timers deadlines, and rt_dns_lookup_poll() does what can be done now and
+ * returns. Everything is in one heap block, so a poll needs little stack
+ * (the Mac's deferred task runs on whatever stack it interrupted).
+ * ====================================================================== */
+
+#define AL_AAAA 0                 /* q[] index of the AAAA (or PTR) query */
+#define AL_A    1                 /* q[] index of the A query */
+#define AL_TCP_NONE 0
+#define AL_TCP_CONNECT 1
+#define AL_TCP_SEND 2
+#define AL_TCP_LEN 3
+#define AL_TCP_BODY 4
+
+struct al_query {
+	u16 type;                 /* DNS_TYPE_*, 0 = not asked */
+	u16 id;
+	int r;                    /* R_PENDING, or as dns_parse_response() */
+	u8 pre;                   /* r is a cached negative answer: not asked */
+	u8 tstate;                /* AL_TCP_*: asked again over TCP */
+	u8 tfrag;                 /* ... because the UDP answer came in fragments */
+	int tfd;
+	u32 tdeadline, tgot, tlen, tcap;
+	u8 thdr[2];
+	u8 *tbuf;                 /* the answer over TCP */
+	u8 *udp;                  /* the truncated UDP answer, used when TCP fails */
+	u32 udplen;
+	int tsrv;                 /* the server asked over TCP */
+	u32 qlen;                 /* the query without our OPT record */
+	u8 q[DNS_QBUF];
+	struct dns_result res;
+};
+
+struct rt_dns_lookup {
+	struct rt_sockctx *c;     /* the caller's: our sockets are made there */
+	u8 ptr;                   /* a reverse lookup (PTR in q[0]) */
+	u8 mdns;                  /* a .local name: multicast DNS */
+	u8 flags;                 /* RT_DNSL_* */
+	u8 done;
+	u8 inx;                   /* an exchange is running */
+	u8 tcp;                   /* dns.tcp_fallback when it started */
+	u16 edns_size;            /* dns.edns_size when it started, 0 = off */
+	u16 edns;                 /* the size asked of the server now, 0 = without */
+	int result;
+	u32 end;                  /* the caller's deadline (rt_now_ms), 0 = none */
+	int cand, ncand;          /* the search list candidate asked now */
+	int att, srv, nsent;      /* round, server, queries sent in this exchange */
+	u32 start, got4;          /* this server's turn began; the A answer came */
+	int e4, e6;               /* the worst failures so far */
+	int fd4, fd6;             /* UDP, per server family */
+	int n4, n6;
+	u32 a4[DNS_CACHE_ADDRS];
+	rt_in6_addr a6[DNS_CACHE_ADDRS];
+	struct dns_server servers[DNS_MAX_SERVERS];
+	int nservers;
+	u32 gen;                  /* dns_servers_gen of that copy */
+	u8 *buf;                  /* UDP answers, alen bytes */
+	u32 alen;
+	char search[DNS_SEARCH_LEN];
+	char name[DNS_NAMEBUF];   /* asked for (the arpa name of a reverse lookup) */
+	char qname[DNS_NAMEBUF];  /* the candidate asked now */
+	char canon[DNS_NAMEBUF];
+	struct al_query q[2];
+};
+
+/* is fd readable (wr 0) or writable (wr 1) now? */
+static int al_ready(struct rt_sockctx *c, int fd, int wr)
+{
+	u32 set[8];
+
+	if (fd < 0 || fd >= 256)
+		return 0;
+	memset(set, 0, sizeof(set));
+	set[fd >> 5] = 1u << (fd & 31);
+	return rt_api_select(c, fd + 1, wr ? NULL : set, wr ? set : NULL, NULL, 0, NULL) > 0;
+}
+
+static void al_nonblock(struct rt_sockctx *c, int fd)
+{
+	s32 one = 1;
+
+	rt_api_ioctl(c, fd, RT_FIONBIO, &one);
+}
+
+/* a name DNS can carry: labels of 1 to 63 bytes, 253 in all (a dot at the end allowed) */
+static int al_name_ok(const char *n)
+{
+	u32 l = (u32)strlen(n), k, lab = 0;
+
+	if (!l || l > 254 || (l == 254 && n[253] != '.') || n[0] == '.')
+		return 0;
+	for (k = 0; k < l; k++) {
+		if (n[k] != '.') {
+			if (++lab > 63)
+				return 0;
+			continue;
+		}
+		if (!lab)
+			return 0;               /* an empty label */
+		lab = 0;
+	}
+	return 1;
+}
+
+static void al_sockaddr(const rt_in6_addr *a, u32 ifindex, u16 port, struct rt_sockaddr_in6 *s6, u32 *len)
+{
+	memset(s6, 0, sizeof(*s6));
+	if (rt_in6_is_v4mapped(a)) {
+		struct rt_sockaddr_in *s4 = (struct rt_sockaddr_in *)(void *)s6;
+		s4->sin_len = sizeof(*s4);
+		s4->sin_family = RT_AF_INET;
+		s4->sin_port = rt_htons(port);
+		s4->sin_addr = rt_in6_v4(a);
+		*len = sizeof(*s4);
+	} else {
+		s6->sin6_len = sizeof(*s6);
+		s6->sin6_family = RT_AF_INET6;
+		s6->sin6_port = rt_htons(port);
+		s6->sin6_addr = *a;
+		s6->sin6_scope_id = ifindex;
+		*len = sizeof(*s6);
+	}
+}
+
+static void al_tcp_close(struct rt_dns_lookup *l, struct al_query *q)
+{
+	if (q->tfd >= 0)
+		rt_api_close(l->c, q->tfd);
+	q->tfd = -1;
+	q->tstate = AL_TCP_NONE;
+	rt_free(q->tbuf);
+	rt_free(q->udp);
+	q->tbuf = q->udp = NULL;
+}
+
+static void al_close(struct rt_dns_lookup *l)
+{
+	int k;
+
+	for (k = 0; k < 2; k++)
+		al_tcp_close(l, &l->q[k]);
+	if (l->fd4 >= 0)
+		rt_api_close(l->c, l->fd4);
+	if (l->fd6 >= 0)
+		rt_api_close(l->c, l->fd6);
+	l->fd4 = l->fd6 = -1;
+	l->inx = 0;
+}
+
+static void al_finish(struct rt_dns_lookup *l, int r)
+{
+	al_close(l);
+	rt_free(l->buf);
+	l->buf = NULL;
+	l->done = 1;
+	l->result = r;
+	if (!l->canon[0])
+		rt_strlcpy(l->canon, l->name, sizeof(l->canon));
+	RT_DBG(RT_DBG_DNS, "lookup %s: %d", l->name, r);
+}
+
+/* our UDP socket of the family v6 (made on first use, bound to an ephemeral port) */
+static int al_socket(struct rt_dns_lookup *l, int v6)
+{
+	int *fd = v6 ? &l->fd6 : &l->fd4, r;
+	struct rt_sockaddr_in6 any;
+	u32 len;
+
+	if (*fd >= 0)
+		return *fd;
+	r = rt_api_socket(l->c, v6 ? RT_AF_INET6 : RT_AF_INET, RT_SOCK_DGRAM, 0);
+	if (r < 0)
+		return r;
+	al_nonblock(l->c, r);
+	if (v6) {
+		al_sockaddr(&rt_in6addr_any, 0, 0, &any, &len);
+	} else {
+		rt_in6_addr z;
+		rt_in6_set_v4mapped(&z, 0);
+		al_sockaddr(&z, 0, 0, &any, &len);
+	}
+	if (rt_api_bind(l->c, r, &any, len) < 0) {
+		rt_api_close(l->c, r);
+		return -RT_EADDRNOTAVAIL;
+	}
+	*fd = r;
+	return r;
+}
+
+/* the query k to the server of this turn (or the mDNS group) */
+static void al_send(struct rt_dns_lookup *l, int k)
+{
+	struct al_query *q = &l->q[k];
+	struct rt_sockaddr_in6 to;
+	u32 tolen;
+	int fd;
+
+	q->r = R_PENDING;
+	if (l->mdns) {
+		rt_in6_addr g;
+		rt_in6_set_v4mapped(&g, rt_htonl(0xe00000fbu));
+		al_sockaddr(&g, 0, 5353, &to, &tolen);
+		fd = al_socket(l, 0);
+		if (fd >= 0 && rt_api_sendto(l->c, fd, q->q, q->qlen, 0, &to, tolen) >= 0)
+			l->nsent++;
+		RT_DBG(RT_DBG_DNS, "mdns query %s type %u, attempt %d", l->qname, (unsigned)q->type, l->att + 1);
+		return;
+	}
+	{
+		const struct dns_server *sv = &l->servers[l->srv];
+		al_sockaddr(&sv->addr, sv->ifindex, DNS_PORT, &to, &tolen);
+		fd = al_socket(l, !rt_in6_is_v4mapped(&sv->addr));
+		if (fd >= 0 && rt_api_sendto(l->c, fd, q->q, q_edns(q->q, q->qlen, l->edns), 0, &to, tolen) >= 0)
+			l->nsent++;
+		RT_DBG(RT_DBG_DNS, "query %s type %u to server %d, attempt %d%s", l->qname, (unsigned)q->type,
+		       l->srv + 1, l->att + 1, l->edns ? ", EDNS" : "");
+	}
+}
+
+/* query k has its final answer for this exchange (or is not asked) */
+static int al_done(const struct rt_dns_lookup *l, int k)
+{
+	const struct al_query *q = &l->q[k];
+
+	return !q->type || q->pre || final(q->r);
+}
+
+/* still waiting for an answer (not: failed for this server) */
+static int al_waiting(const struct rt_dns_lookup *l, int k)
+{
+	const struct al_query *q = &l->q[k];
+
+	return q->type && !q->pre && q->r == R_PENDING;
+}
+
+/* The server list changed since the lookup copied it (a restart of the network, which empties it and
+ * reads riptide.conf again; DHCP; an expiry): the lookup asks the servers there are now, from the
+ * first. 0, or -1 when there are none: the lookup then fails cleanly (it keeps no pointer into the
+ * resolver's state, only its own copies). */
+static int al_reload(struct rt_dns_lookup *l)
+{
+	u32 now = rt_now_ms();
+	int i;
+
+	if (l->mdns)
+		return 0;
+	rt_lock();
+	if (l->gen == dns_servers_gen) {
+		rt_unlock();
+		return 0;
+	}
+	servers_expire();
+	l->nservers = dns_nservers;
+	memcpy(l->servers, dns_servers, sizeof(l->servers));
+	l->gen = dns_servers_gen;
+	rt_unlock();
+	for (i = 0; i < l->nservers; i++)
+		if (l->servers[i].noedns && (s32)(l->servers[i].noedns_until - now) <= 0)
+			l->servers[i].noedns = 0;
+	RT_DBG(RT_DBG_DNS, "lookup %s: the servers changed, %d now", l->name, l->nservers);
+	l->srv = 0;
+	return l->nservers ? 0 : -1;
+}
+
+/* this server's turn: what has no final answer yet is sent (AAAA first, RFC 8305 3) */
+static void al_turn(struct rt_dns_lookup *l)
+{
+	int k;
+
+	if (!l->mdns) {
+		const struct dns_server *sv = &l->servers[l->srv];
+		l->edns = l->edns_size && !sv->noedns ? edns_size_for(l->edns_size, sv) : 0;
+	}
+	l->start = rt_now_ms();
+	l->got4 = 0;
+	for (k = 0; k < 2; k++)
+		if (!al_done(l, k))
+			al_send(l, k);
+}
+
+static int al_positive(const struct rt_dns_lookup *l, int k)
+{
+	return l->q[k].type && l->q[k].r > 0;
+}
+
+/* the TCP query of k ended: n bytes of answer in tbuf, or n < 0 */
+static void al_tcp_end(struct rt_dns_lookup *l, int k, int n)
+{
+	struct al_query *q = &l->q[k];
+	int x = DNS_IGNORE;
+
+	rt_lock();
+	if (n < 0)
+		rt_dns_stat_tcp_fail++;
+	else
+		rt_dns_stat_tcp++;
+	rt_unlock();
+	RT_DBG(RT_DBG_DNS, "TCP query %s type %u to server %d: %d", l->qname, (unsigned)q->type, q->tsrv + 1, n);
+	if (n > 0)
+		x = dns_parse_response(q->tbuf, (u32)n, q->id, l->qname, q->type, &q->res);
+	if (x == DNS_IGNORE) {
+		/* a fragmented answer is not used; a truncated one is, as it is */
+		if (q->tfrag || !q->udp)
+			x = -RT_TRY_AGAIN;
+		else
+			x = dns_parse_response(q->udp, q->udplen, q->id, l->qname, q->type, &q->res);
+		if (x == DNS_IGNORE)
+			x = -RT_TRY_AGAIN;
+		if (x == -RT_TRY_AGAIN)
+			q->res.naddr = 0;
+	}
+	al_tcp_close(l, q);
+	q->r = x;
+	if (x > 0 && k == AL_A)
+		l->got4 = rt_now_ms();
+}
+
+/* ask the query k again over TCP (RFC 7766), from the server of this turn */
+static void al_tcp_start(struct rt_dns_lookup *l, int k, int frag, const u8 *udp, u32 n)
+{
+	struct al_query *q = &l->q[k];
+	const struct dns_server *sv = &l->servers[l->srv];
+	struct rt_sockaddr_in6 to;
+	u32 tolen;
+	int fd, r;
+
+	q->tfrag = (u8)frag;
+	q->tsrv = l->srv;
+	q->tdeadline = rt_now_ms() + DNS_TCP_TIMEOUT_MS;
+	q->tgot = 0;
+	if (udp && (q->udp = rt_malloc(n)) != NULL) {
+		memcpy(q->udp, udp, n);
+		q->udplen = n;
+	}
+	q->tstate = AL_TCP_CONNECT;
+	q_edns(q->q, q->qlen, 0);
+	fd = rt_api_socket(l->c, rt_in6_is_v4mapped(&sv->addr) ? RT_AF_INET : RT_AF_INET6, RT_SOCK_STREAM, 0);
+	if (fd < 0) {
+		al_tcp_end(l, k, fd);
+		return;
+	}
+	q->tfd = fd;
+	al_nonblock(l->c, fd);
+	al_sockaddr(&sv->addr, sv->ifindex, DNS_PORT, &to, &tolen);
+	r = rt_api_connect(l->c, fd, &to, tolen);
+	if (r == 0)
+		q->tstate = AL_TCP_SEND;
+	else if (r != -RT_EINPROGRESS && r != -RT_EALREADY && r != -RT_EWOULDBLOCK)
+		al_tcp_end(l, k, r);
+}
+
+/* move the TCP query of k on as far as it goes without waiting */
+static void al_tcp_poll(struct rt_dns_lookup *l, int k)
+{
+	struct al_query *q = &l->q[k];
+	int r;
+
+	for (;;) {
+		if ((s32)(rt_now_ms() - q->tdeadline) >= 0) {
+			al_tcp_end(l, k, -RT_ETIMEDOUT);
+			return;
+		}
+		switch (q->tstate) {
+		case AL_TCP_CONNECT: {
+			s32 err = 0;
+			u32 el = sizeof(err);
+			if (!al_ready(l->c, q->tfd, 1))
+				return;
+			rt_api_getsockopt(l->c, q->tfd, RT_SOL_SOCKET, RT_SO_ERROR, &err, &el);
+			if (err) {
+				al_tcp_end(l, k, -(int)err);
+				return;
+			}
+			q->tstate = AL_TCP_SEND;
+			q->tgot = 0;
+			break;
+		}
+		case AL_TCP_SEND: {
+			/* the length prefix, then the query, perhaps in pieces */
+			const u8 *p;
+			u32 n;
+			rt_put_be16(q->thdr, (u16)q->qlen);
+			p = q->tgot < 2 ? q->thdr + q->tgot : q->q + (q->tgot - 2);
+			n = q->tgot < 2 ? 2 - q->tgot : q->qlen + 2 - q->tgot;
+			r = rt_api_send(l->c, q->tfd, p, n, 0);
+			if (r == -RT_EWOULDBLOCK)
+				return;
+			if (r <= 0) {
+				al_tcp_end(l, k, r < 0 ? r : -RT_ECONNRESET);
+				return;
+			}
+			q->tgot += (u32)r;
+			if (q->tgot == q->qlen + 2) {
+				q->tstate = AL_TCP_LEN;
+				q->tgot = 0;
+			}
+			break;
+		}
+		case AL_TCP_LEN:
+			r = rt_api_recv(l->c, q->tfd, q->thdr + q->tgot, 2 - q->tgot, 0);
+			if (r == -RT_EWOULDBLOCK)
+				return;
+			if (r <= 0) {
+				al_tcp_end(l, k, r < 0 ? r : -RT_ECONNRESET);
+				return;
+			}
+			q->tgot += (u32)r;
+			if (q->tgot < 2)
+				break;
+			q->tlen = rt_get_be16(q->thdr);
+			q->tcap = q->tlen < DNS_TCP_MAX ? q->tlen : DNS_TCP_MAX;
+			if (q->tlen < 12 || !(q->tbuf = rt_malloc(q->tcap))) {
+				al_tcp_end(l, k, q->tlen < 12 ? -RT_ECONNRESET : -RT_ENOMEM);
+				return;
+			}
+			q->tstate = AL_TCP_BODY;
+			q->tgot = 0;
+			break;
+		case AL_TCP_BODY:
+			r = rt_api_recv(l->c, q->tfd, q->tbuf + q->tgot, q->tcap - q->tgot, 0);
+			if (r == -RT_EWOULDBLOCK)
+				return;
+			if (r <= 0) {
+				al_tcp_end(l, k, r < 0 ? r : -RT_ECONNRESET);
+				return;
+			}
+			q->tgot += (u32)r;
+			if (q->tgot < q->tcap)
+				break;
+			if (q->tlen > q->tcap)
+				q->tbuf[2] |= 0x02;    /* TC: the rest did not fit */
+			al_tcp_end(l, k, (int)q->tcap);
+			return;
+		default:
+			return;
+		}
+	}
+}
+
+/* the datagrams that have come: answers of this turn's server to our queries */
+static void al_recv(struct rt_dns_lookup *l)
+{
+	int f;
+
+	for (f = 0; f < 2; f++) {
+		int fd = f ? l->fd6 : l->fd4;
+		for (;;) {
+			struct rt_sockaddr_in6 from;
+			struct rt_iov v;
+			u32 fl = sizeof(from);
+			int n, mf = 0, k, x, ok;
+			struct al_query *q = NULL;
+			struct dns_server *sv = l->mdns ? NULL : &l->servers[l->srv];
+			if (fd < 0)
+				break;
+			memset(&from, 0, sizeof(from));
+			v.base = l->buf;
+			v.len = l->alen;
+			n = rt_api_recvmsg(l->c, fd, &v, 1, RT_MSG_DONTWAIT | RT_MSG_FRAGMENTED, &from, &fl, &mf);
+			if (n < 0)
+				break;
+			if (n < 12 || !(l->buf[2] & 0x80))
+				continue;
+			/* from the server's port 53 (multicast DNS: from any responder's 5353) */
+			if (f) {
+				ok = from.sin6_port == rt_htons(l->mdns ? 5353 : DNS_PORT) &&
+				     (l->mdns || rt_in6_eq(&from.sin6_addr, &sv->addr));
+			} else {
+				const struct rt_sockaddr_in *f4 = (const struct rt_sockaddr_in *)(const void *)&from;
+				ok = f4->sin_port == rt_htons(l->mdns ? 5353 : DNS_PORT) &&
+				     (l->mdns || (rt_in6_is_v4mapped(&sv->addr) && f4->sin_addr == rt_in6_v4(&sv->addr)));
+			}
+			if (!ok)
+				continue;
+			for (k = 0; k < 2; k++)
+				if (al_waiting(l, k) && !l->q[k].tstate && l->q[k].id == rt_get_be16(l->buf))
+					q = &l->q[k];
+			if (!q)
+				continue;
+			k = (int)(q - l->q);
+			if (l->mdns) {
+				u32 ttl = 0;
+				x = mdns_parse_answer(l->buf, (u32)n, q->id, l->qname, q->type,
+				                      k == AL_A ? l->a4 : NULL, k == AL_A ? NULL : l->a6,
+				                      DNS_CACHE_ADDRS, &ttl);
+				if (x > 0) {
+					q->r = x;
+					q->res.ttl = ttl;
+					rt_strlcpy(q->res.canon, l->qname, sizeof(q->res.canon));
+					if (k == AL_A)
+						l->got4 = rt_now_ms();
+				}
+				continue;
+			}
+			if (l->edns && (RCODE(l->buf) == 1 || RCODE(l->buf) == 4)) {
+				/* FORMERR/NOTIMP: perhaps the OPT record; once more without, both queries */
+				noedns_mark(sv, l->srv);
+				l->edns = 0;
+				l->start = rt_now_ms();
+				for (k = 0; k < 2; k++)
+					if (!al_done(l, k) && !l->q[k].tstate)
+						al_send(l, k);
+				continue;
+			}
+			x = dns_parse_response(l->buf, (u32)n, q->id, l->qname, q->type, &q->res);
+			if (x == DNS_IGNORE)
+				continue;
+			if (mf & RT_MSG_FRAGMENTED) {
+				/* RFC 9715 3.2: not used; over TCP, or the next server */
+				frag_note(l->srv);
+				if (l->tcp) {
+					al_tcp_start(l, k, 1, NULL, 0);
+				} else {
+					q->res.naddr = 0;
+					q->r = -RT_TRY_AGAIN;
+				}
+				continue;
+			}
+			if (l->edns && (RCODE(l->buf) == 0 || RCODE(l->buf) == 3) && dns_find_opt(l->buf, (u32)n, NULL) == 0)
+				noedns_mark(sv, l->srv);
+			if (TC(l->buf) && l->tcp) {
+				al_tcp_start(l, k, 0, l->buf, (u32)n);
+				continue;
+			}
+			q->r = x;
+			if (x > 0 && k == AL_A)
+				l->got4 = rt_now_ms();
+		}
+	}
+}
+
+/* the next server (or round); 1 when the exchange is over */
+static int al_next_server(struct rt_dns_lookup *l)
+{
+	if (al_positive(l, AL_A) || al_positive(l, AL_AAAA))
+		return 1;
+	if (++l->srv >= (l->mdns ? 1 : l->nservers)) {
+		l->srv = 0;
+		if (++l->att >= DNS_ATTEMPTS)
+			return 1;
+	}
+	if (al_reload(l) < 0)
+		return 1;                        /* no server any more: what waits fails */
+	al_turn(l);
+	return 0;
+}
+
+/* the exchange for l->qname: 1 when it is over */
+static int al_exchange(struct rt_dns_lookup *l)
+{
+	u32 limit = l->mdns ? MDNS_WAIT_MS : DNS_TIMEOUT_MS, el;
+	int k;
+
+	al_recv(l);
+	for (k = 0; k < 2; k++)
+		if (l->q[k].tstate)
+			al_tcp_poll(l, k);
+	if (al_done(l, 0) && al_done(l, 1))
+		return 1;
+	if (l->q[0].tstate || l->q[1].tstate)
+		return 0;                        /* TCP keeps its own time */
+	/* RFC 8305 3: the A records are in, and the AAAA answer is late */
+	if (!(l->flags & RT_DNSL_BOTH) && al_positive(l, AL_A) && l->got4 && al_waiting(l, AL_AAAA) &&
+	    l->got4 - l->start + (u32)rt_he_resolution_delay < limit)
+		limit = l->got4 - l->start + (u32)rt_he_resolution_delay;
+	el = rt_now_ms() - l->start;
+	if (el >= limit) {
+		if (al_positive(l, AL_A))
+			return 1;
+		return al_next_server(l);
+	}
+	/* SERVFAIL & co. for everything asked: the next server now */
+	if (!al_waiting(l, 0) && !al_waiting(l, 1) && !al_positive(l, AL_A))
+		return al_next_server(l);
+	return 0;
+}
+
+/* the exchange is over: what has no answer has failed */
+static void al_over(struct rt_dns_lookup *l)
+{
+	int k;
+
+	al_close(l);
+	for (k = 0; k < 2; k++)
+		if (l->q[k].type && l->q[k].r == R_PENDING)
+			l->q[k].r = l->mdns ? -RT_HOST_NOT_FOUND : -RT_TRY_AGAIN;
+}
+
+/* remember a negative answer or a failure of query k (neg_note()) */
+static void al_neg_note(struct rt_dns_lookup *l, int k)
+{
+	struct al_query *q = &l->q[k], *o = &l->q[!k];
+	int other_final = o->type && final(o->r);
+
+	if (!q->type || q->pre || l->mdns || !l->nsent || !(final(q->r) || !other_final))
+		return;
+	rt_lock();
+	if (q->r == 0 || q->r == -RT_HOST_NOT_FOUND)
+		neg_add(l->qname, q->type, q->r, q->res.negttl);
+	else if (q->r == -RT_TRY_AGAIN || q->r == -RT_NO_RECOVERY)
+		neg_fail(l->qname, q->type, q->r);
+	rt_unlock();
+}
+
+static int al_failure(const struct rt_dns_lookup *l)
+{
+	return worse(l->e4, l->e6);
+}
+
+/* this candidate's answers are in: take them, or go on to the next candidate */
+static void al_cand_end(struct rt_dns_lookup *l, int cut)
+{
+	struct al_query *q6 = &l->q[AL_AAAA], *q4 = &l->q[AL_A];
+
+	al_over(l);
+	if (l->ptr) {
+		if (q6->r > 0) {
+			rt_strlcpy(l->canon, q6->res.name, sizeof(l->canon));
+			al_finish(l, 1);
+		} else {
+			al_finish(l, q6->r == 0 ? -RT_NO_DATA : q6->r);
+		}
+		return;
+	}
+	if (al_positive(l, AL_A) || al_positive(l, AL_AAAA)) {
+		rt_lock();
+		if (al_positive(l, AL_A))
+			cache_add(l->name, l->mdns ? l->name : q4->res.canon, DNS_TYPE_A, l->a4, NULL, q4->r, q4->res.ttl);
+		if (al_positive(l, AL_AAAA))
+			cache_add(l->name, l->mdns ? l->name : q6->res.canon, DNS_TYPE_AAAA, NULL, l->a6, q6->r,
+			          q6->res.ttl);
+		rt_unlock();
+		if (al_positive(l, AL_A))
+			l->n4 = q4->r;
+		if (al_positive(l, AL_AAAA))
+			l->n6 = q6->r;
+		if (!l->canon[0])
+			rt_strlcpy(l->canon, al_positive(l, AL_AAAA) ? q6->res.canon : q4->res.canon, sizeof(l->canon));
+		al_finish(l, l->n4 + l->n6);
+		return;
+	}
+	if (q4->type)
+		l->e4 = worse(l->e4, q4->r);
+	if (q6->type)
+		l->e6 = worse(l->e6, q6->r);
+	if (cut || ++l->cand >= l->ncand) {
+		al_finish(l, l->n4 + l->n6 ? l->n4 + l->n6 : al_failure(l));
+		return;
+	}
+	l->inx = 0;                          /* the next candidate in the next round */
+}
+
+/* candidate l->cand into l->qname. RT_DNSL_SHORTSEARCH (MacTCP's resolver): the name itself
+ * first, then NAME.DOMAIN for each domain of the search list; else cand_name() */
+static int al_cand_name(struct rt_dns_lookup *l)
+{
+	char d[64];
+
+	if (!(l->flags & RT_DNSL_SHORTSEARCH) || l->ncand == 1)
+		return cand_name(l->search, l->name, l->cand, l->ncand, l->qname);
+	if (l->cand == 0) {
+		rt_strlcpy(l->qname, l->name, sizeof(l->qname));
+		return 0;
+	}
+	if (!search_nth(l->search, l->cand - 1, d, sizeof(d)) || strlen(l->name) + 1 + strlen(d) >= DNS_NAMEBUF)
+		return -1;
+	rt_snprintf(l->qname, sizeof(l->qname), "%s.%s", l->name, d);
+	return 0;
+}
+
+/* begin candidate l->cand: cached negative answers first, then the exchange */
+static void al_cand_begin(struct rt_dns_lookup *l)
+{
+	int k, ask = 0;
+
+	if (!l->ptr && !l->mdns && al_cand_name(l) < 0) {
+		if (++l->cand >= l->ncand)
+			al_finish(l, l->n4 + l->n6 ? l->n4 + l->n6 : al_failure(l));
+		return;
+	}
+	for (k = 0; k < 2; k++) {
+		struct al_query *q = &l->q[k];
+		int len;
+		if (!q->type)
+			continue;
+		q->pre = 0;
+		q->r = R_PENDING;
+		if (!l->mdns) {
+			int c;
+			rt_lock();
+			c = neg_find(l->qname, q->type);
+			rt_unlock();
+			if (c != DNS_IGNORE) {
+				RT_DBG(RT_DBG_DNS, "query %s type %u: cached negative %d", l->qname, (unsigned)q->type, c);
+				q->r = c;
+				q->pre = 1;
+				continue;
+			}
+		}
+		q->id = (u16)rt_random32();
+		if (k == 1 && l->q[0].type)
+			q->id = dns_other_id(l->q[0].id);
+		len = l->mdns ? dns_build_query(q->q, sizeof(q->q), q->id, l->qname, q->type) :
+		      build_q_size(l->edns_size, q->q, q->id, l->qname, q->type);
+		if (len < 0) {
+			q->r = -RT_NO_RECOVERY;
+			q->pre = 1;
+			continue;
+		}
+		q->qlen = (u32)len;
+		ask++;
+	}
+	l->nsent = 0;
+	if (!ask) {
+		al_cand_end(l, 0);
+		return;
+	}
+	l->att = l->srv = 0;
+	if (al_reload(l) < 0) {
+		al_cand_end(l, 1);               /* the servers went (a restart): failed, not asked */
+		return;
+	}
+	l->inx = 1;
+	al_turn(l);
+}
+
+/* the parts both kinds of lookup start with */
+static struct rt_dns_lookup *al_new(struct rt_sockctx *c, u32 timeout_ms)
+{
+	struct rt_dns_lookup *l = rt_zalloc(sizeof(*l));
+
+	if (!l)
+		return NULL;
+	l->c = c;
+	l->fd4 = l->fd6 = -1;
+	l->q[0].tfd = l->q[1].tfd = -1;
+	l->e4 = l->e6 = -RT_HOST_NOT_FOUND;
+	if (timeout_ms)
+		l->end = (rt_now_ms() + timeout_ms) | 1;
+	return l;
+}
+
+/* the servers, the search list, EDNS and TCP as they are now; a buffer for answers */
+static int al_prepare(struct rt_dns_lookup *l)
+{
+	u32 now = rt_now_ms();
+	s32 edns;
+	int i;
+
+	rt_lock();
+	servers_expire();
+	l->nservers = dns_nservers;
+	memcpy(l->servers, dns_servers, sizeof(l->servers));
+	l->gen = dns_servers_gen;
+	rt_strlcpy(l->search, dns_search, sizeof(l->search));
+	edns = rt_dns_edns_size;
+	l->tcp = rt_dns_tcp != 0;
+	rt_unlock();
+	for (i = 0; i < l->nservers; i++)
+		if (l->servers[i].noedns && (s32)(l->servers[i].noedns_until - now) <= 0)
+			l->servers[i].noedns = 0;
+	if (edns && edns < DNS_UDP_MIN)
+		edns = DNS_UDP_MIN;
+	if (edns > DNS_EDNS_CAP)
+		edns = DNS_EDNS_CAP;
+	l->edns_size = (u16)edns;
+	l->alen = l->edns_size > DNS_UDP_MIN ? l->edns_size : DNS_UDP_MIN;
+	l->buf = rt_malloc(l->alen);
+	if (!l->buf && l->alen > DNS_UDP_MIN) {
+		l->edns_size = 0;
+		l->alen = DNS_UDP_MIN;
+		l->buf = rt_malloc(l->alen);
+	}
+	return l->buf ? 0 : -RT_ENOMEM;
+}
+
+struct rt_dns_lookup *rt_dns_lookup_start(struct rt_sockctx *c, const char *name, int family, int flags,
+                                          u32 timeout_ms, int *err)
+{
+	struct rt_dns_lookup *l;
+	int want4 = family != RT_AF_INET6, want6 = family != RT_AF_INET, n;
+	char c4[DNS_CACHE_NAME];
+
+	if (err)
+		*err = 0;
+	if (!c || !name || !al_name_ok(name)) {
+		if (err)
+			*err = -RT_EINVAL;
+		return NULL;
+	}
+	if (!(l = al_new(c, timeout_ms))) {
+		if (err)
+			*err = -RT_ENOMEM;
+		return NULL;
+	}
+	l->flags = (u8)flags;
+	rt_strlcpy(l->name, name, sizeof(l->name));
+	/* without the network: the hosts table, localhost, our own .local name, the cache */
+	c4[0] = 0;
+	if (want6) {
+		n = resolve_local(name, DNS_TYPE_AAAA, NULL, l->a6, DNS_CACHE_ADDRS, l->canon, sizeof(l->canon));
+		if (n < 0) {
+			al_finish(l, n);             /* DNS is not allowed */
+			return l;
+		}
+		if (n > 0)
+			l->n6 = n, want6 = 0;
+	}
+	if (want4) {
+		n = resolve_local(name, DNS_TYPE_A, l->a4, NULL, DNS_CACHE_ADDRS, c4, sizeof(c4));
+		if (n < 0) {
+			al_finish(l, l->n6 ? l->n6 : n);
+			return l;
+		}
+		if (n > 0)
+			l->n4 = n, want4 = 0;
+	}
+	if (!l->canon[0] && c4[0])
+		rt_strlcpy(l->canon, c4, sizeof(l->canon));
+	if (!want4 && !want6) {
+		al_finish(l, l->n4 + l->n6);
+		return l;
+	}
+	if (al_prepare(l) < 0) {
+		al_finish(l, l->n4 + l->n6 ? l->n4 + l->n6 : -RT_TRY_AGAIN);
+		if (!(l->n4 + l->n6)) {
+			rt_dns_lookup_free(l);
+			if (err)
+				*err = -RT_ENOMEM;
+			return NULL;
+		}
+		return l;
+	}
+	l->mdns = (u8)is_mdns_name(name);
+	if (!l->mdns && !l->nservers) {
+		if (l->n4 + l->n6) {
+			al_finish(l, l->n4 + l->n6);   /* one family was known, and nobody to ask for the other */
+			return l;
+		}
+		rt_dns_lookup_free(l);
+		if (err)
+			*err = -RT_ENXIO;
+		return NULL;
+	}
+	if (want6) {
+		l->q[AL_AAAA].type = DNS_TYPE_AAAA;
+		l->q[AL_AAAA].res.addrs6 = l->a6;
+		l->q[AL_AAAA].res.max = DNS_CACHE_ADDRS;
+	}
+	if (want4) {
+		l->q[AL_A].type = DNS_TYPE_A;
+		l->q[AL_A].res.addrs = l->a4;
+		l->q[AL_A].res.max = DNS_CACHE_ADDRS;
+	}
+	if (l->mdns) {
+		l->ncand = 1;
+		rt_strlcpy(l->qname, name, sizeof(l->qname));
+	} else {
+		l->ncand = (flags & RT_DNSL_NOSEARCH) || ((flags & RT_DNSL_SHORTSEARCH) && strchr(name, '.')) ? 1 :
+		           cand_count(l->search, name);
+	}
+	al_cand_begin(l);
+	return l;
+}
+
+struct rt_dns_lookup *rt_dns_lookup_start_addr(struct rt_sockctx *c, const rt_in6_addr *addr, u32 timeout_ms,
+                                               int *err)
+{
+	static const char hex[] = "0123456789abcdef";
+	struct rt_dns_lookup *l;
+	int found, disallowed, i, n = 0;
+
+	if (err)
+		*err = 0;
+	if (!c || !addr) {
+		if (err)
+			*err = -RT_EINVAL;
+		return NULL;
+	}
+	if (!(l = al_new(c, timeout_ms))) {
+		if (err)
+			*err = -RT_ENOMEM;
+		return NULL;
+	}
+	l->ptr = 1;
+	rt_lock();
+	found = hosts_reverse(addr, l->canon, sizeof(l->canon));
+	disallowed = rt_dns_disallowed;
+	rt_unlock();
+	if (!found && (rt_in6_is_loopback(addr) ||
+	               (rt_in6_is_v4mapped(addr) && rt_in6_v4(addr) == RT_INADDR_LOOPBACK))) {
+		rt_strlcpy(l->canon, "localhost", sizeof(l->canon));
+		found = 1;
+	}
+	if (found || disallowed) {
+		al_finish(l, found ? 1 : -RT_HOST_NOT_FOUND);
+		return l;
+	}
+	if (rt_in6_is_v4mapped(addr)) {
+		const u8 *b = addr->b;
+		rt_snprintf(l->name, sizeof(l->name), "%u.%u.%u.%u.in-addr.arpa", (unsigned)b[15], (unsigned)b[14],
+		            (unsigned)b[13], (unsigned)b[12]);
+	} else {
+		/* RFC 3596 2.5: nibbles in reverse order under ip6.arpa */
+		for (i = 15; i >= 0; i--) {
+			l->name[n++] = hex[addr->b[i] & 15];
+			l->name[n++] = '.';
+			l->name[n++] = hex[addr->b[i] >> 4];
+			l->name[n++] = '.';
+		}
+		memcpy(l->name + n, "ip6.arpa", 9);
+	}
+	rt_strlcpy(l->qname, l->name, sizeof(l->qname));
+	if (al_prepare(l) < 0 || !l->nservers) {
+		int e = l->buf ? -RT_ENXIO : -RT_ENOMEM;
+		rt_dns_lookup_free(l);
+		if (err)
+			*err = e;
+		return NULL;
+	}
+	l->q[AL_AAAA].type = DNS_TYPE_PTR;
+	l->ncand = 1;
+	al_cand_begin(l);
+	return l;
+}
+
+int rt_dns_lookup_poll(struct rt_dns_lookup *l)
+{
+	int guard;
+
+	if (!l)
+		return -RT_NO_RECOVERY;
+	for (guard = 0; !l->done && guard < 8; guard++) {
+		if (l->end && (s32)(rt_now_ms() - l->end) >= 0) {
+			/* the caller's time is up: what has come is the answer */
+			al_cand_end(l, 1);
+			break;
+		}
+		if (!l->inx) {
+			al_cand_begin(l);
+			continue;
+		}
+		if (!al_exchange(l))
+			break;
+		al_over(l);
+		al_neg_note(l, AL_AAAA);
+		al_neg_note(l, AL_A);
+		al_cand_end(l, 0);
+	}
+	return l->done ? l->result : 0;
+}
+
+int rt_dns_lookup_get(const struct rt_dns_lookup *l, u32 *a4, int *n4, rt_in6_addr *a6, int *n6, char *canon,
+                      u32 canonlen)
+{
+	int i, m;
+
+	if (!l || !l->done)
+		return -RT_EINVAL;
+	if (n4) {
+		m = a4 ? RT_MIN(*n4, l->ptr ? 0 : l->n4) : 0;
+		for (i = 0; i < m; i++)
+			a4[i] = l->a4[i];
+		*n4 = m;
+	}
+	if (n6) {
+		m = a6 ? RT_MIN(*n6, l->ptr ? 0 : l->n6) : 0;
+		for (i = 0; i < m; i++)
+			a6[i] = l->a6[i];
+		*n6 = m;
+	}
+	if (canon && canonlen)
+		rt_strlcpy(canon, l->canon, canonlen);
+	return l->result;
+}
+
+const char *rt_dns_lookup_canon(const struct rt_dns_lookup *l)
+{
+	return l && l->done ? l->canon : "";
+}
+
+void rt_dns_lookup_free(struct rt_dns_lookup *l)
+{
+	if (!l)
+		return;
+	al_close(l);
+	rt_free(l->buf);
+	rt_free(l);
 }
 
 /* ======================================================================

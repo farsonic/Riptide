@@ -1,7 +1,8 @@
 /*
  * ipp6get.c - a small .IPP6 program (docs/IPP6.md): look .IPP6 up, resolve a name to its IPv6 and
  * IPv4 addresses, connect to them in order (IPv6 first, falling back to IPv4 when that fails or
- * when the host has no IPv6 address), and fetch a page over HTTP/1.0. On a Mac without .IPP6 it
+ * when the host has no IPv6 address), and fetch a page over HTTP/1.0. With interface version 2 the
+ * lookup and the connecting are one call, ip6ConnectName, which races IPv6 and IPv4. On a Mac without .IPP6 it
  * falls back to MacTCP's .IPP, with an IPv4 address (names would need Apple's DNR glue there).
  *
  * The calls are synchronous for brevity: a real program makes them asynchronously and goes on
@@ -153,6 +154,8 @@ static long receive_all(unsigned long stream, char *first, unsigned short firstl
 	return total;
 }
 
+static long ipp6_version;               /* Gestalt 'ipp6' */
+
 static void fetch6(const char *host)
 {
 	static IP6Address addrs[8];
@@ -165,22 +168,7 @@ static void fetch6(const char *host)
 	char *p;
 	short r, i, n;
 
-	/* 1. the name: AAAA and A, every IPv6 address first (kIP6OrderDefault would be RFC 6724's
-	   order, which puts IPv4 before a unique local IPv6 address) */
-	memset(&look, 0, sizeof look);
-	look.csParam.resolve.hostName = (char *)host;
-	look.csParam.resolve.flags = kIP6OrderIPv6First;
-	look.csParam.resolve.results = addrs;
-	look.csParam.resolve.maxResults = 8;
-	look.csParam.resolve.port = PORT;
-	r = call6(&look, ip6Resolve);
-	n = look.csParam.resolve.count;
-	sprintf_n(line, sizeof line, "%s: %d address%s (result %d)", host, n, n == 1 ? "" : "es", r);
-	say(line);
-	if (r != 0)
-		return;
-
-	/* 2. a stream, and the addresses in order until one connects */
+	/* 1. a stream */
 	memset(&pb, 0, sizeof pb);
 	pb.csParam.create.rcvBuff = new_ptr(16384);
 	pb.csParam.create.rcvBuffLen = 16384;
@@ -190,21 +178,55 @@ static void fetch6(const char *host)
 		return;
 	}
 	stream = pb.tcpStream;
-	for (i = 0; i < n; i++) {
-		addr_text(&addrs[i], text, sizeof text);
+	if (ipp6_version >= 2) {
+		/* 2. version 2: one call looks the name up and connects, IPv6 and IPv4 raced (Happy Eyeballs);
+		   IPv6 first (kIP6OrderDefault would be RFC 6724's order, which puts IPv4 before a unique local
+		   IPv6 address) */
 		memset(&pb.csParam, 0, sizeof pb.csParam);
 		pb.tcpStream = stream;
-		pb.csParam.open.ulpTimeoutValue = 15;           /* seconds for each address ... */
-		pb.csParam.open.validityFlags = timeoutValue;   /* ... valid */
-		pb.csParam.open.remoteAddr = addrs[i];
-		r = call6(&pb, TCPActiveOpen);
-		sprintf_n(line, sizeof line, "  %s [%s]:%u: %s (%d)", IP6_IS_V4(&addrs[i]) ? "IPv4" : "IPv6", text,
-		          (unsigned)addrs[i].port, r == 0 ? "connected" : "failed, next", r);
+		pb.csParam.connectName.ulpTimeoutValue = 30;    /* seconds for the lookup and the connection */
+		pb.csParam.connectName.validityFlags = timeoutValue;
+		pb.csParam.connectName.remoteAddr.port = PORT;
+		pb.csParam.connectName.hostName = (char *)host;
+		pb.csParam.connectName.flags = kIP6OrderIPv6First;
+		r = call6(&pb, ip6ConnectName);
+		addr_text(&pb.csParam.connectName.remoteAddr, text, sizeof text);
+		sprintf_n(line, sizeof line, "%s: ip6ConnectName %d: [%s]:%u, %u address%s, %u attempt%s, %lu ms", host, r,
+		          text, (unsigned)pb.csParam.connectName.remoteAddr.port, (unsigned)pb.csParam.connectName.addrCount,
+		          pb.csParam.connectName.addrCount == 1 ? "" : "es", (unsigned)pb.csParam.connectName.attempts,
+		          pb.csParam.connectName.attempts == 1 ? "" : "s", (unsigned long)pb.csParam.connectName.elapsed);
 		say(line);
-		if (r == 0)
-			break;
+		n = 1;
+		i = r == 0 ? 0 : 1;
+	} else {
+		/* 2. version 1: the name (AAAA and A, every IPv6 address first), then the addresses in order
+		   until one connects */
+		memset(&look, 0, sizeof look);
+		look.csParam.resolve.hostName = (char *)host;
+		look.csParam.resolve.flags = kIP6OrderIPv6First;
+		look.csParam.resolve.results = addrs;
+		look.csParam.resolve.maxResults = 8;
+		look.csParam.resolve.port = PORT;
+		r = call6(&look, ip6Resolve);
+		n = r == 0 ? look.csParam.resolve.count : 0;
+		sprintf_n(line, sizeof line, "%s: %d address%s (result %d)", host, n, n == 1 ? "" : "es", r);
+		say(line);
+		for (i = 0; i < n; i++) {
+			addr_text(&addrs[i], text, sizeof text);
+			memset(&pb.csParam, 0, sizeof pb.csParam);
+			pb.tcpStream = stream;
+			pb.csParam.open.ulpTimeoutValue = 15;           /* seconds for each address ... */
+			pb.csParam.open.validityFlags = timeoutValue;   /* ... valid */
+			pb.csParam.open.remoteAddr = addrs[i];
+			r = call6(&pb, TCPActiveOpen);
+			sprintf_n(line, sizeof line, "  %s [%s]:%u: %s (%d)", IP6_IS_V4(&addrs[i]) ? "IPv4" : "IPv6", text,
+			          (unsigned)addrs[i].port, r == 0 ? "connected" : "failed, next", r);
+			say(line);
+			if (r == 0)
+				break;
+		}
 	}
-	if (i == n) {
+	if (i >= n) {
 		say("  no address answered");
 	} else {
 		/* 3. the request, in one WDS of one piece */
@@ -301,6 +323,7 @@ static void run(void)
 	/* 1. .IPP6 if it is there (Gestalt first: an OpenDriver of a name not installed searches the
 	   resource files), else MacTCP's .IPP */
 	if (gestalt(gestaltIPP6, &version) == 0 && version >= 1 && open_driver(IPP6_DRIVER_NAME_C, &ipp6) == 0) {
+		ipp6_version = version;
 		IP6iopb pb;
 		static IP6AddrInfo mine[8];
 		memset(&pb, 0, sizeof pb);
