@@ -22,8 +22,9 @@
  * only frees the slot, counts (tx_done_n, tx_err_n) and asks for the stack's deferred task; the
  * stack's poll (tx_reap) then tells the core, which sends what its QoS bands hold back while the
  * driver has qos_inflight frames (src/core/qos.c). A program that calls the core in its own context
- * (api_mac.c) reaps them as it gives the core back (net_mac_reap), since the deferred task is put
- * off while it holds the core.
+ * (api_mac.c) reaps them as it gives the core back, since the deferred task is put off while it
+ * holds the core; with QoS off they are also reaped after each received frame and before each
+ * MacTCP call (net_mac_reap has the why).
  *
  * VLANs (src/core/vlan.c): the first VLAN interface on a card attaches the card's protocol handler
  * for type 0x8100 as well (vlan_rx, asynchronously), the last one gone detaches it; tagged frames
@@ -345,10 +346,10 @@ void net_mac_tx_done(void *pb)
 
 /* the stack's context: the completions seen since the last look, to the core (which may send
    what its QoS bands hold) */
-static void tx_reap(struct card *c)
+static void tx_reap(struct card *c, int eager)
 {
 	u32 done = c->tx_done_n;
-	if (done == c->tx_reaped)
+	if (done == c->tx_reaped || (eager && c->nif.qos))
 		return;
 	rt_lock();
 	while (c->tx_reaped != done) {
@@ -363,16 +364,20 @@ static void tx_reap(struct card *c)
 	rt_unlock();
 }
 
-/* Also from a program that had the core (os_mac.c mac_core_leave: while it sends in a loop the
-   deferred task is put off) and before each MacTCP call (ipp.c ipp_poll): a driver that completes
-   its writes at once (Aurora68's) would otherwise have every write of the stack's round counted as
-   in flight until its next poll, and UDP's pacing (rt_netif_tx_room: tx_inflight < tx_slots) would
-   refuse a UDPWrite after a burst of TCP. */
-void net_mac_reap(void)
+/* When the core hears of completed writes. Once per round of the stack (the poll's start) and when
+   a program gives the core back (os_mac.c mac_core_leave: while a program sends in a loop the
+   deferred task is put off); with QoS off also after each received frame and before each MacTCP
+   call (eager, ipp.c ipp_poll). A driver that completes its writes at once (Aurora68's: they go
+   into the Pi's board ring) would otherwise have every write of the round counted as in flight,
+   and UDP's pacing (rt_netif_tx_room: tx_inflight < tx_slots) could refuse a UDPWrite after a
+   burst of TCP. With QoS on, UDP's room is the band's and the round's count is what paces such a
+   driver: the bands hold what is beyond Frames in flight until the next round, so interactive
+   frames wait behind fewer bulk ones in the driver's own queue (docs/MAC.md, "QoS bands"). */
+void net_mac_reap(int eager)
 {
 	for (int k = 0; k < MAC_CARDS; k++)
 		if (cards[k].open)
-			tx_reap(&cards[k]);
+			tx_reap(&cards[k], eager);
 }
 
 /* The handler for tagged frames (type 0x8100), attached while the card has VLAN interfaces: the
@@ -609,7 +614,7 @@ void net_mac_poll(void)
 		struct mac_rxring *r = &mac_rx[k];
 		if (!c->open)
 			continue;
-		tx_reap(c);
+		tx_reap(c, 0);
 		u32 got = 0;
 		while (r->tail != r->head) {
 			u8 *s = r->ring + (u32)(r->tail & r->mask) * MAC_RX_SLOT;
@@ -629,7 +634,7 @@ void net_mac_poll(void)
 					rt_netif_input(&c->nif, b, rt_get_be16(f + 12), f + 6, flags);
 					rt_unlock();
 					got++;
-					tx_reap(c);                   /* what the frame made TCP send, if done already */
+					tx_reap(c, 1);                /* what the frame made TCP send, if done already */
 				} else {
 					rt_lock();
 					rt_drv_rx_nobuf(&c->nif);

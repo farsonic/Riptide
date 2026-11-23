@@ -371,7 +371,7 @@ void mac_core_enter(struct mac_client *c)
 }
 void mac_core_leave(void)
 {
-	net_mac_reap();                                /* the writes completed while the program had the core */
+	net_mac_reap(0);                               /* the writes completed while the program had the core */
 	u16 sr = mac_irq_off();
 	int run = stack_put_off;
 	core_lent = 0;
