@@ -1745,7 +1745,6 @@ static int immediate(int cs)
 int ipp6_control_a5(void *pb, void *dce, void *a5)
 {
 	int cs = PB_CSCODE(pb), r;
-	(void)dce;
 	if (PB_IOTRAP(pb) & 0x200)
 		return controlErr;                        /* immediate calls cannot wait for the stack */
 	/* made synchronously, these are answered here, in any context; made asynchronously they are
@@ -1766,6 +1765,7 @@ int ipp6_control_a5(void *pb, void *dce, void *a5)
 	{
 		u16 sr = mac_irq_off();
 		void **pp = (void **)&incoming6;
+		ipp_dm_dequeue(pb, dce);                  /* off the Device Manager's queue before its qLink is ours (ipp.c) */
 		PB_QLINK(pb) = NULL;
 		while (*pp)
 			pp = &PB_QLINK(*pp);

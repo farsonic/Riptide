@@ -1019,6 +1019,44 @@ static void test_misc(void)
 	}
 }
 
+/* A call the Device Manager queued while the driver was taking another (23 November 2026: Aurora68 Play's lock-up on
+   the owner's SE). The Device Manager sets drvrActive before it calls the driver, with interrupts on; a call made
+   meanwhile (from a completion routine of the stack's deferred task, which may run at the end of any interrupt) is
+   only queued. The driver went idle again (_Dequeue, drvrActive cleared) without taking it, so it stayed in the queue
+   until the next call, which then waited in its place: a synchronous one for ever. Made here by hand: drvrActive set
+   with interrupts off, a call (queued only), drvrActive cleared, then a second call, which the Device Manager hands
+   the driver as the head of the queue, the first. Both must complete; with the old driver the second did not (a third
+   call pushes it through, so that nothing is left on the queue) */
+static struct call q1, q2, q3;
+static void test_queue(void)
+{
+	void ***ut = *(void ****)0x11C;                    /* UTableBase */
+	unsigned char *dce = ut && ut[~ipp6] ? (unsigned char *)*ut[~ipp6] : 0;
+	short sr, r1, r2;
+	if (!dce) {
+		check(0, "the .IPP6 device control entry", 0);
+		return;
+	}
+	clear(&q1);
+	clear(&q2);
+	clear(&q3);
+	__asm__ volatile("move.w %%sr,%0\n\tori.w #0x0700,%%sr" : "=d"(sr) : : "cc", "memory");
+	dce[5] |= 0x80;                                    /* drvrActive: as while it takes another call */
+	start(&q1, ip6GetInfo);                            /* queued, not handed to the driver */
+	dce[5] &= 0x7F;
+	__asm__ volatile("move.w %0,%%sr" : : "d"(sr) : "cc", "memory");
+	start(&q2, ip6GetInfo);                            /* the driver gets q1, the head; q2 waits behind it */
+	r1 = wait_call(&q1, 3 * 60);
+	r2 = wait_call(&q2, 3 * 60);
+	check(r1 == 0, "a call queued while the driver was busy completes", r1);
+	check(r2 == 0, "... and so does the call behind it, with no other call to push it (the Device Manager's queue)", r2);
+	if (r2 == NOT_DONE) {
+		start(&q3, ip6GetInfo);
+		wait_call(&q2, 3 * 60);
+		wait_call(&q3, 3 * 60);
+	}
+}
+
 static void run_tests(void)
 {
 	int k, a5bad = 0, regsbad = 0, other = 0;
@@ -1027,6 +1065,7 @@ static void run_tests(void)
 	test_detect();
 	if (!ipp6)
 		return;
+	test_queue();
 	test_addrs();
 	test_text();
 	test_resolve();

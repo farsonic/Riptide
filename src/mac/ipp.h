@@ -15,6 +15,7 @@ void  ipp_result(void *pb, int r);                       /* complete a call; err
 void *ipp_creator_a5(void *pb);                          /* the A5 of the program that made this create call */
 void  ipp_keep_a5(void *pb, void *a5);                   /* kept for ipp_creator_a5 (a create call's Control) */
 int   ipp_in_poll(void);                                 /* the stack's task is running .IPP's and .IPP6's calls */
+void  ipp_dm_dequeue(void *pb, void *dce);               /* a call that waits, off the Device Manager's queue (irq off) */
 
 /* ipp6.c: .IPP6, the IPv6 interface (docs/IPP6.md), a second driver of the same stack */
 int   ipp6_control_a5(void *pb, void *dce, void *a5);   /* drvr.S: .IPP6's Control entry */

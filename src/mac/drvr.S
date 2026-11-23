@@ -94,14 +94,44 @@ iodone:
 pending:
 	/* A concurrent driver (Inside Macintosh: Devices, "Writing a Device Driver"): the request
 	   leaves our queue and the driver is marked idle, so the Device Manager hands us the next
-	   one; ioResult stays 1 until mac_complete sets it and calls ioCompletion. */
-	movem.l	%a0-%a1,-(%sp)
-	lea	6(%a1),%a1		| dCtlQHdr
-	.short	0xA96E			| _Dequeue: A0 = element, A1 = queue
-	movem.l	(%sp)+,%a0-%a1
+	   one; ioResult stays 1 until mac_complete sets it and calls ioCompletion. The request is
+	   off the queue already: the Control entry took it off (ipp_dm_dequeue, ipp.c) before it
+	   used its qLink, which was the Device Manager's link to the request behind it.
+	   A request that came while this one was being taken (23 November 2026): the Device Manager
+	   sets drvrActive before it calls the driver, with interrupts on, and a call made meanwhile
+	   (by a completion routine run from the stack's own deferred task, which can run at the end
+	   of any interrupt while a program is in _Control at level 0) is only queued: the Device
+	   Manager calls the driver for the head of the queue when it is idle, and IODone starts the
+	   next request, but nothing did here (and the qLink cut it off the queue: Aurora68 Play's
+	   TCPAbort on the owner's SE waited for ever). So the queue is looked at with interrupts off,
+	   and its head is taken as the Device Manager's IODone takes it: the driver stays active and
+	   the head goes to the entry its ioTrap names (Control, Status or Prime), which ends here or
+	   in IODone again. */
+	move.w	%sr,-(%sp)
+	ori.w	#0x0700,%sr
+	move.l	8(%a1),%d0		| dCtlQHead: a request queued meanwhile?
+	bne.s	next_request
 	bclr	#7,5(%a1)		| drvrActive
+	move.w	(%sp)+,%sr
 	moveq	#0,%d0
 	rts
+next_request:				| A1 = the DCE, D0 = the request; still active, so a call made
+	move.w	(%sp)+,%sr		| from now on is queued behind it and taken in its turn
+	move.l	%d0,%a0
+	move.l	(%a1),%a2		| dCtlDriver: the header (D1, D2 and A2 are the Device Manager's
+	btst	#6,5(%a1)		| scratch: it keeps D3-D7/A1-A6 around a driver call)
+	beq.s	1f
+	move.l	(%a2),%a2		| dRAMBased: a handle
+1:	moveq	#12,%d1			| drvrCtl, as the Device Manager picks it: _Control (trap 4),
+	cmp.b	#4,7(%a0)
+	beq.s	2f
+	moveq	#14,%d1			| drvrStatus (trap 5),
+	cmp.b	#5,7(%a0)
+	beq.s	2f
+	moveq	#10,%d1			| drvrPrime (Read, Write)
+2:	move.w	(%a2,%d1.w),%d1
+	moveq	#0,%d0
+	jmp	(%a2,%d1.w)
 
 /* ---- .IPP6: the second driver of the same stack (docs/IPP6.md, src/mac/ipp6.c) -------------
    Its own header, so that the Device Manager knows it by name and gives it a unit table entry and

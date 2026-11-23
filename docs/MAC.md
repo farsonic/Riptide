@@ -82,6 +82,24 @@ and returns (Inside Macintosh: Devices, "Writing a Device Driver"), and `mac_com
 notification routines are pascal procedures: `mac_call_pascal1` pushes the argument, also sets
 A0 (PiPing's routine reads A0), and restores the stack pointer afterwards either way.
 
+**A call made while the driver takes another** (23 November 2026). The Device Manager (the IIci
+ROM's at 4080b5f6) puts every call on the driver's queue and, when `drvrActive` is clear, sets it
+and calls the driver for the queue's head; while it is set a call is only queued, and IODone takes
+the next one off the head. `drvrActive` is set with interrupts on, and the stack's deferred task
+runs at the end of any interrupt that comes while a program is in `_Control` at level 0: a
+completion routine it calls (a receive chained from its own completion, as Aurora68 Play's) can
+make a call then, which is only queued. Until that day two things lost such a call: the Control
+entry linked the call it was taking into the stack's list through its qLink, which was still the
+Device Manager's link to the call behind, and the `_Dequeue` after it emptied the queue; and the
+path for a call that waits never looked at the queue again, as IODone would. The call behind was
+never completed: Aurora68 Play's synchronous TCPAbort waited for ever on the owner's SE (the Mac
+frozen, the pointer moving), a video's receive stood still. Now `ipp_dm_dequeue` (ipp.c) takes a
+call that waits off the queue, interrupts off, before its qLink is used, and drvr.S's path for it
+looks at the queue with interrupts off and takes a call it finds as IODone would, the driver
+staying active, through the entry its ioTrap names. The IPP6 test has the case ("a call queued
+while the driver was busy"): with the fix 95 passed and 2 failed in Aurora68's testbed (a scope
+name and riptide.conf host lines the run did not have), without it the call behind never completed.
+
 **The image.** The driver is C compiled with an ordinary m68k ELF GCC (`-fno-pic`), linked at 0
 with `--emit-relocs`. `tools/elf2mac.py` turns it into a `'DRVR'` resource: the code, the data,
 the zero-filled BSS, then a table of every 32-bit absolute field. The driver's first Open adds

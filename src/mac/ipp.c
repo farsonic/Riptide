@@ -435,6 +435,34 @@ static void reap(void)
 	mac_core_leave();
 }
 
+/* A call that waits is taken off the Device Manager's queue for the driver (the DCE's dCtlQHdr at 6: qFlags, qHead at
+   8, qTail at 12) here, with interrupts off, before its qLink links it into the stack's own list. Until 23 November
+   2026 the list was linked first and drvr.S dequeued the call after: but the call is the queue's head, and its qLink
+   is the Device Manager's link to the call queued behind it, one made while the driver was taking this one (from a
+   completion routine of the stack's deferred task, which runs at the end of any interrupt while a program is in
+   _Control at level 0). Setting the qLink to 0 cut that call off the queue, and the _Dequeue that followed emptied
+   it: the call was never handed to the driver nor completed. A synchronous one waited for ever (Aurora68 Play's
+   TCPAbort on the owner's SE, docs/MAC.md); an asynchronous one never came back (a video's receive chain stood still).
+   With pb no longer on the queue nothing is done (a call that did not come through it). */
+void ipp_dm_dequeue(void *pb, void *dce)
+{
+	void **head, **tail, *p, *prev = NULL;
+	if (!dce)
+		return;
+	head = (void **)((u8 *)dce + 8);
+	tail = (void **)((u8 *)dce + 12);
+	for (p = *head; p; prev = p, p = PB_QLINK(p))
+		if (p == pb) {
+			if (prev)
+				PB_QLINK(prev) = PB_QLINK(p);
+			else
+				*head = PB_QLINK(p);
+			if (*tail == pb)
+				*tail = prev;
+			return;
+		}
+}
+
 /* the Control routine (any level): hand the call over to the stack's context */
 int ipp_control(void *pb)
 {
@@ -443,7 +471,6 @@ int ipp_control(void *pb)
 int ipp_control_a5(void *pb, void *dce, void *a5)
 {
 	int cs = PB_CSCODE(pb);
-	(void)dce;
 	if (cs == accRun) {
 		mac_clock_run();                          /* NTP's clock step, the Map control panel's time zone */
 		reap();
@@ -462,6 +489,7 @@ int ipp_control_a5(void *pb, void *dce, void *a5)
 	if (cs == ipctlEchoICMP || cs == 20 || cs == 27 || cs == 30)
 		ipp_keep_a5(pb, a5);
 	u16 sr = mac_irq_off();
+	ipp_dm_dequeue(pb, dce);                      /* off the Device Manager's queue before its qLink is ours */
 	PB_QLINK(pb) = NULL;
 	void **pp = (void **)&incoming;
 	while (*pp) pp = &PB_QLINK(*pp);
