@@ -16,6 +16,20 @@
  * the stack's deferred task drains here. Sent frames: copied into one of a few transmit slots and
  * handed to an asynchronous EWrite, whose completion frees the slot.
  *
+ * The transmit slots are the driver's slots for the core (struct rt_drv_stats: tx_slots,
+ * tx_inflight): a write is counted when it is handed to the driver (rt_drv_tx_start) and when its
+ * completion has been seen (rt_drv_tx_done). The completion runs at interrupt time, so there it
+ * only frees the slot, counts (tx_done_n, tx_err_n) and asks for the stack's deferred task; the
+ * stack's poll (tx_reap) then tells the core, which sends what its QoS bands hold back while the
+ * driver has qos_inflight frames (src/core/qos.c). The core's count can stay above the driver's for
+ * as long as a program holds the core (os_mac.c, mac_core_enter): such frames wait in the bands.
+ *
+ * VLANs (src/core/vlan.c): the first VLAN interface on a card attaches the card's protocol handler
+ * for type 0x8100 as well (vlan_rx, asynchronously), the last one gone detaches it; tagged frames
+ * come in through the same ring and the core strips the tag (rt_vlan_input). A VLAN's frames go
+ * out through mac_link_output with type 0x8100 and the tag in front of the payload. Whether a
+ * card's .ENET driver passes tagged frames at all depends on the driver (docs/MAC.md).
+ *
  * Two cards, one default route: each interface has a metric (wired 10, WiFi 20, or metric= on the
  * interface line), which DHCP gives the routes it learns, so the wired link wins while it is up. A
  * driver that can say whether its link is up (Aurora68's: csLinkStatus, 230, answered with 'A68L')
@@ -30,11 +44,13 @@
 #include "rt_errno.h"
 #include "rt_buf.h"
 #include "rt_netif.h"
+#include "rt_ctl.h"
 #include "mac.h"
 
 #define ENET_DELMULTI 245
 #define ENET_ADDMULTI 246
 #define ENET_ATTACHPH 247
+#define ENET_DETACHPH 248
 #define ENET_WRITE    249
 #define ENET_GETINFO  252
 #define ENET_LINKSTATUS 230                       /* Aurora68's drivers' own (mac/enet.s) */
@@ -42,6 +58,8 @@
 #define E_POINTER     30
 #define E_BUFFSIZE    34
 #define ETH_HLEN      14
+#define ETH_P_8021Q   0x8100
+#define VLAN_HLEN     4
 #define RX_SLOTS      32
 
 struct mac_rxring mac_rx[MAC_CARDS];
@@ -59,7 +77,9 @@ static int nfound = -1;
 
 #define TX_SLOTS 8
 #define MC_PBS 4
-struct txslot { u8 pb[64]; u16 wds[6]; u8 frame[1516]; volatile u8 busy; };
+#define MC_REFS 16
+/* frame: the header and 1500 bytes, or 1504 with a VLAN tag */
+struct txslot { u8 pb[64]; u16 wds[6]; u8 frame[ETH_HLEN + 1500 + VLAN_HLEN + 2]; volatile u8 busy; };
 /* an open card: an interface of the core */
 static struct card {
 	int open, index;                              /* index: the found[] entry; -1 the built-in .ENET */
@@ -70,6 +90,15 @@ static struct card {
 	u8 link_pb[40];                               /* csLinkStatus, asked asynchronously */
 	u8 link_known, link_up, link_asked;
 	u32 link_tick, tx_drops;
+	struct rt_drv_stats drv;                      /* the core's driver counters, QoS's tx_inflight */
+	volatile u32 tx_done_n, tx_err_n;             /* completions seen at interrupt time, errors among them */
+	volatile s16 tx_err_code;                     /* the last error's ioResult */
+	u32 tx_reaped, tx_err_reaped;                 /* ... of which the core has been told */
+	u32 rx_drop_base;                             /* mac_rx[].dropped at the last counter reset */
+	struct rt_mc_ref mcref[MC_REFS];              /* link multicast groups, counted (VLANs share them) */
+	int nmcref;
+	u8 vlan_pb[40];                               /* EAttachPH / EDetachPH of type 0x8100 */
+	u8 vlan_want, vlan_have, vlan_asked, vlan_failed;
 } cards[MAC_CARDS];
 static void (*const handlers[MAC_CARDS])(void) = { mac_enet_ph0, mac_enet_ph1, mac_enet_ph2, mac_enet_ph3 };
 
@@ -200,6 +229,9 @@ static int enet_ctl(struct card *c, int cs, u16 prot, void *ptr, u16 size)
 static int mac_mcast(struct rt_netif *n, const u8 *hw, int join)
 {
 	struct card *c = n->driver;
+	/* the first join and the last leave only: a VLAN joins the groups its parent has too */
+	if (!rt_mc_ref(c->mcref, MC_REFS, &c->nmcref, hw, join))
+		return 0;
 	for (int i = 0; i < MC_PBS; i++) {
 		u8 *pb = c->mc_pb[i];
 		if (PB_RESULT(pb) > 0)
@@ -208,8 +240,11 @@ static int mac_mcast(struct rt_netif *n, const u8 *hw, int join)
 		PB_REFNUM(pb) = c->ref;
 		PB_CSCODE(pb) = join ? ENET_ADDMULTI : ENET_DELMULTI;
 		memcpy(pb + 28, hw, 6);
-		return mac_pbcontrol(pb, 1) < 0 ? -RT_EIO : 0;
+		if (mac_pbcontrol(pb, 1) >= 0)
+			return 0;
+		break;
 	}
+	rt_mc_ref(c->mcref, MC_REFS, &c->nmcref, hw, !join);   /* not done: as it was */
 	return -RT_EBUSY;
 }
 
@@ -219,7 +254,13 @@ static int mac_link_output(struct rt_netif *n, struct rt_buf *b, const u8 *dsthw
 	struct card *c = n->driver;
 	struct txslot *t = NULL;
 	for (int i = 0; i < TX_SLOTS; i++) if (!c->tx[i].busy) { t = &c->tx[i]; break; }
-	if (!t || b->len > 1500) { c->tx_drops++; rt_buf_free(b); return -RT_ENOBUFS; }
+	if (!t || b->len > (ethertype == ETH_P_8021Q ? 1500u + VLAN_HLEN : 1500u)) {
+		if (!t)
+			rt_drv_tx_full(n);
+		c->tx_drops++;
+		rt_buf_free(b);
+		return -RT_ENOBUFS;
+	}
 	t->busy = 1;
 	memcpy(t->frame, dsthw ? dsthw : bcast, 6);
 	memcpy(t->frame + 6, n->hwaddr, 6);           /* the driver puts its own in as well */
@@ -235,15 +276,132 @@ static int mac_link_output(struct rt_netif *n, struct rt_buf *b, const u8 *dsthw
 	PB_CSCODE(t->pb) = ENET_WRITE;
 	PB_P(t->pb, E_POINTER) = t->wds;
 	PB_COMPLETION(t->pb) = (void *)mac_tx_done;
-	if (mac_pbcontrol(t->pb, 1) < 0) { t->busy = 0; c->tx_drops++; return -RT_EIO; }
+	rt_drv_tx_start(n, len);
+	int e = mac_pbcontrol(t->pb, 1);
+	if (e < 0) {
+		/* refused at once: counted as a completion with an error, unless the driver called the
+		   completion routine for it already */
+		u16 sr = mac_irq_off();
+		if (t->busy) {
+			t->busy = 0;
+			c->tx_err_code = (s16)e;
+			c->tx_err_n++;
+			c->tx_done_n++;
+		}
+		mac_irq_restore(sr);
+		c->tx_drops++;
+		return -RT_EIO;
+	}
 	return 0;
 }
+/* an EWrite's completion, at interrupt time (drvr.S mac_tx_done): the slot is free; the core hears
+   of it in the stack's poll (tx_reap) */
 void net_mac_tx_done(void *pb)
 {
 	for (int k = 0; k < MAC_CARDS; k++)
 		if (cards[k].open)
-			for (int i = 0; i < TX_SLOTS; i++)
-				if (cards[k].tx[i].pb == pb) { cards[k].tx[i].busy = 0; return; }
+			for (int i = 0; i < TX_SLOTS; i++) {
+				struct txslot *t = &cards[k].tx[i];
+				if (t->pb != pb)
+					continue;
+				if (t->busy) {
+					s16 r = PB_RESULT(pb);
+					t->busy = 0;
+					if (r) {
+						cards[k].tx_err_code = r;
+						cards[k].tx_err_n++;
+					}
+					cards[k].tx_done_n++;
+					mac_schedule();
+				}
+				return;
+			}
+}
+
+/* the stack's context: the completions seen since the last look, to the core (which may send
+   what its QoS bands hold) */
+static void tx_reap(struct card *c)
+{
+	u32 done = c->tx_done_n;
+	if (done == c->tx_reaped)
+		return;
+	rt_lock();
+	while (c->tx_reaped != done) {
+		s32 err = 0;
+		c->tx_reaped++;
+		if (c->tx_err_reaped != c->tx_err_n) {
+			c->tx_err_reaped++;
+			err = c->tx_err_code ? c->tx_err_code : -1;
+		}
+		rt_drv_tx_done(&c->nif, err);
+	}
+	rt_unlock();
+}
+
+/* The handler for tagged frames (type 0x8100), attached while the card has VLAN interfaces: the
+   same entry as the card's other types (its ring). Asynchronous, as the multicast calls are:
+   the core asks from the stack's deferred task. */
+static void vlan_ph_step(struct card *c)
+{
+	u8 *pb = c->vlan_pb;
+	if (c->vlan_asked) {
+		s16 r = PB_RESULT(pb);
+		if (r > 0)
+			return;                               /* still in progress */
+		c->vlan_asked = 0;
+		if (PB_CSCODE(pb) == ENET_ATTACHPH) {
+			if (r == 0) {
+				c->vlan_have = 1;
+				rt_log(RT_LOG_INFO, "%s: receiving tagged frames (802.1Q)", c->nif.name);
+			} else {
+				c->vlan_failed = 1;
+				rt_log(RT_LOG_WARN, "%s: .ENET EAttachPH for VLAN frames failed (%d): no VLAN frames", c->nif.name, (int)r);
+			}
+		} else
+			c->vlan_have = 0;
+	}
+	if (c->vlan_want == c->vlan_have || (c->vlan_want && c->vlan_failed))
+		return;
+	memset(pb, 0, sizeof c->vlan_pb);
+	PB_REFNUM(pb) = c->ref;
+	PB_CSCODE(pb) = c->vlan_want ? ENET_ATTACHPH : ENET_DETACHPH;
+	PB_W(pb, E_PROTTYPE) = ETH_P_8021Q;
+	PB_P(pb, E_POINTER) = c->vlan_want ? (void *)handlers[c - cards] : NULL;
+	int e = mac_pbcontrol(pb, 1);
+	if (e >= 0) {
+		c->vlan_asked = 1;                        /* the result is looked at in the next poll */
+		return;
+	}
+	if (c->vlan_want) {
+		c->vlan_failed = 1;
+		rt_log(RT_LOG_WARN, "%s: .ENET EAttachPH for VLAN frames failed (%d): no VLAN frames", c->nif.name, e);
+	} else
+		c->vlan_have = 0;
+}
+static int mac_vlan_rx(struct rt_netif *n, int on)
+{
+	struct card *c = n->driver;
+	c->vlan_want = (u8)(on != 0);
+	if (on)
+		c->vlan_failed = 0;                       /* a new first VLAN: try again */
+	vlan_ph_step(c);
+	return 0;
+}
+
+/* the driver's part of the core's driver record (ip -s link, the Counters page) */
+static void mac_drv_info(struct rt_netif *n, struct rt_ctl_driver *r)
+{
+	struct card *c = n->driver;
+	rt_snprintf(r->kind, sizeof r->kind, "enet");
+	rt_snprintf(r->driver, sizeof r->driver, "%s", c->index >= 0 ? found[c->index].drvr : ".ENET");
+	r->unit = c->index >= 0 ? (u32)c->index : 0;
+	r->flags |= RT_CTL_DRVF_DROPS;
+	r->drv_drops = mac_rx[c - cards].dropped - c->rx_drop_base;   /* the receive ring was full */
+}
+static void mac_drv_reset(struct rt_netif *n)
+{
+	struct card *c = n->driver;
+	c->rx_drop_base = mac_rx[c - cards].dropped;
 }
 
 /* Open one card as interface NAME (riptide.conf's "interface NAME device=.ENET [unit=N] [slot=S]
@@ -310,6 +468,7 @@ int net_mac_open(const char *name, const struct mac_cardsel *sel, int mtu)
 	n->mtu = mtu >= 576 && mtu < 1500 ? (u16)mtu : 1500;
 	n->link_output = mac_link_output;
 	n->mcast = mac_mcast;
+	n->vlan_rx = mac_vlan_rx;
 	n->driver = c;
 	n->metric = sel->metric >= 0 ? (u32)sel->metric : (idx >= 0 && found[idx].kind == KIND_WIFI) ? 20 : 10;
 	rt_snprintf(n->name, sizeof n->name, "%s", name);
@@ -317,8 +476,15 @@ int net_mac_open(const char *name, const struct mac_cardsel *sel, int mtu)
 		rt_snprintf(n->descr, sizeof n->descr, "%s slot %u id $%02x", found[idx].drvr, found[idx].slot, found[idx].id);
 	else
 		rt_snprintf(n->descr, sizeof n->descr, ".ENET refnum %d", (int)c->ref);
+	c->drv.tx_slots = TX_SLOTS;
+	c->drv.noqueue = 1;                           /* .ENET hands over every frame: no reads to count */
+	c->drv.info = mac_drv_info;
+	c->drv.reset = mac_drv_reset;
+	c->rx_drop_base = r->dropped;
 	rt_lock();
 	int res = rt_netif_add(n);
+	if (res >= 0)
+		rt_drv_attach(n, &c->drv);                /* "qos on" by default: the bands, too */
 	rt_unlock();
 	if (res < 0) { why("rt_netif_add failed"); return res; }
 	c->open = 1;
@@ -397,6 +563,8 @@ void net_mac_poll(void)
 		struct mac_rxring *r = &mac_rx[k];
 		if (!c->open)
 			continue;
+		tx_reap(c);
+		u32 got = 0;
 		while (r->tail != r->head) {
 			u8 *s = r->ring + (u32)(r->tail & r->mask) * MAC_RX_SLOT;
 			u16 len = *(u16 *)s;
@@ -411,12 +579,25 @@ void net_mac_poll(void)
 					else if (f[0] & 1) flags = RT_BUFF_MCAST;
 					rt_rng_add(rt_os_jitter());
 					rt_lock();
+					rt_drv_rx_done(&c->nif, -1, len, 0);
 					rt_netif_input(&c->nif, b, rt_get_be16(f + 12), f + 6, flags);
+					rt_unlock();
+					got++;
+				} else {
+					rt_lock();
+					rt_drv_rx_nobuf(&c->nif);
 					rt_unlock();
 				}
 			}
 			r->tail++;
 		}
+		if (got) {
+			rt_lock();
+			rt_drv_batch(&c->nif, got);
+			rt_unlock();
+		}
+		if (c->vlan_asked || c->vlan_want != c->vlan_have)
+			vlan_ph_step(c);
 		link_poll(c);
 	}
 	pick_primary();

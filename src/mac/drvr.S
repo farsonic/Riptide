@@ -595,9 +595,11 @@ mac_tm_entry:				| A1 = the TMTask: ask for the deferred task
    an empty buffer). A driver calls the handler without saying which card it is, so every card
    gets its own entry point (mac_enet_ph0 ... 3), which picks the card's ring and goes on to the
    common code: two cards on one NuBus card (Aurora68's wired port and WiFi in slot 9) are two
-   drivers, each with its own protocol table. */
+   drivers, each with its own protocol table. The entry is the card's, not the type's: it is
+   attached for IPv4, ARP and IPv6, and for 802.1Q tagged frames (type 0x8100) while the card has
+   VLAN interfaces (net_mac.c vlan_ph_step), whose 4-byte tag makes the data up to 1504 bytes. */
 	.equ	RX_SLOT, 1536
-	.equ	RX_DATA, 1500
+	.equ	RX_DATA, 1504		| 1500, and a VLAN tag (802.1Q) in front of it
 	.equ	RXR_RING, 0		| struct mac_rxring (mac.h): u8 *ring
 	.equ	RXR_HEAD, 4		| volatile u16 head, tail
 	.equ	RXR_TAIL, 6
