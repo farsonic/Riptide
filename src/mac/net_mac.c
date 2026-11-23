@@ -363,8 +363,11 @@ static void tx_reap(struct card *c)
 	rt_unlock();
 }
 
-/* also from a program that had the core (os_mac.c mac_core_leave): while it sends in a loop the
-   deferred task is put off, and the core would count every write since as still in flight */
+/* Also from a program that had the core (os_mac.c mac_core_leave: while it sends in a loop the
+   deferred task is put off) and before each MacTCP call (ipp.c ipp_poll): a driver that completes
+   its writes at once (Aurora68's) would otherwise have every write of the stack's round counted as
+   in flight until its next poll, and UDP's pacing (rt_netif_tx_room: tx_inflight < tx_slots) would
+   refuse a UDPWrite after a burst of TCP. */
 void net_mac_reap(void)
 {
 	for (int k = 0; k < MAC_CARDS; k++)
@@ -626,6 +629,7 @@ void net_mac_poll(void)
 					rt_netif_input(&c->nif, b, rt_get_be16(f + 12), f + 6, flags);
 					rt_unlock();
 					got++;
+					tx_reap(c);                   /* what the frame made TCP send, if done already */
 				} else {
 					rt_lock();
 					rt_drv_rx_nobuf(&c->nif);

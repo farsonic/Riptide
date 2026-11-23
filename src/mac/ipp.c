@@ -761,10 +761,12 @@ void ipp_poll(void)
 		if (pb) incoming = PB_QLINK(pb);
 		mac_irq_restore(sr);
 		if (!pb) break;
+		net_mac_reap();                           /* the writes before it count as done (UDP's pacing) */
 		int r = handle(pb);
 		if (r != 1) ipp_result(pb, r);
 	}
 	echo_poll();
+	net_mac_reap();
 	mactcp_poll(&ctx);
 	ipp6_poll();                                  /* .IPP6's calls, in the same round (ipp6.c) */
 	in_poll = 0;
