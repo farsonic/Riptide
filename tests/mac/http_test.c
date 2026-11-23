@@ -860,6 +860,19 @@ static void test_resolver(void)
 	check(r == 0 && hi.addr[0] == PEER, "StrToAddr peer.testbed, through the result procedure", r);
 	r = lookup(3L, (long)"nowhere.testbad", &hi, &ticks, &first_r);
 	check(r == authNameErr, "StrToAddr of a name that does not exist: authNameErr", r);
+	/* the core resolver's (19 November's DNS client of its own is gone): the negative cache, the
+	   search list, TCP for a large answer. dns_peer.py (tests/mac) gives negative answers an SOA and
+	   has big.testbed; its log shows nowhere.testbad asked once */
+	r = lookup(3L, (long)"nowhere.testbad", &hi, &ticks, &first_r);
+	rt_snprintf(t, sizeof t, "... again: authNameErr from the negative cache in %lu ticks", (unsigned long)ticks);
+	check(r == authNameErr && ticks < 30, t, r);
+	r = lookup(3L, (long)"peer", &hi, &ticks, &first_r);
+	rt_snprintf(t, sizeof t, "StrToAddr peer (no dot): the search domain, \"%s\"", hi.cname);
+	check(r == 0 && hi.addr[0] == PEER && !strcmp(hi.cname, "peer.testbed"), t, r);
+	r = lookup(3L, (long)"big.testbed", &hi, &ticks, &first_r);
+	rt_snprintf(t, sizeof t, "StrToAddr big.testbed (100 A records, over TCP): %lu.%lu.%lu.%lu and 3 more",
+	            hi.addr[0] >> 24, (hi.addr[0] >> 16) & 255, (hi.addr[0] >> 8) & 255, hi.addr[0] & 255);
+	check(r == 0 && hi.addr[0] == PEER && hi.addr[1] == 0xC6336401UL && hi.addr[3] == 0xC6336403UL, t, r);
 	r = lookup(6L, (long)PEER, &hi, &ticks, &first_r);
 	rt_snprintf(t, sizeof t, "AddrToName 192.168.68.1: \"%s\"", hi.cname);
 	check(r == 0 && !strcmp(hi.cname, "peer.testbed"), t, r);

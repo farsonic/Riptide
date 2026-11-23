@@ -88,6 +88,20 @@ int main(void)
 	OFF(TCP6iopb, csParam.open.optionCnt, 81);
 	OFF(TCP6iopb, csParam.open.options, 82);
 	OFF(TCP6iopb, csParam.open.userDataPtr, 122);
+	/* ip6ConnectName (77, version 2): TCPActiveOpen's fields, the name and what came of it */
+	OFF(TCP6iopb, csParam.connectName.ulpTimeoutValue, 32);
+	OFF(TCP6iopb, csParam.connectName.validityFlags, 34);
+	OFF(TCP6iopb, csParam.connectName.remoteAddr, 36);
+	OFF(TCP6iopb, csParam.connectName.remoteAddr.port, 52);
+	OFF(TCP6iopb, csParam.connectName.localAddr, 56);
+	OFF(TCP6iopb, csParam.connectName.optionCnt, 81);
+	OFF(TCP6iopb, csParam.connectName.hostName, 82);
+	OFF(TCP6iopb, csParam.connectName.flags, 86);
+	OFF(TCP6iopb, csParam.connectName.addrCount, 88);
+	OFF(TCP6iopb, csParam.connectName.attempts, 90);
+	OFF(TCP6iopb, csParam.connectName.elapsed, 92);
+	OFF(TCP6iopb, csParam.connectName.reserved, 96);
+	OFF(TCP6iopb, csParam.connectName.userDataPtr, 122);
 	OFF(TCP6iopb, csParam.send.ulpTimeoutValue, 32);
 	OFF(TCP6iopb, csParam.send.validityFlags, 34);
 	OFF(TCP6iopb, csParam.send.pushFlag, 35);
@@ -213,6 +227,8 @@ int main(void)
 	at("csCode UDPMaxMTUSize", UDPMaxMTUSize, 25);
 	at("csCode ip6GetInfo", ip6GetInfo, 70);
 	at("csCode ip6StrToAddr", ip6StrToAddr, 76);
+	at("csCode ip6ConnectName", ip6ConnectName, 77);
+	at("IPP6_VERSION", IPP6_VERSION, 2);
 	at("ip6BadAddrErr", (size_t)-ip6BadAddrErr, 23060);
 	at("ip6NoSourceErr", (size_t)-ip6NoSourceErr, 23065);
 	at("gestaltIPP6", gestaltIPP6 == 0x69707036UL, 1);

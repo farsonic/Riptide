@@ -86,10 +86,10 @@ static const char *cs_name6(int cs)
 		"csCode 33", "TCPSend", "TCPNoCopyRcv", "TCPRcvBfrReturn", "TCPRcv", "TCPClose", "TCPAbort",
 		"TCPStatus", "TCPExtendedStat", "TCPRelease", "TCPGlobalInfo" };
 	static const char *const own[] = { "ip6GetInfo", "ip6GetAddrs", "ip6Resolve", "ip6ResolveAddr",
-		"ip6ResolveCancel", "ip6AddrToStr", "ip6StrToAddr" };
+		"ip6ResolveCancel", "ip6AddrToStr", "ip6StrToAddr", "ip6ConnectName" };
 	if (cs >= 20 && cs <= 43)
 		return tcpudp[cs - 20];
-	if (cs >= ip6GetInfo && cs <= ip6StrToAddr)
+	if (cs >= ip6GetInfo && cs <= ip6ConnectName)
 		return own[cs - ip6GetInfo];
 	if (cs == 1)
 		return "killCode";
@@ -282,7 +282,7 @@ static u32 features_now(void)
 }
 static int get_info(IP6iopb *pb)
 {
-	static const char impl[] = "Riptide .IPP6 1 (" __DATE__ ")";
+	static const char impl[] = "Riptide .IPP6 2 (" __DATE__ ")";
 	IP6InfoPB *p = &pb->csParam.info;
 	p->version = IPP6_VERSION;
 	p->features = features_cache;
@@ -388,6 +388,8 @@ struct s6 {
 	u32 own_lo, own_hi;             /* the creator's partition (ipp6_reap); 1: not a program's */
 	IP6Address remote, local;       /* the connection's ends (TCP), as TCPStatus reports them */
 	u16 lport;                      /* UDP: the stream's port */
+	struct rt_he_conn *he;          /* ip6ConnectName: the core's Happy Eyeballs, until it connects */
+	u32 open_t0;                    /* ip6ConnectName: when the call came */
 };
 static struct s6 streams6[NSTREAMS6];
 
@@ -474,6 +476,10 @@ static u32 wds_total(const u8 *w)
 }
 static void stream_close(struct s6 *s)
 {
+	if (s->he) {
+		rt_he_conn_free(s->he);         /* a connect by name that had not connected */
+		s->he = NULL;
+	}
 	if (s->fd >= 0)
 		rt_api_close(&ctx6, s->fd);
 	s->fd = -1;
@@ -630,6 +636,8 @@ static void tcp_up(struct s6 *s, TCP6iopb *pb)
 	s->conn = 1;
 	s->snd_moved = rt_now_ms();
 	tcp_fill_ends(s, pb);
+	if (pb->csCode == ip6ConnectName)
+		pb->csParam.connectName.elapsed = rt_now_ms() - s->open_t0;
 	s->open_pb = NULL;
 	result6(pb, 0);
 }
@@ -642,9 +650,44 @@ static int filter_ok(const IP6Address *f, const struct rt_sockaddr_in6 *a)
 	return a6_unspec(f) || !memcmp(f->addr, &a->sin6_addr, 16);
 }
 
+/* ip6ConnectName: the core's Happy Eyeballs moved on; done when it has connected or given up */
+static void tcp_poll_name(struct s6 *s)
+{
+	TCP6iopb *pb = s->open_pb;
+	TCP6ConnectNamePB *p = &pb->csParam.connectName;
+	struct rt_he_result res;
+	int r;
+	mac_prog_name = s->prog;                        /* the attempts' sockets are the program's */
+	r = rt_he_conn_poll(s->he);
+	mac_prog_name = NULL;
+	if (r == 1)
+		return;
+	rt_he_conn_info(s->he, &res);
+	p->addrCount = res.naddrs;
+	p->attempts = res.attempts;
+	if (r == 0) {
+		s->fd = rt_he_conn_take(s->he, &res);
+		rt_he_conn_free(s->he);
+		s->he = NULL;
+		tcp_up(s, pb);
+		return;
+	}
+	if (r == RT_HE_LOOKUP_FAILED)
+		r = rt_he_conn_dns_error(s->he) == -RT_HOST_NOT_FOUND ? authNameErr : noAnsErr;
+	else
+		r = dest_err(-r, openFailed);
+	s->open_pb = NULL;
+	stream_close(s);
+	result6(pb, r);
+}
+
 static void tcp_poll_open(struct s6 *s)
 {
 	TCP6iopb *pb = s->open_pb;
+	if (s->he) {
+		tcp_poll_name(s);
+		return;
+	}
 	if (s->passive) {
 		struct rt_sockaddr_in6 a;
 		u32 l = sizeof a;
@@ -825,7 +868,7 @@ static void tcp_poll(struct s6 *s)
 {
 	int err = 0;
 	u32 l = sizeof err;
-	if (s->fd < 0)
+	if (s->fd < 0 && !s->he)
 		return;
 	if (s->open_pb) {
 		tcp_poll_open(s);
@@ -938,6 +981,67 @@ static void linger0(struct s6 *s)
 		rt_api_setsockopt(&ctx6, s->fd, RT_SOL_SOCKET, RT_SO_LINGER, &lg, sizeof lg);    /* a reset */
 }
 
+/* ip6ConnectName (77, version 2): TCPActiveOpen by name, with the core's Happy Eyeballs (RFC 8305: AAAA
+   and A at once, the addresses in RFC 6724's order with the families alternating, the next attempt
+   after net.inet.he.attempt_delay or as soon as one fails; the IPv6 lookup filter) */
+static int start_err(int err);
+static int tcp_open_name(TCP6iopb *pb)
+{
+	TCP6ConnectNamePB *p = &pb->csParam.connectName;
+	struct s6 *s = stream_of(pb, 1);
+	const char *name = p->hostName;
+	IP6Address lit;
+	int r, err = 0, fam, order, fl = p->flags, prefer;
+	if (!s)
+		return invalidStreamPtr;
+	if (s->fd >= 0 || s->open_pb)
+		return connectionExists;
+	if (!name)
+		return invalidBufPtr;
+	if (!p->remoteAddr.port)
+		return invalidLength;
+	if (!name[0] || strlen(name) > 253)
+		return nameSyntaxErr;
+	p->addrCount = p->attempts = 0;
+	p->elapsed = 0;
+	s->open_t0 = rt_now_ms();
+	r = parse_literal(name, &lit);
+	if (r == ip6ScopeErr)
+		return r;
+	if (r == 0) {
+		/* an address literal: TCPActiveOpen to it (the same fields; a scoped one keeps its scope) */
+		if (((fl & kIP6OnlyIPv6) && IP6_IS_V4(&lit)) || ((fl & kIP6OnlyIPv4) && !IP6_IS_V4(&lit)))
+			return ip6BadAddrErr;
+		lit.port = p->remoteAddr.port;
+		p->remoteAddr = lit;
+		memset(&p->localAddr, 0, sizeof p->localAddr);
+		p->addrCount = p->attempts = 1;
+		return tcp_open(pb, 0);
+	}
+	if ((fl & kIP6OnlyIPv6) && (fl & kIP6OnlyIPv4))
+		return noAnsErr;
+	fam = (fl & kIP6OnlyIPv6) ? RT_AF_INET6 : (fl & kIP6OnlyIPv4) ? RT_AF_INET : RT_AF_UNSPEC;
+	order = fl & kIP6OrderMask;
+	if (order == kIP6OrderDefault)
+		order = order_now();
+	prefer = order == kIP6OrderIPv6First ? 6 : order == kIP6OrderIPv4First ? 4 : 0;
+	tcp_reset_conn(s, pb);
+	s->passive = 0;
+	s->open_deadline = 0;                           /* the core keeps the time (the ULP timeout) */
+	memset(&s->remote, 0, sizeof s->remote);
+	memset(&s->local, 0, sizeof s->local);
+	mac_prog_name = s->prog;
+	s->he = rt_he_conn_start(&ctx6, name, p->remoteAddr.port, fam,
+	                         RT_HE_V6SOCK | RT_HE_SHORTSEARCH | ((fl & kIP6NoSearch) ? RT_HE_NOSEARCH : 0), prefer,
+	                         ulp_secs(s) * 1000u, &err);
+	mac_prog_name = NULL;
+	if (!s->he)
+		return start_err(err);
+	s->open_pb = pb;
+	tcp_poll_name(s);                               /* a literal or a cached name may connect at once */
+	return 1;
+}
+
 /* the stream of a TCP call that needs a connection: 0 if there is one, else the result */
 static int need_conn(void *pb, struct s6 **sp, int closing)
 {
@@ -961,6 +1065,8 @@ static int tcp_call(TCP6iopb *pb)
 		return tcp_open(pb, 1);
 	case TCPActiveOpen:
 		return tcp_open(pb, 0);
+	case ip6ConnectName:
+		return tcp_open_name(pb);
 	case TCPSend: {
 		u32 n;
 		if ((r = need_conn(pb, &s, 0)) != 0)
@@ -1239,273 +1345,103 @@ static int udp_call(UDP6iopb *pb)
 }
 
 /* ==================== names (ip6Resolve, ip6ResolveAddr) ==================== */
-#define DNS_TRY_MS   2500               /* a query sent again (to the next server) after this */
-#define DNS_TRIES    4                  /* sends of one query before it is given up */
+/* The core resolver's asynchronous lookups (rt_dns_lookup_*, src/core/resolv.c), polled here in the
+   stack's deferred task: the hosts table and the cache, the search list, AAAA and A at once, EDNS,
+   TCP for answers too large for UDP, the negative cache, as for every lookup of the stack. */
 #define DNS_DEFAULT  10                 /* seconds of a lookup whose block says 0 */
 #define LOOK_ADDRS   16                 /* addresses kept per lookup (of each family, 8) */
-enum { QW_IDLE = 0, QW_WAIT, QW_DONE };
-struct dq {
-	u16 id, type;                   /* AAAA (28), A (1) or PTR (12) */
-	u8 state, tries;
-	u8 nx, answered;                /* no such name; a NOERROR answer came */
-	u32 deadline;
-};
 struct look {
 	IP6iopb *pb;
 	u32 own_lo, own_hi;             /* the partition of the parameter block (ipp6_reap) */
-	int fd;
-	int ptr, searched, server;
-	u32 end;                        /* the whole lookup's deadline */
-	char name[256];                 /* the name asked for now */
-	char canon[256];
-	struct dq q[2];                 /* forward: AAAA and A; reverse: PTR in q[0] */
-	rt_in6_addr a6[LOOK_ADDRS / 2], a4[LOOK_ADDRS / 2];
-	int n6, n4;
+	struct rt_dns_lookup *l;
 };
 static struct look looks[NLOOK];
-static u16 dns_id = 0x6600;
-
-static int dns_send(struct look *L, struct dq *q)
-{
-	rt_in6_addr srv[4];
-	u32 idx[4];
-	u8 src[4], pkt[300];
-	int n = rt_dns_get_servers6(srv, idx, src, 4), len = 12, k;
-	const char *nm = L->name;
-	struct rt_sockaddr_in6 to;
-	if (n <= 0)
-		return noNameServer;
-	if (n > 4)
-		n = 4;
-	memset(pkt, 0, 12);
-	q->id = ++dns_id;
-	rt_put_be16(pkt, q->id);
-	pkt[2] = 0x01;                                  /* recursion desired */
-	rt_put_be16(pkt + 4, 1);                        /* one question */
-	while (*nm) {                                   /* the name in labels */
-		const char *dot = nm;
-		while (*dot && *dot != '.')
-			dot++;
-		k = (int)(dot - nm);
-		if (k < 1 || k > 63 || len + k + 6 > (int)sizeof pkt)
-			return nameSyntaxErr;
-		pkt[len++] = (u8)k;
-		memcpy(pkt + len, nm, (u32)k);
-		len += k;
-		nm = *dot ? dot + 1 : dot;
-	}
-	pkt[len++] = 0;
-	rt_put_be16(pkt + len, q->type);
-	rt_put_be16(pkt + len + 2, 1);                  /* IN */
-	len += 4;
-	memset(&to, 0, sizeof to);
-	to.sin6_len = sizeof to;
-	to.sin6_family = RT_AF_INET6;
-	to.sin6_port = rt_htons(53);
-	to.sin6_addr = srv[(u32)L->server % (u32)n];
-	to.sin6_scope_id = idx[(u32)L->server % (u32)n];
-	q->state = QW_WAIT;
-	q->tries++;
-	q->deadline = rt_now_ms() + DNS_TRY_MS;
-	if (rt_api_sendto(&ctx6, L->fd, pkt, (u32)len, RT_MSG_DONTWAIT, &to, sizeof to) < 0)
-		return 1;                               /* a send that failed is a try that got no answer */
-	return 1;
-}
-
-/* a name in the message at p into out (dotted), compressed names followed; the byte after it */
-static int dns_name(const u8 *m, int mlen, int p, char *out, int olen)
-{
-	int o = 0, end = -1, guard = 0;
-	while (p < mlen && guard++ < 64) {
-		int k = m[p];
-		if (!k) {
-			if (end < 0)
-				end = p + 1;
-			break;
-		}
-		if ((k & 0xC0) == 0xC0) {
-			if (p + 1 >= mlen)
-				return -1;
-			if (end < 0)
-				end = p + 2;
-			p = ((k & 0x3F) << 8) | m[p + 1];
-			continue;
-		}
-		if (p + 1 + k > mlen)
-			return -1;
-		if (out) {
-			if (o && o < olen - 1)
-				out[o++] = '.';
-			for (int i = 0; i < k && o < olen - 1; i++)
-				out[o++] = (char)m[p + 1 + i];
-		}
-		p += 1 + k;
-	}
-	if (out && olen)
-		out[o < olen ? o : olen - 1] = 0;
-	return end;
-}
 
 static void look_free(struct look *L)
 {
 	L->pb = NULL;
-	if (L->fd >= 0)
-		rt_api_close(&ctx6, L->fd);
-	L->fd = -1;
+	rt_dns_lookup_free(L->l);
+	L->l = NULL;
 }
 
-/* the forward lookup's answer: the addresses in the order asked for, into the caller's array */
-static void look_finish(struct look *L)
+/* the core's failure as the result programs see */
+static int look_err(int r)
+{
+	return r == -RT_HOST_NOT_FOUND ? authNameErr : noAnsErr;
+}
+
+/* the forward lookup's answer (r: rt_dns_lookup_poll's): the addresses in the order asked for, into the
+   caller's array (the stack's deferred task runs on whatever stack it interrupted: little of it here) */
+static void look_finish(struct look *L, int r)
 {
 	IP6iopb *pb = L->pb;
 	IP6ResolvePB *p = &pb->csParam.resolve;
 	rt_in6_addr all[LOOK_ADDRS];
-	int n = 0, order = p->flags & kIP6OrderMask, r;
+	u32 a4[LOOK_ADDRS / 2];
+	int n = 0, n4 = LOOK_ADDRS / 2, n6 = LOOK_ADDRS / 2, order = p->flags & kIP6OrderMask, k;
+	if (r <= 0) {
+		look_free(L);
+		result6(pb, look_err(r));
+		return;
+	}
+	rt_dns_lookup_get(L->l, a4, &n4, all, &n6, p->canonName && p->canonNameLen ? p->canonName : NULL,
+	                  p->canonNameLen);
 	if (order == kIP6OrderDefault)
 		order = order_now();
 	if (order == kIP6OrderIPv4First) {
-		for (int i = 0; i < L->n4; i++) all[n++] = L->a4[i];
-		for (int i = 0; i < L->n6; i++) all[n++] = L->a6[i];
+		memmove(&all[n4], &all[0], (u32)n6 * sizeof all[0]);
+		for (int i = 0; i < n4; i++) rt_in6_set_v4mapped(&all[i], a4[i]);
 	} else {
-		for (int i = 0; i < L->n6; i++) all[n++] = L->a6[i];
-		for (int i = 0; i < L->n4; i++) all[n++] = L->a4[i];
-		if (order == kIP6OrderRFC6724 && n > 1) {
-			rt_lock();
-			rt_inet_sort_dest(all, n);
-			rt_unlock();
-		}
+		for (int i = 0; i < n4; i++) rt_in6_set_v4mapped(&all[n6 + i], a4[i]);
 	}
-	if (n > p->maxResults && L->n6 && L->n4) {
+	n = n4 + n6;
+	if (order == kIP6OrderRFC6724 && n > 1) {
+		rt_lock();
+		rt_inet_sort_dest(all, n);
+		rt_unlock();
+	}
+	k = n > p->maxResults ? p->maxResults : n;
+	if (n > p->maxResults && n6 && n4) {
 		/* More addresses than the caller has room for, and both families: alternate them, starting with
 		   the family the order chose first (RFC 8305, section 4), so that the answer holds some of each.
 		   Cut off in plain order, a name with eight IPv6 addresses (NPO's radio streams) filled an
 		   eight-entry array with IPv6 only, and a program on a network whose IPv6 did not reach the
-		   server never tried IPv4. */
-		rt_in6_addr v6[LOOK_ADDRS], v4[LOOK_ADDRS];
-		int c6 = 0, c4 = 0, i6 = 0, i4 = 0, m = 0, six = !rt_in6_is_v4mapped(&all[0]);
-		for (int i = 0; i < n; i++)                 /* each family keeps the order chosen above */
-			if (rt_in6_is_v4mapped(&all[i]))
-				v4[c4++] = all[i];
+		   server never tried IPv4. Each family keeps the order chosen above. */
+		int i6 = 0, i4 = 0, six = !rt_in6_is_v4mapped(&all[0]);
+		for (int m = 0; m < k; m++, six = !six) {
+			while (i6 < n && rt_in6_is_v4mapped(&all[i6]))
+				i6++;
+			while (i4 < n && !rt_in6_is_v4mapped(&all[i4]))
+				i4++;
+			if ((six && i6 < n) || i4 >= n)
+				memcpy(p->results[m].addr, &all[i6++], 16);
 			else
-				v6[c6++] = all[i];
-		while (i6 < c6 || i4 < c4) {
-			if ((six && i6 < c6) || i4 >= c4)
-				all[m++] = v6[i6++];
-			else
-				all[m++] = v4[i4++];
-			six = !six;
+				memcpy(p->results[m].addr, &all[i4++], 16);
 		}
+	} else {
+		for (int m = 0; m < k; m++)
+			memcpy(p->results[m].addr, &all[m], 16);
 	}
-	if (n > p->maxResults)
-		n = p->maxResults;
-	for (int i = 0; i < n; i++) {
-		memcpy(p->results[i].addr, &all[i], 16);
-		p->results[i].port = p->port;
-		p->results[i].scope = 0;
+	for (int m = 0; m < k; m++) {
+		p->results[m].port = p->port;
+		p->results[m].scope = 0;
 	}
-	p->count = (u16)n;
-	if (p->canonName && p->canonNameLen)
-		rt_strlcpy(p->canonName, L->canon[0] ? L->canon : L->name, p->canonNameLen);
-	if (n)
-		r = 0;
-	else if (L->q[0].nx || L->q[1].nx)
-		r = authNameErr;
-	else
-		r = noAnsErr;
+	p->count = (u16)k;
 	look_free(L);
-	result6(pb, r);
-}
-
-/* both queries are over: the answer, or the name again with the search domain */
-static int look_retry_search(struct look *L)
-{
-	const char *dom = rt_dns_search_list();
-	u32 k = 0;
-	char *e;
-	if (L->ptr || L->searched || !dom || !*dom || strchr(L->name, '.') || L->n4 || L->n6 ||
-	    !(L->q[0].nx || L->q[1].nx))
-		return 0;
-	L->searched = 1;
-	e = L->name + strlen(L->name);
-	*e++ = '.';
-	while (dom[k] && dom[k] != ' ' && dom[k] != ',' && e < L->name + sizeof L->name - 1)
-		*e++ = dom[k++];
-	*e = 0;
-	for (int i = 0; i < 2; i++)
-		if (L->q[i].type) {
-			L->q[i].tries = 0;
-			L->q[i].nx = L->q[i].answered = 0;
-			dns_send(L, &L->q[i]);
-		}
-	return 1;
-}
-
-static void look_answer(struct look *L, const u8 *m, int n)
-{
-	int qd = rt_get_be16(m + 4), an = rt_get_be16(m + 6), p = 12, rcode = m[3] & 15;
-	struct dq *q = NULL;
-	for (int i = 0; i < 2; i++)
-		if (L->q[i].type && L->q[i].state == QW_WAIT && L->q[i].id == rt_get_be16(m))
-			q = &L->q[i];
-	if (!q || !(m[2] & 0x80))
-		return;                                 /* not an answer to a query still waiting */
-	if (rcode == 3) {
-		q->state = QW_DONE;
-		q->nx = 1;
-		return;
-	}
-	if (rcode) {
-		/* the server could not answer (SERVFAIL, REFUSED): the next server, at once */
-		L->server++;
-		if (q->tries < DNS_TRIES)
-			dns_send(L, q);
-		else
-			q->state = QW_DONE;
-		return;
-	}
-	q->state = QW_DONE;
-	q->answered = 1;
-	for (int k = 0; k < qd && p > 0; k++) {
-		p = dns_name(m, n, p, NULL, 0);
-		p = p > 0 ? p + 4 : -1;
-	}
-	for (int k = 0; k < an && p > 0 && p + 10 <= n; k++) {
-		char nm[256];
-		int e = dns_name(m, n, p, nm, sizeof nm), type, rdlen;
-		if (e < 0 || e + 10 > n)
-			break;
-		type = rt_get_be16(m + e);
-		rdlen = rt_get_be16(m + e + 8);
-		if (e + 10 + rdlen > n)
-			break;
-		if (q->type == 28 && type == 28 && rdlen == 16 && L->n6 < LOOK_ADDRS / 2) {
-			memcpy(&L->a6[L->n6++], m + e + 10, 16);
-			if (!L->canon[0])
-				rt_strlcpy(L->canon, nm, sizeof L->canon);
-		} else if (q->type == 1 && type == 1 && rdlen == 4 && L->n4 < LOOK_ADDRS / 2) {
-			u32 v4;
-			memcpy(&v4, m + e + 10, 4);
-			rt_in6_set_v4mapped(&L->a4[L->n4++], v4);
-			if (!L->canon[0])
-				rt_strlcpy(L->canon, nm, sizeof L->canon);
-		} else if (q->type == 12 && type == 12 && !L->canon[0]) {
-			dns_name(m, n, e + 10, L->canon, sizeof L->canon);
-		}
-		p = e + 10 + rdlen;
-	}
+	result6(pb, k ? 0 : noAnsErr);
 }
 
 /* the reverse lookup's answer: the name into the caller's buffer */
-static void look_finish_ptr(struct look *L)
+static void look_finish_ptr(struct look *L, int r)
 {
 	IP6iopb *pb = L->pb;
 	IP6ResolvePB *p = &pb->csParam.resolve;
-	int r;
-	if (L->canon[0]) {
-		rt_strlcpy(p->hostName, L->canon, p->hostNameLen);
-		r = strlen(L->canon) + 1 > p->hostNameLen ? ip6TruncatedErr : 0;
+	if (r > 0) {
+		/* the name, cut to the buffer (ip6TruncatedErr) */
+		rt_dns_lookup_get(L->l, NULL, NULL, NULL, NULL, p->hostName, p->hostNameLen);
+		r = strlen(rt_dns_lookup_canon(L->l)) + 1 > p->hostNameLen ? ip6TruncatedErr : 0;
 	} else {
-		r = L->q[0].nx ? authNameErr : noAnsErr;
+		r = look_err(r);
 	}
 	look_free(L);
 	result6(pb, r);
@@ -1515,61 +1451,33 @@ static void looks_poll(void)
 {
 	for (int i = 0; i < NLOOK; i++) {
 		struct look *L = &looks[i];
-		u8 m[700];
-		int n, waiting = 0;
+		int r;
 		if (!L->pb)
 			continue;
-		while ((n = rt_api_recvfrom(&ctx6, L->fd, m, sizeof m, RT_MSG_DONTWAIT, NULL, NULL)) >= 12)
-			look_answer(L, m, n);
-		for (int k = 0; k < 2; k++) {
-			struct dq *q = &L->q[k];
-			if (q->state != QW_WAIT)
-				continue;
-			if ((s32)(rt_now_ms() - q->deadline) >= 0) {
-				if (q->tries >= DNS_TRIES) {
-					q->state = QW_DONE;
-					continue;
-				}
-				L->server++;
-				dns_send(L, q);
-			}
-			waiting++;
-		}
-		/* the whole lookup's time: what has come is the answer (an AAAA answer is not held up for
-		   ever by an A query that gets none, nor the other way round) */
-		if (waiting && !expired(L->end))
+		r = rt_dns_lookup_poll(L->l);
+		if (r == 0)
 			continue;
-		if (!waiting && look_retry_search(L))
-			continue;
-		if (L->ptr)
-			look_finish_ptr(L);
+		if (L->pb->csCode == ip6ResolveAddr)
+			look_finish_ptr(L, r);
 		else
-			look_finish(L);
+			look_finish(L, r);
 	}
 }
 
-static struct look *look_new(IP6iopb *pb, int *err)
+static struct look *look_slot(void)
 {
-	struct look *L = NULL;
-	u16 t = pb->csParam.resolve.timeout;
 	for (int i = 0; i < NLOOK; i++)
 		if (!looks[i].pb) {
-			L = &looks[i];
-			break;
+			memset(&looks[i], 0, sizeof looks[i]);
+			return &looks[i];
 		}
-	if (!L) {
-		*err = outOfMemory;
-		return NULL;
-	}
-	memset(L, 0, sizeof *L);
-	L->fd = socket6(RT_SOCK_DGRAM, RT_IPPROTO_UDP);
-	if (L->fd < 0) {
-		*err = outOfMemory;
-		return NULL;
-	}
-	L->end = rt_now_ms() + (t ? t : DNS_DEFAULT) * 1000u;
-	L->pb = pb;
-	return L;
+	return NULL;
+}
+
+/* rt_dns_lookup_start's failure as the result programs see */
+static int start_err(int err)
+{
+	return err == -RT_ENXIO ? noNameServer : err == -RT_EINVAL ? nameSyntaxErr : outOfMemory;
 }
 
 static int resolve_call(IP6iopb *pb)
@@ -1578,10 +1486,7 @@ static int resolve_call(IP6iopb *pb)
 	const char *name = p->hostName;
 	IP6Address lit;
 	struct look *L;
-	u32 a4[LOOK_ADDRS / 2];
-	rt_in6_addr a6[LOOK_ADDRS / 2];
-	int n4 = 0, n6 = 0, err, r;
-	u16 fl = p->flags;
+	int err = 0, r, fam, fl = p->flags;
 	p->count = 0;
 	if (!name || !p->results)
 		return invalidBufPtr;
@@ -1601,74 +1506,41 @@ static int resolve_call(IP6iopb *pb)
 			rt_strlcpy(p->canonName, name, p->canonNameLen);
 		return 0;
 	}
-	/* the hosts table and the cache: a family found there is not asked for again */
-	if (!(fl & kIP6OnlyIPv6))
-		n4 = rt_resolve_local46(name, 0, a4, NULL, LOOK_ADDRS / 2);
-	if (!(fl & kIP6OnlyIPv4))
-		n6 = rt_resolve_local46(name, 1, NULL, a6, LOOK_ADDRS / 2);
-	if (!(L = look_new(pb, &err)))
-		return err;
-	for (int i = 0; i < n4; i++)
-		rt_in6_set_v4mapped(&L->a4[L->n4++], a4[i]);
-	for (int i = 0; i < n6; i++)
-		L->a6[L->n6++] = a6[i];
-	rt_strlcpy(L->name, name, sizeof L->name);
-	if (L->name[strlen(L->name) - 1] == '.') {      /* a trailing dot: the name as it is */
-		L->name[strlen(L->name) - 1] = 0;
-		L->searched = 1;
-	}
-	if (fl & kIP6NoSearch)
-		L->searched = 1;
-	if ((n4 || (fl & kIP6OnlyIPv6)) && (n6 || (fl & kIP6OnlyIPv4))) {
-		look_finish(L);                         /* everything asked for was known */
-		return 1;                               /* completed already (result6 ran) */
-	}
-	if (!n6 && !(fl & kIP6OnlyIPv4))
-		L->q[0].type = 28;
-	if (!n4 && !(fl & kIP6OnlyIPv6))
-		L->q[1].type = 1;
-	for (int i = 0; i < 2; i++)
-		if (L->q[i].type && (r = dns_send(L, &L->q[i])) != 1) {
-			if (n4 || n6) {                 /* no server, but the hosts table knew one family */
-				look_finish(L);
-				return 1;
-			}
-			look_free(L);
-			return r;
-		}
+	if ((fl & kIP6OnlyIPv6) && (fl & kIP6OnlyIPv4))
+		return noAnsErr;                        /* neither family asked for */
+	if (!(L = look_slot()))
+		return outOfMemory;
+	fam = (fl & kIP6OnlyIPv6) ? RT_AF_INET6 : (fl & kIP6OnlyIPv4) ? RT_AF_INET : RT_AF_UNSPEC;
+	/* both answers are waited for, up to the block's timeout; the search list only for a name without
+	   a dot, after the name itself (docs/IPP6.md) */
+	L->l = rt_dns_lookup_start(&ctx6, name, fam, RT_DNSL_BOTH | RT_DNSL_SHORTSEARCH |
+	                           ((fl & kIP6NoSearch) ? RT_DNSL_NOSEARCH : 0),
+	                           (p->timeout ? p->timeout : DNS_DEFAULT) * 1000u, &err);
+	if (!L->l)
+		return start_err(err);
+	L->pb = pb;
+	if ((r = rt_dns_lookup_poll(L->l)) != 0)
+		look_finish(L, r);                      /* the hosts table or the cache knew it: completed already */
 	return 1;
 }
 
 static int resolve_addr_call(IP6iopb *pb)
 {
 	IP6ResolvePB *p = &pb->csParam.resolve;
-	const u8 *a = p->addr.addr;
 	struct look *L;
-	int err, r;
+	rt_in6_addr a;
+	int err = 0, r;
 	if (!p->hostName || !p->hostNameLen)
 		return invalidBufPtr;
-	if (!(L = look_new(pb, &err)))
-		return err;
-	L->ptr = 1;
-	L->searched = 1;
-	if (IP6_IS_V4(&p->addr)) {
-		rt_snprintf(L->name, sizeof L->name, "%u.%u.%u.%u.in-addr.arpa", a[15], a[14], a[13], a[12]);
-	} else {
-		static const char hex[] = "0123456789abcdef";
-		char *o = L->name;
-		for (int i = 15; i >= 0; i--) {
-			*o++ = hex[a[i] & 15];
-			*o++ = '.';
-			*o++ = hex[a[i] >> 4];
-			*o++ = '.';
-		}
-		rt_strlcpy(o, "ip6.arpa", sizeof L->name - (u32)(o - L->name));
-	}
-	L->q[0].type = 12;
-	if ((r = dns_send(L, &L->q[0])) != 1) {
-		look_free(L);
-		return r;
-	}
+	if (!(L = look_slot()))
+		return outOfMemory;
+	memcpy(&a, p->addr.addr, 16);
+	L->l = rt_dns_lookup_start_addr(&ctx6, &a, (p->timeout ? p->timeout : DNS_DEFAULT) * 1000u, &err);
+	if (!L->l)
+		return start_err(err);
+	L->pb = pb;
+	if ((r = rt_dns_lookup_poll(L->l)) != 0)
+		look_finish_ptr(L, r);                  /* the hosts table knew it */
 	return 1;
 }
 
@@ -1690,7 +1562,7 @@ static int handle6(void *pb)
 {
 	int cs = PB_CSCODE(pb);
 	note_call6(cs);
-	if (cs >= 30 && cs <= 43) {
+	if ((cs >= 30 && cs <= 43) || cs == ip6ConnectName) {
 		int r = tcp_call(pb);
 		if (r != controlErr)
 			return r;

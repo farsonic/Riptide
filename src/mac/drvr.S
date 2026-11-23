@@ -544,7 +544,7 @@ mac_newgestalt:				| short (u32 selector, void *proc): _NewGestalt
 	.globl	mac_gestalt_ipp6
 mac_gestalt_ipp6:			| pascal OSErr (OSType selector, long *response): the .IPP6 interface
 	move.l	4(%sp),%a0		| version (docs/IPP6.md, section 11; ipp6.c's IPP6_VERSION)
-	move.l	#1,(%a0)
+	move.l	#2,(%a0)
 	move.l	(%sp)+,%a0
 	addq.l	#8,%sp
 	clr.w	(%sp)			| noErr

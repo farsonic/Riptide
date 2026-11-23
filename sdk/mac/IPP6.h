@@ -1,6 +1,6 @@
 /*
  * IPP6.h - the .IPP6 programming interface: IPv6 (and IPv4) for classic Mac programs, the MacTCP
- * way. Interface version 1. The specification is Riptide's docs/IPP6.md; the offsets in the
+ * way. Interface version 2. The specification is Riptide's docs/IPP6.md; the offsets in the
  * comments below are its definition, and tests/t_ipp6_layout.c checks this header against them.
  *
  * Standalone: no other header is needed (Universal Interfaces may be included before it, and
@@ -49,7 +49,7 @@ typedef short          IP6SInt16;
 #endif
 
 #define gestaltIPP6        0x69707036UL     /* 'ipp6': answers the interface version */
-#define IPP6_VERSION       1                /* this header's version */
+#define IPP6_VERSION       2                /* this header's version (2: ip6ConnectName) */
 #define IPP6_DRIVER_NAME   "\p.IPP6"        /* OpenDriver's name (a Pascal string) */
 #define IPP6_DRIVER_NAME_C ".IPP6"
 
@@ -84,7 +84,8 @@ enum {                                      /* MacTCP's numbers (MacTCP.h) */
 #endif
 enum {                                      /* .IPP6's own */
 	ip6GetInfo = 70, ip6GetAddrs = 71, ip6Resolve = 72, ip6ResolveAddr = 73, ip6ResolveCancel = 74,
-	ip6AddrToStr = 75, ip6StrToAddr = 76
+	ip6AddrToStr = 75, ip6StrToAddr = 76,
+	ip6ConnectName = 77                 /* version 2: TCPActiveOpen by name, Happy Eyeballs (TCP6iopb) */
 };
 
 /* ---- result codes ------------------------------------------------------------------------- */
@@ -195,6 +196,28 @@ typedef struct TCP6OpenPB {                 /* TCPPassiveOpen (31), TCPActiveOpe
 	IP6Ptr     userDataPtr;             /* 122 */
 } TCP6OpenPB;
 
+typedef struct TCP6ConnectNamePB {          /* ip6ConnectName (77, version 2): TCPActiveOpen's fields, and */
+	IP6UInt8   ulpTimeoutValue;         /* 32: seconds for the whole connect, lookup included (0x80); 0 = 2 min */
+	IP6UInt8   ulpTimeoutAction;        /* 33 */
+	IP6UInt8   validityFlags;           /* 34 */
+	IP6UInt8   commandTimeoutValue;     /* 35: not used */
+	IP6Address remoteAddr;              /* 36: in: the port (52); out: the address that answered */
+	IP6Address localAddr;               /* 56: out: this end */
+	IP6UInt8   tosFlags;                /* 76: ignored, as TCPActiveOpen's */
+	IP6UInt8   precedence;              /* 77 */
+	IP6UInt8   dontFrag;                /* 78 */
+	IP6UInt8   timeToLive;              /* 79 */
+	IP6UInt8   security;                /* 80 */
+	IP6UInt8   optionCnt;               /* 81 */
+	IP6Ptr     hostName;                /* 82: in: the host name or an address literal, a C string */
+	IP6UInt16  flags;                   /* 86: in: kIP6Order..., kIP6OnlyIPv6, kIP6OnlyIPv4, kIP6NoSearch */
+	IP6UInt16  addrCount;               /* 88: out: the addresses the name had (of the families asked) */
+	IP6UInt16  attempts;                /* 90: out: connection attempts started */
+	IP6UInt32  elapsed;                 /* 92: out: ms from the call to the connection, lookup included */
+	IP6UInt8   reserved[26];            /* 96: in: 0 */
+	IP6Ptr     userDataPtr;             /* 122 */
+} TCP6ConnectNamePB;
+
 typedef struct TCP6SendPB {                 /* TCPSend (34): MacTCP's */
 	IP6UInt8  ulpTimeoutValue;          /* 32 */
 	IP6UInt8  ulpTimeoutAction;         /* 33 */
@@ -279,6 +302,7 @@ typedef struct TCP6iopb {
 		TCP6AbortPB      abort;
 		TCP6StatusPB     status;
 		TCP6GlobalInfoPB globalInfo;
+		TCP6ConnectNamePB connectName;
 	} csParam;
 } TCP6iopb;
 

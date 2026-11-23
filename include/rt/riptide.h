@@ -147,6 +147,34 @@ int  rt_resolve_name6(const char *name, rt_in6_addr *addrs, int max, char *canon
  * RT_AF_INET6. Count or the error of rt_resolve_name(). No lock held. */
 int  rt_resolve_name46(const char *name, rt_in6_addr *addrs, int max, int family, char *canon, u32 canonlen);
 int  rt_resolve_local46(const char *name, int v6, u32 *a4, rt_in6_addr *a6, int max);   /* no network: hosts, cache */
+/* Asynchronous lookups, for a context that must never wait (the Mac's
+ * deferred task, which runs every MacTCP and .IPP6 call): the lookups of
+ * rt_resolve_name46() and rt_resolve_addr6() (hosts table, localhost, our
+ * .local name and the cache first; the search list; A and AAAA at once;
+ * EDNS, TCP for truncated answers, the negative cache; answers cached) on
+ * non-blocking sockets of context c. start() begins one (NULL and *err:
+ * -RT_EINVAL not a name DNS can carry, -RT_ENXIO no name server and nothing
+ * known locally, -RT_ENOMEM); poll() moves it on without waiting and
+ * returns 0 while it goes on (poll it whenever the stack has run, at least
+ * every 100 ms or so), else the count of addresses (forward), 1 (reverse:
+ * the name is the canonical name of get()) or -h_errno; get() copies the
+ * answer (in: room in *n4 / *n6, out: how many); free() ends a lookup, done
+ * or not. timeout_ms (0 = none) cuts the lookup short with what has come.
+ * Called WITHOUT the lock, from one context at a time. */
+#define RT_DNSL_BOTH     0x01   /* wait for both A and AAAA (no resolution delay) */
+#define RT_DNSL_NOSEARCH 0x02   /* the name as it is, without the search list */
+#define RT_DNSL_SHORTSEARCH 0x04 /* MacTCP's rule: the search list only for a name without a dot,
+                                  * after the name itself (not the resolv.conf order) */
+struct rt_dns_lookup;
+struct rt_dns_lookup *rt_dns_lookup_start(struct rt_sockctx *c, const char *name, int family, int flags,
+                                          u32 timeout_ms, int *err);
+struct rt_dns_lookup *rt_dns_lookup_start_addr(struct rt_sockctx *c, const rt_in6_addr *addr, u32 timeout_ms,
+                                               int *err);
+int  rt_dns_lookup_poll(struct rt_dns_lookup *l);
+int  rt_dns_lookup_get(const struct rt_dns_lookup *l, u32 *a4, int *n4, rt_in6_addr *a6, int *n6, char *canon,
+                       u32 canonlen);
+const char *rt_dns_lookup_canon(const struct rt_dns_lookup *l);   /* get()'s name, until free() */
+void rt_dns_lookup_free(struct rt_dns_lookup *l);
 
 /* ---- Happy Eyeballs v2 (src/core/happy.c, RFC 8305) ---- */
 extern s32 rt_he_enable, rt_he_attempt_delay, rt_he_resolution_delay, rt_he_prefer, rt_he_aaaa_filter;
@@ -164,6 +192,32 @@ struct rt_he_result {
  * NULL. Called without the lock. */
 int  rt_he_connect(struct rt_sockctx *c, const char *host, u16 port, int family, int type, u32 timeout_ms,
                    struct rt_he_result *res);
+/* The same for a context that must never wait (src/core/happy.c, the
+ * Mac's .IPP6): start() looks the name up with rt_dns_lookup_start() (or
+ * takes a literal) and poll() starts the attempts as they fall due and
+ * looks at what has connected, without waiting: 1 while it goes on, 0 when
+ * a connection is up (take() hands over its descriptor, non-blocking, and
+ * the result), else -errno of the last attempt, or RT_HE_LOOKUP_FAILED
+ * with the lookup's -h_errno in dns_error(). flags: RT_HE_V6SOCK every
+ * attempt on an IPv6 socket with IPV6_V6ONLY off (IPv4 IPv4-mapped);
+ * RT_HE_NOSEARCH the name without the search list, RT_HE_SHORTSEARCH
+ * with RT_DNSL_SHORTSEARCH's rule. prefer -1:
+ * net.inet.he.prefer, else 0, 4 or 6 as it. start() fails as
+ * rt_dns_lookup_start() (*err), or -RT_EAFNOSUPPORT for a literal of the
+ * other family. free() closes everything not taken. Called WITHOUT the
+ * lock. */
+#define RT_HE_V6SOCK        0x01
+#define RT_HE_NOSEARCH      0x02
+#define RT_HE_SHORTSEARCH   0x04
+#define RT_HE_LOOKUP_FAILED (-10000)
+struct rt_he_conn;
+struct rt_he_conn *rt_he_conn_start(struct rt_sockctx *c, const char *host, u16 port, int family, int flags,
+                                    int prefer, u32 timeout_ms, int *err);
+int  rt_he_conn_poll(struct rt_he_conn *h);
+int  rt_he_conn_take(struct rt_he_conn *h, struct rt_he_result *res);
+int  rt_he_conn_dns_error(const struct rt_he_conn *h);
+void rt_he_conn_info(const struct rt_he_conn *h, struct rt_he_result *res);   /* so far */
+void rt_he_conn_free(struct rt_he_conn *h);
 /* IPv6 can reach global addresses (a route and a source); lock held */
 int  rt_he_v6_usable(void);
 /* "happy_eyeballs on|off | delay MS | resolution_delay MS |
