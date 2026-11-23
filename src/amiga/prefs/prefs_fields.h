@@ -46,6 +46,14 @@ enum { F_STR, F_NUM, F_CHECK, F_CYCLE };
 #define FL_RIGHT  8             /* F_CHECK: GadTools: on the previous row, at the right */
 #define FL_DHCP   16            /* disabled with a static address */
 #define FL_IF     32            /* a setting of the card rp_ifsel: off is in struct rp_iface */
+#define FL_AMIGA  64            /* the Amiga's alone: nothing acts on it on the Mac, which does not show it */
+
+/* RP_ON_MAC: the editor is built for the Mac (Makefile.mac), where settings marked FL_AMIGA (and
+ * form fields marked LF_AMIGA) are left out of the pages; their values in riptide.conf are kept
+ * as they are. docs/MAC-GUI.md, "Every setting and what acts on it on the Mac". */
+#ifndef RP_ON_MAC
+#define RP_ON_MAC 0
+#endif
 
 /* the card the Interface and Address pages show (an index of
  * rp_model.ifc[]; the first card when that slot is not used) */
@@ -73,6 +81,10 @@ void rp_fset(struct rp_model *m, int fi, long v);
 char *rp_fstr(struct rp_model *m, int fi);
 /* F_CYCLE: index of the current value in cy[] (0 when unknown) */
 int  rp_fcycle(const struct rp_model *m, int fi);
+/* shown on this platform: 0 for an FL_AMIGA setting on the Mac (mac = 1); rp_fshown() asks for
+ * the platform the editor is built for */
+int  rp_fshown_on(int fi, int mac);
+#define rp_fshown(fi) rp_fshown_on(fi, RP_ON_MAC)
 /* disabled by another setting (DHCP, NTP) */
 int  rp_fdisabled(const struct rp_model *m, int fi);
 /* the label without '_', and its shortcut key in lower case (0: none) */
@@ -116,6 +128,7 @@ const char *rp_list_full_msg(int page);
 enum { LF_NUM, LF_STR, LF_CYCLE, LF_INFO };   /* LF_INFO: shown, not edited */
 #define LF_SAMEROW 1            /* next to the field before, on its row */
 #define LF_NAMES   2            /* LF_CYCLE: its labels are the names of struct rp_lnames */
+#define LF_AMIGA   4            /* the Amiga's alone (as FL_AMIGA); a field of its own row */
 struct rp_lfield {
 	unsigned char page, type, flags;
 	unsigned char size;         /* LF_STR: longest text */
@@ -174,6 +187,9 @@ void rp_iface_row(const struct rp_iface *f, char *buf, int len);
 const char *rp_lform_note(int page);
 /* the label without '_', and its shortcut key in lower case (0: none) */
 void rp_lflabel(int fi, char *buf, int len);
+/* form field fi shown on this platform (as rp_fshown_on) */
+int  rp_lfshown_on(int fi, int mac);
+#define rp_lfshown(fi) rp_lfshown_on(fi, RP_ON_MAC)
 char rp_lfkey(int fi);
 
 #endif

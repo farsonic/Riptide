@@ -108,6 +108,7 @@ struct mstream {
 	u8 *rbuf;                       /* the caller's receive buffer */
 	u32 rlen;
 	void *notify, *udata, *a5;      /* the ASR, its user data, the creating program's A5 */
+	char prog[32];                  /* the creating program's name (Background programs, QoS rules) */
 	void *open_pb;                  /* a TCP open waiting */
 	u32 open_deadline;
 	int passive;
@@ -311,6 +312,7 @@ static int tcp_create(void *pb, struct rt_sockctx *c)
 			s->rlen = PB_L(pb, 36);
 			s->notify = PB_P(pb, 40);
 			s->udata = PB_P(pb, 44);
+			rt_strlcpy(s->prog, ipp_creator_prog(pb), sizeof s->prog);
 			s->a5 = ipp_creator_a5(pb);
 			PB_L(pb, 28) = (u32)s;
 			return 0;
@@ -331,7 +333,10 @@ static void tcp_reset_conn(struct mstream *s, void *pb)
 static int tcp_open6(void *pb, struct rt_sockctx *c, struct mstream *s, const rt_in6_addr *a6)
 {
 	struct rt_sockaddr_in6 a;
-	int fd = rt_api_socket(c, RT_AF_INET6, RT_SOCK_STREAM, RT_IPPROTO_TCP), r;
+	int fd, r;
+	mac_prog_name = s->prog;
+	fd = rt_api_socket(c, RT_AF_INET6, RT_SOCK_STREAM, RT_IPPROTO_TCP);
+	mac_prog_name = NULL;
 	if (fd < 0)
 		return insufficientResources;
 	nonblock(c, fd);
@@ -381,7 +386,9 @@ static int tcp_open(void *pb, struct rt_sockctx *c, int passive)
 		if (!passive && standin_lookup(PB_L(pb, 36), &a6, NULL, 0))
 			return tcp_open6(pb, c, s, &a6);
 	}
+	mac_prog_name = s->prog;
 	fd = rt_api_socket(c, RT_AF_INET, RT_SOCK_STREAM, RT_IPPROTO_TCP);
+	mac_prog_name = NULL;
 	if (fd < 0)
 		return insufficientResources;
 	nonblock(c, fd);
@@ -746,7 +753,9 @@ static int udp_create(void *pb, struct rt_sockctx *c)
 		;
 	if (i == NSTREAMS)
 		return insufficientResources;
+	mac_prog_name = ipp_creator_prog(pb);
 	fd = rt_api_socket(c, RT_AF_INET, RT_SOCK_DGRAM, RT_IPPROTO_UDP);
+	mac_prog_name = NULL;
 	if (fd < 0)
 		return insufficientResources;
 	nonblock(c, fd);
@@ -767,6 +776,7 @@ static int udp_create(void *pb, struct rt_sockctx *c)
 		s->rlen = PB_L(pb, 36);
 		s->notify = PB_P(pb, 40);
 		s->udata = PB_P(pb, 46);
+		rt_strlcpy(s->prog, ipp_creator_prog(pb), sizeof s->prog);
 		s->a5 = ipp_creator_a5(pb);
 		s->lport = a.sin_port;
 		PB_W(pb, 44) = a.sin_port;
@@ -843,7 +853,9 @@ static int udp_fd6(struct rt_sockctx *c, struct mstream *s)
 	int one = 1;
 	if (s->fd6 >= 0)
 		return s->fd6;
+	mac_prog_name = s->prog;
 	s->fd6 = rt_api_socket(c, RT_AF_INET6, RT_SOCK_DGRAM, RT_IPPROTO_UDP);
+	mac_prog_name = NULL;
 	if (s->fd6 < 0)
 		return -1;
 	nonblock(c, s->fd6);

@@ -64,7 +64,7 @@ static int page_dyn(int p)
 	}
 	return -1;
 }
-static char status_text[120];
+static char status_text[160];
 /* the Time page: Set Clock Now, and the last NTP sync of the running Riptide */
 static Object *ntp_btn, *ntp_lbl;
 static char *ntp_help;
@@ -75,14 +75,35 @@ static const char ntp_sizer[] = "Last NTP sync: 23:59 (23 h 59 min ago) with tim
                                 "offset -12.345 s, the clock was left as it was. Next in 23 h 59 min.";
 static const char *pubname;     /* PUBSCREEN=, for the message windows */
 
-static const char *const btn_label[4] = { "_Save", "_Use", "_Apply", "_Cancel" };
-static const ULONG btn_id[4] = { ID_SAVE, ID_USE, ID_APPLY, ID_CANCEL };
-static const char *const btn_help[4] = {
+#ifdef MM_MAC_HIG
+extern int mm_dialog_keys;      /* src/mac/mui/mm_app.c */
+/* The Mac (docs/MAC-GUI.md): Save, Apply and Cancel, as the Guidelines' dialogs have them. Save is
+ * the default button (Return, Enter), Cancel answers Escape and Command-period; the bar shows them
+ * as Apply ... Cancel Save. Save and Apply give the changes to the running Riptide at once without
+ * asking, and the window stays open, its status line saying what Riptide took and what waits for
+ * a restart of the Mac. The Amiga's Use (ENV: until a reboot) is Apply on the Mac. */
+#define NBTN 3
+static const char *const btn_label[NBTN] = { "Save", "Apply", "Cancel" };
+static const ULONG btn_id[NBTN] = { ID_SAVE, ID_APPLY, ID_CANCEL };
+static const char *const btn_help[NBTN] = {
+	"Saves the settings now and gives Riptide the ones it can take at once. The line below says "
+	"which wait for a restart of the Mac. Return or Enter.",
+	"Gives the changes to the running Riptide now without saving them: they last until the Mac "
+	"restarts.",
+	"Closes the window. Changes that were not saved are forgotten. Escape or Command-period.",
+};
+static char act_text[120];      /* what the last Save or Apply did, for the status line */
+#else
+#define NBTN 4
+static const char *const btn_label[NBTN] = { "_Save", "_Use", "_Apply", "_Cancel" };
+static const ULONG btn_id[NBTN] = { ID_SAVE, ID_USE, ID_APPLY, ID_CANCEL };
+static const char *const btn_help[NBTN] = {
 	"Saves the settings for good and uses them now. Riptide is asked to take the changes it can.",
 	"Uses the settings until the Amiga is switched off, without saving them for good.",
 	"Gives the changes Riptide can take to the running stack now. The window stays open.",
 	"Closes the window. Changes that were not saved or used are forgotten.",
 };
+#endif
 
 /* ---- small things ---- */
 static Object *rect(void)
@@ -576,6 +597,13 @@ static void show_status(void)
 {
 	int running = FindPort((CONST_STRPTR)RIPTIDE_PORTNAME) != NULL;
 
+#ifdef MM_MAC_HIG
+	/* after Save or Apply: what it did, in place of whether Riptide runs */
+	if (act_text[0])
+		rt_snprintf(status_text, sizeof(status_text), "%s%s", act_text,
+		            rp_conf_changed(&rp_cfg) || other_file ? tr("  Not saved yet.") : "");
+	else
+#endif
 	rt_snprintf(status_text, sizeof(status_text), "%s%s", tr(running ? "Riptide is running." :
 	            "Riptide is not running."),
 	            rp_conf_changed(&rp_cfg) || other_file ? tr("  Changes not saved yet.") : "");
@@ -767,8 +795,8 @@ static Object *field_page(int p)
 		const struct rp_field *f = &rp_fields[i];
 		Object *g, *cell;
 		int j;
-		if (f->page != p)
-			continue;
+		if (f->page != p || !rp_fshown(i))
+			continue;           /* (the Mac leaves out the Amiga's own settings) */
 		g = field_build(i);
 		if (!g)
 			return NULL;
@@ -777,6 +805,8 @@ static Object *field_page(int p)
 		/* compact layout: a check box marked FL_RIGHT goes on this row, at
 		 * its right (as in the GadTools editor), so the page fits 256 lines */
 		j = i + 1;
+		while (j < rp_nfields && rp_fields[j].page == p && !rp_fshown(j))
+			j++;
 		if (theme_compact() && j < rp_nfields && rp_fields[j].page == p && (rp_fields[j].flags & FL_RIGHT) &&
 		    rp_fields[j].type == F_CHECK) {
 			Object *g2 = field_build(j);
@@ -857,7 +887,7 @@ static Object *lform_build(int p)
 		const struct rp_lfield *f = &rp_lfields[i];
 		Object *row, *r;
 		int last = i, fills = 0;
-		if (f->page != p || (f->flags & LF_SAMEROW))
+		if (f->page != p || (f->flags & LF_SAMEROW) || !rp_lfshown(i))
 			continue;
 		while (last + 1 < rp_nlfields && rp_lfields[last + 1].page == p && (rp_lfields[last + 1].flags & LF_SAMEROW))
 			last++;
@@ -1149,7 +1179,9 @@ static struct NewMenu menus[] = {
 	{ NM_ITEM, (CONST_STRPTR)"Save As...", (CONST_STRPTR)"A", 0, 0, (APTR)ID_SAVEAS },
 	{ NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
 	{ NM_ITEM, (CONST_STRPTR)"Save", (CONST_STRPTR)"S", 0, 0, (APTR)ID_SAVE },
+#ifndef MM_MAC_HIG
 	{ NM_ITEM, (CONST_STRPTR)"Use", (CONST_STRPTR)"U", 0, 0, (APTR)ID_USE },
+#endif
 	{ NM_ITEM, (CONST_STRPTR)"Apply", (CONST_STRPTR)"Y", 0, 0, (APTR)ID_APPLY },
 	{ NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
 	{ NM_ITEM, (CONST_STRPTR)"About...", (CONST_STRPTR)"?", 0, 0, (APTR)ID_ABOUT },
@@ -1190,7 +1222,11 @@ static int build_window(const char *pubscreen)
 	head = mui_newc(head_mcc, MUIA_Head_Page, (ULONG)page, TAGEND);
 	pages = mui_new(MUIC_Group, MUIA_Group_PageMode, TRUE, TAGEND);
 	status = mui_newc(status_mcc, TAGEND);
+#ifdef MM_MAC_HIG
+	bar = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_Spacing, 10,
+#else
 	bar = mui_new(MUIC_Group, MUIA_Group_Horiz, TRUE, MUIA_Group_SameSize, TRUE, MUIA_Group_Spacing, 8,
+#endif
 	              MUIA_InnerLeft, 8, MUIA_InnerRight, 8, MUIA_InnerTop, theme_compact() ? 3 : 6,
 	              MUIA_InnerBottom, theme_compact() ? 3 : 6,
 	              MUIA_Background, (ULONG)theme_spec(T_PANEL), TAGEND);
@@ -1206,11 +1242,20 @@ static int build_window(const char *pubscreen)
 		}
 		mui_do(pages, OM_ADDMEMBER, (ULONG)pg);
 	}
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < NBTN; i++) {
 		char name[16];
 		const char *s;
 		int n = 0;
+#ifdef MM_MAC_HIG
+		/* Save: the default button (its heavy outline, Return and Enter); Cancel: Escape and
+		 * Command-period (src/mac/mui, mm_dialog_keys) */
+		btn[i] = mui_newc(qbutton_mcc, MUIA_QButton_Label, (ULONG)btn_label[i], MUIA_InputMode,
+		                  MUIV_InputMode_RelVerify, MUIA_CycleChain, 1, MUIA_HorizWeight, 0, MUIA_QButton_Key,
+		                  btn_id[i] == ID_SAVE ? 0x44UL : btn_id[i] == ID_CANCEL ? 0x45UL : 0UL, MUIA_QButton_ID,
+		                  btn_id[i], TAGEND);
+#else
 		btn[i] = button(btn_label[i]);
+#endif
 		if (!btn[i])
 			return -1;
 		for (s = btn_label[i]; *s && n < (int)sizeof(name) - 1; s++)
@@ -1219,9 +1264,18 @@ static int build_window(const char *pubscreen)
 		name[n] = 0;
 		bhelp[i] = bubble_dup(name, btn_help[i]);
 		mui_set(btn[i], MUIA_ShortHelp, (ULONG)bhelp[i]);
-		mui_do(bar, OM_ADDMEMBER, (ULONG)btn[i]);
 		mui_do(btn[i], MUIM_Notify, MUIA_Pressed, FALSE, (ULONG)app, 2, MUIM_Application_ReturnID, btn_id[i]);
 	}
+#ifdef MM_MAC_HIG
+	/* Apply at the left; Cancel, then Save, the default, at the right (Guidelines p. 196) */
+	mui_do(bar, OM_ADDMEMBER, (ULONG)btn[1]);
+	mui_do(bar, OM_ADDMEMBER, (ULONG)rect());
+	mui_do(bar, OM_ADDMEMBER, (ULONG)btn[2]);
+	mui_do(bar, OM_ADDMEMBER, (ULONG)btn[0]);
+#else
+	for (i = 0; i < NBTN; i++)
+		mui_do(bar, OM_ADDMEMBER, (ULONG)btn[i]);
+#endif
 	mui_set(pages, MUIA_Group_ActivePage, (ULONG)page);
 	right = mui_new(MUIC_Group, MUIA_Group_Spacing, 0, MUIA_Group_Child, (ULONG)head, MUIA_Group_Child,
 	                (ULONG)pages, TAGEND);
@@ -1377,6 +1431,34 @@ static int ask_file(const char *title, int save, char *buf, int len)
 	return ok;
 }
 
+#ifdef MM_MAC_HIG
+/* The Mac's Save and Apply: the file written now (Save), the changes given to the running Riptide
+ * without a question, and the window kept open, its status line saying what happened. A setting
+ * that is wrong, a file that cannot be written or a change Riptide refused is shown in an alert
+ * with the reason. Never closes the window (0). */
+static int finish(ULONG id)
+{
+	int saved = id == ID_SAVE;
+
+	act_text[0] = 0;
+	if (harvest() < 0 || validate() < 0) {
+		rt_snprintf(act_text, sizeof(act_text), "%s", tr(saved ? "Not saved: a setting needs correcting." :
+		                                                       "Not applied: a setting needs correcting."));
+		return 0;
+	}
+	if (saved && rp_store(1) < 0) {
+		rt_snprintf(act_text, sizeof(act_text), "%s", tr("Not saved: riptide.conf could not be written."));
+		return 0;
+	}
+	rp_apply_mac(saved, act_text, sizeof(act_text));
+	if (saved && rp_load() == 0) {
+		/* what was written is the new starting point ("Changes not saved yet" goes) */
+		other_file = 0;
+		refresh_all();
+	}
+	return 0;
+}
+#else
 /* Save, Use or Apply; 1 when the window should close */
 static int finish(ULONG id)
 {
@@ -1391,6 +1473,7 @@ static int finish(ULONG id)
 	rp_apply(1);
 	return 1;
 }
+#endif
 
 /* the form's field fi shown with a message: what is wrong with it */
 static void form_complain(int fi, const char *err)
@@ -1795,6 +1878,9 @@ int mui_run(const struct rp_gui_args *a)
 	rp_log("window %ldx%ld at %ld,%ld", (long)mui_get(win, MUIA_Window_Width), (long)mui_get(win, MUIA_Window_Height),
 	       (long)mui_get(win, MUIA_Window_LeftEdge), (long)mui_get(win, MUIA_Window_TopEdge));
 	rp_request_fn = mui_request;
+#ifdef MM_MAC_HIG
+	mm_dialog_keys = 1;     /* Return: Save; Escape, Command-period: Cancel (and the messages' buttons) */
+#endif
 	show_status();
 	{
 		/* for the DEBUG log: the bubbles of the first setting and page */

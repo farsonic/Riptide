@@ -110,7 +110,18 @@ void ipp_result(void *pb, int r)
    its notification routines are called with it, as MacTCP does. Kept from the Control entry,
    which runs in the caller's context, until the stack's task takes the call. */
 #define A5_SLOTS 16
-static struct { void *pb, *a5; } a5_of[A5_SLOTS];
+static struct { void *pb, *a5; char prog[32]; } a5_of[A5_SLOTS];
+/* CurApName ($910, a Str31): the name of the program whose context this is */
+static void cur_ap_name(char *out, u32 len)
+{
+	const u8 *p = (const u8 *)0x910;
+	u32 n = p[0] < 32 ? p[0] : 31, i;
+	if (n >= len)
+		n = len - 1;
+	for (i = 0; i < n; i++)
+		out[i] = (char)p[i + 1];
+	out[n] = 0;
+}
 void ipp_keep_a5(void *pb, void *a5)
 {
 	unsigned i;
@@ -122,9 +133,20 @@ void ipp_keep_a5(void *pb, void *a5)
 		if (!a5_of[i].pb || a5_of[i].pb == pb) {
 			a5_of[i].a5 = a5;
 			a5_of[i].pb = pb;
+			cur_ap_name(a5_of[i].prog, sizeof a5_of[i].prog);
 			break;
 		}
 	mac_irq_restore(sr);
+}
+const char *ipp_creator_prog(void *pb)
+{
+	static char now[32];
+	unsigned i;
+	for (i = 0; i < A5_SLOTS; i++)
+		if (a5_of[i].pb == pb)
+			return a5_of[i].prog;
+	now[0] = 0;
+	return now;
 }
 void *ipp_creator_a5(void *pb)
 {

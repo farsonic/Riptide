@@ -152,11 +152,30 @@ int rp_load(void)
 	return r;
 }
 
+#ifdef MM_MAC_HIG
+const char *mm_os_errtext(LONG err);
+void mm_os_macpath(const char *amiga, char *out, int len);
+#endif
+/* "Cannot write PATH", and on the Mac its full path and the File Manager's reason */
+static void cannot_write(char *msg, size_t size, const char *path)
+{
+#ifdef MM_MAC_HIG
+	char mp[256];
+	LONG e = IoErr();
+
+	mm_os_macpath(path, mp, sizeof(mp));
+	rt_snprintf(msg, size, "The settings were not saved.\nCannot write %s:\n%s (error %ld).", mp, mm_os_errtext(e),
+	            (long)e);
+#else
+	rt_snprintf(msg, size, "Cannot write %s", path);
+#endif
+}
+
 int rp_store(int save)
 {
 	size_t len;
 	char *text = rp_conf_text(&rp_cfg, &len);
-	char msg[160];
+	char msg[400];
 	int r = 0;
 
 	if (!text) {
@@ -164,10 +183,10 @@ int rp_store(int save)
 		return -1;
 	}
 	if (save && write_file(RP_ENVARC_CONF, text, len, 1) < 0) {
-		rt_snprintf(msg, sizeof(msg), "Cannot write %s", RP_ENVARC_CONF);
+		cannot_write(msg, sizeof(msg), RP_ENVARC_CONF);
 		r = -1;
 	} else if (write_file(RP_ENV_CONF, text, len, 0) < 0) {
-		rt_snprintf(msg, sizeof(msg), "Cannot write %s", RP_ENV_CONF);
+		cannot_write(msg, sizeof(msg), RP_ENV_CONF);
 		r = -1;
 	}
 	rp_free(text);
@@ -295,6 +314,85 @@ void rp_apply(int ask)
 		           sizeof(msg) - strlen(msg));
 	rp_message(msg);
 }
+
+#ifdef MM_MAC_HIG
+/* the Mac: what an Apply left waiting for a restart of the Mac, in words */
+static char owed_what[100];
+static int owed_unsaved;        /* some of it was only applied, not saved yet */
+
+static void owe(const char *what)
+{
+	size_t k = strlen(owed_what);
+
+	if (what[0] && !contains(owed_what, what))
+		rt_snprintf(owed_what + k, sizeof(owed_what) - k, "%s%s", k ? ", " : "", what);
+}
+
+/* apply_one, but a card turned off ("interface en0 delete") waits for the Mac's next start: the
+ * Mac's Riptide cannot close a card while it runs */
+static void mac_apply_one(const char *line, void *arg)
+{
+	struct apply_state *st = arg;
+	size_t n = strlen(line);
+	int failed = st->failed;
+
+	if (!strncmp(line, "interface ", 10) && n > 17 && !strcmp(line + n - 7, " delete") && !strchr(line + 10, '.')) {
+		owe("a card turned off");
+		return;
+	}
+	apply_one(line, arg);
+	/* "nameserver flush" before the new servers: one change, not two */
+	if (n > 6 && !strcmp(line + n - 6, " flush") && st->failed == failed)
+		st->n--;
+}
+
+void rp_apply_mac(int saved, char *line, int len)
+{
+	struct apply_state st;
+	char what[100], msg[600];
+	size_t k;
+	int restart;
+
+	rp_restart_what(&rp_cfg, what, sizeof(what));
+	owe(what);
+	if (saved)
+		owed_unsaved = 0;
+	else if (what[0])
+		owed_unsaved = 1;
+	if (!FindPort((CONST_STRPTR)RIPTIDE_PORTNAME)) {
+		rt_snprintf(line, (size_t)len, "%s", saved ? "Saved. Riptide is not running: it takes them when the Mac starts." :
+		            "Not applied: Riptide is not running. Save, and it takes them when the Mac starts.");
+		return;
+	}
+	memset(&st, 0, sizeof(st));
+	k = strlen(owed_what);
+	restart = rp_live_commands(&rp_cfg, mac_apply_one, &st);
+	if (!saved && strlen(owed_what) != k)
+		owed_unsaved = 1;               /* a card turned off, only applied */
+	rp_conf_applied(&rp_cfg);
+	if (restart && !owed_what[0])
+		rt_strlcpy(owed_what, "some settings", sizeof(owed_what));
+	if (st.failed) {
+		rt_snprintf(msg, sizeof(msg), "Riptide did not take %d of the %d change%s:\n%s", st.failed, st.n,
+		            rp_plural((unsigned long)st.n), st.report);
+		rp_message(msg);
+	}
+	if (!st.n)
+		k = (size_t)rt_snprintf(line, (size_t)len, "%s", saved ? "Saved" : "Nothing to apply");
+	else if (saved)
+		k = (size_t)rt_snprintf(line, (size_t)len, "Saved; Riptide took %d change%s", st.n - st.failed,
+		                        rp_plural((unsigned long)(st.n - st.failed)));
+	else
+		k = (size_t)rt_snprintf(line, (size_t)len, "Applied %d change%s", st.n - st.failed,
+		                        rp_plural((unsigned long)(st.n - st.failed)));
+	if (st.failed && k < (size_t)len)
+		k += (size_t)rt_snprintf(line + k, (size_t)len - k, " (%d refused)", st.failed);
+	if (k < (size_t)len)
+		rt_snprintf(line + k, (size_t)len - k, owed_what[0] ? (owed_unsaved ? ". Save and restart the Mac for: %s." :
+		                                                      ". Restart the Mac for: %s.") : ".",
+		            owed_what);
+}
+#endif
 
 /* ---- list pages ---- */
 int rp_list_n(int page)

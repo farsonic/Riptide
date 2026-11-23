@@ -328,6 +328,8 @@ int rt_mac_open(void *pb, void *dce)
 		rt_unlock();
 		if (r < 0) { rt_log(RT_LOG_ERR, "rt_init: %d", r); return ipBadCnfgErr; }
 		core_up = 1;
+		/* QoS rules by program: the MacTCP program a socket is made for (os_mac.c) */
+		rt_qos_program_hook = rt_os_program_name;
 		mac_clock_init();                       /* the Map control panel's time zone, NTP's clock hook */
 		rt_log(RT_LOG_INFO, "Riptide for the Mac: core up");
 		configure();

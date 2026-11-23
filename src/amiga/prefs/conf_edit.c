@@ -2570,3 +2570,40 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 		restart = 1;
 	return restart;
 }
+
+/* buf += (buf empty ? "" : ", ") + part, cut at size */
+static void add_part(char *buf, size_t size, const char *part)
+{
+	size_t k = strlen(buf);
+
+	if (k && k + 2 < size) {
+		buf[k++] = ',';
+		buf[k++] = ' ';
+		buf[k] = 0;
+	}
+	if (k < size)
+		rt_strlcpy(buf + k, part, size - k);
+}
+
+void rp_restart_what(const struct rp_conf *c, char *buf, size_t size)
+{
+	const struct rp_model *o = c->have_applied ? &c->applied : &c->orig, *n = &c->cur;
+	int i, deflt = 0;
+
+	buf[0] = 0;
+	if (ifaces_changed(o, n) ||
+	    ((list_changed(o, n, RP_LIST_ALIAS) || list_changed(o, n, RP_LIST_VLAN) || list_changed(o, n, RP_LIST_ADDR6)) &&
+	     str_changed(o->ifc[0].ifname, n->ifc[0].ifname)))
+		add_part(buf, size, "the cards and their addresses");
+	if (o->ipv4 != n->ipv4 || o->ipv6 != n->ipv6)
+		add_part(buf, size, "IPv4 or IPv6 on or off");
+	for (i = 0; i < RP_NSC; i++)
+		if (o->sc[i] != n->sc[i] && n->sc[i] == RP_UNSET)
+			deflt = 1;
+	for (i = 0; i < RP_NIF; i++)
+		if (n->ifc[i].ifname[0] && !n->ifc[i].disabled && o->ifc[i].ipv6 != n->ifc[i].ipv6 && n->ifc[i].ipv6 < 0 &&
+		    !str_changed(o->ifc[i].ifname, n->ifc[i].ifname))
+			deflt = 1;
+	if (deflt)
+		add_part(buf, size, "settings set back to Default");
+}

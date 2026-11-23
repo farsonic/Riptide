@@ -14,6 +14,10 @@ void  ipp_opened(void);                                  /* drvr.S: after an Ope
 void  ipp_result(void *pb, int r);                       /* complete a call; errors logged once per kind */
 void *ipp_creator_a5(void *pb);                          /* the A5 of the program that made this create call */
 void  ipp_keep_a5(void *pb, void *a5);                   /* kept for ipp_creator_a5 (a create call's Control) */
+const char *ipp_creator_prog(void *pb);                  /* that program's name (CurApName then), "" unknown */
+/* os_mac.c: the program a socket is being made for, while mactcp.c and ipp6.c make it; its name is
+   what the core's rt_os_program_name() gives (Background programs, QoS rules by program) */
+extern const char *mac_prog_name;
 int   ipp_in_poll(void);                                 /* the stack's task is running .IPP's and .IPP6's calls */
 void  ipp_dm_dequeue(void *pb, void *dce);               /* a call that waits, off the Device Manager's queue (irq off) */
 

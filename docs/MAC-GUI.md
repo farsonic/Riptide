@@ -62,14 +62,162 @@ understands: `interface en0 device=.ENET unit=0 [mtu=] [ipv4=] [ipv6=] [tcpwindo
 On the first run, with no riptide.conf yet, the editor writes a starting one (the card and
 DHCP), as the Amiga's Installer does.
 
-## Save, Use, Apply and Cancel on the Mac
+## Save, Apply and Cancel on the Mac
 
-The buttons do what they do on the Amiga: **Save** writes riptide.conf for good (Preferences
-folder) and gives the changes to the running Riptide; **Use** writes the In Use copy (until the
-Mac restarts) and gives the changes; **Apply** gives the changes to the running Riptide only and
-keeps the window open; **Cancel** forgets them. Riptide for the Mac cannot yet restart its
-network while it runs (RTCMD_RESTART), so changes to the card and its addresses take effect
-when the Mac restarts, and the editor says so.
+![RiptidePrefs on a 512 x 342 screen: Apply, Cancel and Save, the default, after a Save](mac-gui-buttons.png)
+
+The Mac has three buttons at the bottom of the window, as the Guidelines' dialogs do (p. 196,
+205-206): **Apply** at the left, **Cancel** and **Save** at the right, Save the default with the
+heavy rounded outline.
+
+- **Save** (Return, Enter, File > Save, Command-S): writes riptide.conf in the Riptide folder of the
+  Preferences folder at once (the old one kept as riptide.conf.bak, a copy in its In Use folder),
+  then gives the running Riptide every change it can take without a question, and the window stays
+  open. The status line says what happened: "Saved; Riptide took 2 changes.", or, when some of the
+  changes wait for the Mac's next start, "Saved. Restart the Mac for: the cards and their
+  addresses." What waits: a card, its driver, unit or address (DHCP or static),
+  IPv4 or IPv6 on or off for all cards, a card turned off, settings set back to Default
+  (`rp_restart_what`, conf_edit.c). After a Save the saved file is the new starting point:
+  "Not saved yet" goes from the status line. The old file is kept as riptide.conf.bak: on the
+  Mac that never happened before (`Rename` in mm_os.c gave _HRename the new name alone, which the
+  File Manager refuses with bdNamErr when the old one is a full path; it now gets the full path).
+- **Apply** (File > Apply, Command-Y): the same for the running Riptide only; nothing is written,
+  so the changes last until the Mac restarts ("Applied 2 changes.  Not saved yet."). It is the Amiga's
+  Use and Apply in one: the Mac's Riptide reads only the saved riptide.conf when it starts.
+- **Cancel** (Escape, Command-period, the close box, Command-W): closes the window. Changes that
+  were not saved are forgotten; changes already applied stay in the running Riptide until the Mac
+  restarts (Cancel does not take them back: the Guidelines' Cancel undoes the dialog's own edits,
+  and Apply was a command of its own).
+
+![A setting that is wrong stops Save with an alert](mac-gui-save-alert.png)
+
+Every failure is an alert with the reason, and the status line says that nothing was saved:
+a setting that is wrong (the alert names it and its page is shown), riptide.conf that cannot be
+written (its full Mac path and the File Manager's reason: "the disk is locked", "the disk is
+full", "the file is open for writing in another program", with the error number; mm_os.c keeps
+the last File Manager error for `IoErr()`), and a change the running Riptide refused (the
+command and Riptide's answer).
+
+The keys are the Guidelines' dialog keys, which the Mac MUI layer gives a program that asks for
+them (`mm_dialog_keys`, mm_app.c): Return and Enter press the default button even while a text
+field is being typed in (the field takes its text first), Escape and Command-period press Cancel.
+The default button's outline is drawn by `mm_hig_ring` (mm_area.c) for a `qbutton` whose key is
+Return, so RiptidePrefs' own messages ("OK", "Apply|Later") get it too.
+
+**Why saving failed** (fixed 23 November 2026): a riptide.conf that chooses its cards by kind, as
+docs/MAC.md shows it (`interface en0 device=.ENET card=ethernet`, `interface en1 device=.ENET
+card=wifi`, no `unit=`), has both cards on .ENET unit 0 as far as the editor's model goes, and the
+check before saving refused it ("Unit: another card uses this device and unit already"), so neither
+Save nor Use wrote anything. On the Mac `card=`, `slot=` and `id=` choose the card and the unit is
+not used (net_mac.c `select_card`); the check now leaves such cards alone (`picks_card`,
+prefs_fields.c), and the Interface page's list shows "en1: .ENET card=wifi, DHCP" for them. The
+Amiga keeps the check: its lines never have `card=`.
+
+**The compact Mac's screen.** The window now fits 512 x 342: 494 x 304 at its smallest (it was
+530 pixels wide, the page head's minimum of 36 lines of the font; on a screen under 560 pixels wide
+it is 33, which the widest page, Time, still fits). Before, the right edge of the window, where
+Save now stands, was off the SE's screen.
+
+**Tested** (23 November 2026) on Aurora68's solo testbed at 512 x 342 (`mac.screen=512x342`, the
+512 x 342 declaration ROM, System 7.1, Riptide running with DHCP), driven through the remote
+control, with the riptide.conf of docs/MAC.md (`card=ethernet`, `card=wifi`): Domain changed and
+Return pressed: "Saved; Riptide took 1 change.", the file in the Preferences folder had the new
+line; RiptidePrefs quit and opened again showed it. A change and Escape closed the window and the
+next start showed the saved value; Command-period closed it as well. Apply of a domain changed the
+running Riptide's name (the Status page: "Host name: MacSE.home.lan...") and not the file. An MTU
+change saved with Return: "Saved. Restart the Mac for: the cards and their addresses." and
+riptide.conf.bak made. A wrong MTU: the alert above, nothing written.
+
+On the Amiga nothing changes: Save, Use, Apply and Cancel as before (everything above is under
+`MM_MAC_HIG`, which only Makefile.mac defines). Shared changes the Amiga gets: the check of card
+lines (a line with `card=`, `slot=` or `id=`, which Amiga lines never have), the card list's text
+for such lines, and the 33-line head on a screen under 560 pixels wide.
+
+## Every setting and what acts on it on the Mac
+
+Audited 23 November 2026 against mac-port at fed1a6d. Riptide for the Mac reads riptide.conf
+when it starts (src/mac/main_mac.c `configure`: the core's `rt_config_line` with the Mac's own
+`interface`, `mactcp` and `ipp6` lines), and Save and Apply send the changes as commands to the
+running stack (`rp_live_commands`, conf_edit.c; RTMAC_PORT in src/mac/ipp.c `port_call`, the
+core's `rt_ctl_command`). The core is the Amiga's, so a setting the core acts on works on the Mac
+too unless the Mac never reaches that code.
+
+**works**: acts at start and on Save/Apply. **start**: acts when the Mac starts (Save says
+"Restart the Mac for ..."; the Mac's Riptide cannot restart its network while it runs).
+**partly**: see the note. **nothing**: no code acts on it on the Mac. **hidden**: the Amiga's
+alone; the Mac leaves it out of its page (`FL_AMIGA`, prefs_fields.c; the value stays in
+riptide.conf).
+
+| Page | Field or button | riptide.conf | Mac | Evidence | Fix |
+|---|---|---|---|---|---|
+| Interface | Cards list, Add card, Remove card | `interface NAME device=.ENET ...` | start | main_mac.c `interface_line`, net_mac.c `net_mac_open` | |
+| Interface | Interface name | `interface NAME` | start | main_mac.c `interface_line` | |
+| Interface | Device | `device=` | hidden | `interface_line` takes only `.ENET` | hidden (FL_AMIGA); new cards get .ENET |
+| Interface | Unit | `unit=` | start | net_mac.c `select_card`: the Nth Ethernet card; `card=`, `slot=`, `id=` come first | two `card=` lines on unit 0 no longer stop Save (`picks_card`) |
+| Interface | MTU | `mtu=` | partly | `net_mac_open`: 576 to 1499, anything else is 1500 | |
+| Interface | TCP window | `tcpwindow=` | start | `interface_line`: `nif->tcp_window` | |
+| Interface | Reads | `reads=` | hidden | `interface_line` skips `reads=` | hidden (FL_AMIGA) |
+| Interface | Card off | `disabled` | start | `interface_line` does not open it; "interface NAME delete" is refused while the Mac runs | Apply no longer sends the refused command; Save says it waits for a restart |
+| Interface | IPv4, IPv6 (all cards) | `ipv4 on/off`, `ipv6 on/off` | start | core config.c | |
+| Address | Mode, Address, Netmask, Gateway | `dhcp IF`, `ifconfig IF A netmask M up`, `route add default G` | start | core config.c, dhcp.c | |
+| Address | Link-local if no DHCP, after (s) | `dhcp IF linklocal off wait S` | start | core `rt_dhcp_set_linklocal` | |
+| Address | IPv6 on this card | `interface ... ipv6=`, `ipv6 IF on/off` | works | `interface_line`, core `ipv6` command | |
+| Extra addresses | the list | `ifconfig IF alias A/BITS` | works | core config.c ifconfig | |
+| VLANs | the list | `interface IF.ID vlan= parent=` | nothing | core vlan.c makes the interface, but net_mac.c attaches protocol handlers for IPv4, ARP and IPv6 only: no tagged frame ever arrives | page help says so on the Mac (mac_lang.c); bigger gap below |
+| Routes | the list | `route add ...` | works | core config.c route | |
+| IPv6 | Router advertisements, Temporary addresses, Address identifiers, Duplicate checks, Announce new addresses | `sysctl net.inet6.ip6.*` | works | core ip6 | |
+| IPv6 addresses | the list | `ifconfig IF inet6 A/P` | works | core config.c | |
+| Names | Host name | `hostname` | works | core; without one, main_mac.c `default_hostname` (Sharing Setup) | |
+| Names | Domain | `domain` | works | core resolver's search list (.IPP6 `rt_dns_search_list`) | |
+| Names | DNS server 1-3 | `nameserver` | works | mactcp.c's and ipp6.c's DNS clients ask the core's servers | |
+| Names | EDNS size, DNS over TCP | `sysctl dns.edns_size`, `dns.tcp_fallback` | partly | the core resolver only: NTP's server names and the Riptide Command Terminal (api_mac.c). The DNR (mactcp.c) and .IPP6 (ipp6.c) have DNS clients of their own, without EDNS or TCP | bigger gap below |
+| Hosts | the list | `host NAME ADDR` | works | `rt_resolve_local46` in mactcp.c and ipp6.c | |
+| Time | NTP time sync, NTP servers | `ntp ...` | works | core ntp.c; os_mac.c sets the clock (SetDateTime, fed1a6d) | |
+| Time | Time zone | `timezone` | works | os_mac.c (`auto`: the Map control panel) | |
+| Time | mDNS responder | `mdns on/off` | works | core netsvc; on unless `mdns off` (main_mac.c) | |
+| Time | Set Clock Now | (`ntp sync`) | works | mui_main.c `ntp_sync_now`, core ctl.c | |
+| TCP | Quick ACK, Delayed ACK segments, Delayed ACK limit, ECN | `sysctl net.inet.tcp.*` | works | core tcp_input.c, tcp_output.c | |
+| Connecting | Fast Open, Fast Open backoff | `sysctl net.inet.tcp.fastopen*` | partly | MacTCP has no call that asks for Fast Open, so only "Fast Open defer all" reaches its programs' connections (not tried with them) | |
+| Connecting | Fast Open defer all, SYN first RTO, SYN max RTO, SYN backoff, MTU probing | `sysctl net.inet.tcp.*` | works | core tcp | |
+| Ports | Connect timeout, ICMP unreachable, Time-wait reuse, Time-wait limit, Local ports from/to | `sysctl net.inet.*` | works | core tcp; MacTCP's local port 0 takes one from the range | |
+| Keepalive | Keepalive all, Idle time, Probe interval, Probe count | `sysctl net.inet.tcp.keep*` | works | core tcp_timer; MacTCP has no keepalive call, so "Keepalive all" is the way to turn it on | |
+| Background | Default TCP algorithm, Background mode, Remote ports, Local ports, LEDBAT target, LEDBAT slowdowns | `sysctl net.inet.tcp.*` | works | core tcp_ledbat.c | |
+| Background | Background programs | `sysctl net.inet.tcp.bg_programs` | works (fixed) | os_mac.c `rt_os_program_name` gave "" | the program that made the stream (CurApName at TCPCreate and UDPCreate, ipp.c `ipp_creator_prog`) is its socket's program (mactcp.c, ipp6.c) |
+| Memory | Low water, Pressure, High water | `sysctl net.inet.tcp.mem_*` | works | core tcp_mem.c | |
+| Happy Eyeballs | Happy Eyeballs, Attempt delay, Resolution delay, IPv6 lookup filter | `sysctl net.inet.he.*` | hidden | core `rt_he_connect` and the filter serve riptide.library's connect by name (src/amiga/riptidelib.c); MacTCP and .IPP6 programs connect to addresses | hidden (FL_AMIGA) |
+| Happy Eyeballs | Prefer | `sysctl net.inet.he.prefer` | works (fixed) | nothing read it on the Mac | .IPP6's default answer order follows it unless riptide.conf has `ipp6 order` (ipp6.c `order_now`) |
+| Happy Eyeballs | DNS negative cache | `sysctl dns.cache.neg_maxttl` | partly | the core's cache: the core resolver's lookups (NTP, the Terminal); the DNR and .IPP6 read the cache but do not fill it | |
+| QoS | QoS bands, Frames in flight, Band limit | `qos on/off`, `sysctl net.inet.ip.qos_*` | hidden | core qos.c queues a frame only while the driver has frames in flight (`nif->drv->tx_inflight`); net_mac.c reports none, so every frame passes the bands | hidden until net_mac.c counts them; bigger gap below |
+| QoS | Priority sets DSCP | `sysctl net.inet.ip.qos_prio_dscp` | works | core qos.c marks the socket's packets | |
+| QoS rules | the list | `qos rule ...` | partly | a rule's priority picks a band, which the Mac does not have (above); its DSCP mark works, by port and now by program | program names: as Background programs; QoS's program hook set (main_mac.c) |
+| Neighbours | the list | `arp add ...` | works | core config.c arp | |
+| Other lines | the list | (kept as they are) | works | conf_edit.c | |
+| Counters | Refresh, Zero, Since start | (RTCMD_TABLES) | works | ipp.c `port_call` `read_tables` | |
+| Status | the page | (RTCMD_TABLES) | works | as Counters | |
+| About | Buy its author a coffee | | partly | no browser on a classic Mac: the address is shown (mm_os.c `URL_OpenA`) | |
+| (menus) | Open, Save As, Last Saved, Restore, Reset to Defaults, Dark Theme, Help Bubbles | | works | Standard File (mm_os.c); RiptidePrefs.prefs in the Riptide folder | |
+| (buttons) | Save, Apply, Cancel | | works | above | Use is Apply on the Mac |
+
+**Bigger gaps** (not done here):
+- **No restart of the network while the Mac runs** (RTCMD_RESTART is refused in ipp.c
+  `port_call`): a card's name, unit, MTU or TCP window, DHCP or a static address, IPv4/IPv6 for
+  all cards, a card turned off or on and a setting set back to Default all wait for the Mac's next
+  start. A restart in the stack (DHCP stopped, addresses and routes flushed, `rt_config_reset`, the
+  file read again with the cards that are open kept) would make them all live.
+- **VLANs**: net_mac.c would need a protocol handler for type 0x8100 (drvr.S has four handler
+  entries, one per card) that hands the frame to the core's VLAN input; whether .ENET drivers
+  deliver tagged frames at all has to be tried on real cards.
+- **QoS bands**: net_mac.c's transmit slots would need to be the driver's `tx_slots` and
+  `tx_inflight` (counted at the write and at its completion, which runs at interrupt time) and the
+  stack's poll would run `rt_qos_run` when a slot comes free; then the bands, Frames in flight and
+  Band limit can come back on the Mac.
+- **DNS for MacTCP programs**: the DNR's and .IPP6's own DNS clients ignore EDNS size, DNS over TCP
+  and the negative cache, and do not fill the core's cache; moving them onto the core resolver's
+  asynchronous lookups would make the Names page's settings and the cache apply to every program.
+- **Happy Eyeballs for .IPP6**: a .IPP6 call that connects by name (like riptide.library's
+  `RiptideConnectName`) would let Happy Eyeballs, its delays and the lookup filter come back on
+  the Mac.
+- **The SE's screen**: see "Known gaps".
 
 ## Keeping both versions in step
 
@@ -266,10 +414,11 @@ is too tied to graphics.library to compile here, so the Mac got a small MUI fron
 
 ## Known gaps
 
-- Riptide for the Mac drives one Ethernet card (unit 0).
+- Riptide for the Mac drives at most four Ethernet cards.
 - RESTART (applying card and address changes without a restart of the Mac) is not there yet.
-- The window is laid out from the editor's sizes; the 512 x 342 screen of a compact Mac is
-  narrower than the editor's smallest compact window (530 pixels).
+- The window fits the 512 x 342 screen of a compact Mac only just (494 x 304 of the 512 x 302
+  below the menu bar); a page that grows (a longer translation, a new setting) can push it off
+  again. The nav list scrolls on such a screen.
 - The guidelines' fonts are only partly followed: menus, alerts and push button names are in the
   system font, but the MUI windows' own text is Geneva 10 (the editor's layouts are measured for
   it), where the guidelines would have Chicago 12 for labels and buttons.

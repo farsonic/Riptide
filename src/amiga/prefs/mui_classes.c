@@ -20,6 +20,7 @@ struct MUI_CustomClass *nav_mcc, *head_mcc, *qbutton_mcc, *qlabel_mcc, *status_m
 #define RAW_UP     0x4C
 #define RAW_DOWN   0x4D
 #define RAW_ESC    0x45
+#define RAW_RETURN 0x44
 #define RAW_WHEEL_UP   0x7A     /* a mouse wheel, as Intuition reports it */
 #define RAW_WHEEL_DOWN 0x7B
 #define SHIFTS     (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)
@@ -549,7 +550,9 @@ DISPATCHER(head_dispatch)
 		}
 		break;
 	case MUIM_AskMinMax: {
-		LONG h = head_h(), w = theme_fh() * 36;
+		/* a screen under 560 pixels wide (the compact Mac's 512 x 342): narrower, so that the
+		 * window fits it (the widest page, Time, is 27 lines of the font wide) */
+		LONG h = head_h(), w = theme_fh() * (_screen(obj)->Width < 560 ? 33 : 36);
 		DoSuperMethodA(cl, obj, msg);
 		mc_minmax(msg, w, w, MUI_MAXMAX, h, h, h);
 		return 0;
@@ -591,6 +594,11 @@ struct qbutton_data {
 
 #ifdef MM_MAC_HIG
 void mm_hig_button(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1, int held);
+void mm_hig_ring(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1, int dim);
+/* the default button, the one Return presses: the Guidelines' heavy outline round it, four
+ * pixels outside the button (p. 205-206), which its box makes room for */
+#define QB_RING(d) ((d)->key == RAW_RETURN)
+#define QB_RINGW 4
 #endif
 static void qbutton_draw(struct qbutton_data *d, Object *obj)
 {
@@ -603,6 +611,13 @@ static void qbutton_draw(struct qbutton_data *d, Object *obj)
 #ifdef MM_MAC_HIG
 	/* the Mac's push button (src/mac/mui/mm_area.c: rounded, inverted while held) */
 	(void)face;
+	if (QB_RING(d)) {
+		mm_hig_ring(rp, x0, y0, x1, y1, dis);
+		x0 += QB_RINGW;
+		y0 += QB_RINGW;
+		x1 -= QB_RINGW;
+		y1 -= QB_RINGW;
+	}
 	mm_hig_button(rp, x0, y0, x1, y1, sel && !dis);
 	theme_keytext(rp, x0 + (x1 - x0 + 1 - w) / 2, y0 + (y1 - y0 + 1 - theme_fh()) / 2, d->label,
 	              dis ? tpen(T_DISABLED) : sel ? tpen(T_WHITE) : tpen(T_TEXT));
@@ -643,6 +658,15 @@ DISPATCHER(qbutton_dispatch)
 		break;
 	case MUIM_AskMinMax: {
 		LONG w = mc_measure(((struct qbutton_data *)INST_DATA(cl, obj))->label, 1) + 24, h = theme_fh() + 8;
+#ifdef MM_MAC_HIG
+		d = INST_DATA(cl, obj);
+		if (w < 59)
+			w = 59;                 /* the Guidelines' narrowest push button (p. 204) */
+		if (QB_RING(d)) {
+			w += 2 * QB_RINGW;
+			h += 2 * QB_RINGW;
+		}
+#endif
 		DoSuperMethodA(cl, obj, msg);
 		mc_minmax(msg, w, w, MUI_MAXMAX, h, h, h);
 		return 0;

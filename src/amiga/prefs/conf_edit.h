@@ -270,5 +270,9 @@ int  rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void
 void rp_conf_applied(struct rp_conf *c);
 /* rp_live_commands() would send something or ask for a restart */
 int  rp_live_pending(const struct rp_conf *c);
+/* Which of those changes wait for a restart, in words for a message: "the cards and their
+ * addresses, IPv4 or IPv6 on or off, settings set back to Default" (the parts that apply), or ""
+ * when rp_live_commands() can send them all. */
+void rp_restart_what(const struct rp_conf *c, char *buf, size_t size);
 
 #endif

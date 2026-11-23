@@ -119,7 +119,7 @@ static const long cyv_gen[] = { RP_UNSET, 1, 0 };
 const struct rp_field rp_fields[] = {
 	{ P_IFACE, F_STR,   FL_IF, MI(ifname), 0, 0,       "_Interface name", NULL, NULL,
 	  "The name Riptide gives the card, such as eth0. Commands and the other pages use it." },
-	{ P_IFACE, F_STR,   FL_IF, MI(device), 0, 0,       "_Device", NULL, NULL,
+	{ P_IFACE, F_STR,   FL_IF | FL_AMIGA, MI(device), 0, 0, "_Device", NULL, NULL,
 	  "The network card's driver: SANA-II, such as a2065.device or uaenet.device, or netdev, such as "
 	  "Emu68's genet.device 4.x." },
 	{ P_IFACE, F_NUM,   FL_IF, MI(unit), 0, 255,       "U_nit", NULL, NULL,
@@ -129,7 +129,7 @@ const struct rp_field rp_fields[] = {
 	{ P_IFACE, F_NUM,   FL_IF | FL_ZERO, MI(tcpwindow), 536, 16777216, "TCP _window", NULL, NULL,
 	  "Caps TCP's receive window on this card. Leave it empty: a limit such as 1440 makes every "
 	  "download crawl. Only for old FS-UAE builds that drop frames." },
-	{ P_IFACE, F_NUM,   FL_IF, MI(reads), 4, 128,      "_Reads", NULL, NULL,
+	{ P_IFACE, F_NUM,   FL_IF | FL_AMIGA, MI(reads), 4, 128, "_Reads", NULL, NULL,
 	  "How many receive requests Riptide keeps waiting at the driver. More can help fast cards." },
 	{ P_IFACE, F_CHECK, FL_IF | FL_RIGHT, MI(disabled), 0, 0, "Card o_ff", NULL, NULL,
 	  "Keep the card's settings but don't use it: Apply removes it with its routes, addresses and DHCP. "
@@ -250,23 +250,23 @@ const struct rp_field rp_fields[] = {
 	  "Above this much buffer memory Riptide shrinks the buffers of busy connections." },
 	{ P_MEM,   F_NUM,   0, SC(RP_SC_MEM_HIGH), 16, 4194304, "_High water (KB)", NULL, NULL,
 	  "The most buffer memory all connections together may use." },
-	{ P_HE,    F_CYCLE, 0, SC(RP_SC_HE_ENABLE), 0, 0,  "_Happy Eyeballs", cy_sw, cyv_sw,
+	{ P_HE,    F_CYCLE, FL_AMIGA, SC(RP_SC_HE_ENABLE), 0, 0, "_Happy Eyeballs", cy_sw, cyv_sw,
 	  "Try a name's IPv6 and IPv4 addresses side by side and keep the first that connects." },
-	{ P_HE,    F_NUM,   0, SC(RP_SC_HE_DELAY), 10, 2000, "Attempt _delay (ms)", NULL, NULL,
+	{ P_HE,    F_NUM,   FL_AMIGA, SC(RP_SC_HE_DELAY), 10, 2000, "Attempt _delay (ms)", NULL, NULL,
 	  "How long one address may take before the next one is tried as well." },
-	{ P_HE,    F_NUM,   0, SC(RP_SC_HE_RESDELAY), 0, 1000, "_Resolution delay (ms)", NULL, NULL,
+	{ P_HE,    F_NUM,   FL_AMIGA, SC(RP_SC_HE_RESDELAY), 0, 1000, "_Resolution delay (ms)", NULL, NULL,
 	  "How long to wait for the IPv6 answer when the IPv4 one came first." },
 	{ P_HE,    F_CYCLE, 0, SC(RP_SC_HE_PREFER), 0, 0,  "Pre_fer", cy_prefer, cyv_prefer,
 	  "Which kind of address is tried first." },
-	{ P_HE,    F_CYCLE, 0, SC(RP_SC_HE_AAAA), 0, 0,    "_IPv6 lookup filter", cy_sw, cyv_sw,
+	{ P_HE,    F_CYCLE, FL_AMIGA, SC(RP_SC_HE_AAAA), 0, 0, "_IPv6 lookup filter", cy_sw, cyv_sw,
 	  "Do not ask for IPv6 addresses while the Amiga has no IPv6 route to the Internet." },
 	{ P_HE,    F_NUM,   0, SC(RP_SC_DNS_NEGTTL), 0, 86400, "DNS _negative cache (s)", NULL, NULL,
 	  "How long a name that does not exist is remembered. 0 asks again every time." },
-	{ P_QOS,   F_CYCLE, 0, MS(qos),       0, 0,        "_QoS bands", cy_tri, cyv_tri,
+	{ P_QOS,   F_CYCLE, FL_AMIGA, MS(qos), 0, 0,       "_QoS bands", cy_tri, cyv_tri,
 	  "Send interactive packets before bulk ones. Helps on slow lines." },
-	{ P_QOS,   F_NUM,   0, SC(RP_SC_QOS_INFLIGHT), 1, 32, "Frames in _flight", NULL, NULL,
+	{ P_QOS,   F_NUM,   FL_AMIGA, SC(RP_SC_QOS_INFLIGHT), 1, 32, "Frames in _flight", NULL, NULL,
 	  "How many packets may wait at the driver. Fewer keeps priorities sharp." },
-	{ P_QOS,   F_NUM,   0, SC(RP_SC_QOS_LIMIT), 8, 1024, "Band _limit (frames)", NULL, NULL,
+	{ P_QOS,   F_NUM,   FL_AMIGA, SC(RP_SC_QOS_LIMIT), 8, 1024, "Band _limit (frames)", NULL, NULL,
 	  "The most packets each priority band holds." },
 	{ P_QOS,   F_CYCLE, 0, SC(RP_SC_QOS_PRIODSCP), 0, 0, "Priority sets _DSCP", cy_sw, cyv_sw,
 	  "Mark packets for routers according to their priority." },
@@ -534,6 +534,34 @@ static int count_names(const char *s)
 	return n;
 }
 
+/* Does a card line choose its card by something other than its unit? The Mac's "interface en1
+ * device=.ENET card=wifi" (or slot=, id=) names the card itself, and the unit is then not used, so
+ * two such lines on .ENET unit 0 are two cards, not one card twice. */
+static int picks_card(const char *extra)
+{
+	const char *s = extra;
+
+	while (*s) {
+		while (*s == ' ')
+			s++;
+		if (!rt_strncasecmp(s, "card=", 5) || !rt_strncasecmp(s, "slot=", 5) || !rt_strncasecmp(s, "id=", 3))
+			return 1;
+		while (*s && *s != ' ')
+			s++;
+	}
+	return 0;
+}
+
+int rp_fshown_on(int fi, int mac)
+{
+	return fi >= 0 && fi < rp_nfields && !(mac && (rp_fields[fi].flags & FL_AMIGA));
+}
+
+int rp_lfshown_on(int fi, int mac)
+{
+	return fi >= 0 && fi < rp_nlfields && !(mac && (rp_lfields[fi].flags & LF_AMIGA));
+}
+
 /* the failing field and its reason */
 static int bad(const struct rp_model *m, const void *addr, const char *why, int *fi, char *err, int errlen)
 {
@@ -564,7 +592,8 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 			return bad(m, f->device, "enter the SANA-II device, e.g. uaenet.device", fi, err, errlen);
 		for (j = 0; j < k; j++)
 			if (m->ifc[j].ifname[0] && !rt_strcasecmp(m->ifc[j].device, f->device) &&
-			    (m->ifc[j].unit < 0 ? 0 : m->ifc[j].unit) == (f->unit < 0 ? 0 : f->unit))
+			    (m->ifc[j].unit < 0 ? 0 : m->ifc[j].unit) == (f->unit < 0 ? 0 : f->unit) &&
+			    !picks_card(m->ifc[j].ifextra) && !picks_card(f->ifextra))
 				return bad(m, &f->unit, "another card uses this device and unit already", fi, err, errlen);
 		if (!f->dhcp) {
 			if (!rp_valid_ip4(f->addr, 1))
@@ -1394,7 +1423,27 @@ void rp_iface_row(const struct rp_iface *f, char *buf, int len)
 	buf[0] = 0;
 	rt_snprintf(u, sizeof(u), "%ld", f->unit < 0 ? 0L : f->unit);
 	lf_add(buf, len, &n, "%s: %s", f->ifname, f->device[0] ? f->device : "(no device)");
-	lf_add(buf, len, &n, " unit %s%s", u, "");
+	if (picks_card(f->ifextra)) {
+		/* the Mac's card=wifi, slot=9 id=0x83: what chooses the card, not the unit */
+		const char *s = f->ifextra;
+		while (*s) {
+			int k = 0;
+			char w[24];
+			while (*s == ' ')
+				s++;
+			while (s[k] && s[k] != ' ' && k < (int)sizeof(w) - 1) {
+				w[k] = s[k];
+				k++;
+			}
+			w[k] = 0;
+			if (k && picks_card(w))
+				lf_add(buf, len, &n, " %s%s", w, "");
+			while (*s && *s != ' ')
+				s++;
+		}
+	} else {
+		lf_add(buf, len, &n, " unit %s%s", u, "");
+	}
 	if (f->dhcp)
 		lf_add(buf, len, &n, ", DHCP%s%s", "", "");
 	else

@@ -563,9 +563,61 @@ LONG PutStr(CONST_STRPTR s)
 	return 0;
 }
 
+/* The File Manager's result of the last dos call here that failed (an OSErr, negative), as IoErr()
+ * gives the Amiga's; mm_os_errtext() says it in words for a message. */
+static LONG last_err;
+static LONG fm_err(LONG e)
+{
+	if (e)
+		last_err = e;
+	return e;
+}
+
 LONG IoErr(void)
 {
-	return 0;
+	return last_err;
+}
+
+const char *mm_os_errtext(LONG err)
+{
+	static char other[40];
+	switch (err) {
+	case 0: return "no error was reported";
+	case -33: return "the folder is full";
+	case -34: return "the disk is full";
+	case -35: return "there is no such disk";
+	case -36: return "the disk could not be read or written (I/O error)";
+	case -37: return "the name is not allowed";
+	case -39: return "the file ends early";
+	case -42: return "too many files are open";
+	case -43: return "the file or folder is not there";
+	case -44: return "the disk is locked";
+	case -45: return "the file is locked";
+	case -46: return "the disk is locked by software";
+	case -47: return "the file is in use";
+	case -48: return "a file of that name is there already";
+	case -49: return "the file is open for writing in another program";
+	case -53: return "the disk is not mounted";
+	case -54: return "the file is locked or in use";
+	case -61: return "the file may not be written";
+	case -108: return "there is not enough memory";
+	case -120: return "a folder on the way is not there";
+	case -5000: return "access was refused (file sharing)";
+	}
+	rt_snprintf(other, sizeof other, "File Manager error %ld", (long)err);
+	return other;
+}
+
+/* the Mac's full path of an Amiga path ("ENVARC:Riptide/riptide.conf"), for messages */
+static void mac_path(const char *a, unsigned char *p);
+void mm_os_macpath(const char *amiga, char *out, int len)
+{
+	unsigned char p[256];
+	int n;
+	mac_path(amiga, p);
+	n = p[0] < len - 1 ? p[0] : len - 1;
+	memcpy(out, p + 1, (unsigned long)n);
+	out[n] = 0;
 }
 
 /* Amiga paths on the Mac: ENVARC:Riptide/x is the Riptide folder in the Preferences folder,
@@ -615,7 +667,7 @@ static int cat_info(const unsigned char *path, LONG *size)
 	UBYTE pb[108];
 	memset(pb, 0, sizeof pb);
 	*(const unsigned char **)(pb + 18) = path;
-	if (mac_pb(pb, TRAP_GETCATINFO) != 0)
+	if (fm_err(mac_pb(pb, TRAP_GETCATINFO)) != 0)
 		return -1;
 	if (pb[30] & 0x10)
 		return 1;
@@ -672,7 +724,7 @@ BPTR CreateDir(CONST_STRPTR name)
 	mac_path((const char *)name, p);
 	memset(pb, 0, sizeof pb);
 	*(unsigned char **)(pb + 18) = p;
-	if (mac_pb(pb, 0x0006A260L) != 0)       /* _HFSDispatch 6: DirCreate */
+	if (fm_err(mac_pb(pb, 0x0006A260L)) != 0)       /* _HFSDispatch 6: DirCreate */
 		return 0;
 	return Lock(name, ACCESS_READ);
 }
@@ -684,26 +736,22 @@ LONG DeleteFile(CONST_STRPTR name)
 	mac_path((const char *)name, p);
 	memset(pb, 0, sizeof pb);
 	*(unsigned char **)(pb + 18) = p;
-	return mac_pb(pb, TRAP_HDELETE) == 0 ? DOSTRUE : 0;
+	return fm_err(mac_pb(pb, TRAP_HDELETE)) == 0 ? DOSTRUE : 0;
 }
 
 LONG Rename(CONST_STRPTR from, CONST_STRPTR to)
 {
 	UBYTE pb[108];
-	unsigned char p[256], q[256], nm[64];
-	int i;
+	unsigned char p[256], q[256];
 	mac_path((const char *)from, p);
 	mac_path((const char *)to, q);
-	/* the new name: the last part of the new path (Rename stays in its folder) */
-	i = q[0];
-	while (i > 0 && q[i] != ':')
-		i--;
-	nm[0] = (unsigned char)(q[0] - i);
-	memcpy(nm + 1, q + i + 1, nm[0]);
+	/* _HRename stays in the folder. With a full path in ioNamePtr the new name in ioMisc must be
+	   the full path too: the name alone is refused (bdNamErr, -37, seen on System 7.1), which had
+	   kept the editor's riptide.conf.bak from ever being made */
 	memset(pb, 0, sizeof pb);
 	*(unsigned char **)(pb + 18) = p;
-	*(unsigned char **)(pb + 28) = nm;
-	return mac_pb(pb, 0xA20B) == 0 ? DOSTRUE : 0;       /* _HRename */
+	*(unsigned char **)(pb + 28) = q;
+	return fm_err(mac_pb(pb, 0xA20B)) == 0 ? DOSTRUE : 0;       /* _HRename */
 }
 
 struct mm_fh { short ref; };
@@ -714,7 +762,7 @@ static short hopen(const unsigned char *p, int perm)
 	memset(pb, 0, sizeof pb);
 	*(const unsigned char **)(pb + 18) = p;
 	pb[27] = (UBYTE)perm;
-	if (mac_pb(pb, TRAP_HOPEN) != 0)
+	if (fm_err(mac_pb(pb, TRAP_HOPEN)) != 0)
 		return 0;
 	return *(short *)(pb + 24);
 }
@@ -742,9 +790,11 @@ BPTR Open(CONST_STRPTR name, LONG mode)
 		UBYTE pb[108];
 		memset(pb, 0, sizeof pb);
 		*(unsigned char **)(pb + 18) = p;
-		mac_pb(pb, TRAP_HCREATE);               /* fails harmlessly when it is there */
+		LONG ce = mac_pb(pb, TRAP_HCREATE);     /* dupFNErr when it is there: harmless */
 		set_type(p);
 		ref = hopen(p, 3);
+		if (!ref && ce && ce != -48)
+			fm_err(ce);                     /* why it could not be made says more than the open */
 		if (ref) {
 			memset(pb, 0, sizeof pb);
 			*(short *)(pb + 24) = ref;
@@ -757,8 +807,10 @@ BPTR Open(CONST_STRPTR name, LONG mode)
 	if (!ref)
 		return 0;
 	f = mm_alloc(sizeof(*f));
-	if (!f)
+	if (!f) {
+		fm_err(-108);
 		return 0;
+	}
 	f->ref = ref;
 	return (BPTR)f;
 }
@@ -812,7 +864,7 @@ LONG Write(BPTR fh, APTR buf, LONG n)
 		*(short *)(pb + 24) = f->ref;
 		*(char **)(pb + 32) = chunk;
 		*(LONG *)(pb + 36) = k;
-		if (mac_pb(pb, TRAP_WRITE) != 0)
+		if (fm_err(mac_pb(pb, TRAP_WRITE)) != 0)
 			return done ? done : -1;
 		done += k;
 	}

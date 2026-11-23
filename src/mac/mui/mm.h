@@ -160,6 +160,15 @@ extern void (*mm_ctl_action)(void *ctl, int part);
    Clear 5), and which of them can be chosen now (bit n: command n), or NULL (mm_app.c) */
 extern int (*mm_edit_action)(int edit);
 extern unsigned (*mm_edit_state)(void);
+/* A program whose window is a dialog in the Guidelines' sense (p. 205-206) sets this: Return and
+   Enter, also in a text field (after its Acknowledge), go to the window's handlers as the raw key
+   Return (0x44), the default button's; Escape and Command-period as Escape (0x45), Cancel's. Off:
+   Escape only leaves a text field and Command-period is a menu key, as before (mm_app.c). */
+extern int mm_dialog_keys;
+/* dos: IoErr() is the File Manager's last error (an OSErr); in words for a message; the Mac's
+   full path of an Amiga path such as ENVARC:Riptide/riptide.conf (mm_os.c) */
+const char *mm_os_errtext(LONG err);
+void mm_os_macpath(const char *amiga, char *out, int len);
 /* ---- small things ---- */
 void *mm_alloc(ULONG n);                         /* cleared; NULL when out of memory */
 void  mm_free(void *p);

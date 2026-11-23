@@ -65,7 +65,15 @@ static struct rt_sockctx ctx6;
 static int ctx6_ok;
 static void *volatile incoming6;        /* calls handed over by Control, linked by qLink */
 static volatile u32 closes6, closes6_logged, opens6;
-static int order_default = kIP6OrderRFC6724;   /* riptide.conf `ipp6 order` */
+static int order_default = -1;                  /* riptide.conf `ipp6 order`; -1: net.inet.he.prefer's */
+/* the order of a lookup that asks for none: `ipp6 order`, else RiptidePrefs' Happy Eyeballs
+   "Prefer" (net.inet.he.prefer), which on the Mac has no other user */
+static int order_now(void)
+{
+	if (order_default >= 0)
+		return order_default;
+	return rt_he_prefer == 4 ? kIP6OrderIPv4First : rt_he_prefer == 6 ? kIP6OrderIPv6First : kIP6OrderRFC6724;
+}
 static volatile u32 features_cache;     /* ip6GetInfo's features, refreshed by the stack's task */
 static u32 features_ms;
 
@@ -281,7 +289,7 @@ static int get_info(IP6iopb *pb)
 	p->maxTCPStreams = NSTREAMS6;
 	p->maxUDPStreams = NSTREAMS6;
 	p->maxLookups = NLOOK;
-	p->order = (u16)order_default;
+	p->order = (u16)order_now();
 	p->implementation = impl;
 	return 0;
 }
@@ -363,6 +371,7 @@ struct s6 {
 	u8 *rbuf;                       /* the caller's receive buffer */
 	u32 rlen;
 	void *notify, *udata, *a5;      /* the ASR, its user data, the creating program's A5 */
+	char prog[32];                  /* the creating program's name (Background programs, QoS rules) */
 	void *open_pb;                  /* a TCP open waiting */
 	u32 open_deadline;
 	int passive;
@@ -521,6 +530,7 @@ static int tcp_create(TCP6iopb *pb)
 	s->rlen = p->rcvBuffLen;
 	s->notify = (void *)p->notifyProc;
 	s->udata = p->userDataPtr;
+	rt_strlcpy(s->prog, ipp_creator_prog(pb), sizeof s->prog);
 	s->a5 = ipp_creator_a5(pb);
 	pb->tcpStream = (u32)s;
 	return 0;
@@ -557,7 +567,9 @@ static int tcp_open(TCP6iopb *pb, int passive)
 		return ip6BadAddrErr;
 	if ((r = to_sin6(&p->remoteAddr, &ra)) != 0 || (r = to_sin6(&p->localAddr, &la)) != 0)
 		return r;
+	mac_prog_name = s->prog;
 	fd = socket6(RT_SOCK_STREAM, RT_IPPROTO_TCP);
+	mac_prog_name = NULL;
 	if (fd < 0)
 		return insufficientResources;
 	s->fd = fd;
@@ -1057,7 +1069,9 @@ static int udp_create(UDP6iopb *pb)
 		return streamAlreadyOpen;
 	if (!(s = new_stream()))
 		return insufficientResources;
+	mac_prog_name = ipp_creator_prog(pb);
 	fd = socket6(RT_SOCK_DGRAM, RT_IPPROTO_UDP);
+	mac_prog_name = NULL;
 	if (fd < 0)
 		return insufficientResources;
 	memset(&a, 0, sizeof a);
@@ -1075,6 +1089,7 @@ static int udp_create(UDP6iopb *pb)
 	s->rlen = p->rcvBuffLen;
 	s->notify = (void *)p->notifyProc;
 	s->udata = p->userDataPtr;
+	rt_strlcpy(s->prog, ipp_creator_prog(pb), sizeof s->prog);
 	s->a5 = ipp_creator_a5(pb);
 	s->lport = a.sin6_port;
 	p->localPort = a.sin6_port;
@@ -1347,7 +1362,7 @@ static void look_finish(struct look *L)
 	rt_in6_addr all[LOOK_ADDRS];
 	int n = 0, order = p->flags & kIP6OrderMask, r;
 	if (order == kIP6OrderDefault)
-		order = order_default;
+		order = order_now();
 	if (order == kIP6OrderIPv4First) {
 		for (int i = 0; i < L->n4; i++) all[n++] = L->a4[i];
 		for (int i = 0; i < L->n6; i++) all[n++] = L->a6[i];

@@ -75,6 +75,8 @@ APP_CFLAGS += -DRP_DEFAULT_IFNAME='"en0"' -DRP_DEFAULT_DEVICE='".ENET"'
 # the Human Interface Guidelines in a program's own classes, where the Mac layer cannot reach
 # (docs/MAC-GUI.md, "Human Interface Guidelines"); never defined for the Amiga
 APP_CFLAGS += -DMM_MAC_HIG
+# RiptidePrefs for the Mac: the settings nothing acts on there (FL_AMIGA) are left out of its pages
+APP_CFLAGS += -DRP_ON_MAC=1
 ifeq ($(AURORA68),1)
 APP_CFLAGS += -DAURORA68_LOG
 endif

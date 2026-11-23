@@ -281,7 +281,10 @@ void rt_free(void *p)
 	mac_irq_restore(sr);
 }
 u32 rt_os_mem_avail(int *chip_only) { if (chip_only) *chip_only = 0; return pool_free; }
-void rt_os_program_name(char *buf, u32 len) { if (len) buf[0] = 0; }
+/* the MacTCP or .IPP6 program a socket is made for (ipp.h): RiptidePrefs' Background programs and
+   QoS rules match it, as they match the Amiga's task names */
+const char *mac_prog_name;
+void rt_os_program_name(char *buf, u32 len) { if (len) rt_strlcpy(buf, mac_prog_name ? mac_prog_name : "", len); }
 
 /* ---- random numbers ------------------------------------------------------------------------ */
 static u32 jitter_count;

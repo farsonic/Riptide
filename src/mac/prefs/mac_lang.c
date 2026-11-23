@@ -44,6 +44,27 @@ static const struct rule rules[] = {
 	  "auto takes it from the Map control panel: its time zone, with daylight saving time when that box is "
 	  "ticked. Or the offset from UTC, such as +10:00.", 1 },
 	{ "the Locale preferences", "the Map control panel", 0 },
+	/* ---- what works differently on the Mac (docs/MAC-GUI.md, "Every setting ...") ---- */
+	{ "Apply removes it with its routes, addresses and DHCP",
+	  "Keep the card's settings but don't use it: from the Mac's next start Riptide leaves it closed.", 1 },
+	{ "Tagged networks (802.1Q) on a card",
+	  "Tagged networks (802.1Q). Not on the Mac yet: its Ethernet drivers give Riptide no tagged frames, "
+	  "so a VLAN here gets nothing. The lines are kept in riptide.conf.", 1 },
+	{ "Trying IPv6 and IPv4 side by side when a name has both",
+	  "Which kind of address .IPP6 programs get first, and how long a name that does not exist is "
+	  "remembered.", 1 },
+	{ "Which kind of address is tried first",
+	  "Which kind of address .IPP6 programs get first when they do not say (riptide.conf's \"ipp6 order\" "
+	  "comes before it).", 1 },
+	{ "Priority queues: interactive traffic goes out before bulk",
+	  "Marks for the routers on the way (DSCP) by the priority of a connection. The priority queues "
+	  "themselves are not on the Mac yet.", 1 },
+	{ "QoS bands: for slow links (off by default)", "On the Mac: the DSCP marks only", 1 },
+	{ "Rules that give connections a priority by port or program",
+	  "Rules that give connections a priority by port or program (its name in the Finder), for the DSCP "
+	  "marks.", 1 },
+	{ "e.g. AmiFTP or wget*", "e.g. Fetch, or Internet* for a name with spaces", 0 },
+	{ "* matches any ending.", "* matches any ending: Internet* for a name with spaces.", 0 },
 	/* ---- the buttons, the About page, the Status page ---- */
 	{ "Uses the settings until the Amiga is switched off",
 	  "Uses the settings now and until the Mac restarts, without saving them for good.", 1 },

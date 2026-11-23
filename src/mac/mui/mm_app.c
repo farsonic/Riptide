@@ -367,6 +367,7 @@ void *mm_mac_menu(int id)
    menu is pulled down or a Command key looked up, which of them can be chosen (bit n for command
    n). Without them the Edit menu works as before: the String being typed in, desk accessories. */
 int (*mm_edit_action)(int edit);
+int mm_dialog_keys;
 unsigned (*mm_edit_state)(void);
 static int edit_menu_id;                /* the Edit menu's id (menus_install) */
 static struct mm_win *front_win(void);
@@ -1297,9 +1298,15 @@ static void key_down(struct mm_win *w, EventRecord *ev)
 		}
 		if (c == 0x1B) {
 			mm_win_activate_string(w, NULL);
+			/* a dialog: Escape is Cancel's even while typing (Guidelines p. 205) */
+			if (mm_dialog_keys)
+				handlers(w, IDCMP_RAWKEY, 0x45, 0, 0, ev->modifiers, -1);
 			return;
 		}
 		mm_string_key(w->active, ev);
+		/* a dialog: Return and Enter press its default button once the field has taken the text */
+		if (mm_dialog_keys && (c == '\r' || c == 3))
+			handlers(w, IDCMP_RAWKEY, 0x44, 0, 0, ev->modifiers, -1);
 		return;
 	}
 	/* A handler that asks for IDCMP_VANILLAKEY gets the character typed first, as on the Amiga,
@@ -1308,6 +1315,8 @@ static void key_down(struct mm_win *w, EventRecord *ev)
 	   (0x1C-0x1F, 1 home, 4 end, 11 and 12 page up and down, 8 delete, 0x7F forward delete). */
 	if (handlers(w, IDCMP_VANILLAKEY, (UWORD)c, 0, 0, ev->modifiers, muikey))
 		return;
+	if (mm_dialog_keys && c == 3)
+		raw = 0x44;                             /* a dialog: Enter is Return */
 	if (raw != 0xFF && handlers(w, IDCMP_RAWKEY, raw, 0, 0, ev->modifiers, muikey))
 		return;
 	if (c == 9) {
@@ -1504,8 +1513,21 @@ static void mm_event_once(void)
 	case autoKey:
 		if (ev.modifiers & cmdKey) {
 			if (ev.what == keyDown) {
+				int ch = (int)(ev.message & charCodeMask);
+				long mk;
 				edit_menu_state();
-				do_menu(MenuKey((int)(ev.message & charCodeMask)));
+				mk = MenuKey(ch);
+				/* Command-period, no menu's: in a dialog it is Escape, Cancel (Guidelines p. 205) */
+				if (!(mk >> 16) && ch == '.' && mm_dialog_keys) {
+					w = front_win();
+					if (w && !w->sleep) {
+						if (w->active)
+							mm_win_activate_string(w, NULL);
+						handlers(w, IDCMP_RAWKEY, 0x45, 0, 0, 0, -1);
+					}
+					break;
+				}
+				do_menu(mk);
 			}
 			break;
 		}

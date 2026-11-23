@@ -1585,6 +1585,71 @@ static void test_drvkeys(void)
 	rp_conf_free(&c);
 }
 
+/* The Mac: cards chosen by card=, slot= or id= (src/mac/net_mac.c) are not one card twice
+ * because their units are the same (RiptidePrefs refused to save the Mac's own riptide.conf,
+ * 23 November 2026); which settings the Mac leaves out; what waits for a restart. */
+static void test_mac(void)
+{
+	static const char *in =
+		"interface en0 device=.ENET card=ethernet\n"
+		"interface en1 device=.ENET card=wifi\n"
+		"hostname MacSE\n"
+		"dhcp en0\n"
+		"dhcp en1\n"
+		"ntp 192.168.68.1\n";
+	struct rp_conf c;
+	char err[200], row[80], what[100];
+	int fi = -1, i, hidden = 0;
+
+	CHECK(rp_conf_load(&c, in, strlen(in)) == 0);
+	CHECK(c.cur.ifc[0].unit == 0 && c.cur.ifc[1].unit == 0);
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0 || (fprintf(stderr, "validate: %s\n", err), 0));
+	rp_iface_row(&c.cur.ifc[1], row, sizeof(row));
+	CHECK(!strcmp(row, "en1: .ENET card=wifi, DHCP") || (fprintf(stderr, "row: %s\n", row), 0));
+	/* the same without card=: one card twice */
+	c.cur.ifc[0].ifextra[0] = c.cur.ifc[1].ifextra[0] = 0;
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && !strcmp(err, "another card uses this device and unit already"));
+	strcpy(c.cur.ifc[1].ifextra, "slot=9 id=0x83");
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	rp_conf_free(&c);
+
+	/* the Mac leaves out the Amiga's settings, the Amiga shows them all */
+	for (i = 0; i < rp_nfields; i++) {
+		CHECK(rp_fshown_on(i, 0));
+		if (!rp_fshown_on(i, 1)) {
+			hidden++;
+			CHECK(rp_fields[i].page != P_TIME && rp_fields[i].page != P_NAMES);
+		}
+	}
+	CHECK(hidden == 9);
+	CHECK(!rp_fshown_on(rp_find(&c.cur, &c.cur.ifc[0].reads), 1));
+	CHECK(!rp_fshown_on(rp_find(&c.cur, &c.cur.ifc[0].device), 1));
+	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.ifc[0].unit), 1));
+	CHECK(rp_fshown_on(rp_find(&c.cur, &c.cur.sc[RP_SC_HE_PREFER]), 1));
+	CHECK(!rp_fshown_on(rp_find(&c.cur, &c.cur.sc[RP_SC_HE_ENABLE]), 1));
+	for (i = 0; i < rp_nlfields; i++)
+		CHECK(rp_lfshown_on(i, 0) && rp_lfshown_on(i, 1));
+
+	/* what waits for a restart, in words */
+	CHECK(rp_conf_load(&c, in, strlen(in)) == 0);
+	rp_restart_what(&c, what, sizeof(what));
+	CHECK(!what[0]);
+	c.cur.ifc[0].dhcp = 0;
+	strcpy(c.cur.ifc[0].addr, "192.168.68.20/24");
+	c.cur.ipv6 = 0;
+	c.cur.sc[RP_SC_ECN] = 1;
+	rp_restart_what(&c, what, sizeof(what));
+	CHECK(!strcmp(what, "the cards and their addresses, IPv4 or IPv6 on or off") ||
+	      (fprintf(stderr, "what: %s\n", what), 0));
+	rp_conf_applied(&c);
+	c.cur.sc[RP_SC_ECN] = RP_UNSET;
+	rp_restart_what(&c, what, sizeof(what));
+	CHECK(!strcmp(what, "settings set back to Default"));
+	rp_restart_what(&c, what, 12);
+	CHECK(strlen(what) == 11);
+	rp_conf_free(&c);
+}
+
 int main(void)
 {
 	test_fields();
@@ -1609,6 +1674,7 @@ int main(void)
 	test_netpages();
 	test_live_applied();
 	test_drvkeys();
+	test_mac();
 	printf("t_prefs_conf: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

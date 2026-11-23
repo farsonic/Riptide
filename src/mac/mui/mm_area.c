@@ -318,6 +318,22 @@ void mm_hig_button(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1, int 
 	FrameRoundRect(&r, 12, 12);
 }
 
+/* The default button's outline (Guidelines p. 205-206): three pixels of black, rounded, round the
+   box x0..y1, the button four pixels inside it, as mac_alert.c draws it for alerts; a disabled
+   default button keeps none (its outline would say Return still works). */
+void mm_hig_ring(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1, int dim)
+{
+	Rect r;
+	SetPort(mm_rp_port(rp));
+	r.left = (short)x0; r.top = (short)y0; r.right = (short)(x1 + 1); r.bottom = (short)(y1 + 1);
+	if (dim)
+		return;
+	ForeColor(33);
+	PenSize(3, 3);
+	FrameRoundRect(&r, 16, 16);
+	PenNormal();
+}
+
 /* ---- Rectangle: room that stretches ---- */
 DISPATCHER(mm_rect_dispatch)
 {

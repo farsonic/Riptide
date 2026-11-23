@@ -34,6 +34,10 @@ int  rp_store(int save);
 /* Send the changes a running Riptide can take to its port. ask = 1 (after
  * Save or Use): only when something changed, and after asking. */
 void rp_apply(int ask);
+/* The Mac's Save (saved = 1, after rp_store) and Apply: the changes given to the running Riptide
+ * without a question; a change it refused in a message; line gets what happened for the status
+ * line ("Saved; Riptide took 2 changes. Restart the Mac for: the cards and their addresses."). */
+void rp_apply_mac(int saved, char *line, int len);
 
 /* the entries of a list page (rp_page_list() != -1) */
 int  rp_list_n(int page);
