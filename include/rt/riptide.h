@@ -89,6 +89,9 @@ void rt_config_reset(void);
  * ECONNRESET), as nothing could reach them. Listening sockets stay.
  * Returns how many. Lock held. */
 int  rt_tcp_drop_lost(void);
+/* The same with another error for the established ones (the Mac: RT_ENETDOWN,
+ * which MacTCP programs see as TCPNetworkFailure). */
+int  rt_tcp_drop_lost_err(int err);
 /* Split a line into whitespace separated words (quotes allowed); modifies
  * line in place. Returns argc. */
 int rt_config_split(char *line, char **argv, int max);

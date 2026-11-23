@@ -2262,6 +2262,11 @@ static int tcp_addr_gone(const rt_in6_addr *a)
 
 int rt_tcp_drop_lost(void)
 {
+	return rt_tcp_drop_lost_err(RT_ECONNRESET);
+}
+
+int rt_tcp_drop_lost_err(int lost_err)
+{
 	struct tcp_sock *tp, *next;
 	int n = 0;
 
@@ -2273,7 +2278,7 @@ int rt_tcp_drop_lost(void)
 		    !tcp_addr_gone(&tp->saddr))
 			continue;
 		/* no RST: it could not leave from an address we no longer have */
-		err = tp->state == RT_TCPS_SYN_SENT ? RT_ENETUNREACH : RT_ECONNRESET;
+		err = tp->state == RT_TCPS_SYN_SENT ? RT_ENETUNREACH : lost_err;
 		tcp_write_queue_purge(tp);
 		tcp_done(tp);              /* one its program closed already is freed */
 		if (tp->so) {

@@ -469,6 +469,8 @@ void mac_schedule(void)
 	mac_irq_restore(sr);
 }
 void rt_kick(void) { mac_schedule(); }
+/* the core is in use: a program has it (api_mac.c, a restart) or the deferred task runs it */
+int mac_core_taken(void) { return core_lent || in_stack; }
 void mac_stack_run(void)
 {
 	u16 sr = mac_irq_off();

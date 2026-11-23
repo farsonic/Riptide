@@ -109,6 +109,31 @@ void standin_hold(u32 v4, int hold)
 }
 
 /* riptide.conf: mactcp ipv6 prefer|on|off, mactcp standin A.B.C.D[/N] */
+/* another range: the stand-ins of the old one are forgotten; the same range again (a restart reads
+   the line again) keeps them, so streams that use one keep their IPv6 address */
+static int range_set;
+static void set_range(u32 a, u32 m)
+{
+	if ((a & m) == base && m == mask)
+		return;
+	mask = m;
+	base = a & m;
+	memset(slots, 0, sizeof slots);
+}
+
+/* a restart of the network (main_mac.c mac_restart): the settings go back to the start before the
+   file is read again, and a range the file no longer names goes back to the default after it */
+void standin_restart_begin(void)
+{
+	standin_prefer6 = 0;
+	range_set = 0;
+}
+void standin_restart_end(void)
+{
+	if (!range_set)
+		set_range(0xC6120000UL, 0xFFFE0000UL);
+}
+
 int standin_config(int argc, char **argv, char *err, u32 errlen)
 {
 	if (argc == 3 && !rt_strcasecmp(argv[1], "ipv6")) {
@@ -137,9 +162,8 @@ int standin_config(int argc, char **argv, char *err, u32 errlen)
 		}
 		if (*e)
 			goto usage;
-		mask = 0xFFFFFFFFUL << (32 - bits);
-		base = a & mask;
-		memset(slots, 0, sizeof slots);
+		set_range(a, 0xFFFFFFFFUL << (32 - bits));
+		range_set = 1;
 		return 0;
 	}
 usage:

@@ -1918,12 +1918,14 @@ int ipp6_config(int argc, char **argv, char *err, u32 errlen)
 			order_default = kIP6OrderIPv6First;
 		else if (!rt_strcasecmp(argv[2], "ipv4"))
 			order_default = kIP6OrderIPv4First;
+		else if (!rt_strcasecmp(argv[2], "default"))
+			order_default = -1;             /* net.inet.he.prefer's (a restart sets it back so) */
 		else
 			goto usage;
 		return 0;
 	}
 usage:
-	rt_snprintf(err, errlen, "usage: ipp6 order rfc6724|ipv6|ipv4");
+	rt_snprintf(err, errlen, "usage: ipp6 order rfc6724|ipv6|ipv4|default");
 	return -RT_EINVAL;
 }
 

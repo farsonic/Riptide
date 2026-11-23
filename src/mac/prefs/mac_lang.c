@@ -67,12 +67,12 @@ static const struct rule rules[] = {
 	  "Riptide is not running. It starts with the Mac: put it in the Extensions folder.", 1 },
 	/* ---- applying ---- */
 	{ "Restart now saves the settings to ENV:",
-	  "Some of the changes need a restart of Riptide's network, which\nRiptide for the Mac cannot do while "
-	  "it runs yet. They take\neffect when the Mac restarts.", 1 },
+	  "Some of the changes need a restart of Riptide's network: the\nprograms keep running, and connections "
+	  "over an address that\ngoes away are closed. Save or Apply restarts it.", 1 },
 	{ "cannot restart its network (0.39 or later can)",
-	  "Riptide for the Mac cannot restart its network while it runs yet.\nThe settings take effect when the "
-	  "Mac restarts.", 1 },
-	{ "Apply restarts Riptide's network (no reboot)", "Card changes take effect when the Mac restarts", 1 },
+	  "This Riptide for the Mac cannot restart its network while it\nruns (one from 23 November 2026 can). "
+	  "The settings take effect\nwhen the Mac restarts.", 1 },
+	{ "Apply restarts Riptide's network (no reboot)", "Save or Apply restarts the network (no reboot)", 1 },
 	/* ---- words ---- */
 	{ "ENVARC:Riptide/", "Preferences:Riptide:", 0 },
 	{ "ENV:Riptide/", "Preferences:Riptide:In Use:", 0 },
