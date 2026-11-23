@@ -328,15 +328,24 @@ static void owe(const char *what)
 		rt_snprintf(owed_what + k, sizeof(owed_what) - k, "%s%s", k ? ", " : "", what);
 }
 
-/* apply_one, but a card turned off ("interface en0 delete") waits for the Mac's next start: the
- * Mac's Riptide cannot close a card while it runs */
+/* rp_live_commands' line for a card turned off ("interface en0 delete"; a VLAN's has a dot) */
+static int card_off_line(const char *line)
+{
+	size_t n = strlen(line);
+
+	return !strncmp(line, "interface ", 10) && n > 17 && !strcmp(line + n - 7, " delete") && !strchr(line + 10, '.');
+}
+
+/* apply_one, but a card turned off ("interface en0 delete") waits for the Mac's next start: a
+ * Riptide for the Mac older than 23 November 2026 cannot close a card while it runs (a newer one
+ * restarts its network instead, mac_restart_net) */
 static void mac_apply_one(const char *line, void *arg)
 {
 	struct apply_state *st = arg;
 	size_t n = strlen(line);
 	int failed = st->failed;
 
-	if (!strncmp(line, "interface ", 10) && n > 17 && !strcmp(line + n - 7, " delete") && !strchr(line + 10, '.')) {
+	if (card_off_line(line)) {
 		owe("a card turned off");
 		return;
 	}
@@ -346,24 +355,89 @@ static void mac_apply_one(const char *line, void *arg)
 		st->n--;
 }
 
+/* The Mac's Riptide restarts its network while the Mac runs (23 November 2026): the In Use copy of
+ * riptide.conf (which Save writes too) is read again, the cards that stay kept open. 1 when it
+ * did, and the status line says so; 0 when this Riptide cannot (an older one), the line untouched. */
+static int mac_restart_net(int saved, const char *what, char *line, int len)
+{
+	char msg[600];
+	const char *rep, *e;
+	int r;
+
+	if (!saved && rp_store(0) < 0) {
+		rt_snprintf(line, (size_t)len, "Not applied: the In Use folder's riptide.conf could not be written.");
+		return 1;
+	}
+	r = cl_request(RTCMD_RESTART, RP_ENV_CONF, 0);
+	rep = cl_reply();
+	if (!rep)
+		rep = "";
+	if (r != 0 && !contains(rep, "restarted")) {
+		if (contains(rep, "unknown command"))
+			return 0;
+		rt_snprintf(msg, sizeof(msg), "Riptide did not restart its network:\n%s", rep[0] ? rep : cl_strerror(r));
+		rp_message(msg);
+		rt_snprintf(line, (size_t)len, "%s", saved ? "Saved; Riptide's network did not restart." :
+		            "Not applied: Riptide's network did not restart.");
+		return 1;
+	}
+	/* the stack has what the file says, the lines it refused aside */
+	rp_conf_applied(&rp_cfg);
+	owed_what[0] = 0;
+	owed_unsaved = 0;
+	for (e = rep; *e && strncmp(e, "riptide.conf: ", 14); e++)
+		;
+	if (*e) {
+		rt_snprintf(msg, sizeof(msg), "Riptide restarted its network, but refused:\n%s", e);
+		rp_message(msg);
+	}
+	rt_snprintf(line, (size_t)len, "%s; Riptide's network restarted for: %s.", saved ? "Saved" : "Applied", what);
+	return 1;
+}
+
+static void find_card_off(const char *line, void *arg)
+{
+	if (card_off_line(line))
+		*(int *)arg = 1;
+}
+
 void rp_apply_mac(int saved, char *line, int len)
 {
 	struct apply_state st;
 	char what[100], msg[600];
 	size_t k;
-	int restart;
+	int restart, off = 0;
 
 	rp_restart_what(&rp_cfg, what, sizeof(what));
+	restart = rp_live_commands(&rp_cfg, find_card_off, &off);
+	if (off && !contains(what, "the cards"))
+		rt_snprintf(what + strlen(what), sizeof(what) - strlen(what), "%sa card turned off", what[0] ? ", " : "");
+	if (!FindPort((CONST_STRPTR)RIPTIDE_PORTNAME)) {
+		owe(what);
+		if (saved)
+			owed_unsaved = 0;
+		else if (what[0])
+			owed_unsaved = 1;
+		rt_snprintf(line, (size_t)len, "%s", saved ? "Saved. Riptide is not running: it takes them when the Mac starts." :
+		            "Not applied: Riptide is not running. Save, and it takes them when the Mac starts.");
+		return;
+	}
+	if (restart || off || what[0] || owed_what[0]) {
+		/* what the restart is for: this change's, and what an older Apply left waiting */
+		char all[100];
+		rt_strlcpy(all, owed_what, sizeof(all));
+		if (what[0] && !contains(all, what))
+			rt_snprintf(all + strlen(all), sizeof(all) - strlen(all), "%s%s", all[0] ? ", " : "", what);
+		if (!all[0])
+			rt_strlcpy(all, "some settings", sizeof(all));
+		if (mac_restart_net(saved, all, line, len))
+			return;
+	}
 	owe(what);
 	if (saved)
 		owed_unsaved = 0;
 	else if (what[0])
 		owed_unsaved = 1;
-	if (!FindPort((CONST_STRPTR)RIPTIDE_PORTNAME)) {
-		rt_snprintf(line, (size_t)len, "%s", saved ? "Saved. Riptide is not running: it takes them when the Mac starts." :
-		            "Not applied: Riptide is not running. Save, and it takes them when the Mac starts.");
-		return;
-	}
 	memset(&st, 0, sizeof(st));
 	k = strlen(owed_what);
 	restart = rp_live_commands(&rp_cfg, mac_apply_one, &st);

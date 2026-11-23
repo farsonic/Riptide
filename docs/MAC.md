@@ -590,6 +590,97 @@ control) found +3601.3 s, set the clock to 22:17:08 and showed the result; the n
 
 ![RiptidePrefs' Time page on the Mac, after the first sync](mac-gui-time.png)
 
+## Restarting the network while the Mac runs
+
+Until 23 November 2026 a change to the cards or their addresses waited for the Mac's next start:
+RTCMD_RESTART, which the Amiga's Riptide has had since 0.39, was refused by the Mac's `.IPP`. Now
+the Mac's Riptide restarts its network itself, and RiptidePrefs' Save and Apply ask for it when a
+change needs it (docs/MAC-GUI.md, "Save, Apply and Cancel on the Mac"): a card added, removed,
+renamed, turned off or on, its unit, MTU or TCP window, DHCP or a static address, IPv4 or IPv6 on or
+off for all cards, a setting set back to Default.
+
+**Where it runs.** A restart calls `.ENET` (detaching and attaching protocol handlers, waiting for
+the calls still at the driver), the File Manager (riptide.conf) and the Resource Manager (the
+Macintosh Name), all synchronously, which the stack's deferred task must never do. So it runs in a
+program's context, as the Open at startup runs in the INIT's: RiptidePrefs' RESTART is a
+synchronous private Control call (RTMAC_PORT, made from its event loop at interrupt level 0), and
+ipp.c answers it in that call, with the core lent to it (`mac_core_enter`, as the Terminal's calls
+take it), so the deferred task leaves the core alone until it is done. An asynchronous RESTART waits
+for the next accRun (SystemTask, also a program's context); one made at interrupt time or from a
+completion routine is refused with the reason.
+
+**What it does** (src/mac/main_mac.c `mac_restart`, the Amiga's `amiga_stack_restart` with the
+cards kept):
+- the file is read first: the In Use copy (what Apply wrote, as ENV: on the Amiga), else the saved
+  riptide.conf, else the Riptide file's `'TEXT'` 128 (kept from the start, as the Riptide file is
+  not open later); RiptidePrefs names `ENV:Riptide/riptide.conf`, the In Use copy. A file that cannot
+  be read leaves everything running;
+- every card leaves the core (`rt_netif_remove`): DHCP stopped and its lease released (a DHCP
+  server gives the same card the same address again as a rule; pinet always does), the addresses,
+  routes, ARP and neighbour entries, IPv6 and its multicast groups, the VLANs on it;
+- a card the file still names, as the same card under the same name (`net_mac_same`: the selection
+  the line makes picks the card that is open), stays open at its driver: its reference number,
+  protocol handlers, receive ring and transmit slots stay, and it comes back into the core as a card
+  just opened, with its counters, link state and interface index (so .IPP6 scope ids stay valid)
+  (`net_mac_renew`). Any other card is detached (`net_mac_close`: EDetachPH for its three protocol
+  types once its calls at the driver have finished), and the cards the file adds are opened;
+- `rt_config_reset` puts what the old file set back to the start (sysctls, host and domain name,
+  name servers, hosts, static routes, QoS, NTP, mDNS), and the Mac's own lines too: `mactcp ipv6`,
+  `mactcp standin` (a range the file names again keeps its stand-ins, so streams that use one keep
+  their IPv6 address) and `ipp6 order`;
+- the file is read as at the start, and the host name comes from Sharing Setup when it names none.
+The answer lists each card ("en0: kept", "en1: opened", "en2: closed"), the lines the stack refused
+(not those that fail only because they name a card the file turns off) and "Riptide: restarted (N
+interfaces)"; the log has the same.
+
+**Open streams.** Sockets are not touched, so nothing a program holds goes away under it: MacTCP
+streams (mactcp.c), `.IPP6` endpoints (ipp6.c), the Terminal's sockets, their buffers and their
+waiting calls stay as they were. Fifteen seconds after the restart (time for DHCP to bind again)
+every TCP connection whose local address is no longer one of the Mac's is dropped
+(`rt_tcp_drop_lost_err`, a core function the Amiga's `rt_tcp_drop_lost` now calls with its own
+ECONNRESET), with RT_ENETDOWN: a MacTCP or `.IPP6` program sees TCPTerminate with TCPNetworkFailure
+(3) in its notification routine, its waiting TCPRcv and TCPSend end in connectionTerminated
+(-23012), and an open still under way in ipDestDeadErr. A connection whose address is still there
+goes on: a static address kept, an MTU or IPv6 change on a card that keeps its IPv4 address, a DHCP
+card given its address back, an IPv6 address that comes back the same (the stable addresses do; a
+temporary address is made anew, so a connection that used one should end: not tried). The stream itself is as TCPCreate left it and can be opened again. All of
+this reaches the programs from the stack's deferred task, as every completion and notification
+does; nothing at interrupt time reads what the restart changes: the protocol handlers only fill
+their card's receive ring, which stays, and a write still at the driver when its card is closed
+completes into transmit slots that stay allocated (they belong to the card's slot, not the card).
+
+**Tested** (23 November 2026) on Aurora68's solo testbed (System 7.1, the IIci ROM, one card, the
+peer `tools/pinet.py` with `PINET_FORWARD="7007=127.0.0.1:17007"` to a TCP echo server on the
+host), with tests/mac/restart_test.c ("Restart test", `make -f Makefile.mac test`:
+build/mac/RestartTest.bin) running throughout: a MacTCP stream to the peer's echo server at
+192.168.68.1 port 7 and a `.IPP6` stream to [fd68::1] port 7007, each sending a line every two
+seconds and reading its echo, and opening its stream again three seconds after a connection ends.
+RiptidePrefs was driven through Aurora68's remote control, in one boot:
+- static 192.168.68.20 to DHCP, Save: "Saved; Riptide's network restarted for: the cards and their
+  addresses."; en0 kept open, DHCP bound to 192.168.68.2 a moment later; after 15 s the MacTCP
+  connection on 192.168.68.20 ended (TCPTerminate, TCPNetworkFailure; the waiting TCPRcv
+  connectionTerminated) and the stream connected again from 192.168.68.2; the `.IPP6` connection,
+  on fd68::8a73:2652:ded2:3676, which the card had again, went on without losing an echo;
+- DHCP back to static 192.168.68.20, Apply: the same the other way round, "Not saved yet." shown;
+- MTU 1500 to 1400, Save: en0 kept open with MTU 1400 (the Status page: "en0 up MTU 1400"), both
+  connections went on;
+- IPv6 off, Save: the `.IPP6` connection ended after 15 s with TCPNetworkFailure, its new opens
+  failed with ipDestDeadErr, the MacTCP one went on; IPv6 on, Save: the `.IPP6` stream connected
+  again from the same address;
+- the card turned off, Save: en0 detached from its driver ("restart: en0 closed", 0 interfaces),
+  both connections ended with TCPNetworkFailure after 15 s, opens failed with ipDestDeadErr; on
+  again, Save: en0 opened again on the same driver (refnum -53) and both streams connected;
+- after these nine restarts the Browser test ran 83 of 83 (with the card on DHCP; on the static
+  address its four checks that expect pinet's DHCP address 192.168.68.2 fail, as they would
+  without a restart), and the Mac went on running.
+An earlier boot found the driver taking the wrong command number for RESTART (ipp.c had RTCMD_QUIT's,
+2, instead of riptide_port.h's 5): Riptide answered "unknown command" and the editor fell back, as
+it does for an older Riptide, to "Saved. Restart the Mac for: ..."; and this boot found a card
+turned off still left for the Mac's restart, as "interface en0 delete" is a command and not a
+restart in `rp_live_commands` (RiptidePrefs now restarts for it too). Both fixed the same day. Not tested: two cards (one kept while another is
+opened or closed), a WiFi card, a real Mac, System 6, a restart while a program is in the middle of
+a synchronous call of the Terminal's, and VLAN lines (which still do nothing on the Mac).
+
 ## Notes for the next stages
 
 - Real programs (Internet Explorer 4.01, Fetch, NCSA Telnet) on real hardware will show what is

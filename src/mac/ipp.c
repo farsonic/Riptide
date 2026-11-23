@@ -34,6 +34,7 @@
 #include "prefs/mac_ipp_private.h"
 /* include/rt/riptide_port.h's numbers (that header needs the Amiga's types) */
 #define RTCMD_STATUS   1
+#define RTCMD_RESTART  5
 #define RTCMD_COMMAND  3
 #define RTCMD_TABLES   4
 #define RTMSGF_TRUNCATED 1
@@ -316,8 +317,15 @@ static int port_call(void *pb)
 		p->result = 0;
 		p->replylen = (u32)strlen(p->reply);
 		return 0;
+	case RTCMD_RESTART:
+		/* made in a program's context (restart_call), never here in the deferred task */
+		rt_strlcpy(p->reply, "Riptide: a restart is a call made by a program, not from a completion routine\n",
+		           p->replysize);
+		p->result = RT_EBUSY;
+		p->replylen = (u32)strlen(p->reply);
+		return 0;
 	default:
-		/* RTCMD_RESTART and RTCMD_QUIT: not on the Mac yet */
+		/* RTCMD_QUIT: the Mac's Riptide does not quit */
 		rt_strlcpy(p->reply, "unknown command\n", p->replysize);
 		p->result = RT_EINVAL;
 		p->replylen = (u32)strlen(p->reply);
@@ -485,6 +493,51 @@ void ipp_dm_dequeue(void *pb, void *dce)
 		}
 }
 
+/* ---- RTCMD_RESTART: riptide.conf read again (main_mac.c mac_restart) ---------------------------
+   The restart calls drivers (.ENET's protocol handlers), the File Manager (riptide.conf) and the
+   Resource Manager (the Macintosh Name) synchronously, which the deferred task must never do. So
+   it runs in a program's context: RiptidePrefs' synchronous Control call, made from its event loop
+   at interrupt level 0, is answered at once in that call (as the Open at startup ran in the
+   INIT's), with the core lent to it; an asynchronous one waits for the next accRun (SystemTask, a
+   program's context), which completes it. */
+static struct mac_client restarter;
+static void *restart_pb;                          /* an asynchronous RESTART waiting for accRun */
+static int is_restart(void *pb)
+{
+	return PB_CSCODE(pb) == RTMAC_PORT && ((struct rtmac_port_pb *)pb)->cmd == RTCMD_RESTART;
+}
+static void restart_run(struct rtmac_port_pb *p)
+{
+	char which[128];
+	int r;
+	if (!p->reply || p->replysize < 2) {
+		p->result = RT_EINVAL;
+		return;
+	}
+	rt_strlcpy(which, p->text && p->textlen ? p->text : "", sizeof which);
+	p->flags = 0;
+	mac_core_enter(&restarter);
+	r = mac_restart(which, p->reply, p->replysize);
+	mac_core_leave();
+	p->result = r < 0 ? -r : 0;
+	p->replylen = (u32)strlen(p->reply);
+}
+static int restart_call(void *pb)
+{
+	u16 sr;
+	__asm__ volatile("move.w %%sr,%0" : "=d"(sr));
+	if (PB_IOTRAP(pb) & 0x400) {
+		if (restart_pb)
+			return controlErr;                    /* one at a time */
+		restart_pb = pb;
+		return 1;
+	}
+	if ((sr & 0x0700) || in_poll || mac_core_taken())
+		return port_call(pb);                     /* refused, with the reason */
+	restart_run(pb);
+	return 0;
+}
+
 /* the Control routine (any level): hand the call over to the stack's context */
 int ipp_control(void *pb)
 {
@@ -496,7 +549,22 @@ int ipp_control_a5(void *pb, void *dce, void *a5)
 	if (cs == accRun) {
 		mac_clock_run();                          /* NTP's clock step, the Map control panel's time zone */
 		reap();
+		if (restart_pb && !mac_core_taken()) {
+			void *rp = restart_pb;
+			restart_pb = NULL;
+			restart_run(rp);
+			ipp_result(rp, 0);
+		}
 		return 0;
+	}
+	if (is_restart(pb) && !(PB_IOTRAP(pb) & 0x200)) {
+		int r = restart_call(pb);
+		if (r != 1)
+			return r;
+		u16 sr = mac_irq_off();
+		ipp_dm_dequeue(pb, dce);                  /* waits for accRun, off the Device Manager's queue */
+		mac_irq_restore(sr);
+		return 1;
 	}
 	if (in_poll && !(PB_IOTRAP(pb) & 0x400) && quick(cs)) {
 		/* a synchronous call from a completion or notification routine, which the stack's task is

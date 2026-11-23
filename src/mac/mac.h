@@ -73,6 +73,7 @@ struct mac_client {
 };
 void mac_core_enter(struct mac_client *c);     /* the core is the program's (the deferred task waits) */
 void mac_core_leave(void);
+int  mac_core_taken(void);                     /* a program has the core, or the deferred task runs it */
 extern const struct rtmac_api mac_api;
 
 /* net_mac.c: every Ethernet card the Slot Manager lists can be an interface of its own */
@@ -89,6 +90,13 @@ void net_mac_poll(void);                       /* stack context: the received fr
 void net_mac_tx_done(void *pb);
 extern struct rt_netif *mac_nif;               /* the interface MacTCP's calls report (the preferred one) */
 extern char mac_net_why[64];
+/* a restart of the network (main_mac.c mac_restart), in a program's context */
+void net_mac_restart_begin(void);              /* driver calls may wait for the earlier ones */
+void net_mac_restart_end(void);
+struct rt_netif *net_mac_nif(int i);           /* the i-th open card's interface, NULL past the last */
+int  net_mac_same(struct rt_netif *n, const struct mac_cardsel *sel);   /* the selection names this card */
+void net_mac_renew(struct rt_netif *n, int mtu, int metric);  /* a card that stays: as just opened */
+void net_mac_close(struct rt_netif *n);        /* a card that goes: detached from its driver */
 
 /* ipp.c: the MacTCP interface */
 int  ipp_control(void *pb);
@@ -101,6 +109,11 @@ void mactcp_poll(struct rt_sockctx *ctx);
 
 /* main_mac.c: the keywords of riptide.conf the Mac layer handles (interface) */
 int  mac_config_unknown(int argc, char **argv, char *err, u32 errlen);
+/* main_mac.c: RTCMD_RESTART, riptide.conf read again while the Mac runs; in a program's context
+   with the core taken (ipp.c). which: "" the file Riptide reads at its start (the In Use copy
+   first), or RiptidePrefs' ENV:Riptide/... (In Use) or ENVARC:Riptide/... (the saved one). The
+   report goes to out. 0 or -errno. */
+int  mac_restart(const char *which, char *out, u32 olen);
 
 /* parameter block fields (Inside Macintosh: Files / Devices; MacTCP.h) */
 #define PB_QLINK(pb)     (*(void **)((u8 *)(pb) + 0))

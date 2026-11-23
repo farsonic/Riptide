@@ -73,17 +73,25 @@ heavy rounded outline.
 - **Save** (Return, Enter, File > Save, Command-S): writes riptide.conf in the Riptide folder of the
   Preferences folder at once (the old one kept as riptide.conf.bak, a copy in its In Use folder),
   then gives the running Riptide every change it can take without a question, and the window stays
-  open. The status line says what happened: "Saved; Riptide took 2 changes.", or, when some of the
-  changes wait for the Mac's next start, "Saved. Restart the Mac for: the cards and their
-  addresses." What waits: a card, its driver, unit or address (DHCP or static),
-  IPv4 or IPv6 on or off for all cards, a card turned off, settings set back to Default
-  (`rp_restart_what`, conf_edit.c). After a Save the saved file is the new starting point:
+  open. The status line says what happened: "Saved; Riptide took 2 changes.", or, when a change
+  needs Riptide's network restarted, "Saved; Riptide's network restarted for: the cards and their
+  addresses." Those changes: a card, its name, unit, MTU, TCP window or address (DHCP or static),
+  IPv4 or IPv6 on or off for all cards, a card turned off or on, settings set back to Default
+  (`rp_restart_what`, conf_edit.c). Until 23 November 2026 they waited for the Mac's next start
+  ("Saved. Restart the Mac for: ..."); now Save sends RTCMD_RESTART and the running Riptide reads the
+  file again ("Restarting the network while the Mac runs" in docs/MAC.md: the cards that stay are
+  kept open, connections over an address that remains go on). A Riptide too old to restart answers
+  "unknown command", and the editor says "Restart the Mac for: ..." as before. Lines the restarted
+  Riptide refused are shown in an alert. After a Save the saved file is the new starting point:
   "Not saved yet" goes from the status line. The old file is kept as riptide.conf.bak: on the
   Mac that never happened before (`Rename` in mm_os.c gave _HRename the new name alone, which the
   File Manager refuses with bdNamErr when the old one is a full path; it now gets the full path).
-- **Apply** (File > Apply, Command-Y): the same for the running Riptide only; nothing is written,
-  so the changes last until the Mac restarts ("Applied 2 changes.  Not saved yet."). It is the Amiga's
-  Use and Apply in one: the Mac's Riptide reads only the saved riptide.conf when it starts.
+- **Apply** (File > Apply, Command-Y): the same for the running Riptide only; the saved file is not
+  written, so the changes last until the Mac restarts ("Applied 2 changes.  Not saved yet."). It is
+  the Amiga's Use and Apply in one: the Mac's Riptide reads only the saved riptide.conf when it
+  starts. When a change needs the network restarted, Apply writes the settings to the In Use folder
+  (as the Amiga's Use writes ENV:) and the restart reads that copy ("Applied; Riptide's network
+  restarted for: ...  Not saved yet.").
 - **Cancel** (Escape, Command-period, the close box, Command-W): closes the window. Changes that
   were not saved are forgotten; changes already applied stay in the running Riptide until the Mac
   restarts (Cancel does not take them back: the Guidelines' Cancel undoes the dialog's own edits,
@@ -140,27 +148,31 @@ when it starts (src/mac/main_mac.c `configure`: the core's `rt_config_line` with
 `interface`, `mactcp` and `ipp6` lines), and Save and Apply send the changes as commands to the
 running stack (`rp_live_commands`, conf_edit.c; RTMAC_PORT in src/mac/ipp.c `port_call`, the
 core's `rt_ctl_command`). The core is the Amiga's, so a setting the core acts on works on the Mac
-too unless the Mac never reaches that code.
+too unless the Mac never reaches that code. The rows marked **works (restart)** were "start" in
+the audit; since 23 November 2026 (branch prefs-restart) Save and Apply restart Riptide's network
+for them (RTCMD_RESTART, main_mac.c `mac_restart`; docs/MAC.md, "Restarting the network while the
+Mac runs").
 
-**works**: acts at start and on Save/Apply. **start**: acts when the Mac starts (Save says
-"Restart the Mac for ..."; the Mac's Riptide cannot restart its network while it runs).
+**works**: acts at start and on Save/Apply. **works (restart)**: acts at start, and on Save/Apply
+through a restart of Riptide's network while the Mac runs. **start**: acts only when the Mac
+starts (none is left).
 **partly**: see the note. **nothing**: no code acts on it on the Mac. **hidden**: the Amiga's
 alone; the Mac leaves it out of its page (`FL_AMIGA`, prefs_fields.c; the value stays in
 riptide.conf).
 
 | Page | Field or button | riptide.conf | Mac | Evidence | Fix |
 |---|---|---|---|---|---|
-| Interface | Cards list, Add card, Remove card | `interface NAME device=.ENET ...` | start | main_mac.c `interface_line`, net_mac.c `net_mac_open` | |
-| Interface | Interface name | `interface NAME` | start | main_mac.c `interface_line` | |
+| Interface | Cards list, Add card, Remove card | `interface NAME device=.ENET ...` | works (restart) | main_mac.c `interface_line`, net_mac.c `net_mac_open` | `mac_restart`: a card removed is closed, one added opened, one kept stays open at its driver |
+| Interface | Interface name | `interface NAME` | works (restart) | main_mac.c `interface_line` | a renamed card is closed and opened under its new name |
 | Interface | Device | `device=` | hidden | `interface_line` takes only `.ENET` | hidden (FL_AMIGA); new cards get .ENET |
-| Interface | Unit | `unit=` | start | net_mac.c `select_card`: the Nth Ethernet card; `card=`, `slot=`, `id=` come first | two `card=` lines on unit 0 no longer stop Save (`picks_card`) |
-| Interface | MTU | `mtu=` | partly | `net_mac_open`: 576 to 1499, anything else is 1500 | |
-| Interface | TCP window | `tcpwindow=` | start | `interface_line`: `nif->tcp_window` | |
+| Interface | Unit | `unit=` | works (restart) | net_mac.c `select_card`: the Nth Ethernet card; `card=`, `slot=`, `id=` come first | two `card=` lines on unit 0 no longer stop Save (`picks_card`) |
+| Interface | MTU | `mtu=` | partly | `net_mac_open`, `net_mac_renew`: 576 to 1499, anything else is 1500 | live through the restart (the card kept open) |
+| Interface | TCP window | `tcpwindow=` | works (restart) | `interface_line`: `nif->tcp_window` | |
 | Interface | Reads | `reads=` | hidden | `interface_line` skips `reads=` | hidden (FL_AMIGA) |
-| Interface | Card off | `disabled` | start | `interface_line` does not open it; "interface NAME delete" is refused while the Mac runs | Apply no longer sends the refused command; Save says it waits for a restart |
-| Interface | IPv4, IPv6 (all cards) | `ipv4 on/off`, `ipv6 on/off` | start | core config.c | |
-| Address | Mode, Address, Netmask, Gateway | `dhcp IF`, `ifconfig IF A netmask M up`, `route add default G` | start | core config.c, dhcp.c | |
-| Address | Link-local if no DHCP, after (s) | `dhcp IF linklocal off wait S` | start | core `rt_dhcp_set_linklocal` | |
+| Interface | Card off | `disabled` | works (restart) | `interface_line` does not open it; "interface NAME delete" is refused while the Mac runs | Save and Apply restart the network instead (`net_mac_close`: the card detached from its driver); on again: opened |
+| Interface | IPv4, IPv6 (all cards) | `ipv4 on/off`, `ipv6 on/off` | works (restart) | core config.c | |
+| Address | Mode, Address, Netmask, Gateway | `dhcp IF`, `ifconfig IF A netmask M up`, `route add default G` | works (restart) | core config.c, dhcp.c | static to DHCP and back while the Mac runs (docs/MAC.md) |
+| Address | Link-local if no DHCP, after (s) | `dhcp IF linklocal off wait S` | works (restart) | core `rt_dhcp_set_linklocal` | |
 | Address | IPv6 on this card | `interface ... ipv6=`, `ipv6 IF on/off` | works | `interface_line`, core `ipv6` command | |
 | Extra addresses | the list | `ifconfig IF alias A/BITS` | works | core config.c ifconfig | |
 | VLANs | the list | `interface IF.ID vlan= parent=` | nothing | core vlan.c makes the interface, but net_mac.c attaches protocol handlers for IPv4, ARP and IPv6 only: no tagged frame ever arrives | page help says so on the Mac (mac_lang.c); bigger gap below |
@@ -199,11 +211,6 @@ riptide.conf).
 | (buttons) | Save, Apply, Cancel | | works | above | Use is Apply on the Mac |
 
 **Bigger gaps** (not done here):
-- **No restart of the network while the Mac runs** (RTCMD_RESTART is refused in ipp.c
-  `port_call`): a card's name, unit, MTU or TCP window, DHCP or a static address, IPv4/IPv6 for
-  all cards, a card turned off or on and a setting set back to Default all wait for the Mac's next
-  start. A restart in the stack (DHCP stopped, addresses and routes flushed, `rt_config_reset`, the
-  file read again with the cards that are open kept) would make them all live.
 - **VLANs**: net_mac.c would need a protocol handler for type 0x8100 (drvr.S has four handler
   entries, one per card) that hands the frame to the core's VLAN input; whether .ENET drivers
   deliver tagged frames at all has to be tried on real cards.
@@ -415,7 +422,6 @@ is too tied to graphics.library to compile here, so the Mac got a small MUI fron
 ## Known gaps
 
 - Riptide for the Mac drives at most four Ethernet cards.
-- RESTART (applying card and address changes without a restart of the Mac) is not there yet.
 - The window fits the 512 x 342 screen of a compact Mac only just (494 x 304 of the 512 x 302
   below the menu bar); a page that grows (a longer translation, a new setting) can push it off
   again. The nav list scrolls on such a screen.
