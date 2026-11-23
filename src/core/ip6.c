@@ -55,11 +55,19 @@ static const struct rt_sysctl ip6_sysctl[] = {
 /* ---- seconds clock for lifetimes ---- */
 static u32 secs_last_ms, secs_acc_ms, secs_now = 1;
 
+static int secs_started;                 /* the first call counts the clock from 0, as before */
 u32 rt_ip6_seconds(void)
 {
 	u32 now = rt_now_ms();
 	u32 d = now - secs_last_ms;
 
+	/* A clock that steps back (a Mac's Microseconds read across its carry, the tick clock exchanged for the microsecond
+	   one) made d about 2^32 ms here: 49 days added at once, every address with a lifetime expired, IPv6 gone a few
+	   minutes after start (seen in the Aurora68 testbed, November 2026). A step back now counts as no time; a jump
+	   forward (the tests', or a Mac whose timers stopped) still counts in full. */
+	if (secs_started && d > 0x7fffffffu)
+		d = 0;
+	secs_started = 1;
 	secs_last_ms = now;
 	secs_acc_ms += d;
 	if (secs_acc_ms >= 1000) {
