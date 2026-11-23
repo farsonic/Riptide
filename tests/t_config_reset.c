@@ -352,6 +352,26 @@ int main(void)
 		CHECK(rt_api_sendto(&ctx, ufd, "x", 1, 0, &to, sizeof(to)) == 1);
 	}
 
+	/* the Mac's restart: the error the lost connection gets is the caller's */
+	{
+		int mac;
+		if_detach();
+		reset();
+		if_attach(ME);
+		mac = connect_to(5003);
+		CHECK(is_established(mac));
+		if_detach();
+		reset();
+		if_attach(ME2);
+		rt_lock();
+		CHECK(rt_tcp_drop_lost_err(RT_ENETDOWN) == 1);
+		rt_unlock();
+		CHECK(rt_api_recv(&ctx, mac, buf, sizeof(buf), 0) == -RT_ENETDOWN);
+		drain();
+		CHECK(!take(&f, &s, &d, &q, &a));
+		rt_api_close(&ctx, mac);
+	}
+
 	/* 3. again and again */
 	for (i = 0; i < 10; i++) {
 		apply_all();

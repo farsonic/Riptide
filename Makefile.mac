@@ -201,6 +201,15 @@ $(BUILD)/ipp6_test.elf: $(APP_BASE) $(APP)/tests/mac/ipp6_test.o src/mac/app/app
 	      $(APP_BASE) $(APP)/tests/mac/ipp6_test.o $(LIBGCC)
 $(BUILD)/IPP6Test.bin: $(BUILD)/ipp6_test.elf tools/elf2app.py
 	$(PYTHON) tools/elf2app.py $< --name "IPP6 test" --creator RT6T --size 512 -o $@
+# connections held open across a restart of the network (tests/mac/restart_test.c), MacTCP and .IPP6
+$(APP)/tests/mac/restart_test.o: tests/mac/restart_test.c sdk/mac/IPP6.h $(APP_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(IPP6_CFLAGS) -c -o $@ $<
+$(BUILD)/restart_test.elf: $(APP_BASE) $(APP)/tests/mac/restart_test.o src/mac/app/app.ld
+	$(LD) -T src/mac/app/app.ld --emit-relocs --gc-sections --no-warn-rwx-segments -z noexecstack -o $@ \
+	      $(APP_BASE) $(APP)/tests/mac/restart_test.o $(LIBGCC)
+$(BUILD)/RestartTest.bin: $(BUILD)/restart_test.elf tools/elf2app.py
+	$(PYTHON) tools/elf2app.py $< --name "Restart test" --creator RTRT --size 256 -o $@
 examples: $(BUILD)/ipp6get.bin
 # the parameter blocks of sdk/mac/IPP6.h as the m68k compiler lays them out (the host's tests/t_ipp6_layout
 # checks them with 68k sizes; this builds the same test for the m68k: run it with qemu-m68k if there is one)
@@ -208,7 +217,7 @@ $(BUILD)/t_ipp6_layout: tests/t_ipp6_layout.c sdk/mac/IPP6.h
 	@mkdir -p $(BUILD)
 	$(CC) -std=c99 -Wall -static -o $@ $< && (command -v qemu-m68k >/dev/null && qemu-m68k $@ || true)
 
-test: $(BUILD)/MacTCPTest.bin $(BUILD)/BrowserTest.bin $(BUILD)/IPP6Test.bin $(BUILD)/ipp6get.bin
+test: $(BUILD)/MacTCPTest.bin $(BUILD)/BrowserTest.bin $(BUILD)/IPP6Test.bin $(BUILD)/ipp6get.bin $(BUILD)/RestartTest.bin
 
 clean:
 	rm -rf $(BUILD)

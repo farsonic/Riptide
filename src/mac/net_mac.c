@@ -35,6 +35,7 @@
 #define ENET_DELMULTI 245
 #define ENET_ADDMULTI 246
 #define ENET_ATTACHPH 247
+#define ENET_DETACHPH 248
 #define ENET_WRITE    249
 #define ENET_GETINFO  252
 #define ENET_LINKSTATUS 230                       /* Aurora68's drivers' own (mac/enet.s) */
@@ -63,15 +64,30 @@ struct txslot { u8 pb[64]; u16 wds[6]; u8 frame[1516]; volatile u8 busy; };
 /* an open card: an interface of the core */
 static struct card {
 	int open, index;                              /* index: the found[] entry; -1 the built-in .ENET */
+	int stuck;                                    /* closed with a call still at the driver: not reused */
 	s16 ref;
 	struct rt_netif nif;
 	struct txslot *tx;
 	u8 mc_pb[MC_PBS][40];
+	u8 mc_next;                                   /* the parameter block to use next, in turn */
 	u8 link_pb[40];                               /* csLinkStatus, asked asynchronously */
 	u8 link_known, link_up, link_asked;
 	u32 link_tick, tx_drops;
 } cards[MAC_CARDS];
 static void (*const handlers[MAC_CARDS])(void) = { mac_enet_ph0, mac_enet_ph1, mac_enet_ph2, mac_enet_ph3 };
+/* each card slot's transmit slots, kept when its card is closed (a restart): a write still with the
+   driver then completes into memory that is still there, and frees its slot (net_mac_tx_done) */
+static struct txslot *txmem[MAC_CARDS];
+/* a restart runs in a program's context (net_mac_restart_begin): there a call may wait for the
+   driver's earlier asynchronous ones to complete (interrupts on), which the deferred task must not */
+static int may_wait;
+static int wait_pb(const u8 *pb)
+{
+	u32 t0 = mac_ticks();
+	while (PB_RESULT(pb) > 0 && may_wait && mac_ticks() - t0 < 120)
+		;
+	return PB_RESULT(pb) > 0;
+}
 
 static void why(const char *s) { u32 i = 0; for (; s[i] && i < sizeof mac_net_why - 1; i++) mac_net_why[i] = s[i]; mac_net_why[i] = 0; rt_log(RT_LOG_WARN, "%s", s); }
 
@@ -200,10 +216,13 @@ static int enet_ctl(struct card *c, int cs, u16 prot, void *ptr, u16 size)
 static int mac_mcast(struct rt_netif *n, const u8 *hw, int join)
 {
 	struct card *c = n->driver;
+	if (may_wait)
+		wait_pb(c->mc_pb[c->mc_next]);            /* a restart leaves and joins many groups at once */
 	for (int i = 0; i < MC_PBS; i++) {
-		u8 *pb = c->mc_pb[i];
+		u8 *pb = c->mc_pb[(c->mc_next + i) % MC_PBS];
 		if (PB_RESULT(pb) > 0)
 			continue;                             /* still in progress */
+		c->mc_next = (u8)((c->mc_next + i + 1) % MC_PBS);
 		memset(pb, 0, sizeof c->mc_pb[i]);
 		PB_REFNUM(pb) = c->ref;
 		PB_CSCODE(pb) = join ? ENET_ADDMULTI : ENET_DELMULTI;
@@ -241,9 +260,9 @@ static int mac_link_output(struct rt_netif *n, struct rt_buf *b, const u8 *dsthw
 void net_mac_tx_done(void *pb)
 {
 	for (int k = 0; k < MAC_CARDS; k++)
-		if (cards[k].open)
+		if (txmem[k])
 			for (int i = 0; i < TX_SLOTS; i++)
-				if (cards[k].tx[i].pb == pb) { cards[k].tx[i].busy = 0; return; }
+				if (txmem[k][i].pb == pb) { txmem[k][i].busy = 0; return; }
 }
 
 /* Open one card as interface NAME (riptide.conf's "interface NAME device=.ENET [unit=N] [slot=S]
@@ -255,7 +274,7 @@ int net_mac_open(const char *name, const struct mac_cardsel *sel, int mtu)
 	struct card *c = NULL;
 	int k, idx;
 	for (k = 0; k < MAC_CARDS; k++)
-		if (!cards[k].open) { c = &cards[k]; break; }
+		if (!cards[k].open && !cards[k].stuck) { c = &cards[k]; break; }
 	if (!c) { why("Riptide for the Mac drives at most four cards"); return -RT_EEXIST; }
 	idx = select_card(sel);
 	if (idx == -2) {
@@ -267,14 +286,19 @@ int net_mac_open(const char *name, const struct mac_cardsel *sel, int mtu)
 	memset(c, 0, sizeof *c);
 	c->index = idx;
 	struct mac_rxring *r = &mac_rx[k];
+	r->head = r->tail = 0;                        /* no handler fills it now (a card closed before) */
 	if (!r->ring) {
 		r->ring = mac_newptr_sys((u32)RX_SLOTS * MAC_RX_SLOT);
 		r->slots = RX_SLOTS;
 		r->mask = RX_SLOTS - 1;
 	}
-	c->tx = mac_newptr_sys(sizeof(struct txslot) * TX_SLOTS);
+	if (!txmem[k]) {
+		txmem[k] = mac_newptr_sys(sizeof(struct txslot) * TX_SLOTS);
+		if (txmem[k])
+			memset(txmem[k], 0, sizeof(struct txslot) * TX_SLOTS);
+	}
+	c->tx = txmem[k];
 	if (!r->ring || !c->tx) { why("not enough memory for the Ethernet buffers"); return -RT_ENOMEM; }
-	memset(c->tx, 0, sizeof(struct txslot) * TX_SLOTS);
 	/* OpenSlot on the .ENET shell, with the card's slot and sResource id: the shell opens that
 	   sResource's driver, so two functions of one card are two drivers with two refnums */
 	memset(pb, 0, sizeof pb);
@@ -420,4 +444,91 @@ void net_mac_poll(void)
 		link_poll(c);
 	}
 	pick_primary();
+}
+
+/* ---- a restart of the network while the Mac runs (main_mac.c mac_restart) ---------------------
+ * It runs in a program's context (RiptidePrefs' synchronous RESTART call, or accRun), with the core
+ * lent to it, so the driver calls here may be synchronous and may wait for the asynchronous ones
+ * still at the driver. A card that stays (the same card under the same name) keeps its driver,
+ * reference number, protocol handlers, receive ring and transmit slots: only the core forgets it
+ * and takes it back (net_mac_renew). A card that goes is detached from its driver (net_mac_close);
+ * its slot's memory stays, so nothing at interrupt time writes into freed memory. */
+void net_mac_restart_begin(void) { may_wait = 1; }
+void net_mac_restart_end(void) { may_wait = 0; }
+
+/* the open cards' interfaces, one by one (i from 0; NULL past the last) */
+struct rt_netif *net_mac_nif(int i)
+{
+	for (int k = 0; k < MAC_CARDS; k++)
+		if (cards[k].open && i-- == 0)
+			return &cards[k].nif;
+	return NULL;
+}
+
+/* does the selection name this open card (as net_mac_open would choose it, the card counted free)? */
+int net_mac_same(struct rt_netif *n, const struct mac_cardsel *sel)
+{
+	struct card *c = n->driver;
+	int idx;
+	c->open = 0;
+	idx = select_card(sel);
+	c->open = 1;
+	return idx == c->index;
+}
+
+/* a card that stays: what the core set on it goes (addresses, IPv4 and IPv6 switches, window), as
+   a card just opened has it; the driver's side, the counters and the link state stay. The core has
+   removed it (rt_netif_remove) and adds it again after this; its index is kept (scope ids). */
+void net_mac_renew(struct rt_netif *n, int mtu, int metric)
+{
+	struct card *c = n->driver;
+	struct rt_netif k = *n;
+	memset(n, 0, sizeof *n);
+	n->type = k.type;
+	n->hwlen = k.hwlen;
+	memcpy(n->hwaddr, k.hwaddr, sizeof n->hwaddr);
+	n->flags = RT_IFF_BROADCAST | RT_IFF_MULTICAST | RT_IFF_SIMPLEX;
+	n->mtu = mtu >= 576 && mtu < 1500 ? (u16)mtu : 1500;
+	n->link_output = k.link_output;
+	n->mcast = k.mcast;
+	n->driver = c;
+	n->stats = k.stats;
+	n->drv = k.drv;
+	n->link_down = k.link_down;
+	n->index = k.index;
+	n->metric = metric >= 0 ? (u32)metric : (c->index >= 0 && found[c->index].kind == KIND_WIFI) ? 20 : 10;
+	memcpy(n->name, k.name, sizeof n->name);
+	memcpy(n->descr, k.descr, sizeof n->descr);
+}
+
+/* a card that goes: its calls at the driver finish (two seconds at most), its protocol handlers are
+   detached, and its slot is free; the core has removed it already */
+void net_mac_close(struct rt_netif *n)
+{
+	struct card *c = n->driver;
+	int k = (int)(c - cards), left = 0;
+	static const u16 types[3] = { 0x0800, 0x0806, 0x86dd };
+	for (int i = 0; i < 3; i++)
+		if (enet_ctl(c, ENET_DETACHPH, types[i], NULL, 0)) {
+			rt_log(RT_LOG_WARN, "%s: .ENET EDetachPH %04x failed: its slot is not used again", n->name, types[i]);
+			left = 1;
+		}
+	for (int i = 0; i < MC_PBS; i++)
+		left |= wait_pb(c->mc_pb[i]);
+	if (c->link_asked)
+		left |= wait_pb(c->link_pb);
+	for (int i = 0; i < TX_SLOTS; i++) {
+		u32 t0 = mac_ticks();
+		while (c->tx[i].busy && mac_ticks() - t0 < 120)
+			;
+	}
+	mac_rx[k].head = mac_rx[k].tail = 0;
+	c->open = 0;
+	c->stuck = left;
+	if (left)
+		rt_log(RT_LOG_WARN, "%s: a call is still at the driver: its slot is not used again", n->name);
+	if (mac_nif == n) {
+		mac_nif = NULL;
+		pick_primary();
+	}
 }
