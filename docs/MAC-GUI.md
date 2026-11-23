@@ -177,7 +177,7 @@ riptide.conf).
 | Address | Link-local if no DHCP, after (s) | `dhcp IF linklocal off wait S` | works (restart) | core `rt_dhcp_set_linklocal` | |
 | Address | IPv6 on this card | `interface ... ipv6=`, `ipv6 IF on/off` | works | `interface_line`, core `ipv6` command | |
 | Extra addresses | the list | `ifconfig IF alias A/BITS` | works | core config.c ifconfig | |
-| VLANs | the list | `interface IF.ID vlan= parent=` | nothing | core vlan.c makes the interface, but net_mac.c attaches protocol handlers for IPv4, ARP and IPv6 only: no tagged frame ever arrives | page help says so on the Mac (mac_lang.c); bigger gap below |
+| VLANs | the list | `interface IF.ID vlan= parent=` | works (fixed) | core vlan.c makes the interface, but net_mac.c attached protocol handlers for IPv4, ARP and IPv6 only: no tagged frame ever arrived | 23 November: the first VLAN on a card attaches its handler for type 0x8100 too (net_mac.c `mac_vlan_rx`), tagged frames go to the core's VLAN input and out with the tag; the not-on-the-Mac page help is gone. Whether a card's .ENET driver passes tagged frames is the driver's (MAC.md, "QoS bands and VLANs") |
 | Routes | the list | `route add ...` | works | core config.c route | |
 | IPv6 | Router advertisements, Temporary addresses, Address identifiers, Duplicate checks, Announce new addresses | `sysctl net.inet6.ip6.*` | works | core ip6 | |
 | IPv6 addresses | the list | `ifconfig IF inet6 A/P` | works | core config.c | |
@@ -201,9 +201,9 @@ riptide.conf).
 | Happy Eyeballs | Happy Eyeballs, Attempt delay, Resolution delay, IPv6 lookup filter | `sysctl net.inet.he.*` | works (fixed) | core `rt_he_connect` and the filter served riptide.library's connect by name (src/amiga/riptidelib.c) only; MacTCP and .IPP6 programs connected to addresses | .IPP6's ip6ConnectName (csCode 77, interface version 2; docs/IPP6.md) connects by name with the core's asynchronous Happy Eyeballs (`rt_he_conn_*`, happy.c): all four apply to it, and Resolution delay to the DNR's lookups too. Shown on the Mac again (no FL_AMIGA; the Amiga's RiptidePrefs differs only in those four flag bytes), page help in mac_lang.c |
 | Happy Eyeballs | Prefer | `sysctl net.inet.he.prefer` | works (fixed) | nothing read it on the Mac | .IPP6's default answer order and ip6ConnectName's first family follow it unless riptide.conf has `ipp6 order` (ipp6.c `order_now`) |
 | Happy Eyeballs | DNS negative cache | `sysctl dns.cache.neg_maxttl` | works (fixed) | the core's cache: the core resolver's lookups (the Terminal); the DNR and .IPP6 read the cache but did not fill it | the DNR's and .IPP6's lookups are the core's: they fill the cache and the negative cache and are answered from them |
-| QoS | QoS bands, Frames in flight, Band limit | `qos on/off`, `sysctl net.inet.ip.qos_*` | hidden | core qos.c queues a frame only while the driver has frames in flight (`nif->drv->tx_inflight`); net_mac.c reports none, so every frame passes the bands | hidden until net_mac.c counts them; bigger gap below |
+| QoS | QoS bands, Frames in flight, Band limit | `qos on/off`, `sysctl net.inet.ip.qos_*` | works (fixed) | core qos.c queues a frame only while the driver has frames in flight (`nif->drv->tx_inflight`); net_mac.c reported none, so every frame passed the bands | 23 November: net_mac.c's transmit slots are the driver's `tx_slots` (8) and `tx_inflight` (counted at the write and when the stack sees its completion, `tx_reap`); shown on the Mac again (no FL_AMIGA) |
 | QoS | Priority sets DSCP | `sysctl net.inet.ip.qos_prio_dscp` | works | core qos.c marks the socket's packets | |
-| QoS rules | the list | `qos rule ...` | partly | a rule's priority picks a band, which the Mac does not have (above); its DSCP mark works, by port and now by program | program names: as Background programs; QoS's program hook set (main_mac.c) |
+| QoS rules | the list | `qos rule ...` | works | a rule's priority picks a band (the bands work since 23 November, above); its DSCP mark works, by port and now by program | program names: as Background programs; QoS's program hook set (main_mac.c) |
 | Neighbours | the list | `arp add ...` | works | core config.c arp | |
 | Other lines | the list | (kept as they are) | works | conf_edit.c | |
 | Counters | Refresh, Zero, Since start | (RTCMD_TABLES) | works | ipp.c `port_call` `read_tables` | |
@@ -213,14 +213,11 @@ riptide.conf).
 | (buttons) | Save, Apply, Cancel | | works | above | Use is Apply on the Mac |
 
 **Bigger gaps** (not done here):
-- **VLANs**: net_mac.c would need a protocol handler for type 0x8100 (drvr.S has four handler
-  entries, one per card) that hands the frame to the core's VLAN input; whether .ENET drivers
-  deliver tagged frames at all has to be tried on real cards.
-- **QoS bands**: net_mac.c's transmit slots would need to be the driver's `tx_slots` and
-  `tx_inflight` (counted at the write and at its completion, which runs at interrupt time) and the
-  stack's poll would run `rt_qos_run` when a slot comes free; then the bands, Frames in flight and
-  Band limit can come back on the Mac.
 - **The SE's screen**: see "Known gaps".
+
+Done since the audit (23 November 2026): **VLANs** and **QoS bands** (the two rows above, and
+MAC.md "QoS bands and VLANs"). Left of them: whether real cards' .ENET drivers pass tagged frames
+has to be tried on those cards.
 
 ## Keeping both versions in step
 

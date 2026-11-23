@@ -197,6 +197,69 @@ for the program's process (api_mac.c records it at attach; the call is allowed a
 On Aurora68's testbed the Mac's side of a ping went from about 5 or about 16 ms (bimodal: the tick)
 to 4 to 8 ms for most echoes under QEMU's slow emulated 68k (19 November).
 
+## QoS bands and VLANs (23 November 2026)
+
+**QoS bands.** The core's priority bands (src/core/qos.c: interactive, default, bulk; `qos on`,
+`qos inflight N`, `qos limit N`) hold a frame back only while the driver has `qos_inflight` frames
+in flight, which they read from the interface's driver counters. net_mac.c now has them: its eight
+transmit slots per card are `tx_slots`, and `tx_inflight` counts a write from the EWrite
+(`rt_drv_tx_start`) until the stack has seen its completion (`rt_drv_tx_done`, which also lets the
+bands send what they hold). The completion runs at interrupt time and there only frees the slot
+and counts; the stack takes the count over at the start of its round, and when a program that
+called the core in its own context (the Terminal's tools, api_mac.c) gives the core back. With QoS
+off it also does so after each received frame and before each MacTCP call, so the count stays true
+for UDP's pacing (a UDPWrite is refused while all eight are taken). With QoS on, UDP's room is the
+band's, and once per round is what paces a driver that takes every frame at once into a queue of
+its own: Aurora68's EWrite copies the frame into the Pi's board ring and completes, so without the
+round the bands would never hold anything while the board's ring fills behind the ping. The driver
+record (`ip -s link`, RiptidePrefs' Counters page) now also has the cards' receive counts and the
+receive ring's drops. RiptidePrefs shows QoS bands, Frames in flight and Band limit on the Mac again.
+
+**VLANs.** `interface en0.10 vlan=10 parent=en0 address=192.168.10.2/24` (or `dhcp`), as on the
+Amiga (the VLANs page writes it). The first VLAN on a card attaches the card's protocol handler for
+type 0x8100 too (net_mac.c `mac_vlan_rx`, an asynchronous EAttachPH, the same entry as the card's
+other types: drvr.S has one per card), the last one gone detaches it; tagged frames go to the
+core's VLAN input (`rt_vlan_input`), which strips the tag. A VLAN's frames go out with type 0x8100
+and the tag in front of the payload, at most 1500 bytes after the header with the default VLAN MTU
+(the card's less 4), 1504 with `mtu=1500`; the receive handler takes 1504 now. Multicast joins are
+counted (`rt_mc_ref`), so a VLAN leaving a group does not take it from the card. A restart of the
+network keeps a card's handler state; a card that closes detaches it.
+
+Whether a card passes tagged frames is the card's .ENET driver's business: one that hands the
+protocol handler every type it has attached (as Inside Macintosh describes) and sends a frame of
+any type works; one that filters types or lengths does not. Only Aurora68's drivers have been
+tried. In its kernel nothing on the way drops them: the .ENET driver (mac/enet.s) dispatches any
+type through its 16-entry protocol table and writes frames up to 1514 bytes; the testbed's file
+bridge and the CDC-ECM path (psmac_usbnet.c) pass any type; by reading the code (not tried), the
+Pi 4's GENET path takes frames up to 1536 bytes with no type filter, the Pi 3B+'s LAN7800 is set
+up without its VLAN filter (RFE_CTL) and with a 1522-byte limit, and the Pi 3B's LAN9514 keeps its
+1518-byte limit (enough with the default VLAN MTU). Over WiFi, access points rarely carry tags.
+Not tried: real NuBus or built-in Ethernet cards and their drivers.
+
+**Tested** (23 November) on Aurora68's solo testbed with a trunk switch in front of two
+`tools/pinet.py` peers (untagged frames to 192.168.68.1, VLAN 10 to a second peer at
+192.168.70.1), the wired card being the kernel's file bridge, then QEMU's usb-net (CDC-ECM) on a
+UDP socket to the switch, and the Riptide Command Terminal running its startup lines:
+- VLAN 10 at boot: "en0: receiving tagged frames (802.1Q)", ARP, IPv6 neighbour discovery and
+  mDNS on the VLAN, the second peer's ping6 answered by the Mac, `ping 192.168.70.1` 4 of 4 (10 to
+  21 ms), on both paths. Live, as Apply sends them: `interface en0.20 vlan=20 ...` sent frames
+  tagged 20 (the switch dropped them, as it carries 10 only); with en0.10 and en0.20 deleted the
+  handler was detached and the ping to 192.168.70.1 got nothing; en0.10 made again attached it
+  again and the ping answered 4 of 4.
+- QoS, with a 15-second upload (`speedtest --server-url` to a host server behind the peer) while
+  the switch pinged the Mac five times a second (idle: 4 ms). File bridge: QoS on, 4 in flight:
+  echoes 38 ms on average, 115 KB/s; QoS off: 92 ms, 109 KB/s; QoS on, 1 in flight: 20 ms,
+  85 KB/s. The bands held up to 31 default frames, the echo replies went out through the
+  interactive band (at most 4 waiting at once), nothing dropped; after each upload every band was
+  empty and nothing was in flight; no echo lost in 535. With QoS off, "in flight (most 16 of 8)":
+  a round's TCP output before the count is taken. The usb-net path: 46 of 2483 writes completed
+  with excessCollsns (-95, Aurora68's driver: its board ring full; TCP sent them again), the upload
+  ran at 58 KB/s with the echoes at 20 to 57 ms.
+- Native tests: 43 passed, 18 skipped (root or TAP), t_prefs_conf: only Device and Reads are
+  hidden on the Mac now.
+Not tried: RiptidePrefs' VLANs page and QoS page on screen (the commands they send were), a VLAN
+across a restart of the network, two cards with VLANs, a real Mac.
+
 ## Testing on Aurora68
 
 The Aurora68 repository's `tools/run-solo.sh` boots a System 7.1 disk image under QEMU with the
@@ -764,7 +827,7 @@ it does for an older Riptide, to "Saved. Restart the Mac for: ..."; and this boo
 turned off still left for the Mac's restart, as "interface en0 delete" is a command and not a
 restart in `rp_live_commands` (RiptidePrefs now restarts for it too). Both fixed the same day. Not tested: two cards (one kept while another is
 opened or closed), a WiFi card, a real Mac, System 6, a restart while a program is in the middle of
-a synchronous call of the Terminal's, and VLAN lines (which still do nothing on the Mac).
+a synchronous call of the Terminal's, and VLAN lines (which did nothing on the Mac then; they do since the same day, "QoS bands and VLANs").
 
 ## Notes for the next stages
 
