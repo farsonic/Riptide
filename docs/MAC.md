@@ -504,6 +504,74 @@ Left out: `rtdiag`, which runs other commands through SystemTagList and writes a
 
 ![The Riptide Command Terminal](mac-terminal.png)
 
+## The clock
+
+Riptide can set the Mac's clock from time servers: the core's SNTP client (src/core/ntp.c, the
+Amiga's; AMIGA.md "Time and .local names" has the protocol side), switched on in riptide.conf or
+on RiptidePrefs' Time page ("NTP time sync", off by default):
+
+```
+ntp on                          # the DHCP lease's NTP servers (option 42), else pool.ntp.org
+ntp pool.ntp.org 192.0.2.1      # or up to four names, IPv4 or IPv6 addresses
+ntp interval 21600              # every 6 hours (default 3600 s; 64 to 604800)
+ntp step 1000                   # set the clock only when it is this many ms off (Mac default 1000)
+timezone +10:00                 # only to override the Map control panel (timezone auto: Map's)
+```
+
+The first sync is two seconds after the configuration is read (DHCP's lease brings its servers a
+moment later, and a sync with them follows), then every interval; `ntp sync` (or **Set Clock
+Now** on the Time page) syncs at once.
+
+**Local time.** The Mac's clock counts local seconds since 1904. Riptide's wall clock is UTC: the
+Mac's time less the time zone of the Map control panel, read from its MachineLocation in extended
+parameter RAM (12 bytes at $E4, what `ReadLocation` reads: `gmtDelta`, seconds east of UTC in
+24 bits, which includes daylight saving time when Map's box is ticked; the top bit of `dlsDelta`
+says it is). It is read when Riptide starts and once a minute afterwards, so a change in Map, or
+ticking daylight saving time, is followed. A Map that was never set (all zero) means local time is
+taken as UTC; the log says so. `timezone +HH:MM` in riptide.conf overrides Map. The log shows
+what is used: `time zone: UTC+11:00 with daylight saving time (the Map control panel)`.
+
+**Fractions of a second.** The Time global moves on once a second. The stack's task looks at it
+at least every 100 ms and notes when it moves on by one; the time since then is the fraction of
+the second (to within half the gap between two looks), so NTP's offsets are measured to about
+0.05 s rather than to a second.
+
+**Setting it.** `SetDateTime` writes the clock chip, which is not done at interrupt or deferred
+task time. The NTP client (in the stack's deferred task) only notes the time it wants; the
+driver's accRun (dNeedTime: the Device Manager sends it every sixth of a second from SystemTask, in
+a program's context) calls `SetDateTime`, just after the chip's next tick, so the new seconds start
+where the chip's seconds start, rounded to the nearest second. It is logged from the stack's task:
+
+```
+ntp: 192.168.68.1 stratum 2, offset +594452.920 s, clock set
+ntp: the Mac's clock set to 2026-11-23 21:08:17 local time (+594453 s)
+ntp: 192.168.68.1 stratum 2, offset -0.042 s
+```
+
+The Mac's clock is set in whole seconds, so the client steps it only when it is at least
+`ntp step` (1000 ms on the Mac) off; smaller offsets are measured and shown, not corrected (the
+Mac cannot slew its clock either).
+
+**RiptidePrefs.** The Time page: "NTP time sync", "NTP servers" (empty: the DHCP lease's, else
+pool.ntp.org; host names or addresses separated by spaces, at most four), "Time zone" (auto: the
+Map control panel), then **Set Clock Now** and a line about the last sync ("Last NTP sync: 21:08
+(5 min ago) with 192.168.68.1, offset -0.042 s, the clock was left as it was. Next in 55 min.").
+Set Clock Now gives the running Riptide the page's servers when they differ from what it has
+(saved or not), asks for a sync, waits up to 12 s and shows the answer; the clock itself is set at
+the next accRun, a sixth of a second later. The Status page's Names tab shows the same.
+
+**Tested** (23 November 2026) on Aurora68's solo testbed (System 7.1, the IIci ROM, the kernel's
+emulated clock chip), with Map's location preset to UTC+11:00 with daylight saving time
+(`mac.xpram=e4:000000000000000080009ab0`) and a small SNTP server on the host reached through
+pinet's UDP relay (`PINET_UDP="123=127.0.0.1:18123"`): the clock went from a week behind to the
+host's UTC + 11 h at the first sync (the kernel's clock chip held the new seconds), and the syncs
+every 64 s after it measured -0.04 to -0.10 s, without stepping again. With the host's server then
+made an hour fast, Set Clock Now in RiptidePrefs (opened and clicked through the testbed's remote
+control) found +3601.3 s, set the clock to 22:17:08 and showed the result; the next syncs measured
++0.28 and +0.34 s and left it. Not tested: a real SE's clock chip, and System 6.
+
+![RiptidePrefs' Time page on the Mac, after the first sync](mac-gui-time.png)
+
 ## Notes for the next stages
 
 - Real programs (Internet Explorer 4.01, Fetch, NCSA Telnet) on real hardware will show what is

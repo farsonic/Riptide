@@ -469,6 +469,40 @@ static void test_model(void)
 			named += m.conns[i].prog[0] != 0;
 		CHECK(named == 0);
 	}
+	/* the Time page's line: the clock time of the sync, whether the clock was set */
+	rp_st_ntp_line(&m, 14 * 3600L + 7 * 60, b, sizeof(b));
+	CHECK_STR(b, "Last NTP sync: 14:05 (2 min ago) with pool.ntp.org,\noffset -0.012 s, "
+	             "the clock was left as it was. Next in 58 min.");
+	st.ntp_flags = RT_CTL_NTPF_STEPPED;
+	st.ntp_off_ms = 3214;
+	feed(&m, 103100, 1);
+	rp_st_ntp_line(&m, 60, b, sizeof(b));            /* just after midnight: the sync was yesterday */
+	CHECK_STR(b, "Last NTP sync: 23:59 (2 min ago) with pool.ntp.org,\noffset +3.214 s, the clock was set. "
+	             "Next in 58 min.");
+	st.ntp_flags = RT_CTL_NTPF_STEPPED | RT_CTL_NTPF_BUSY;
+	feed(&m, 103200, 1);
+	rp_st_ntp_line(&m, -1, b, sizeof(b));
+	CHECK_STR(b, "Last NTP sync: 2 min ago with pool.ntp.org,\noffset +3.214 s, the clock was set. Syncing now.");
+	st.ntp_flags = 0;
+	st.ntp_ago_s = 0xffffffffu;
+	st.ntp_state = RT_CTL_NTP_WAIT;
+	feed(&m, 103300, 1);
+	rp_st_ntp_line(&m, 0, b, sizeof(b));
+	CHECK_STR(b, "Last NTP sync: none yet. Next try in 58 min.");
+	st.ntp_state = RT_CTL_NTP_FAILED;
+	strcpy(st.ntp_error, "no answer");
+	feed(&m, 103400, 1);
+	rp_st_ntp_line(&m, 0, b, sizeof(b));
+	CHECK_STR(b, "Last NTP sync: none yet.\nThe last try failed: no answer.");
+	st.ntp_state = RT_CTL_NTP_OFF;
+	feed(&m, 103500, 1);
+	rp_st_ntp_line(&m, 0, b, sizeof(b));
+	CHECK_STR(b, "Last NTP sync: none, NTP is off in the running Riptide.");
+	rp_st_ntp_line(&m, 0, b, 12);
+	CHECK(strlen(b) < 12);
+	st.ntp_ago_s = 120;
+	st.ntp_off_ms = -12;
+	st.ntp_error[0] = 0;
 	/* NTP off and failed */
 	st.ntp_state = RT_CTL_NTP_OFF;
 	feed(&m, 104000, 1);
@@ -487,6 +521,8 @@ static void test_model(void)
 	/* stopped */
 	rp_status_stopped(&m);
 	CHECK(!m.running && m.nif == 0 && m.total.n == 0);
+	rp_st_ntp_line(&m, 0, b, sizeof(b));
+	CHECK_STR(b, "Riptide is not running: no NTP sync yet.");
 	/* a missing table is no problem */
 	{
 		struct rp_st_input in;

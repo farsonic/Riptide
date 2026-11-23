@@ -31,6 +31,7 @@ s32 rt_tz_offset;
 s32 rt_tz_system;
 u8  rt_tz_configured;
 u8  rt_ntp_battclock;
+u32 rt_ntp_step_default_ms = 500;
 int (*rt_set_wallclock_hook)(u32 sec, u32 usec);
 
 struct ntp_tv {
@@ -295,7 +296,7 @@ static void sync_next(void)
 			if (rt_parse_ipv4(n, &v4) == 0) {
 				rt_in6_set_v4mapped(&a, v4);
 				add_addr(&a, n);
-			} else if (rt_inet6_pton(n, &a) == 1) {
+			} else if (rt_inet6_pton(n, &a) == 0) {
 				add_addr(&a, n);
 			} else if (ntp.dns_type == 0) {
 				ntp.dns_type = DNS_TYPE_A;
@@ -407,10 +408,25 @@ static void dns_answer(const u8 *msg, u32 len)
 	sync_next();
 }
 
+static void fmt_off(char *b, u32 len, s32 s, s32 u);
+
+/* the address of a server as text: a.b.c.d for IPv4, else RFC 5952 */
+static void addr_text(const rt_in6_addr *a, char *b, u32 len)
+{
+	char t[48];
+
+	if (rt_in6_is_v4mapped(a))
+		rt_format_ipv4(a->w[3], t);
+	else
+		rt_inet6_ntop(a, t, sizeof(t));
+	rt_strlcpy(b, t, len);
+}
+
 static void apply(const struct ntp_tv *t2, const struct ntp_tv *t3, const struct ntp_tv *t4, u8 stratum)
 {
 	s32 os, ou, d;
 	u32 abs_ms;
+	char off[32], at[48];
 
 	if (rt_ntp_compute(&ntp.t1, t2, t3, t4, &os, &ou, &d) < 0 || d < 0 || d > 10000000) {
 		ntp.addr_i++;
@@ -441,8 +457,13 @@ static void apply(const struct ntp_tv *t2, const struct ntp_tv *t3, const struct
 		if (rt_set_wallclock_hook((u32)s, (u32)u) == 0)
 			ntp.stepped = 1;
 	}
-	rt_log(RT_LOG_INFO, "ntp: %s stratum %u, offset %ld.%06lu s%s", ntp.last_name, (unsigned)stratum,
-	       (long)os, (unsigned long)ou, ntp.stepped ? ", clock set" : "");
+	/* "ntp: pool.ntp.org (192.0.2.1) stratum 2, offset +3.214 s, clock set" */
+	fmt_off(off, sizeof(off), os, ou);
+	addr_text(&ntp.last_addr, at, sizeof(at));
+	if (!strcmp(at, ntp.last_name))
+		at[0] = 0;
+	rt_log(RT_LOG_INFO, "ntp: %s%s%s%s stratum %u, offset %s%s", ntp.last_name, at[0] ? " (" : "", at,
+	       at[0] ? ")" : "", (unsigned)stratum, off, ntp.stepped ? ", clock set" : "");
 	sync_done(1, NULL);
 }
 
@@ -546,6 +567,7 @@ void rt_ntp_ctl(struct rt_ctl_status *st)
 	s32 next = (s32)(ntp.next_ms - rt_now_ms());
 
 	st->ntp_ago_s = 0xffffffffu;
+	st->ntp_flags = 0;
 	if (!ntp.enabled) {
 		st->ntp_state = RT_CTL_NTP_OFF;
 		return;
@@ -553,8 +575,12 @@ void rt_ntp_ctl(struct rt_ctl_status *st)
 	st->ntp_state = ntp.last_err[0] ? RT_CTL_NTP_FAILED : ntp.synced ? RT_CTL_NTP_SYNCED : RT_CTL_NTP_WAIT;
 	st->ntp_next_s = next > 0 ? (u32)next / 1000u : 0;
 	rt_strlcpy(st->ntp_error, ntp.last_err, sizeof(st->ntp_error));
+	if (ntp.state != NS_IDLE)
+		st->ntp_flags |= RT_CTL_NTPF_BUSY;
 	if (!ntp.synced)
 		return;
+	if (ntp.stepped)
+		st->ntp_flags |= RT_CTL_NTPF_STEPPED;
 	st->ntp_ago_s = (rt_now_ms() - ntp.last_ms) / 1000u;
 	st->ntp_stratum = ntp.stratum;
 	/* years off before the first sync: the most that fits */
@@ -568,7 +594,7 @@ void rt_ntp_ctl(struct rt_ctl_status *st)
 
 void rt_ntp_status(char *buf, u32 len)
 {
-	char off[32];
+	char off[32], at[48], when[32];
 	s32 next = (s32)(ntp.next_ms - rt_now_ms());
 
 	buf[0] = 0;
@@ -576,15 +602,24 @@ void rt_ntp_status(char *buf, u32 len)
 		return;
 	if (next < 0)
 		next = 0;
+	if (ntp.state != NS_IDLE)
+		rt_strlcpy(when, "syncing now", sizeof(when));
+	else
+		rt_snprintf(when, sizeof(when), "next %sin %lu s", ntp.synced ? "" : "try ",
+		            (unsigned long)((u32)next / 1000u));
 	if (ntp.synced) {
 		fmt_off(off, sizeof(off), ntp.off_sec, ntp.off_usec);
-		rt_snprintf(buf, len, "NTP: %s, stratum %u, offset %s%s, delay %lu ms, %lu s ago, next in %lu s%s%s",
-		            ntp.last_name, (unsigned)ntp.stratum, off, ntp.stepped ? " (clock set)" : "",
-		            (unsigned long)(ntp.delay_us / 1000u), (unsigned long)((rt_now_ms() - ntp.last_ms) / 1000u),
-		            (unsigned long)((u32)next / 1000u), ntp.last_err[0] ? "; last try: " : "", ntp.last_err);
+		addr_text(&ntp.last_addr, at, sizeof(at));
+		if (!strcmp(at, ntp.last_name))
+			at[0] = 0;
+		rt_snprintf(buf, len, "NTP: %s%s%s%s, stratum %u, offset %s%s, delay %lu ms, %lu s ago, %s%s%s",
+		            ntp.last_name, at[0] ? " (" : "", at, at[0] ? ")" : "", (unsigned)ntp.stratum, off,
+		            ntp.stepped ? " (clock set)" : "", (unsigned long)(ntp.delay_us / 1000u),
+		            (unsigned long)((rt_now_ms() - ntp.last_ms) / 1000u), when,
+		            ntp.last_err[0] ? "; last try: " : "", ntp.last_err);
 	} else {
-		rt_snprintf(buf, len, "NTP: not synchronised yet%s%s, next try in %lu s",
-		            ntp.last_err[0] ? ", " : "", ntp.last_err, (unsigned long)((u32)next / 1000u));
+		rt_snprintf(buf, len, "NTP: not synchronised yet%s%s, %s", ntp.last_err[0] ? ", " : "", ntp.last_err,
+		            when);
 	}
 }
 
@@ -761,7 +796,7 @@ void rt_netsvc_reset(void)
 	ntp.ndhcp = 0;
 	ntp.backoff = 0;
 	ntp.interval_s = 3600;
-	ntp.step_ms = 500;
+	ntp.step_ms = rt_ntp_step_default_ms;
 	ntp.last_err[0] = 0;
 	rt_ntp_battclock = 0;
 	rt_tz_configured = 0;
@@ -772,7 +807,7 @@ void rt_netsvc_reset(void)
 void rt_netsvc_init(void)
 {
 	ntp.interval_s = 3600;
-	ntp.step_ms = 500;
+	ntp.step_ms = rt_ntp_step_default_ms;
 	rt_timer_init(&ntp_timer, ntp_timer_fn, NULL);
 	rt_timer_init(&ntp_rx_timer, ntp_rx, NULL);
 	rt_mdns_init();

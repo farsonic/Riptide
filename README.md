@@ -27,6 +27,10 @@ if you want stability etc.
   direct loader for Miami's MNI drivers. Also loopback, ARP, ICMP, UDP, raw
   sockets, IPv4 fragmentation, path-MTU discovery, a DHCP client and a DNS
   resolver.
+* **Time and names:** an SNTP client (RFC 4330, IPv4 and IPv6; servers from
+  riptide.conf, the DHCP lease or pool.ntp.org) that sets the clock, on or
+  off in RiptidePrefs' Time page with a Set Clock Now button, and an mDNS
+  responder for `name.local`.
 * **IPv6:** dual-stack host with SLAAC (RFC 7217 stable and RFC 8981
   temporary addresses), NDP, MLDv2, router advertisement routes, MTU and
   DNS (RDNSS/DNSSL), stateless DHCPv6, ICMPv6, fragments and path MTU;
@@ -44,7 +48,8 @@ if you want stability etc.
 
 * **Classic Mac OS:** the `mac-port` branch also builds Riptide as a MacTCP replacement for
   System 7 on 68020 and later Macs (docs/MAC.md), with `.IPP6`, a public IPv6 interface in MacTCP's
-  style for programs written for it (docs/IPP6.md, sdk/mac/IPP6.h).
+  style for programs written for it (docs/IPP6.md, sdk/mac/IPP6.h). It can set the Mac's clock
+  by NTP (RiptidePrefs' Time page, the Map control panel's time zone; docs/MAC.md "The clock").
 
 ## Installing
 

@@ -518,6 +518,22 @@ static int all_names(const char *s)
 	return 1;
 }
 
+/* how many names separated by spaces */
+static int count_names(const char *s)
+{
+	int n = 0;
+
+	while (*s) {
+		while (*s == ' ')
+			s++;
+		if (*s)
+			n++;
+		while (*s && *s != ' ')
+			s++;
+	}
+	return n;
+}
+
 /* the failing field and its reason */
 static int bad(const struct rp_model *m, const void *addr, const char *why, int *fi, char *err, int errlen)
 {
@@ -637,6 +653,8 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 			return bad(m, m->dns[i], "enter an IPv4 or IPv6 address", fi, err, errlen);
 	if (m->ntp && m->ntp_servers[0] && !all_names(m->ntp_servers))
 		return bad(m, m->ntp_servers, "host names or addresses, separated by spaces", fi, err, errlen);
+	if (m->ntp && count_names(m->ntp_servers) > 4)
+		return bad(m, m->ntp_servers, "at most four time servers", fi, err, errlen);
 	if (m->timezone[0] && !rp_valid_tz(m->timezone))
 		return bad(m, m->timezone, "auto, or the offset from UTC: +10:00, -5, +5:30", fi, err, errlen);
 	if (!rp_valid_programs(m->ss[RP_SS_BG_PROGRAMS]))

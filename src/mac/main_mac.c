@@ -19,6 +19,7 @@
 #include "rt_netif.h"
 #include "rt_ip6.h"
 #include "rt_qos.h"
+#include "rt_netsvc.h"
 
 #define HEAP_BYTES (1024u * 1024u)
 #define ipBadLapErr  -23000
@@ -320,11 +321,14 @@ int rt_mac_open(void *pb, void *dce)
 		mac_log_line("Open: starting");
 		int e = mac_os_init(HEAP_BYTES);
 		if (e < 0) { rt_log(RT_LOG_ERR, "Open: no %u KB for the stack's memory pool (%d)", HEAP_BYTES / 1024, e); return -108; }
+		/* the clock is set in whole seconds: NTP steps it from 1 s off (riptide.conf: "ntp step MS") */
+		rt_ntp_step_default_ms = 1000;
 		rt_lock();
 		int r = rt_init();
 		rt_unlock();
 		if (r < 0) { rt_log(RT_LOG_ERR, "rt_init: %d", r); return ipBadCnfgErr; }
 		core_up = 1;
+		mac_clock_init();                       /* the Map control panel's time zone, NTP's clock hook */
 		rt_log(RT_LOG_INFO, "Riptide for the Mac: core up");
 		configure();
 		if (!net_up) { rt_log(RT_LOG_ERR, "Open: no network: %s", mac_net_why); return ipBadLapErr; }

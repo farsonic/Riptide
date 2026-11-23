@@ -1045,6 +1045,18 @@ static void test_fields(void)
 	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && fi == rp_find(&c.cur, c.cur.ifc[0].addr));
 	strcpy(c.cur.ifc[0].addr, "192.168.1.20/24");
 	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	/* NTP servers: names or addresses, at most four (the stack's limit) */
+	c.cur.ntp = 1;
+	strcpy(c.cur.ntp_servers, "pool.ntp.org 192.0.2.1 2001:db8::1 time.example.org");
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	strcat(c.cur.ntp_servers, " fifth.example.org");
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && fi == rp_find(&c.cur, c.cur.ntp_servers) &&
+	      strstr(err, "at most four"));
+	strcpy(c.cur.ntp_servers, "pool.ntp.org bad_name!");
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && fi == rp_find(&c.cur, c.cur.ntp_servers));
+	c.cur.ntp = 0;                     /* off: the servers are not looked at */
+	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) == 0);
+	c.cur.ntp_servers[0] = 0;
 	c.cur.sc[RP_SC_PORT_FIRST] = 50000;
 	c.cur.sc[RP_SC_PORT_LAST] = 40000;
 	CHECK(rp_validate(&c.cur, &fi, err, sizeof(err)) < 0 && fi == rp_find(&c.cur, &c.cur.sc[RP_SC_PORT_LAST]));

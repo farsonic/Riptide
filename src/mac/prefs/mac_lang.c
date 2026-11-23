@@ -39,6 +39,11 @@ static const struct rule rules[] = {
 	{ "enter the SANA-II device", "enter .ENET, the Mac's Ethernet driver", 1 },
 	{ "enter its SANA-II device and unit below",
 	  "Adds a network card: its driver is .ENET; enter which card it is (0 is the first) below.", 1 },
+	/* ---- the Time page ---- */
+	{ "auto takes it from the Locale preferences",
+	  "auto takes it from the Map control panel: its time zone, with daylight saving time when that box is "
+	  "ticked. Or the offset from UTC, such as +10:00.", 1 },
+	{ "the Locale preferences", "the Map control panel", 0 },
 	/* ---- the buttons, the About page, the Status page ---- */
 	{ "Uses the settings until the Amiga is switched off",
 	  "Uses the settings now and until the Mac restarts, without saving them for good.", 1 },

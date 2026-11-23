@@ -21,6 +21,9 @@ extern s32 rt_tz_system;   /* the system's offset ("timezone auto") */
 extern int (*rt_set_wallclock_hook)(u32 sec, u32 usec);
 /* "ntp battclock on": the glue also writes the battery backed clock */
 extern u8  rt_ntp_battclock;
+/* the "ntp step" a configuration starts with, in ms (500; the Mac's clock
+ * is set in whole seconds, so its glue makes it 1000 before rt_init) */
+extern u32 rt_ntp_step_default_ms;
 
 /* ---- SNTP client ---- */
 /* "ntp SERVER... | on | off | sync | status | interval S | step MS |

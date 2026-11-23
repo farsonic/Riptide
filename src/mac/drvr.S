@@ -325,6 +325,21 @@ mac_primetime:				| void (void *tmtask, s32 ms)
 	.short	0xA05A
 	rts
 
+	.globl	mac_readxpram
+mac_readxpram:				| short (void *buf, u32 count_addr): _ReadXPRam, A0 the buffer, D0 the
+	move.l	4(%sp),%a0		| count in the high word and the first address in the low (ReadLocation
+	move.l	8(%sp),%d0		| is this with $000C00E4: the Map control panel's MachineLocation).
+	.short	0xA051			| Not at interrupt time: the clock chip is behind it
+	ext.l	%d0
+	rts
+
+	.globl	mac_setdatetime
+mac_setdatetime:			| short (u32 secs): _SetDateTime, D0 local seconds since 1904: the
+	move.l	4(%sp),%d0		| clock chip and the Time global. Only in a program's context (accRun)
+	.short	0xA03A
+	ext.l	%d0
+	rts
+
 	.globl	mac_getresource
 mac_getresource:			| void **(u32 type, int id): GetResource (toolbox, pascal)
 	move.l	4(%sp),%d0

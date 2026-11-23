@@ -201,6 +201,10 @@ const char *rp_st_conn_header(void);
 /* "Names and time" and "Counters" as lines separated by '\n' */
 void rp_st_names_text(const struct rp_status_model *m, char *buf, int len);
 void rp_st_counters_text(const struct rp_status_model *m, char *buf, int len);
+/* The Time page's line about NTP, two lines at most:
+ * "Last NTP sync: 14:05 (12 min ago) with pool.ntp.org,\noffset +3.214 s, the clock was set. Next in 48 min."
+ * day_s is the local time of day now in seconds (-1: not known, only "12 min ago"). */
+void rp_st_ntp_line(const struct rp_status_model *m, long day_s, char *buf, int len);
 /* "Routes": the routing tables, then the neighbour caches, one entry a
  * line ("default via 192.168.1.1  eth0  DHCP", "192.168.1.1  00:11:...
  * eth0  reachable"), at most maxlines lines */

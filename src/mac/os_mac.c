@@ -17,6 +17,7 @@
 #include "rt_errno.h"
 #include "rt_ctl.h"
 #include "rt_diag.h"
+#include "rt_netsvc.h"
 #include "riptide.h"
 #include "mac.h"
 
@@ -38,12 +39,197 @@ u64 rt_now_us(void)
 }
 u32 rt_now_ms(void) { return (u32)(rt_now_us() / 1000u); }
 #define MAC_EPOCH_TO_UNIX 2082844800u                 /* 1904 to 1970 */
-u32 rt_wallclock(void)
+#define MAC_TIME (*(volatile u32 *)0x20C)             /* Time: local seconds since 1904 */
+
+/* The wall clock. The Mac keeps local time in whole seconds (Time, moved on by the clock chip's
+   one-second interrupt); the core wants UTC with microseconds (NTP's offsets). UTC is local time
+   less rt_tz_offset: the Map control panel's time zone (mac_tz_read) unless riptide.conf has
+   "timezone". The fraction is measured: the stack's task looks at Time at least every 100 ms
+   (mac_clock_sample) and notes when it moved on by one; the time since then is the fraction, to
+   within half the gap between two looks. Until a tick has been seen it is taken as 0.5 s. */
+static volatile u32 sub_time, sub_prev_us, sub_us;
+static volatile u8 sub_ok;
+static int clock_phase(u32 now, u32 *frac)
 {
-	u32 t = *(volatile u32 *)0x20C;                /* Time: local seconds since 1904 */
-	return t > MAC_EPOCH_TO_UNIX ? t - MAC_EPOCH_TO_UNIX : 0;
+	u32 k = MAC_TIME - sub_time, d;
+	if (!sub_ok || k > 1)
+		return 0;
+	d = now - sub_us - k * 1000000u;                /* k = 1: Time moved on since the last look */
+	*frac = (s32)d < 0 ? 0 : d > 999999u ? 999999u : d;
+	return 1;
 }
-void rt_wallclock_tv(u32 *sec, u32 *usec) { *sec = rt_wallclock(); *usec = 0; }
+void rt_wallclock_tv(u32 *sec, u32 *usec)
+{
+	u32 t = MAC_TIME, us = 500000u;
+	clock_phase((u32)rt_now_us(), &us);
+	*sec = t > MAC_EPOCH_TO_UNIX ? t - MAC_EPOCH_TO_UNIX - (u32)rt_tz_offset : 0;
+	*usec = us;
+}
+u32 rt_wallclock(void) { u32 s, u; rt_wallclock_tv(&s, &u); return s; }
+
+/* Setting the clock (the core's rt_set_wallclock_hook, from NTP in the stack's task). SetDateTime
+   talks to the clock chip, which is not done at interrupt or deferred task time: the hook only
+   notes the time, and the driver's accRun (a program's context, every sixth of a second: ipp.c)
+   calls mac_clock_run, which sets it just after the chip's next tick (so that the new seconds
+   start where the chip's seconds start: within 0.2 s), and in whole seconds, rounded. The result
+   is logged from the stack's task. The core steps only beyond "ntp step" (1 s on the Mac). */
+static volatile u8 set_pending, set_done, tz_news;
+static u32 set_sec, set_usec, set_at_us, set_local;
+static s32 set_diff;
+static int mac_set_clock(u32 sec, u32 usec)
+{
+	u16 sr = mac_irq_off();
+	set_sec = sec;
+	set_usec = usec;
+	set_at_us = (u32)rt_now_us();
+	set_pending = 1;
+	mac_irq_restore(sr);
+	return 0;
+}
+
+/* The Map control panel's MachineLocation (12 bytes of extended parameter RAM at $E4, what
+   ReadLocation reads): latitude, longitude, then gmtDelta, the seconds east of UTC in 24 bits
+   (with daylight saving time in them when its box is ticked), under dlsDelta, whose top bit says
+   daylight saving time is on. All zero: Map never set; local time is then taken as UTC. */
+static s32 tz_delta;
+static u8 tz_dst, tz_known, tz_seen;
+void mac_tz_read(void)
+{
+	u8 loc[12];
+	u32 g;
+	s32 d;
+	int i, any = 0;
+	memset(loc, 0, sizeof loc);
+	if (mac_readxpram(loc, 0x000C00E4u) != 0)
+		return;
+	for (i = 0; i < 12; i++)
+		any |= loc[i];
+	g = (u32)loc[9] << 16 | (u32)loc[10] << 8 | loc[11];
+	d = g & 0x800000u ? (s32)(g | 0xFF000000u) : (s32)g;
+	if (tz_seen && d == tz_delta && tz_known == (any != 0) && tz_dst == (loc[8] >> 7))
+		return;
+	tz_delta = d;
+	tz_known = any != 0;
+	tz_dst = loc[8] >> 7;
+	tz_seen = 1;
+	rt_tz_system = d;
+	if (!rt_tz_configured)
+		rt_tz_offset = d;
+	tz_news = 1;
+}
+
+/* accRun (ipp.c): a program's context, where the clock chip may be used */
+void mac_clock_run(void)
+{
+	static u32 tz_ticks;
+	u32 now, age, frac = 0, secs, local;
+	s32 us;
+	if (!tz_ticks || mac_ticks() - tz_ticks >= 3600u) {        /* Map's settings, once a minute */
+		mac_tz_read();
+		tz_ticks = mac_ticks() | 1;
+	}
+	if (!set_pending)
+		return;
+	now = (u32)rt_now_us();
+	age = now - set_at_us;
+	if (age > 600000000u) {                     /* ten minutes without accRun: too old to use */
+		set_pending = 0;
+		return;
+	}
+	if (clock_phase(now, &frac)) {
+		if (frac > 200000u && age < 3000000u)
+			return;                             /* wait for just after the chip's tick */
+	} else if (age < 3000000u) {
+		return;                                 /* no tick seen yet: wait for one, 3 s at most */
+	} else {
+		frac = 0;
+	}
+	/* the time now, less the part of this second the chip has counted already, rounded */
+	us = (s32)set_usec + (s32)age - (s32)frac + 1500000;
+	secs = set_sec - 1u + (u32)us / 1000000u;
+	local = secs + (u32)rt_tz_offset + MAC_EPOCH_TO_UNIX;
+	set_diff = (s32)(local - MAC_TIME);
+	set_pending = 0;
+	if (mac_setdatetime(local) == 0) {
+		u16 sr = mac_irq_off();
+		sub_ok = 0;                             /* a jump, not a tick: the phase again */
+		sub_time = MAC_TIME;
+		sub_prev_us = (u32)rt_now_us();
+		mac_irq_restore(sr);
+		set_local = local;
+		set_done = 1;
+	}
+}
+
+/* local seconds since 1904 as "2026-11-23 14:05:09" */
+static void fmt_local(char *b, u32 len, u32 t)
+{
+	u32 days = t / 86400u, s = t % 86400u, y = 1904, m = 0;
+	static const u8 mdays[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+	for (;;) {
+		u32 yd = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+		if (days < yd)
+			break;
+		days -= yd;
+		y++;
+	}
+	for (; m < 12; m++) {
+		u32 md = mdays[m] + (m == 1 && y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+		if (days < md)
+			break;
+		days -= md;
+	}
+	rt_snprintf(b, len, "%lu-%02lu-%02lu %02lu:%02lu:%02lu", (unsigned long)y, (unsigned long)m + 1,
+	            (unsigned long)days + 1, (unsigned long)(s / 3600u), (unsigned long)(s / 60u % 60u),
+	            (unsigned long)(s % 60u));
+}
+
+/* the stack's task, every pass (at least every 100 ms): the clock's phase, and what accRun did */
+static void mac_clock_sample(void)
+{
+	u32 t = MAC_TIME, now = (u32)rt_now_us();
+	u16 sr = mac_irq_off();
+	if (t != sub_time) {
+		u32 gap = now - sub_prev_us;
+		if (t == sub_time + 1 && gap < 250000u) {
+			sub_us = now - gap / 2;             /* the tick was between the two looks */
+			sub_ok = 1;
+		} else if (t == sub_time + 1 && sub_ok) {
+			sub_us += 1000000u;                 /* looked late: the phase carries on */
+		} else {
+			sub_ok = 0;                         /* the first look, or the clock was set */
+		}
+		sub_time = t;
+	}
+	sub_prev_us = now;
+	mac_irq_restore(sr);
+	if (tz_news) {
+		s32 o = tz_delta < 0 ? -tz_delta : tz_delta;
+		tz_news = 0;
+		if (!tz_known)
+			rt_log(RT_LOG_INFO, "time zone: none set in the Map control panel, local time taken as UTC "
+			       "(set it there, or \"timezone +HH:MM\" in riptide.conf)");
+		else
+			rt_log(RT_LOG_INFO, "time zone: UTC%c%02ld:%02ld%s (the Map control panel)%s",
+			       tz_delta < 0 ? '-' : '+', (long)(o / 3600), (long)(o / 60 % 60),
+			       tz_dst ? " with daylight saving time" : "",
+			       rt_tz_configured ? "; riptide.conf's \"timezone\" is used instead" : "");
+	}
+	if (set_done) {
+		char b[32];
+		set_done = 0;
+		fmt_local(b, sizeof b, set_local);
+		rt_log(RT_LOG_INFO, "ntp: the Mac's clock set to %s local time (%s%ld s)", b, set_diff < 0 ? "-" : "+",
+		       (long)(set_diff < 0 ? -set_diff : set_diff));
+	}
+}
+
+void mac_clock_init(void)
+{
+	mac_tz_read();
+	sub_time = MAC_TIME;
+	rt_set_wallclock_hook = mac_set_clock;
+}
 
 /* ---- memory: a first-fit pool with boundary coalescing -------------------------------------- */
 struct blk { u32 size; struct blk *next; };           /* size includes this header; free list by address */
@@ -296,6 +482,7 @@ void mac_stack_run(void)
 	u32 ms;
 	for (int rounds = 0; ; rounds++) {
 		again = 0;
+		mac_clock_sample();
 		net_mac_poll();
 		ipp_poll();
 		rt_lock();

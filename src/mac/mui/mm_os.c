@@ -536,6 +536,16 @@ void CloseDevice(struct IORequest *io)
 }
 
 /* ==================== dos ==================== */
+/* Delay: the Amiga's ticks are fiftieths of a second, the Mac's sixtieths. SystemTask meanwhile, so
+   the drivers get their time (Riptide's accRun sets the clock after an NTP sync). Weak: the
+   Riptide Command Terminal has its own, which keeps its window alive (term_os.c) */
+__attribute__((weak)) void Delay(LONG timeout)
+{
+	ULONG end = TickCount() + (ULONG)timeout * 6 / 5;
+	while ((LONG)(TickCount() - end) < 0)
+		SystemTask();
+}
+
 APTR DateStamp(APTR date)
 {
 	struct DateStamp *ds = date;

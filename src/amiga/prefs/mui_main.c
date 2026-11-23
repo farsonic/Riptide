@@ -21,6 +21,8 @@
 #include "prefs/mui_ids.h"
 #include "prefs/mui_status.h"
 #include "prefs/mui_counters.h"
+#include "prefs/prefs_status.h"
+#include "rt/riptide_port.h"
 
 #define NF RP_NFIELDS_MAX
 #define IS_LIST(p) (rp_page_list(p) >= 0)
@@ -63,6 +65,14 @@ static int page_dyn(int p)
 	return -1;
 }
 static char status_text[120];
+/* the Time page: Set Clock Now, and the last NTP sync of the running Riptide */
+static Object *ntp_btn, *ntp_lbl;
+static char *ntp_help;
+static char ntp_text[200];
+static struct rp_status_model *ntp_model;
+/* the line's room is measured from this when the window opens; the real text comes after */
+static const char ntp_sizer[] = "Last NTP sync: 23:59 (23 h 59 min ago) with time.example.org,\n"
+                                "offset -12.345 s, the clock was left as it was. Next in 23 h 59 min.";
 static const char *pubname;     /* PUBSCREEN=, for the message windows */
 
 static const char *const btn_label[4] = { "_Save", "_Use", "_Apply", "_Cancel" };
@@ -257,6 +267,8 @@ static void update_disabled(void)
 			mui_set(flab[i], MUIA_Disabled, dis);
 		}
 	}
+	if (ntp_btn && mui_get(ntp_btn, MUIA_Disabled) != (ULONG)!rp_cfg.cur.ntp)
+		mui_set(ntp_btn, MUIA_Disabled, (ULONG)!rp_cfg.cur.ntp);
 }
 
 /* does page p edit its entries with a form? */
@@ -1003,6 +1015,94 @@ static Object *about_page(void)
 	return grp;
 }
 
+/* ---- the Time page's Set Clock Now and its line about the last sync ---- */
+/* the running Riptide's NTP state into the line under the button */
+static void ntp_show(void)
+{
+	struct DateStamp ds;
+
+	if (!ntp_lbl)
+		return;
+	if (!ntp_model) {
+		ntp_model = rp_alloc(sizeof(*ntp_model));
+		if (!ntp_model)
+			return;
+		rp_status_init(ntp_model);
+	}
+	rp_status_read(ntp_model);
+	DateStamp(&ds);
+	rp_st_ntp_line(ntp_model, ds.ds_Minute * 60L + ds.ds_Tick / 50, ntp_text, sizeof(ntp_text));
+	mui_set(ntp_lbl, MUIA_QLabel_Text, (ULONG)ntp_text);
+}
+
+/* Set Clock Now: the page's NTP servers to the running Riptide when they are not what it has, then
+ * "ntp sync", and up to 12 s for the answer (four servers that do not answer take 8) */
+static void ntp_sync_now(void)
+{
+	const struct rp_model *was = rp_cfg.have_applied ? &rp_cfg.applied : &rp_cfg.orig;
+	char line[RP_LONG + 8], msg[400];
+	int i;
+
+	if (harvest() < 0 || !rp_cfg.cur.ntp)
+		return;
+	if (!FindPort((CONST_STRPTR)RIPTIDE_PORTNAME)) {
+		rp_message(tr("Riptide is not running.\nThe clock is set when it runs with NTP on."));
+		return;
+	}
+	if (was->ntp != rp_cfg.cur.ntp || strcmp(was->ntp_servers, rp_cfg.cur.ntp_servers)) {
+		rt_snprintf(line, sizeof(line), "ntp %s", rp_cfg.cur.ntp_servers[0] ? rp_cfg.cur.ntp_servers : "on");
+		if (cl_command(line, 0) != 0) {
+			rt_snprintf(msg, sizeof(msg), "%s\n%s", tr("Riptide did not take the time servers:"), cl_reply());
+			rp_message(msg);
+			return;
+		}
+	}
+	if (cl_command("ntp sync", 0) != 0) {
+		rt_snprintf(msg, sizeof(msg), "%s\n%s", tr("Riptide did not sync:"), cl_reply());
+		rp_message(msg);
+		return;
+	}
+	mui_set(app, MUIA_Application_Sleep, TRUE);
+	for (i = 0; i < 48; i++) {
+		Delay(12);                          /* a quarter of a second */
+		ntp_show();
+		if (ntp_model && ntp_model->have_st && !(ntp_model->st.ntp_flags & RT_CTL_NTPF_BUSY) &&
+		    (ntp_model->st.ntp_ago_s < 30 || ntp_model->st.ntp_state == RT_CTL_NTP_FAILED))
+			break;
+	}
+	mui_set(app, MUIA_Application_Sleep, FALSE);
+	if (!ntp_model || !ntp_model->have_st)
+		return;
+	if (ntp_model->st.ntp_flags & RT_CTL_NTPF_BUSY)
+		rt_snprintf(msg, sizeof(msg), "%s", tr("Riptide is still asking the time servers.\nThe Time page shows "
+		                                       "the result when you come back to it."));
+	else if (ntp_model->st.ntp_state == RT_CTL_NTP_FAILED)
+		rt_snprintf(msg, sizeof(msg), "%s\n%s", tr("The clock was not set: no time server gave a good answer."),
+		            ntp_model->st.ntp_error);
+	else
+		rt_snprintf(msg, sizeof(msg), "%s", ntp_text);
+	rp_message(msg);
+}
+
+/* the Time page: its settings, then the button and the line */
+static Object *time_page(Object *fields)
+{
+	ULONG dis = (ULONG)!rp_cfg.cur.ntp;
+
+	ntp_btn = button("Set Clock _Now");
+	ntp_lbl = label(ntp_sizer, QL_TEXT);
+	if (!fields || !ntp_btn || !ntp_lbl)
+		return NULL;
+	ntp_help = bubble_dup("Set Clock Now", "Asks the time servers now and sets the clock from their answer "
+	                      "(when it is more than a moment off). Uses the servers above, saved or not.");
+	mui_set(ntp_btn, MUIA_ShortHelp, (ULONG)ntp_help);
+	mui_set(ntp_btn, MUIA_Disabled, dis);
+	mui_do(ntp_btn, MUIM_Notify, MUIA_Pressed, FALSE, (ULONG)app, 2, MUIM_Application_ReturnID, ID_NTPSYNC);
+	return mui_new(MUIC_Group, MUIA_Group_VertSpacing, theme_compact() ? 3 : 6, MUIA_Group_Child, (ULONG)fields,
+	               MUIA_Group_Child, (ULONG)hgroup2(ntp_btn, rect()), MUIA_Group_Child, (ULONG)left(ntp_lbl),
+	               TAGEND);
+}
+
 static Object *build_page(int p)
 {
 	Object *body, *filler, *note;
@@ -1022,6 +1122,8 @@ static Object *build_page(int p)
 		                      MUIA_InnerBottom, in - 2, MUIA_Group_Child, (ULONG)body, TAGEND) : NULL;
 	}
 	body = IS_LIST(p) ? list_page(p) : field_page(p);
+	if (p == P_TIME)
+		body = time_page(body);
 
 	note = label(has_form(p) ? rp_lform_note(p) : rp_pages[p].note, QL_NOTE);
 	filler = IS_LIST(p) ? NULL : rect();
@@ -1161,7 +1263,11 @@ static void reopen(void)
 	mui_set(win, MUIA_Window_Open, FALSE);
 	mui_set(root, MUIA_Background, (ULONG)theme_spec(T_WINDOW));
 	mui_set(bar, MUIA_Background, (ULONG)theme_spec(T_PANEL));
+	if (ntp_lbl)
+		mui_set(ntp_lbl, MUIA_QLabel_Text, (ULONG)ntp_sizer);
 	mui_set(win, MUIA_Window_Open, TRUE);
+	if (page == P_TIME)
+		ntp_show();
 }
 
 static void set_tips(int on)
@@ -1473,8 +1579,14 @@ static int command(ULONG id)
 		mui_do(win, MUIM_Window_ToFront);
 		mui_set(win, MUIA_Window_Activate, TRUE);
 		return 0;
+	case ID_NTPSYNC:
+		ntp_sync_now();
+		show_status();
+		return 0;
 	case ID_PAGE:
 		page = (int)mui_get(nav, MUIA_Nav_Active);
+		if (page == P_TIME)
+			ntp_show();
 		/* a card may have been renamed or its driver changed: the list of
 		 * cards and the names the forms offer follow */
 		harvest_card(0);
@@ -1602,6 +1714,11 @@ static void free_all(void)
 	}
 	rp_free(about_help);
 	about_help = NULL;
+	rp_free(ntp_help);
+	ntp_help = NULL;
+	rp_free(ntp_model);
+	ntp_model = NULL;
+	ntp_btn = ntp_lbl = NULL;
 	for (i = 0; i < 3; i++) {
 		rp_free(ifhelp[i]);
 		ifhelp[i] = NULL;
@@ -1673,6 +1790,8 @@ int mui_run(const struct rp_gui_args *a)
 		goto out;
 	}
 	rp_log("window open, page %d, %s theme", page, theme_dark() ? "dark" : "light");
+	if (page == P_TIME)
+		ntp_show();
 	rp_log("window %ldx%ld at %ld,%ld", (long)mui_get(win, MUIA_Window_Width), (long)mui_get(win, MUIA_Window_Height),
 	       (long)mui_get(win, MUIA_Window_LeftEdge), (long)mui_get(win, MUIA_Window_TopEdge));
 	rp_request_fn = mui_request;

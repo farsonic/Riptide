@@ -445,6 +445,7 @@ int ipp_control_a5(void *pb, void *dce, void *a5)
 	int cs = PB_CSCODE(pb);
 	(void)dce;
 	if (cs == accRun) {
+		mac_clock_run();                          /* NTP's clock step, the Map control panel's time zone */
 		reap();
 		return 0;
 	}

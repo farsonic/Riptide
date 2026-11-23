@@ -84,6 +84,27 @@ static void test_era(void)
 	rt_put_be32(p + 4, 0xffffffffu);
 	rt_ntp_ts_to_tv(p, &t);
 	CHECK(t.sec == 1735689600u && t.usec == 999999);
+	/* a query across the era change: received in era 0's last second, answered in era 1's first */
+	{
+		u8 p2[8], p3[8];
+		struct ntp_tv t1, t2, t3, t4;
+		s32 os, ou, d;
+		rt_put_be32(p2, 0xffffffffu);
+		rt_put_be32(p2 + 4, 0xe6666666u);             /* .9 */
+		rt_put_be32(p3, 0);
+		rt_put_be32(p3 + 4, 0x1999999au);             /* .1 */
+		rt_ntp_ts_to_tv(p2, &t2);
+		rt_ntp_ts_to_tv(p3, &t3);
+		CHECK(t2.sec == 2085978495u && t2.usec == 899999);
+		CHECK(t3.sec == 2085978496u && t3.usec == 100000);
+		/* the client 3 s behind: sent at ...492.8, back at ...493.4 */
+		t1 = tv(2085978492u, 800000);
+		t4 = tv(2085978493u, 400000);
+		CHECK(rt_ntp_compute(&t1, &t2, &t3, &t4, &os, &ou, &d) == 0);
+		/* ((95.9 - 92.8) + (96.1 - 93.4)) / 2 = 2.9 s; (0.6 - 0.2) = 0.4 s round trip */
+		CHECK(os == 2 && ou >= 899999 && ou <= 900000);
+		CHECK(d >= 399999 && d <= 400001);
+	}
 }
 
 static int cmd(const char *line, char *out, u32 len)

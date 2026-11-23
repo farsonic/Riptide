@@ -837,6 +837,48 @@ void rp_st_names_text(const struct rp_status_model *m, char *buf, int len)
 	}
 }
 
+void rp_st_ntp_line(const struct rp_status_model *m, long day_s, char *buf, int len)
+{
+	char t[32], o[32];
+	int k = 0;
+
+	buf[0] = 0;
+	if (!m->running) {
+		addf(buf, len, 0, "Riptide is not running: no NTP sync yet.");
+		return;
+	}
+	if (!m->have_st)
+		return;
+	if (m->st.ntp_state == RT_CTL_NTP_OFF) {
+		addf(buf, len, 0, "Last NTP sync: none, NTP is off in the running Riptide.");
+		return;
+	}
+	if (m->st.ntp_ago_s == 0xffffffffUL) {
+		k = addf(buf, len, k, "Last NTP sync: none yet");
+	} else {
+		rp_fmt_dur(t, sizeof(t), m->st.ntp_ago_s);
+		k = addf(buf, len, k, "Last NTP sync: ");
+		if (day_s >= 0 && m->st.ntp_ago_s < 86400UL) {
+			long at = (day_s - (long)m->st.ntp_ago_s + 86400L) % 86400L;
+			k = addf(buf, len, k, "%02ld:%02ld (%s ago)", at / 3600, at / 60 % 60, t);
+		} else {
+			k = addf(buf, len, k, "%s ago", t);
+		}
+		rp_fmt_offset(o, sizeof(o), m->st.ntp_off_ms);
+		k = addf(buf, len, k, " with %s,\noffset %s, %s", m->st.ntp_server[0] ? m->st.ntp_server : "the server", o,
+		         (m->st.ntp_flags & RT_CTL_NTPF_STEPPED) ? "the clock was set" : "the clock was left as it was");
+	}
+	if (m->st.ntp_flags & RT_CTL_NTPF_BUSY) {
+		addf(buf, len, k, ". Syncing now.");
+	} else if (m->st.ntp_state == RT_CTL_NTP_FAILED) {
+		addf(buf, len, k, ".%sThe last try failed: %s.", m->st.ntp_ago_s == 0xffffffffUL ? "\n" : " ",
+		     m->st.ntp_error[0] ? m->st.ntp_error : "no answer");
+	} else {
+		rp_fmt_dur(t, sizeof(t), m->st.ntp_next_s);
+		addf(buf, len, k, ". Next %sin %s.", m->st.ntp_ago_s == 0xffffffffUL ? "try " : "", t);
+	}
+}
+
 /* where a route came from, and what it does */
 static const char *route_words(u32 flags, u8 proto, u8 linkdown)
 {

@@ -494,7 +494,7 @@ takes about 10 s instead of 7 s.
 
 ### Time and .local names
 
-**NTP.** `ntp pool.ntp.org` (or up to four names or addresses) starts the
+**NTP.** `ntp pool.ntp.org` (or up to four names, IPv4 or IPv6 addresses) starts the
 SNTP client (RFC 4330, the client side of NTPv4): the first query goes out
 two seconds after the stack starts, then once an hour (`ntp interval
 SECONDS`, 64 to 604800). `ntp on` without servers uses the NTP servers of
@@ -513,7 +513,8 @@ The offset is computed from the four time stamps
 divisions, and NTP time stamps are converted with 32-bit wrap-around, so the
 client keeps working through the NTP era change in February 2036 (up to
 2106). When the clock is off by at least `ntp step` milliseconds (500 by
-default) Riptide sets the system time with timer.device `TR_SETSYSTIME`;
+default; 1000 on the Mac, whose clock counts whole seconds: docs/MAC.md,
+"The clock") Riptide sets the system time with timer.device `TR_SETSYSTIME`;
 AmigaOS cannot slew, so smaller offsets are only reported. With `ntp
 battclock on` the battery-backed clock (battclock.resource) is set too.
 
@@ -524,11 +525,25 @@ auto` goes back to the Locale value. `Riptide TIMEZONE` shows the offset in
 use. Daylight saving time is not tracked: change the Locale preferences (or
 the `timezone` line) when it starts and ends.
 
-`Riptide NTP STATUS` and `Riptide STATUS` show the last sync:
+`Riptide NTP STATUS` and `Riptide STATUS` show the last sync (the address
+in brackets when the server was named), "syncing now" while a sync runs:
 
 ```
-NTP: pool.ntp.org, stratum 2, offset +3.214 s (clock set), delay 41 ms, 12 s ago, next in 3588 s
+NTP: pool.ntp.org (192.0.2.1), stratum 2, offset +3.214 s (clock set), delay 41 ms, 12 s ago, next in 3588 s
 ```
+
+and each sync is logged:
+
+```
+ntp: pool.ntp.org (192.0.2.1) stratum 2, offset +3.214 s, clock set
+```
+
+RiptidePrefs' Time page has a **Set Clock Now** button (MUI editor): it
+gives the running Riptide the page's servers if they differ from what it
+has, asks for `ntp sync`, waits for the answer (at most 12 s) and shows it;
+under the button, the last sync: "Last NTP sync: 14:05 (12 min ago) with
+pool.ntp.org, offset +3.214 s, the clock was set. Next in 48 min." The page
+refuses more than four servers, as the stack does.
 
 **mDNS.** Riptide answers multicast DNS (RFC 6762) for `HOSTNAME.local`
 (the first label of `hostname`, `amiga` when none is set) on every
@@ -1316,7 +1331,7 @@ under a heading of their own):
 | IPv6 addresses | a list of up to 8 static IPv6 addresses on the cards and VLANs: `[IF\|]ADDR/PLEN [nodad]` (without `IF\|` the first card), e.g. `2001:db8::5/64`, `eth1.20\|2001:db8:20::5/48 nodad`. MUI editor: a form with Interface, IPv6 address and Check for duplicates (On/Off) | `ifconfig IF inet6 ADDR/PLEN [nodad]` |
 | Names | host name, domain, up to three DNS servers; EDNS size (empty: default, 0 = off) and DNS over TCP (Default/On/Off) | `hostname`, `domain`, `nameserver`, `sysctl dns.edns_size=N`, `sysctl dns.tcp_fallback=0\|1` |
 | Hosts | a list of up to 16 names with their addresses that need no name server (the hosts file): `NAME ADDR`, e.g. `printer 192.168.1.9`, `nas.lan 2001:db8::9`; another name for the same address is another entry. MUI editor: a form with Name and IP address; the list reads `printer = 192.168.1.9` | `host NAME ADDR` |
-| Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
+| Time | NTP on/off and servers (empty: from the DHCP lease, else pool.ntp.org; at most four), time zone (`auto` = the Locale preferences, or `+10:00`), mDNS responder (Default/On/Off); Set Clock Now and the last sync (MUI editor) | `ntp SERVER...` / `ntp on` / `ntp off`, `timezone +HH:MM\|auto`, `mdns on\|off` |
 | TCP | quick ACK (Default/Off/On), delayed ACK segments and time limit, ECN (Default/Off/On/Accept only) | `sysctl net.inet.tcp.quickack=`, `delack_segs=`, `delack_ms=`, `sysctl net.inet.tcp.ecn=` |
 | Advanced: Connecting | Fast Open (Default/On/Off), Fast Open for every connect with a cookie, Fast Open backoff after lost SYNs (s, 0-86400), first and largest SYN RTO (ms, 200-3000 / 200-120000), SYN backoff (Linear/Doubling), MTU probing for path MTU black holes (Default/Off/On black hole/Always) | `sysctl net.inet.tcp.fastopen=`, `fastopen_all=`, `fastopen_blackhole=`, `syn_rto_initial_ms=`, `syn_rto_max_ms=`, `syn_backoff=`, `mtu_probing=` |
 | Advanced: Ports | connect timeout (s, 0-600), ICMP unreachable during a connect (Keep trying / 2nd report / At once), TIME_WAIT reuse (Off/On/Loopback only), TIME_WAIT limit (0-65536), local port range (1024-65535) | `sysctl net.inet.tcp.connect_timeout=`, `syn_icmp_abort=`, `tw_reuse=`, `max_tw_buckets=`, `net.inet.ip.portrange.first=`, `.last=` |

@@ -27,6 +27,8 @@ void  mac_dt_entry(void);
 void  mac_tm_entry(void);
 short mac_pb(void *pb, long trap);
 short mac_findfolder(int vref, long type, int create, short *vrefout, long *dirout);
+short mac_readxpram(void *buf, u32 count_addr);    /* not at interrupt time */
+short mac_setdatetime(u32 secs);                   /* local seconds since 1904; a program's context only */
 
 /* the receive rings the protocol handlers fill, one per card (net_mac.c owns them; drvr.S's
    mac_enet_phN fills mac_rx[N], and knows this layout: 16 bytes) */
@@ -47,6 +49,9 @@ void mac_stack_run(void);                      /* the deferred task's body */
 int  mac_os_init(u32 heap_bytes);
 void mac_log_line(const char *s);
 const char *mac_log_ring(u32 *len, u32 *pos);
+void mac_clock_init(void);                     /* at Open: the time zone, NTP's clock hook */
+void mac_clock_run(void);                      /* accRun (a program's context): set the clock if NTP asked */
+void mac_tz_read(void);                        /* the Map control panel's time zone; not at interrupt time */
 static inline u16 mac_irq_off(void) { u16 sr; __asm__ volatile("move.w %%sr,%0\n\tori.w #0x0700,%%sr" : "=d"(sr) :: "memory"); return sr; }
 static inline void mac_irq_restore(u16 sr) { __asm__ volatile("move.w %0,%%sr" :: "d"(sr) : "memory"); }
 static inline u32 mac_ticks(void) { return *(volatile u32 *)0x16A; }

@@ -423,6 +423,9 @@ struct rt_ctl_dns6 {
 #define RT_CTL_NTP_WAIT    1      /* on, not synced yet */
 #define RT_CTL_NTP_SYNCED  2      /* the last sync worked */
 #define RT_CTL_NTP_FAILED  3      /* the last try failed */
+/* ntp_flags (always 0 from older Riptides, where the byte was padding) */
+#define RT_CTL_NTPF_STEPPED 1     /* the last sync set the clock */
+#define RT_CTL_NTPF_BUSY    2     /* a sync is running now */
 struct rt_ctl_status {
 	char version[16];         /* "0.23" */
 	u32  uptime_s;            /* since Riptide started */
@@ -433,7 +436,7 @@ struct rt_ctl_status {
 	/* NTP */
 	u8   ntp_state;           /* RT_CTL_NTP_* */
 	u8   ntp_stratum;
-	u8   pad;
+	u8   ntp_flags;           /* RT_CTL_NTPF_* */
 	u32  ntp_ago_s;           /* since the last good sync, 0xffffffff = never */
 	u32  ntp_next_s;          /* until the next try */
 	s32  ntp_off_ms;          /* the clock's offset at the last sync (+: it was behind) */
