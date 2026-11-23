@@ -74,6 +74,7 @@ struct dns_server {
 };
 static struct dns_server dns_servers[DNS_MAX_SERVERS];
 static int dns_nservers;
+static u32 dns_servers_gen;     /* changes with the list (the asynchronous lookups look again) */
 /* The search list, space separated ("lan example.org"); its first domain
  * is the one rt_dns_search_domain() returns. */
 #define DNS_SEARCH_MAX   6
@@ -184,6 +185,7 @@ static void servers_expire(void)
 			for (j = i; j + 1 < dns_nservers; j++)
 				dns_servers[j] = dns_servers[j + 1];
 			dns_nservers--;
+			dns_servers_gen++;
 			continue;
 		}
 		i++;
@@ -230,6 +232,7 @@ int rt_dns_add_server6(const rt_in6_addr *a, u32 ifindex, u32 lifetime_s, int so
 	                                      0 : rt_ip6_seconds() + lifetime_s;
 	dns_servers[dns_nservers].noedns = 0;
 	dns_nservers++;
+	dns_servers_gen++;
 	neg_flush(1);                     /* a new server may answer */
 	return 0;
 }
@@ -254,6 +257,7 @@ void rt_dns_remove_server6(const rt_in6_addr *a)
 		for (j = i; j + 1 < dns_nservers; j++)
 			dns_servers[j] = dns_servers[j + 1];
 		dns_nservers--;
+		dns_servers_gen++;
 		neg_flush(1);
 		return;
 	}
@@ -270,6 +274,7 @@ void rt_dns_remove_server(u32 addr)
 void rt_dns_clear_servers(void)
 {
 	dns_nservers = 0;
+	dns_servers_gen++;
 	neg_flush(1);
 }
 
@@ -2370,6 +2375,7 @@ struct rt_dns_lookup {
 	rt_in6_addr a6[DNS_CACHE_ADDRS];
 	struct dns_server servers[DNS_MAX_SERVERS];
 	int nservers;
+	u32 gen;                  /* dns_servers_gen of that copy */
 	u8 *buf;                  /* UDP answers, alen bytes */
 	u32 alen;
 	char search[DNS_SEARCH_LEN];
@@ -2547,6 +2553,35 @@ static int al_waiting(const struct rt_dns_lookup *l, int k)
 	const struct al_query *q = &l->q[k];
 
 	return q->type && !q->pre && q->r == R_PENDING;
+}
+
+/* The server list changed since the lookup copied it (a restart of the network, which empties it and
+ * reads riptide.conf again; DHCP; an expiry): the lookup asks the servers there are now, from the
+ * first. 0, or -1 when there are none: the lookup then fails cleanly (it keeps no pointer into the
+ * resolver's state, only its own copies). */
+static int al_reload(struct rt_dns_lookup *l)
+{
+	u32 now = rt_now_ms();
+	int i;
+
+	if (l->mdns)
+		return 0;
+	rt_lock();
+	if (l->gen == dns_servers_gen) {
+		rt_unlock();
+		return 0;
+	}
+	servers_expire();
+	l->nservers = dns_nservers;
+	memcpy(l->servers, dns_servers, sizeof(l->servers));
+	l->gen = dns_servers_gen;
+	rt_unlock();
+	for (i = 0; i < l->nservers; i++)
+		if (l->servers[i].noedns && (s32)(l->servers[i].noedns_until - now) <= 0)
+			l->servers[i].noedns = 0;
+	RT_DBG(RT_DBG_DNS, "lookup %s: the servers changed, %d now", l->name, l->nservers);
+	l->srv = 0;
+	return l->nservers ? 0 : -1;
 }
 
 /* this server's turn: what has no final answer yet is sent (AAAA first, RFC 8305 3) */
@@ -2826,6 +2861,8 @@ static int al_next_server(struct rt_dns_lookup *l)
 		if (++l->att >= DNS_ATTEMPTS)
 			return 1;
 	}
+	if (al_reload(l) < 0)
+		return 1;                        /* no server any more: what waits fails */
 	al_turn(l);
 	return 0;
 }
@@ -3001,6 +3038,10 @@ static void al_cand_begin(struct rt_dns_lookup *l)
 		return;
 	}
 	l->att = l->srv = 0;
+	if (al_reload(l) < 0) {
+		al_cand_end(l, 1);               /* the servers went (a restart): failed, not asked */
+		return;
+	}
 	l->inx = 1;
 	al_turn(l);
 }
@@ -3032,6 +3073,7 @@ static int al_prepare(struct rt_dns_lookup *l)
 	servers_expire();
 	l->nservers = dns_nservers;
 	memcpy(l->servers, dns_servers, sizeof(l->servers));
+	l->gen = dns_servers_gen;
 	rt_strlcpy(l->search, dns_search, sizeof(l->search));
 	edns = rt_dns_edns_size;
 	l->tcp = rt_dns_tcp != 0;

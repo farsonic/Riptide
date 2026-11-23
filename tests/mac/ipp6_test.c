@@ -547,13 +547,21 @@ static void test_resolve(void)
 	c.pb.i.csParam.resolve.hostName = canon;
 	c.pb.i.csParam.resolve.hostNameLen = sizeof canon;
 	r = run(&c, ip6ResolveAddr);
-	check(r == 0 && !strcmp(canon, "peer.testbed"), "ip6ResolveAddr ::ffff:192.168.68.1: peer.testbed (in-addr.arpa)", r);
+	/* the core resolver asks the hosts table first, as for names: riptide.conf's `host h6.lan 192.168.68.1`
+	   (before 23 November 2026 .IPP6 asked the name servers only, which say peer.testbed) */
+	check(r == 0 && !strcmp(canon, "h6.lan"), "ip6ResolveAddr ::ffff:192.168.68.1: h6.lan (the hosts table first)", r);
 	clear(&c);
 	a4(&c.pb.i.csParam.resolve.addr, PEER4, 0);
 	c.pb.i.csParam.resolve.hostName = canon;
 	c.pb.i.csParam.resolve.hostNameLen = 5;
 	r = run(&c, ip6ResolveAddr);
-	check(r == ip6TruncatedErr && !strcmp(canon, "peer"), "... into 5 bytes: ip6TruncatedErr, \"peer\"", r);
+	check(r == ip6TruncatedErr && !strcmp(canon, "h6.l"), "... into 5 bytes: ip6TruncatedErr, \"h6.l\"", r);
+	clear(&c);
+	a4(&c.pb.i.csParam.resolve.addr, 0xC0A84409UL, 0);
+	c.pb.i.csParam.resolve.hostName = canon;
+	c.pb.i.csParam.resolve.hostNameLen = sizeof canon;
+	r = run(&c, ip6ResolveAddr);
+	check(r == authNameErr, "ip6ResolveAddr ::ffff:192.168.68.9: authNameErr (in-addr.arpa, no name)", r);
 	clear(&c);
 	a6(&c.pb.i.csParam.resolve.addr, PEER6, 0);
 	c.pb.i.csParam.resolve.hostName = canon;
@@ -927,7 +935,8 @@ static void test_connect_name(void)
 	   IPv4 attempt starts the attempt delay (250 ms) after the first, not when IPv6 has given up */
 	connect_name(D, "many.testbed", 80, kIP6OrderIPv6First, 20);
 	r = connect_wait(D, "many.testbed:80, IPv6 first");
-	check(r == 0 && is4(&p->remoteAddr, PEER4) && p->addrCount == 10 && p->attempts == 2 && p->elapsed >= 200 &&
+	/* (the resolver keeps eight addresses of a family: 8 IPv6 and 1 IPv4) */
+	check(r == 0 && is4(&p->remoteAddr, PEER4) && p->addrCount == 9 && p->attempts == 2 && p->elapsed >= 200 &&
 	      p->elapsed < 2500, "ip6ConnectName many.testbed: IPv4 connects at the second attempt, about 250 ms on", r);
 	if (r == 0)
 		tcp_simple(D, TCPAbort);

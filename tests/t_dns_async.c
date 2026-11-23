@@ -533,6 +533,46 @@ int main(void)
 		rt_dns_lookup_free(l);
 	}
 
+	/* a restart of the network while a lookup waits (the Mac's mac_restart: rt_config_reset empties the
+	   servers, the search list, the hosts table and the cache, then riptide.conf is read again): the
+	   lookup takes the new list at its next server's turn; with none it fails cleanly */
+	{
+		int err;
+		struct rt_dns_lookup *l;
+		u32 t0 = ms_now();
+		cmd("dns", "flush", NULL);                      /* silent.test's failure is remembered */
+		l = rt_dns_lookup_start(&cctx, "silent.test", RT_AF_INET, RT_DNSL_NOSEARCH, 0, &err);
+		CHECK(l && rt_dns_lookup_poll(l) == 0);
+		usleep(100000);
+		CHECK(rt_dns_lookup_poll(l) == 0);
+		rt_lock();
+		rt_resolv_reset();
+		rt_unlock();
+		r = run(l, NULL);
+		CHECK(r == -RT_TRY_AGAIN && ms_now() - t0 < 3000);
+		printf("silent.test across a reset without servers: %d after %u ms\n", r, (unsigned)(ms_now() - t0));
+		rt_dns_lookup_free(l);
+		/* the list read again: a lookup started before it asks the new servers */
+		l = rt_dns_lookup_start(&cctx, "silent.test", RT_AF_INET, RT_DNSL_NOSEARCH, 0, &err);
+		CHECK(l == NULL && err == -RT_ENXIO);
+		rt_lock();
+		rt_dns_add_server(rt_htonl(0x7f000002));      /* nobody there */
+		rt_unlock();
+		l = rt_dns_lookup_start(&cctx, "v4.test", RT_AF_INET, RT_DNSL_NOSEARCH, 0, &err);
+		CHECK(l && rt_dns_lookup_poll(l) == 0);
+		rt_lock();
+		rt_dns_clear_servers();
+		rt_dns_add_server(rt_htonl(0x7f000001));
+		rt_unlock();
+		t0 = ms_now();
+		n4 = 4;
+		r = run(l, NULL);
+		rt_dns_lookup_get(l, a4, &n4, NULL, NULL, NULL, 0);
+		CHECK(r == 1 && n4 == 1 && a4[0] == rt_htonl(0xc0000202u));
+		printf("v4.test, its server replaced while it waited: %d after %u ms\n", r, (unsigned)(ms_now() - t0));
+		rt_dns_lookup_free(l);
+	}
+
 	/* ---- Happy Eyeballs, asynchronously: lo.test is ::1 and 127.0.0.1 ---- */
 	{
 		struct rt_sockctx hctx;
