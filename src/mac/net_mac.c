@@ -21,8 +21,9 @@
  * completion has been seen (rt_drv_tx_done). The completion runs at interrupt time, so there it
  * only frees the slot, counts (tx_done_n, tx_err_n) and asks for the stack's deferred task; the
  * stack's poll (tx_reap) then tells the core, which sends what its QoS bands hold back while the
- * driver has qos_inflight frames (src/core/qos.c). The core's count can stay above the driver's for
- * as long as a program holds the core (os_mac.c, mac_core_enter): such frames wait in the bands.
+ * driver has qos_inflight frames (src/core/qos.c). A program that calls the core in its own context
+ * (api_mac.c) reaps them as it gives the core back (net_mac_reap), since the deferred task is put
+ * off while it holds the core.
  *
  * VLANs (src/core/vlan.c): the first VLAN interface on a card attaches the card's protocol handler
  * for type 0x8100 as well (vlan_rx, asynchronously), the last one gone detaches it; tagged frames
@@ -360,6 +361,15 @@ static void tx_reap(struct card *c)
 		rt_drv_tx_done(&c->nif, err);
 	}
 	rt_unlock();
+}
+
+/* also from a program that had the core (os_mac.c mac_core_leave): while it sends in a loop the
+   deferred task is put off, and the core would count every write since as still in flight */
+void net_mac_reap(void)
+{
+	for (int k = 0; k < MAC_CARDS; k++)
+		if (cards[k].open)
+			tx_reap(&cards[k]);
 }
 
 /* The handler for tagged frames (type 0x8100), attached while the card has VLAN interfaces: the

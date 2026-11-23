@@ -88,6 +88,7 @@ int  net_mac_cards(void);                      /* cards found (the Slot Manager'
 int  net_mac_card_info(int i, char *buf, u32 len);   /* "slot 9 id $83 .Network_WiFi_PiStorm (wifi)" */
 void net_mac_poll(void);                       /* stack context: the received frames into the core */
 void net_mac_tx_done(void *pb);
+void net_mac_reap(void);                       /* the core's context: completed writes to the core (QoS) */
 extern struct rt_netif *mac_nif;               /* the interface MacTCP's calls report (the preferred one) */
 extern char mac_net_why[64];
 /* a restart of the network (main_mac.c mac_restart), in a program's context */
