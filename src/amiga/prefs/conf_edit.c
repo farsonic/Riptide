@@ -2341,11 +2341,52 @@ int rp_valid_ip(const char *s)
 
 /* ---- the running stack ---- */
 
+/* the card of interface name (a card, or a VLAN CARD.ID) runs in the stack
+ * that has model o: it is there and not turned off */
+static int if_ran(const struct rp_model *o, const char *name)
+{
+	char card[RP_IFNAMELEN];
+	size_t l = strcspn(name, ".");
+	int j;
+
+	if (l >= sizeof(card))
+		return 0;
+	memcpy(card, name, l);
+	card[l] = 0;
+	j = rp_iface_find(o, card);
+	return j >= 0 && !o->ifc[j].disabled;
+}
+
+/* and still runs with model n (not new, renamed or turned off: the entries
+ * on such a card wait for the restart that opens it) */
+static int if_runs(const struct rp_model *o, const struct rp_model *n, const char *name)
+{
+	return if_ran(o, name) && if_ran(n, name);
+}
+
+/* name is a VLAN this Apply makes, new or made again after a change (the
+ * addresses, routes and neighbours on it then go to it again) */
+static int vlan_made(const struct rp_model *o, const struct rp_model *n, const char *name)
+{
+	char ifn[RP_IFNAMELEN], v[RP_IFNAMELEN + 8];
+	int i;
+
+	if (!strchr(name, '.'))
+		return 0;
+	for (i = 0; i < RP_NVLAN && n->vlan[i][0]; i++) {
+		rp_entry_if(n, n->vlan[i], ifn, sizeof(ifn));
+		rt_snprintf(v, sizeof(v), "%s.%lu", ifn, rt_strtoul(rp_entry_body(n->vlan[i]), NULL, 10));
+		if (!rt_strcasecmp(v, name))
+			return !list_has(o, RP_LIST_VLAN, n->vlan[i]);
+	}
+	return 0;
+}
+
 int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void *arg), void *arg)
 {
 	const struct rp_model *o = c->have_applied ? &c->applied : &c->orig, *n = &c->cur;
 	char buf[LINEMAX];
-	int i, restart = 0;
+	int i, restart = 0, same0;
 
 	if (str_changed(o->hostname, n->hostname) && n->hostname[0]) {
 		rt_snprintf(buf, sizeof(buf), "hostname %s", n->hostname);
@@ -2416,119 +2457,121 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 			fn(buf, arg);
 		}
 	}
-	if (list_changed(o, n, RP_LIST_ALIAS) && !str_changed(o->ifc[0].ifname, n->ifc[0].ifname)) {
+	same0 = !str_changed(o->ifc[0].ifname, n->ifc[0].ifname);
+	/* removed addresses first (from interfaces the stack has) */
+	for (i = 0; same0 && i < RP_NALIAS && o->alias[i][0]; i++) {
 		char ifn[RP_IFNAMELEN];
 		const char *b;
-		int j, k;
-		/* removed addresses first, then the new ones */
-		for (i = 0; i < RP_NALIAS && o->alias[i][0]; i++) {
-			for (j = 0; j < RP_NALIAS && str_changed(o->alias[i], n->alias[j]); j++)
-				;
-			if (j < RP_NALIAS)
-				continue;
-			rp_entry_if(o, o->alias[i], ifn, sizeof(ifn));
-			b = rp_entry_body(o->alias[i]);
-			for (k = 0; b[k] && b[k] != '/' && b[k] != ' '; k++)
-				;
-			rt_snprintf(buf, sizeof(buf), "ifconfig %s %.*s -alias", ifn, k, b);
-			fn(buf, arg);
-		}
-		for (i = 0; i < RP_NALIAS && n->alias[i][0]; i++) {
-			for (j = 0; j < RP_NALIAS && str_changed(n->alias[i], o->alias[j]); j++)
-				;
-			if (j < RP_NALIAS)
-				continue;
-			rp_entry_if(n, n->alias[i], ifn, sizeof(ifn));
-			rt_snprintf(buf, sizeof(buf), "ifconfig %s alias %s", ifn, rp_entry_body(n->alias[i]));
-			fn(buf, arg);
-		}
+		int k;
+		rp_entry_if(o, o->alias[i], ifn, sizeof(ifn));
+		if (list_has(n, RP_LIST_ALIAS, o->alias[i]) || !if_ran(o, ifn))
+			continue;
+		b = rp_entry_body(o->alias[i]);
+		for (k = 0; b[k] && b[k] != '/' && b[k] != ' '; k++)
+			;
+		rt_snprintf(buf, sizeof(buf), "ifconfig %s %.*s -alias", ifn, k, b);
+		fn(buf, arg);
 	}
-	if (list_changed(o, n, RP_LIST_VLAN) && !str_changed(o->ifc[0].ifname, n->ifc[0].ifname)) {
+	if (list_changed(o, n, RP_LIST_VLAN) && same0) {
 		char ifn[RP_IFNAMELEN];
-		int j;
-		/* removed (or changed) VLANs go, then the new ones are made */
+		/* removed (or changed) VLANs go, then the new ones are made; a
+		 * VLAN on a card that is new or turned off waits for the restart */
 		for (i = 0; i < RP_NVLAN && o->vlan[i][0]; i++) {
-			for (j = 0; j < RP_NVLAN && str_changed(o->vlan[i], n->vlan[j]); j++)
-				;
-			if (j < RP_NVLAN)
+			if (list_has(n, RP_LIST_VLAN, o->vlan[i]))
 				continue;
 			rp_entry_if(o, o->vlan[i], ifn, sizeof(ifn));
+			if (!if_ran(o, ifn))
+				continue;
 			rt_snprintf(buf, sizeof(buf), "interface %s.%lu delete", ifn,
 			            rt_strtoul(rp_entry_body(o->vlan[i]), NULL, 10));
 			fn(buf, arg);
 		}
 		for (i = 0; i < RP_NVLAN && n->vlan[i][0]; i++) {
-			for (j = 0; j < RP_NVLAN && str_changed(n->vlan[i], o->vlan[j]); j++)
-				;
-			if (j < RP_NVLAN)
+			if (list_has(o, RP_LIST_VLAN, n->vlan[i]))
+				continue;
+			rp_entry_if(n, n->vlan[i], ifn, sizeof(ifn));
+			if (!if_runs(o, n, ifn))
 				continue;
 			vlan_line(n->ifc[0].ifname, n->vlan[i], buf, sizeof(buf));
 			fn(buf, arg);
 		}
 	}
-	if (list_changed(o, n, RP_LIST_ADDR6) && !str_changed(o->ifc[0].ifname, n->ifc[0].ifname)) {
+	/* new addresses, and those of a VLAN made again (it lost them) */
+	for (i = 0; same0 && i < RP_NALIAS && n->alias[i][0]; i++) {
+		char ifn[RP_IFNAMELEN];
+		rp_entry_if(n, n->alias[i], ifn, sizeof(ifn));
+		if ((list_has(o, RP_LIST_ALIAS, n->alias[i]) && !vlan_made(o, n, ifn)) || !if_runs(o, n, ifn))
+			continue;
+		rt_snprintf(buf, sizeof(buf), "ifconfig %s alias %s", ifn, rp_entry_body(n->alias[i]));
+		fn(buf, arg);
+	}
+	for (i = 0; same0 && i < RP_NADDR6 && o->addr6[i][0]; i++) {
 		char ifn[RP_IFNAMELEN];
 		const char *b;
 		int k;
-		for (i = 0; i < RP_NADDR6 && o->addr6[i][0]; i++) {
-			if (list_has(n, RP_LIST_ADDR6, o->addr6[i]))
-				continue;
-			rp_entry_if(o, o->addr6[i], ifn, sizeof(ifn));
-			b = rp_entry_body(o->addr6[i]);
-			for (k = 0; b[k] && b[k] != '/' && b[k] != ' '; k++)
-				;
-			rt_snprintf(buf, sizeof(buf), "ifconfig %s inet6 %.*s delete", ifn, k, b);
-			fn(buf, arg);
-		}
-		for (i = 0; i < RP_NADDR6 && n->addr6[i][0]; i++) {
-			if (list_has(o, RP_LIST_ADDR6, n->addr6[i]))
-				continue;
-			rp_entry_if(n, n->addr6[i], ifn, sizeof(ifn));
-			rt_snprintf(buf, sizeof(buf), "ifconfig %s inet6 %s", ifn, rp_entry_body(n->addr6[i]));
-			fn(buf, arg);
-		}
+		rp_entry_if(o, o->addr6[i], ifn, sizeof(ifn));
+		if (list_has(n, RP_LIST_ADDR6, o->addr6[i]) || !if_ran(o, ifn))
+			continue;
+		b = rp_entry_body(o->addr6[i]);
+		for (k = 0; b[k] && b[k] != '/' && b[k] != ' '; k++)
+			;
+		rt_snprintf(buf, sizeof(buf), "ifconfig %s inet6 %.*s delete", ifn, k, b);
+		fn(buf, arg);
 	}
-	if (list_changed(o, n, RP_LIST_ROUTE)) {
-		for (i = 0; i < RP_NROUTE && o->route[i][0]; i++) {
-			size_t k;
-			if (list_has(n, RP_LIST_ROUTE, o->route[i]))
-				continue;
-			/* the entry without its type word */
-			rt_snprintf(buf, sizeof(buf), "route del %s", o->route[i]);
-			k = strlen(buf);
-			while (k && buf[k - 1] != ' ')
-				k--;
-			if (k && (eq(buf + k, "reject") || eq(buf + k, "prohibit") || eq(buf + k, "unreachable") ||
-			          eq(buf + k, "blackhole")))
-				buf[k - 1] = 0;
-			fn(buf, arg);
-		}
-		for (i = 0; i < RP_NROUTE && n->route[i][0]; i++) {
-			if (list_has(o, RP_LIST_ROUTE, n->route[i]))
-				continue;
-			rt_snprintf(buf, sizeof(buf), "route add %s", n->route[i]);
-			fn(buf, arg);
-		}
+	for (i = 0; same0 && i < RP_NADDR6 && n->addr6[i][0]; i++) {
+		char ifn[RP_IFNAMELEN];
+		rp_entry_if(n, n->addr6[i], ifn, sizeof(ifn));
+		if ((list_has(o, RP_LIST_ADDR6, n->addr6[i]) && !vlan_made(o, n, ifn)) || !if_runs(o, n, ifn))
+			continue;
+		rt_snprintf(buf, sizeof(buf), "ifconfig %s inet6 %s", ifn, rp_entry_body(n->addr6[i]));
+		fn(buf, arg);
 	}
-	if (list_changed(o, n, RP_LIST_NEIGH)) {
-		for (i = 0; i < RP_NNEIGH && o->neigh[i][0]; i++) {
-			char dev[RP_IFNAMELEN];
-			const char *e = o->neigh[i];
-			int k;
-			if (list_has(n, RP_LIST_NEIGH, e))
-				continue;
-			for (k = 0; e[k] && e[k] != ' '; k++)
-				;
-			rp_entry_dev(e, dev, sizeof(dev));
-			rt_snprintf(buf, sizeof(buf), "arp del %.*s%s%s", k, e, dev[0] ? " dev " : "", dev);
-			fn(buf, arg);
-		}
-		for (i = 0; i < RP_NNEIGH && n->neigh[i][0]; i++) {
-			if (list_has(o, RP_LIST_NEIGH, n->neigh[i]))
-				continue;
-			rt_snprintf(buf, sizeof(buf), "arp add %s", n->neigh[i]);
-			fn(buf, arg);
-		}
+	/* routes and neighbours: those through an interface the stack has */
+	for (i = 0; i < RP_NROUTE && o->route[i][0]; i++) {
+		char dev[RP_IFNAMELEN];
+		size_t k;
+		rp_entry_dev(o->route[i], dev, sizeof(dev));
+		if (list_has(n, RP_LIST_ROUTE, o->route[i]) || (dev[0] && !if_ran(o, dev)))
+			continue;
+		/* the entry without its type word */
+		rt_snprintf(buf, sizeof(buf), "route del %s", o->route[i]);
+		k = strlen(buf);
+		while (k && buf[k - 1] != ' ')
+			k--;
+		if (k && (eq(buf + k, "reject") || eq(buf + k, "prohibit") || eq(buf + k, "unreachable") ||
+		          eq(buf + k, "blackhole")))
+			buf[k - 1] = 0;
+		fn(buf, arg);
+	}
+	for (i = 0; i < RP_NROUTE && n->route[i][0]; i++) {
+		char dev[RP_IFNAMELEN];
+		rp_entry_dev(n->route[i], dev, sizeof(dev));
+		if ((list_has(o, RP_LIST_ROUTE, n->route[i]) && !(dev[0] && vlan_made(o, n, dev))) ||
+		    (dev[0] && !if_runs(o, n, dev)))
+			continue;
+		rt_snprintf(buf, sizeof(buf), "route add %s", n->route[i]);
+		fn(buf, arg);
+	}
+	for (i = 0; i < RP_NNEIGH && o->neigh[i][0]; i++) {
+		char dev[RP_IFNAMELEN];
+		const char *e = o->neigh[i];
+		int k;
+		rp_entry_dev(e, dev, sizeof(dev));
+		if (list_has(n, RP_LIST_NEIGH, e) || (dev[0] && !if_ran(o, dev)))
+			continue;
+		for (k = 0; e[k] && e[k] != ' '; k++)
+			;
+		rt_snprintf(buf, sizeof(buf), "arp del %.*s%s%s", k, e, dev[0] ? " dev " : "", dev);
+		fn(buf, arg);
+	}
+	for (i = 0; i < RP_NNEIGH && n->neigh[i][0]; i++) {
+		char dev[RP_IFNAMELEN];
+		rp_entry_dev(n->neigh[i], dev, sizeof(dev));
+		if ((list_has(o, RP_LIST_NEIGH, n->neigh[i]) && !(dev[0] && vlan_made(o, n, dev))) ||
+		    (dev[0] && !if_runs(o, n, dev)))
+			continue;
+		rt_snprintf(buf, sizeof(buf), "arp add %s", n->neigh[i]);
+		fn(buf, arg);
 	}
 	if (list_changed(o, n, RP_LIST_HOST)) {
 		for (i = 0; i < RP_NHOST && o->host[i][0]; i++) {
