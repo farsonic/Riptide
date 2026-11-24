@@ -2346,9 +2346,11 @@ int rp_valid_ip(const char *s)
 static int if_ran(const struct rp_model *o, const char *name)
 {
 	char card[RP_IFNAMELEN];
-	size_t l = strcspn(name, ".");
+	size_t l = 0;
 	int j;
 
+	while (name[l] && name[l] != '.')
+		l++;
 	if (l >= sizeof(card))
 		return 0;
 	memcpy(card, name, l);

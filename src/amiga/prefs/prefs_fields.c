@@ -573,9 +573,11 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 		}
 		{
 			/* the stack refuses a VLAN bigger than its card */
-			const char *x = strstr(rp_entry_body(m->vlan[i]), "mtu=");
+			const char *x = rp_entry_body(m->vlan[i]);
 			long cm = m->ifc[rp_iface_find(m, ifn)].mtu;
-			if (x && cm > 0 && (long)rt_strtoul(x + 4, NULL, 10) > cm) {
+			while (*x && strncmp(x, " mtu=", 5))
+				x++;
+			if (*x && cm > 0 && (long)rt_strtoul(x + 5, NULL, 10) > cm) {
 				*fi = 0;
 				rp_vpage = P_VLAN;
 				rt_snprintf(err, (size_t)errlen, "VLAN %lu: its MTU is above %ld, the MTU of %s (VLANs page)",
