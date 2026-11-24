@@ -571,6 +571,18 @@ int rp_validate(const struct rp_model *m, int *fi, char *err, int errlen)
 			            rp_entry_body(m->vlan[i]), ifn);
 			return -1;
 		}
+		{
+			/* the stack refuses a VLAN bigger than its card */
+			const char *x = strstr(rp_entry_body(m->vlan[i]), "mtu=");
+			long cm = m->ifc[rp_iface_find(m, ifn)].mtu;
+			if (x && cm > 0 && (long)rt_strtoul(x + 4, NULL, 10) > cm) {
+				*fi = 0;
+				rp_vpage = P_VLAN;
+				rt_snprintf(err, (size_t)errlen, "VLAN %lu: its MTU is above %ld, the MTU of %s (VLANs page)",
+				            rt_strtoul(rp_entry_body(m->vlan[i]), NULL, 10), cm, ifn);
+				return -1;
+			}
+		}
 		for (j = 0; j < i; j++) {
 			char ifn2[RP_IFNAMELEN];
 			rp_entry_if(m, m->vlan[j], ifn2, sizeof(ifn2));
@@ -678,7 +690,8 @@ int rp_list_entry_valid(int page, const char *s, char *err, int errlen)
 	}
 	if (page == P_VLAN && !rp_valid_vlan(s)) {
 		rt_strlcpy(err, "VLAN: the id (1-4094), then dhcp, an address\nA.B.C.D/BITS or up, and if needed "
-		           "pcp=0-7|priority,\nmtu=68-65535, ipv4=, ipv6=, qos=on|off, tcpwindow=N;\ne.g. 10 dhcp pcp=4",
+		           "pcp=0-7|priority,\nmtu=68-65535, ipv4=, ipv6=, qos=on|off, tcpwindow=N\n(with ipv4=off only up);"
+		           "\ne.g. 10 dhcp pcp=4",
 		           (size_t)errlen);
 		return 0;
 	}
@@ -1196,6 +1209,9 @@ int rp_lform_put(int page, const struct rp_lvals *v, const struct rp_lnames *nm,
 			return lf_bad(LV_ID, "enter the VLAN number, 1..4094", fi, err, errlen);
 		rt_snprintf(d, sizeof(d), "%lu", rt_strtoul(a, NULL, 10));
 		lf_add(entry, len, &n, "%s%s", d, "");
+		if (v->cy[LV_IP4] == 2 && (v->cy[LV_MODE] == 0 || v->cy[LV_MODE] == 1))
+			return lf_bad(LV_IP4, "IPv4 is off: choose the address mode Up or Not started, or turn IPv4 on", fi,
+			              err, errlen);
 		if (v->cy[LV_MODE] == 1) {
 			lf_trim(v, LV_ADDR, b, sizeof(b));
 			if (!strchr(b, '/') || !rp_valid_ip4(b, 1))

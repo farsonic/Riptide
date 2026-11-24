@@ -695,23 +695,25 @@ static void test_vlan(void)
 	      !rp_valid_vlan("10 dhcp up") && !rp_valid_vlan("10 10.0.0.1") && !rp_valid_vlan("10 pcp=8") &&
 	      !rp_valid_vlan("10 pcp=1 pcp=2") && !rp_valid_vlan("10 foo"));
 	/* the other per-VLAN settings (src/core/vlan.c) */
-	CHECK(rp_valid_vlan("10 dhcp pcp=4 mtu=1400 ipv4=off ipv6=on qos=on tcpwindow=8192") &&
+	CHECK(rp_valid_vlan("10 dhcp pcp=4 mtu=1400 ipv4=on ipv6=on qos=on tcpwindow=8192") &&
 	      rp_valid_vlan("10 tcpwindow=0") && rp_valid_vlan("10 mtu=68") && rp_valid_vlan("10 qos=off up"));
 	CHECK(!rp_valid_vlan("10 mtu=67") && !rp_valid_vlan("10 mtu=65536") && !rp_valid_vlan("10 mtu=") &&
 	      !rp_valid_vlan("10 tcpwindow=535") && !rp_valid_vlan("10 tcpwindow=16777217") &&
 	      !rp_valid_vlan("10 ipv4=maybe") && !rp_valid_vlan("10 mtu=1400 mtu=1300") && !rp_valid_vlan("10 vlan=3"));
+	/* the stack refuses DHCP or an address with IPv4 off (t_prefs_wiring) */
+	CHECK(!rp_valid_vlan("10 dhcp ipv4=off") && rp_valid_vlan("10 up ipv4=off"));
 	/* a hand-written line with all of them: in the list, written back as it was */
 	{
-		static const char in[] = "interface eth0.7 vlan=7 parent=eth0 tcpwindow=4096 qos=on ipv4=off dhcp "
+		static const char in[] = "interface eth0.7 vlan=7 parent=eth0 tcpwindow=4096 qos=on ipv4=on dhcp "
 		                         "mtu=1000 pcp=priority ipv6=off\n";
 		roundtrip("vlan keys", in);
 		CHECK(rp_conf_load(&c, in, strlen(in)) == 0);
 		CHECK(rp_list_count(&c, RP_LIST_VLAN) == 1 &&
 		      !strcmp(rp_list_get(&c, RP_LIST_VLAN, 0),
-		              "7 dhcp pcp=priority mtu=1000 ipv4=off ipv6=off qos=on tcpwindow=4096"));
+		              "7 dhcp pcp=priority mtu=1000 ipv4=on ipv6=off qos=on tcpwindow=4096"));
 		CHECK(rp_list_add(&c, RP_LIST_VLAN, "8 192.168.8.2/24 mtu=1400 ipv4=on") == 0);
 		t = text_of(&c);
-		CHECK(!strcmp(t, "interface eth0.7 vlan=7 parent=eth0 tcpwindow=4096 qos=on ipv4=off dhcp mtu=1000 "
+		CHECK(!strcmp(t, "interface eth0.7 vlan=7 parent=eth0 tcpwindow=4096 qos=on ipv4=on dhcp mtu=1000 "
 		                 "pcp=priority ipv6=off\n"
 		                 "interface eth0.8 vlan=8 parent=eth0 address=192.168.8.2/24 mtu=1400 ipv4=on\n") ||
 		      (fprintf(stderr, "%s", t), 0));

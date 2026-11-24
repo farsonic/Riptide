@@ -1968,7 +1968,7 @@ int rp_valid_vlan(const char *s)
 {
 	static const char *const keys[RP_VLAN_NKEYS] = { "pcp", "mtu", "ipv4", "ipv6", "qos", "tcpwindow" };
 	char w[RP_VLAN_NKEYS + 3][RP_VLANLEN];
-	int n = 0, i, j, mode = 0, seen = 0;
+	int n = 0, i, j, mode = 0, seen = 0, v4 = 0, v4off = 0;
 	size_t k;
 	unsigned long id;
 	const char *e, *v;
@@ -2003,14 +2003,17 @@ int rp_valid_vlan(const char *s)
 			    j == 5 ? !(isnum && (x == 0 || (x >= 536 && x <= 16777216UL))) :
 			    !(eq(v, "on") || eq(v, "off")))
 				return 0;
+			v4off |= j == 2 && eq(v, "off");
 		} else if (eq(w[i], "dhcp") || eq(w[i], "up") || (strchr(w[i], '/') && rp_valid_ip4(w[i], 1))) {
 			if (mode++)
 				return 0;
+			v4 = !eq(w[i], "up");
 		} else {
 			return 0;
 		}
 	}
-	return 1;
+	/* DHCP or an IPv4 address with IPv4 off: the stack refuses the VLAN */
+	return !(v4 && v4off);
 }
 
 int rp_valid_ports(const char *s)
