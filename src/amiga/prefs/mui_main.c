@@ -1233,9 +1233,11 @@ static int load_text(const char *path)
 			FreeVec(start);
 	}
 	FreeVec(text);
-	/* the stack still has what was last applied */
-	c.applied = rp_cfg.applied;
-	c.have_applied = rp_cfg.have_applied;
+	/* the stack still has what was last applied, or the file the editor
+	 * started with: Apply and Use work out their commands against that,
+	 * not against the file just opened (whose differences would be lost) */
+	c.applied = rp_cfg.have_applied ? rp_cfg.applied : rp_cfg.orig;
+	c.have_applied = 1;
 	rp_conf_free(&rp_cfg);
 	rp_cfg = c;
 	return 0;
