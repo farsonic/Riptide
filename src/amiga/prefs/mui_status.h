@@ -16,7 +16,7 @@ Object *status_page_build(Object *app, ULONG chosen_id, ULONG update_id);
 void status_update_chosen(void);
 /* call when app returned chosen_id */
 void status_table_chosen(void);
-/* show tab t (0 interfaces, 1 connections, 2 names and time, 3 counters) */
+/* show tab t (0 interfaces, 1 connections, 2 names and time, 3 counters, 4 routes) */
 void status_page_tab(int t);
 /* after the window and its objects are gone */
 void status_page_free(void);

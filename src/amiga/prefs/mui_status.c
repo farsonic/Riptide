@@ -11,7 +11,7 @@
  *
  * The classes here draw in the theme like those of mui_classes.c:
  *   graph   a 60 second history of two values (a struct rp_hist)
- *   tabs    a row of labels that switches a page group (keys 1 to 4)
+ *   tabs    a row of labels that switches a page group (keys 1 to 5)
  *   table   rows of two lines: a text, then columns separated by '\t';
  *           a row can be chosen
  *   ifview  every interface: three lines, its speeds and a small graph;
@@ -557,7 +557,7 @@ DISPATCHER(tabs_dispatch)
 				tabs_go(obj, i);
 			return MUI_EventHandlerRC_Eat;
 		}
-		/* 1 to 4 choose a tab; cursor left and right step */
+		/* 1 to 5 choose a tab; cursor left and right step */
 		if (im->Class == IDCMP_RAWKEY && !(im->Code & IECODE_UP_PREFIX)) {
 			if (im->Code >= RAW_1 && im->Code < RAW_1 + d->n) {
 				tabs_go(obj, im->Code - RAW_1);
