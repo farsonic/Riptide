@@ -2388,13 +2388,21 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 	char buf[LINEMAX];
 	int i, restart = 0, same0;
 
-	if (str_changed(o->hostname, n->hostname) && n->hostname[0]) {
+	/* a setting emptied or set back to Default has no command: the
+	 * stack keeps what it has until a restart (rt_config_reset) */
+	if (str_changed(o->hostname, n->hostname)) {
 		rt_snprintf(buf, sizeof(buf), "hostname %s", n->hostname);
-		fn(buf, arg);
+		if (n->hostname[0])
+			fn(buf, arg);
+		else
+			restart = 1;
 	}
-	if (str_changed(o->domain, n->domain) && n->domain[0]) {
+	if (str_changed(o->domain, n->domain)) {
 		rt_snprintf(buf, sizeof(buf), "domain %s", n->domain);
-		fn(buf, arg);
+		if (n->domain[0])
+			fn(buf, arg);
+		else
+			restart = 1;
 	}
 	if (dns_changed(o, n)) {
 		fn("nameserver flush", arg);
@@ -2411,18 +2419,27 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 			rt_snprintf(buf, sizeof(buf), "%s %s", RP_KW_NTP, n->ntp ? RP_KW_NTP_ON : RP_KW_NTP_OFF);
 		fn(buf, arg);
 	}
-	if (str_changed(o->timezone, n->timezone) && n->timezone[0]) {
+	if (str_changed(o->timezone, n->timezone)) {
 		rt_snprintf(buf, sizeof(buf), "%s %s", RP_KW_TIMEZONE, n->timezone);
-		fn(buf, arg);
+		if (n->timezone[0])
+			fn(buf, arg);
+		else
+			restart = 1;
 	}
-	if (o->mdns != n->mdns && n->mdns >= 0) {
+	if (o->mdns != n->mdns) {
 		rt_snprintf(buf, sizeof(buf), "%s %s", RP_KW_MDNS, n->mdns ? "on" : "off");
-		fn(buf, arg);
+		if (n->mdns >= 0)
+			fn(buf, arg);
+		else
+			restart = 1;
 	}
 #define SYSCTL(f, name) \
-	if (o->f != n->f && n->f != RP_UNSET) { \
+	if (o->f != n->f) { \
 		rt_snprintf(buf, sizeof(buf), "sysctl %s=%ld", name, n->f); \
-		fn(buf, arg); \
+		if (n->f != RP_UNSET) \
+			fn(buf, arg); \
+		else \
+			restart = 1; \
 	}
 	SYSCTL(quickack, "net.inet.tcp.quickack")
 	SYSCTL(delack_segs, "net.inet.tcp.delack_segs")
@@ -2446,9 +2463,12 @@ int rp_live_commands(const struct rp_conf *c, void (*fn)(const char *line, void 
 			rt_snprintf(buf, sizeof(buf), "sysctl %s=%s", rp_ss_names[i], n->ss[i]);
 			fn(buf, arg);
 		}
-	if (o->qos != n->qos && n->qos >= 0) {
+	if (o->qos != n->qos) {
 		rt_snprintf(buf, sizeof(buf), "%s %s", RP_KW_QOS, n->qos ? "on" : "off");
-		fn(buf, arg);
+		if (n->qos >= 0)
+			fn(buf, arg);
+		else
+			restart = 1;
 	}
 	if (list_changed(o, n, RP_LIST_QRULE)) {
 		fn("qos rules flush", arg);

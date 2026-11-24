@@ -777,6 +777,30 @@ static void test_wiring(void)
 		CHECK(!rt_netif_find("net0.1") && !rt_netif_find("net1.4094"));
 		rt_unlock();
 	}
+	/* emptied or back to Default without a command of its own: Apply says
+	 * a restart is needed (before, it said nothing and the stack kept the
+	 * old value) */
+	for (i = 0; i < 7; i++) {
+		struct rp_model was = d.cur;
+		int r;
+		CHECK(apply(&d) == 0);          /* nothing pending */
+		switch (i) {
+		case 0: d.cur.hostname[0] = 0; break;
+		case 1: d.cur.domain[0] = 0; break;
+		case 2: d.cur.timezone[0] = 0; break;
+		case 3: d.cur.mdns = -1; break;
+		case 4: d.cur.qos = -1; break;
+		case 5: d.cur.quickack = RP_UNSET; break;
+		default: d.cur.delack_ms = RP_UNSET; break;
+		}
+		CHECK(memcmp(&was, &d.cur, sizeof(was)) != 0);
+		r = apply(&d);
+		if (r != 1)
+			fprintf(stderr, "FAIL case %d: Apply %d, not a restart\n", i, r);
+		CHECK(r == 1);
+		d.cur = was;
+		apply(&d);
+	}
 	/* a new card with an address, a VLAN and an IPv6 address on it: they
 	 * wait for the restart that opens the card (nothing is refused) */
 	{
