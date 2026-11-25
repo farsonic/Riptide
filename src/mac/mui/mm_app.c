@@ -797,6 +797,7 @@ static int win_make(Object *obj, struct mm_wind *d, int proc)
 }
 
 static int windows_opened;
+int mm_trace_events;                    /* (development) every event but null, update and os ones to the log */
 
 static int win_open(Object *obj, struct mm_wind *d)
 {
@@ -952,6 +953,18 @@ DISPATCHER(mm_win_dispatch)
 		}
 		if (mm_tag_find(tl, MUIA_Window_Activate, &v) && v && d->w.macwin)
 			SelectWindow(d->w.macwin);
+		/* a place given after the window was made (Quill's ribbon puts its list under the tool); the
+		   window moves there at once if it is open */
+		if (mm_tag_find(tl, MUIA_Window_LeftEdge, &v))
+			d->left = (LONG)v;
+		if (mm_tag_find(tl, MUIA_Window_TopEdge, &v))
+			d->top = (LONG)v;
+		if ((mm_tag_find(tl, MUIA_Window_LeftEdge, &v) || mm_tag_find(tl, MUIA_Window_TopEdge, &v)) && d->open && d->w.macwin &&
+		    d->left >= 0 && d->top >= 0) {
+			MoveWindow(d->w.macwin, (int)d->left, (int)d->top, 0);
+			d->w.awin.LeftEdge = (WORD)d->left;
+			d->w.awin.TopEdge = (WORD)d->top;
+		}
 		break;
 	}
 	case OM_GET: {
@@ -1501,6 +1514,12 @@ static void mm_event_once(void)
 	DisposeRgn(rgn);
 	if (ev.what != nullEvent && ev.what != updateEvt && !(ev.what == osEvt && ((ev.message >> 24) & 0xFF) == mouseMovedMessage))
 		bubble_hide();
+	if (mm_trace_events && ev.what != nullEvent && ev.what != updateEvt && ev.what != osEvt) {
+		void *fw = FrontWindow();
+		struct mm_win *fwin = win_of_mac(fw);
+		mm_log("event %d at %d,%d mods %x msg %lx; front %s", ev.what, ev.where.h, ev.where.v, ev.modifiers,
+		       (unsigned long)ev.message, !fw ? "none" : !fwin ? "not ours" : WD(fwin->obj)->borderless ? "a list" : "a window");
+	}
 	switch (ev.what) {
 	case mouseDown: {
 		void *mw = NULL;
@@ -1568,8 +1587,12 @@ static void mm_event_once(void)
 			break;
 		case inContent:
 			if (FrontWindow() != mw) {
+				/* a click that sends a pop-up list away (a frameless window of ours in front) also
+				   counts where it lands, as on the Amiga; any other only brings its window forward */
+				struct mm_win *fw = win_of_mac(FrontWindow());
 				SelectWindow(mw);
-				break;
+				if (!(fw && WD(fw->obj)->borderless && w && !w->sleep))
+					break;
 			}
 			if (w && !w->sleep)
 				content_click(w, &ev);
@@ -1588,6 +1611,14 @@ static void mm_event_once(void)
 		break;
 	case keyDown:
 	case autoKey:
+		{
+			/* Escape sends a pop-up list (a frameless window) away */
+			struct mm_win *fw = win_of_mac(FrontWindow());
+			if (fw && WD(fw->obj)->borderless && (ev.message & charCodeMask) == 0x1B) {
+				mm_setattrs(fw->obj, MUIA_Window_Open, FALSE, TAG_DONE);
+				break;
+			}
+		}
 		if (ev.modifiers & cmdKey) {
 			if (ev.what == keyDown) {
 				int ch = (int)(ev.message & charCodeMask);
