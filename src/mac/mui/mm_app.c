@@ -728,6 +728,8 @@ static void win_close(struct mm_wind *d)
 	ULONG m;
 	if (!d->open)
 		return;
+	if (d->borderless)
+		mm_log("a list window closed");      /* (Octavo's ribbon tree: when its lists close) */
 	if (w->active)
 		mm_win_activate_string(w, NULL);
 	m = MUIM_Hide;
@@ -1620,8 +1622,11 @@ static void mm_event_once(void)
 			mm_string_activate(w->active, (ev.modifiers & activeFlag) != 0);
 		/* MUIA_Window_Activate follows (a pop-up list closes itself when another window comes
 		   to the front); last, as a notification may close the window */
-		if (w)
+		if (w && !(bubble && FrontWindow() == bubble)) {   /* (not when a help bubble came up in front) */
+			if (WD(w->obj)->borderless)
+				mm_log("a list window %s", (ev.modifiers & activeFlag) ? "activated" : "deactivated");
 			mm_notify_fire(w->obj, MUIA_Window_Activate, (ev.modifiers & activeFlag) != 0);
+		}
 		break;
 	case osEvt:
 		if (((ev.message >> 24) & 0xFF) == suspendResumeMessage) {
