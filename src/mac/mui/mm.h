@@ -116,6 +116,22 @@ void mm_children_do(Object *o, Msg msg);         /* send msg to each child */
 Object *mm_hit(Object *o, int x, int y, ULONG need); /* the deepest shown object at x,y with flags need */
 int mm_inside(Object *o, int x, int y);
 
+/* MUI 3's older input (MUI_RequestIDCMP, MUIM_HandleInput) and a window without a frame
+   (MUIA_Window_Borderless: a pop-up list), for Quill's ribbon; MUI's numbers */
+#ifndef MUIM_HandleInput
+#define MUIM_HandleInput        0x80422a1aUL
+struct MUIP_HandleInput { ULONG MethodID; struct IntuiMessage *imsg; LONG muikey; };
+#endif
+#ifndef MUIA_Parent
+#define MUIA_Parent             0x8042e35fUL     /* (get) the group an object is in */
+#endif
+#ifndef MUIA_Window_Borderless
+#define MUIA_Window_Borderless  0x80429b79UL
+#endif
+#define MM_EHF_INPUT 0x8000             /* an event handler node of MUI_RequestIDCMP's */
+void MUI_RequestIDCMP(Object *obj, ULONG flags);
+void MUI_RejectIDCMP(Object *obj, ULONG flags);
+
 /* ---- groups ---- */
 void mm_group_add(Object *g, Object *child);
 void mm_group_rem(Object *g, Object *child);
@@ -151,6 +167,17 @@ int   mm_mono_port(void *port);                  /* the port shows one bit per p
 void  mm_gfx_port_moved(void *port);             /* a window opened, moved or changed size: its screen again */
 void  mm_gfx_port_gone(void *port);
 #define MM_RGB(r, g, b) (((ULONG)(r) << 16) | ((ULONG)(g) << 8) | (ULONG)(b))
+/* graphics.library beyond the MUI editor's (Quill's ribbon, panes and File page, compiled from
+   their Amiga sources): fonts by name and size as Mac families and sizes, extents, ellipses and
+   one-bit templates */
+struct TextFont *OpenDiskFont(const struct TextAttr *ta);
+struct TextFont *OpenFont(const struct TextAttr *ta);
+void  CloseFont(struct TextFont *tf);
+void  TextExtent(struct RastPort *rp, CONST_STRPTR s, ULONG n, struct TextExtent *te);
+ULONG TextFit(struct RastPort *rp, CONST_STRPTR s, ULONG n, struct TextExtent *te, const struct TextExtent *cte,
+              LONG dir, ULONG width, ULONG height);
+void  DrawEllipse(struct RastPort *rp, LONG cx, LONG cy, LONG a, LONG b);
+void  BltTemplate(CONST_PLANEPTR src, LONG xsrc, LONG mod, struct RastPort *rp, LONG x, LONG y, LONG w, LONG h);
 /* the theme's colours for the built-in classes (mm_gfx.c reads the theme's tokens) */
 ULONG mm_theme_rgb(int token);
 

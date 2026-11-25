@@ -217,9 +217,37 @@ struct TextFont {
 	UWORD  tf_XSize;
 	UWORD  tf_Baseline;
 	UWORD  tf_BoldSmear;
+	/* (the rest of the NDK's layout, for Quill's ribbon on the Mac: its own fonts) */
+	UWORD  tf_Accessors;
+	UBYTE  tf_LoChar, tf_HiChar;
+	APTR   tf_CharData;
+	UWORD  tf_Modulo;
+	APTR   tf_CharLoc, tf_CharSpace, tf_CharKern;
 };
 #define JAM1            0
+#define JAM2            1
+#define COMPLEMENT      2
+#define FSF_UNDERLINED  0x01
 #define FSF_BOLD        0x02
+#define FSF_ITALIC      0x04
+#define FSF_EXTENDED    0x08
+#define FPF_ROMFONT     0x01
+#define FPF_DISKFONT    0x02
+#define FPF_PROPORTIONAL 0x20
+#define FPF_DESIGNED    0x40
+#define PRECISION_EXACT  (-1L)
+#define PRECISION_IMAGE  0
+#define PRECISION_ICON   16
+typedef UBYTE *PLANEPTR;
+typedef const UBYTE *CONST_PLANEPTR;
+struct Rectangle {
+	WORD   MinX, MinY;
+	WORD   MaxX, MaxY;
+};
+struct TextExtent {
+	UWORD  te_Width, te_Height;
+	struct Rectangle te_Extent;
+};
 #define OBP_Precision   0x84000000UL
 #define PRECISION_GUI   32
 

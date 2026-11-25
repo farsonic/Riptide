@@ -203,6 +203,7 @@ struct mm_wind {
 	LONG left, top;
 	Object *refwin;
 	unsigned char ptitle[80];
+	int borderless;                 /* MUIA_Window_Borderless: a plain box, no title bar (a pop-up list) */
 };
 ULONG mm_win_datasize(void) { return sizeof(struct mm_wind); }
 #define WD(o) ((struct mm_wind *)INST_DATA(mm_cl_win, o))
@@ -806,13 +807,13 @@ static int win_open(Object *obj, struct mm_wind *d)
 	if (!w->root)
 		return 0;
 	mac_pstr(d->ptitle, d->title ? tr(d->title) : "");
-	if (!win_make(obj, d, zoomDocProc))
+	if (!win_make(obj, d, d->borderless ? plainDBox : zoomDocProc))
 		return 0;
 	mm = &muiAreaData(w->root)->mad_MinMax;
 	/* Guidelines p. 140-145: a window whose size cannot change has no size box and no zoom box.
 	   MUI tells only after Setup, so such a window is made again as a plain document window. */
-	w->resizable = mm->MaxWidth > mm->MinWidth || mm->MaxHeight > mm->MinHeight;
-	if (!w->resizable) {
+	w->resizable = !d->borderless && (mm->MaxWidth > mm->MinWidth || mm->MaxHeight > mm->MinHeight);
+	if (!w->resizable && !d->borderless) {
 		m = MUIM_Cleanup;
 		DoMethodA(w->root, (Msg)&m);
 		mm_gfx_port_gone(w->macwin);
@@ -903,6 +904,7 @@ DISPATCHER(mm_win_dispatch)
 		d->left = (LONG)mm_tag(tl, MUIA_Window_LeftEdge, (ULONG)-1);
 		d->top = (LONG)mm_tag(tl, MUIA_Window_TopEdge, (ULONG)-1);
 		d->refwin = (Object *)mm_tag(tl, MUIA_Window_RefWindow, 0);
+		d->borderless = mm_tag(tl, MUIA_Window_Borderless, 0) != 0;
 		d->w.obj = obj;
 		if (d->w.root)
 			MMO(d->w.root)->parent = NULL;
@@ -1064,6 +1066,12 @@ static int handlers(struct mm_win *w, ULONG class, UWORD code, int x, int y, sho
 	im.MouseX = (WORD)x;
 	im.MouseY = (WORD)y;
 	im.IDCMPWindow = &w->awin;
+	{
+		/* the time, as Intuition stamps its messages (DoubleClick compares them) */
+		unsigned long t = (unsigned long)TickCount();
+		im.Seconds = t / 60;
+		im.Micros = (t % 60) * 16667;
+	}
 	m.id = MUIM_HandleEvent;
 	m.im = &im;
 	m.muikey = muikey;
@@ -1075,6 +1083,8 @@ static int handlers(struct mm_win *w, ULONG class, UWORD code, int x, int y, sho
 			;
 		if (j == w->neh || !(e->ehn_Events & class))
 			continue;
+		/* MUI_RequestIDCMP's objects get the older MUIM_HandleInput, with the same message */
+		m.id = (e->ehn_Flags & MM_EHF_INPUT) ? MUIM_HandleInput : MUIM_HandleEvent;
 		r = e->ehn_Class ? CoerceMethodA(e->ehn_Class, e->ehn_Object, (Msg)&m) : DoMethodA(e->ehn_Object, (Msg)&m);
 		if (r & MUI_EventHandlerRC_Eat)
 			return 1;
@@ -1082,6 +1092,67 @@ static int handlers(struct mm_win *w, ULONG class, UWORD code, int x, int y, sho
 			return 1;
 	}
 	return 0;
+}
+
+/* MUI 3's older input: MUI_RequestIDCMP gives an object MUIM_HandleInput for the events asked
+   (Quill's ribbon list), through an event handler node of the window's like the newer kind */
+#define MAXREQ 16
+static struct MUI_EventHandlerNode reqnode[MAXREQ];
+static struct MUI_EventHandlerNode *req_node(Object *obj, int make)
+{
+	int i, free = -1;
+	for (i = 0; i < MAXREQ; i++) {
+		if (reqnode[i].ehn_Object == obj)
+			return &reqnode[i];
+		if (!reqnode[i].ehn_Object && free < 0)
+			free = i;
+	}
+	if (!make || free < 0)
+		return NULL;
+	memset(&reqnode[free], 0, sizeof(reqnode[free]));
+	reqnode[free].ehn_Object = obj;
+	reqnode[free].ehn_Flags = MM_EHF_INPUT;
+	return &reqnode[free];
+}
+static void req_add(struct mm_win *w, struct MUI_EventHandlerNode *n)
+{
+	int i;
+	for (i = 0; i < w->neh && w->eh[i] != n; i++)
+		;
+	if (i == w->neh && w->neh < MM_MAXHANDLERS)
+		w->eh[w->neh++] = n;
+}
+static void req_rem(struct mm_win *w, struct MUI_EventHandlerNode *n)
+{
+	int i;
+	for (i = 0; i < w->neh; i++)
+		if (w->eh[i] == n) {
+			w->eh[i] = w->eh[--w->neh];
+			return;
+		}
+}
+void MUI_RequestIDCMP(Object *obj, ULONG flags)
+{
+	struct MUI_EventHandlerNode *n = req_node(obj, 1);
+	struct mm_win *w = mm_win_of(obj);
+	if (!n)
+		return;
+	n->ehn_Events |= flags;
+	if (w)
+		req_add(w, n);
+}
+void MUI_RejectIDCMP(Object *obj, ULONG flags)
+{
+	struct MUI_EventHandlerNode *n = req_node(obj, 0);
+	struct mm_win *w = mm_win_of(obj);
+	if (!n)
+		return;
+	n->ehn_Events &= ~flags;
+	if (!n->ehn_Events) {
+		if (w)
+			req_rem(w, n);
+		n->ehn_Object = NULL;
+	}
 }
 
 /* help bubbles */
@@ -1359,7 +1430,11 @@ static long sleep_ticks(void)
 {
 	struct mm_appd *a = appd();
 	unsigned long now = (unsigned long)TickCount();
-	long s = 30;
+	struct mm_win *fw = front_win();
+	/* With no timer due, sleep two seconds; half a second while a text field shows its caret (it
+	   blinks in mm_string_idle). WaitNextEvent comes back at once for any event, the mouse leaving
+	   its point included, so nothing waits for this */
+	long s = fw && fw->active ? 30 : 120;
 	int i;
 	if (a)
 		for (i = 0; i < MAXIHN; i++)
@@ -1543,6 +1618,10 @@ static void mm_event_once(void)
 		w = win_of_mac((void *)ev.message);
 		if (w && w->active)
 			mm_string_activate(w->active, (ev.modifiers & activeFlag) != 0);
+		/* MUIA_Window_Activate follows (a pop-up list closes itself when another window comes
+		   to the front); last, as a notification may close the window */
+		if (w)
+			mm_notify_fire(w->obj, MUIA_Window_Activate, (ev.modifiers & activeFlag) != 0);
 		break;
 	case osEvt:
 		if (((ev.message >> 24) & 0xFF) == suspendResumeMessage) {

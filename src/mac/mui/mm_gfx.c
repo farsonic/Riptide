@@ -110,12 +110,34 @@ void SetDrMd(struct RastPort *rp, ULONG mode)
 /* ---- fonts ---- */
 struct TextFont mm_font;
 static short font_num = geneva, font_size = 9;
+/* A font of the program's own (OpenFont, OpenDiskFont: Quill's ribbon opens its sizes and its bold
+   face that way): a Mac family, size and face behind an Amiga TextFont, known by its reply port.
+   Text and TextLength draw in the rastport's font; everything else in the interface font. */
+static char macfont_tag;
+struct mm_macfont { struct TextFont tf; short num, size, face; };
+static const struct TextFont *cur_tf;
+static int tf_is_mac(const struct TextFont *f)
+{
+	return f && f->tf_Message.mn_ReplyPort == (struct MsgPort *)&macfont_tag;
+}
+static const struct TextFont *cur_metrics(void)
+{
+	return tf_is_mac(cur_tf) ? cur_tf : &mm_font;
+}
 
+/* b: the Mac's face bits (1 bold, 2 italic, 4 underline; the classes pass 0 or 1) */
 void mm_use_font(int b)
 {
+	if (tf_is_mac(cur_tf)) {
+		const struct mm_macfont *m = (const struct mm_macfont *)cur_tf;
+		TextFont(m->num);
+		TextSize(m->size);
+		TextFace((m->face | b) & 0x7F);
+		return;
+	}
 	TextFont(font_num);
 	TextSize(font_size);
-	TextFace(b ? MAC_BOLD : 0);
+	TextFace(b & 0x7F);
 }
 
 LONG SetFont(struct RastPort *rp, const struct TextFont *f)
@@ -376,8 +398,8 @@ void mm_text(void *port, int x, int y, const char *s, int n, ULONG rgb, int b)
 				Rect d;
 				d.left = (short)x;
 				d.right = (short)(x + TextWidth(s, 0, n));
-				d.top = (short)(y - mm_font.tf_Baseline);
-				d.bottom = (short)(y + mm_font.tf_YSize - mm_font.tf_Baseline);
+				d.top = (short)(y - cur_metrics()->tf_Baseline);
+				d.bottom = (short)(y + cur_metrics()->tf_YSize - cur_metrics()->tf_Baseline);
 				/* a quarter of the ink taken away: half (the Mac's own grey) leaves Geneva 9 unreadable */
 				PenPat(pat_ltgray);
 				PenMode(11);    /* patBic (11; 14 was notPatXor, which turned disabled labels into blocks) */
@@ -419,29 +441,198 @@ void Draw(struct RastPort *rp, LONG x, LONG y)
 	d->cpy = (WORD)y;
 }
 
+/* the soft style as the Mac's face bits (FSF_UNDERLINED 1, FSF_BOLD 2, FSF_ITALIC 4) */
+static int face_of(const struct mm_rpd *d)
+{
+	return ((d->style & 2) ? MAC_BOLD : 0) | ((d->style & 4) ? 2 : 0) | ((d->style & 1) ? 4 : 0);
+}
+
 WORD TextLength(struct RastPort *rp, CONST_STRPTR s, ULONG n)
 {
-	return (WORD)mm_textw((const char *)s, (int)n, (RPD(rp)->style & FSF_BOLD) != 0);
+	WORD w;
+	cur_tf = RPD(rp)->font;
+	w = (WORD)mm_textw((const char *)s, (int)n, face_of(RPD(rp)));
+	cur_tf = NULL;
+	return w;
 }
 
 LONG Text(struct RastPort *rp, CONST_STRPTR s, ULONG n)
 {
 	struct mm_rpd *d = RPD(rp);
-	int b = (d->style & FSF_BOLD) != 0;
-	int w = mm_textw((const char *)s, (int)n, b);
+	int b = face_of(d);
+	int w;
+	cur_tf = d->font;
+	w = mm_textw((const char *)s, (int)n, b);
 	if (d->port) {
 		if (d->drmd & 1) {      /* JAM2: the background pen behind the text */
 			Rect r;
 			r.left = d->cpx;
 			r.right = (short)(d->cpx + w);
-			r.top = (short)(d->cpy - mm_font.tf_Baseline);
-			r.bottom = (short)(r.top + mm_font.tf_YSize);
+			r.top = (short)(d->cpy - cur_metrics()->tf_Baseline);
+			r.bottom = (short)(r.top + cur_metrics()->tf_YSize);
 			mm_fill(d->port, &r, mm_pen_rgb(d->bpen));
 		}
 		mm_text(d->port, d->cpx, d->cpy, (const char *)s, (int)n, mm_pen_rgb(d->apen), b);
 	}
+	cur_tf = NULL;
 	d->cpx = (WORD)(d->cpx + w);
 	return 0;
+}
+
+/* ---- graphics.library beyond the MUI editor's (Quill's ribbon, panes and File page) ---- */
+/* a font by name and pixel height: a Mac family (Geneva for sans serif, Times for serif, Monaco
+   for fixed widths), the bitmap size whose line is nearest the height asked (not taller, where one
+   is), bold when the style asks or the name ends in B ("QuillSansB.font") */
+static int has(const char *s, const char *w)
+{
+	int n = (int)strlen(w);
+	for (; *s; s++)
+		if (!strncmp(s, w, (size_t)n))
+			return 1;
+	return 0;
+}
+
+struct TextFont *OpenDiskFont(const struct TextAttr *ta)
+{
+	static const short sizes[] = { 9, 10, 12, 14, 18, 20, 24, 36 };
+	struct mm_macfont *m;
+	char low[64];
+	const char *n = ta && ta->ta_Name ? (const char *)ta->ta_Name : "";
+	const char *base = n, *dot;
+	FontInfo fi;
+	int i, best = 0, bestd = 1000, len;
+	if (!ta || !(m = mm_alloc(sizeof(*m))))
+		return NULL;
+	for (dot = n; *dot; dot++)
+		if (*dot == '/' || *dot == ':')
+			base = dot + 1;
+	dot = strchr(base, '.');
+	len = dot ? (int)(dot - base) : (int)strlen(base);
+	for (i = 0; i < len && i < (int)sizeof(low) - 1; i++)
+		low[i] = (char)(base[i] >= 'A' && base[i] <= 'Z' ? base[i] + 32 : base[i]);
+	low[i] = 0;
+	m->num = has(low, "mono") || has(low, "courier") || has(low, "topaz") ? 4 /* monaco */ :
+	         (has(low, "serif") && !has(low, "sans")) || has(low, "times") ? 20 /* times */ : geneva;
+	m->face = (ta->ta_Style & FSF_BOLD) || (len > 1 && base[len - 1] == 'B') ? MAC_BOLD : 0;
+	for (i = 0; i < (int)(sizeof(sizes) / sizeof(sizes[0])); i++) {
+		int h, dd;
+		TextFont(m->num);
+		TextSize(sizes[i]);
+		TextFace(m->face);
+		GetFontInfo(&fi);
+		h = fi.ascent + fi.descent;
+		dd = h <= (int)ta->ta_YSize ? (int)ta->ta_YSize - h : 2 * (h - (int)ta->ta_YSize) + 1;
+		if (dd < bestd) {
+			bestd = dd;
+			best = i;
+		}
+	}
+	m->size = sizes[best];
+	TextSize(m->size);
+	GetFontInfo(&fi);
+	mm_use_font(0);
+	m->tf.tf_Message.mn_ReplyPort = (struct MsgPort *)&macfont_tag;
+	m->tf.tf_YSize = (UWORD)(fi.ascent + fi.descent + fi.leading);
+	m->tf.tf_Baseline = (UWORD)fi.ascent;
+	m->tf.tf_XSize = (UWORD)fi.widMax;
+	m->tf.tf_Style = m->face ? FSF_BOLD : 0;
+	m->tf.tf_LoChar = 32;
+	m->tf.tf_HiChar = 255;
+	return &m->tf;
+}
+
+struct TextFont *OpenFont(const struct TextAttr *ta)
+{
+	return OpenDiskFont(ta);
+}
+
+void CloseFont(struct TextFont *tf)
+{
+	if (tf_is_mac(tf))
+		mm_free(tf);
+}
+
+void TextExtent(struct RastPort *rp, CONST_STRPTR s, ULONG n, struct TextExtent *te)
+{
+	const struct TextFont *f = RPD(rp)->font ? RPD(rp)->font : &mm_font;
+	te->te_Width = (UWORD)TextLength(rp, s, n);
+	te->te_Height = f->tf_YSize;
+	te->te_Extent.MinX = 0;
+	te->te_Extent.MinY = (WORD)-f->tf_Baseline;
+	te->te_Extent.MaxX = (WORD)(te->te_Width ? te->te_Width - 1 : 0);
+	te->te_Extent.MaxY = (WORD)(f->tf_YSize - f->tf_Baseline - 1);
+}
+
+/* how many of the n characters fit in width (and height) pixels; their extent in te */
+ULONG TextFit(struct RastPort *rp, CONST_STRPTR s, ULONG n, struct TextExtent *te, const struct TextExtent *cte,
+              LONG dir, ULONG width, ULONG height)
+{
+	const struct TextFont *f = RPD(rp)->font ? RPD(rp)->font : &mm_font;
+	ULONG k = n;
+	(void)cte;
+	(void)dir;
+	if (height < f->tf_YSize)
+		k = 0;
+	while (k > 0 && (ULONG)TextLength(rp, s, k) > width)
+		k--;
+	TextExtent(rp, s, k, te);
+	return k;
+}
+
+/* an ellipse's outline around cx, cy, a pixels wide and b high either side */
+void DrawEllipse(struct RastPort *rp, LONG cx, LONG cy, LONG a, LONG b)
+{
+	struct mm_rpd *d = RPD(rp);
+	Rect r;
+	ULONG rgb = mm_pen_rgb(d->apen);
+	if (!d->port)
+		return;
+	SetPort(d->port);
+	r.left = (short)(cx - a);
+	r.top = (short)(cy - b);
+	r.right = (short)(cx + a + 1);
+	r.bottom = (short)(cy + b + 1);
+	if (mm_mono_port(d->port)) {
+		mono_ink();
+		PenPat(lum(rgb) >= 215 ? pat_white : pat_black);
+	} else {
+		color(rgb);
+	}
+	FrameOval(&r);
+	PenNormal();
+	ForeColor(33);
+}
+
+/* a one-bit template (each row mod bytes, from bit xsrc) drawn in the A pen where it has ones */
+void BltTemplate(CONST_PLANEPTR src, LONG xsrc, LONG mod, struct RastPort *rp, LONG x, LONG y, LONG w, LONG h)
+{
+	struct mm_rpd *d = RPD(rp);
+	struct { const void *base; short rowbytes; Rect bounds; } bm;
+	Rect sr, dr;
+	ULONG rgb = mm_pen_rgb(d->apen);
+	if (!d->port || w <= 0 || h <= 0 || (mod & 1))
+		return;
+	SetPort(d->port);
+	bm.base = src;
+	bm.rowbytes = (short)mod;
+	bm.bounds.left = 0;
+	bm.bounds.top = 0;
+	bm.bounds.right = (short)(mod * 8);
+	bm.bounds.bottom = (short)h;
+	sr.left = (short)xsrc;
+	sr.top = 0;
+	sr.right = (short)(xsrc + w);
+	sr.bottom = (short)h;
+	dr.left = (short)x;
+	dr.top = (short)y;
+	dr.right = (short)(x + w);
+	dr.bottom = (short)(y + h);
+	if (mm_mono_port(d->port))
+		mono_ink();
+	else
+		color(rgb);
+	CopyBits(&bm, (char *)d->port + 2, &sr, &dr, srcOr, NULL);
+	ForeColor(33);
 }
 
 void RectFill(struct RastPort *rp, LONG x0, LONG y0, LONG x1, LONG y1)

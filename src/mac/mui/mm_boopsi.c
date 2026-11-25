@@ -347,6 +347,10 @@ DISPATCHER(mm_notify_dispatch)
 			*g->opg_Storage = MMO(obj)->udata;
 			return TRUE;
 		}
+		if (g->opg_AttrID == MUIA_Parent) {
+			*g->opg_Storage = (ULONG)MMO(obj)->parent;
+			return TRUE;
+		}
 		return FALSE;
 	}
 	case MUIM_Notify: {
