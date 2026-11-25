@@ -1644,10 +1644,12 @@ static void mm_event_once(void)
 			still_since = (unsigned long)TickCount();
 			if (!w->sleep)
 				mouse_moved(w, p, ev.modifiers);
-		} else if (still_since && !bubble && !Button() && (unsigned long)TickCount() - still_since > 50 &&
-		           p.h >= 0 && p.v >= 0 && p.h < w->w && p.v < w->h && !w->sleep) {
+		} else if (still_since && (unsigned long)TickCount() - still_since > 50) {
+			/* the pointer has rested: a bubble if it is over the window, and either way no more
+			   waiting for one (the loop wakes six times a second while it waits) */
 			still_since = 0;
-			bubble_show(w, p);
+			if (!bubble && !Button() && p.h >= 0 && p.v >= 0 && p.h < w->w && p.v < w->h && !w->sleep)
+				bubble_show(w, p);
 		}
 		if (w->active)
 			mm_string_idle(w->active);
